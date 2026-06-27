@@ -19,6 +19,8 @@ For full client/server programs (discovery, point enumeration, priority arrays),
 | [`mini-device-revisited`](samples/mini-device-revisited/) | Minimal BACnet/IP server with 4 points |
 | [`whois-scan`](samples/whois-scan/) | Who-Is scanner |
 | [`point-discover`](samples/point-discover/) | Object-list + present-value + priority-array discovery |
+| [`bacnet-write`](samples/bacnet-write/) | WriteProperty with priority + relinquish |
+| [`rpm-read`](samples/rpm-read/) | ReadPropertyMultiple bulk read |
 
 ## Running
 

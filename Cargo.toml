@@ -19,6 +19,8 @@ exclude = [
     "examples/rust/samples/mini-device-revisited",
     "examples/rust/samples/whois-scan",
     "examples/rust/samples/point-discover",
+    "examples/rust/samples/bacnet-write",
+    "examples/rust/samples/rpm-read",
 ]
 # rusty-bacnet is a cdylib — `cargo test` can't link it without Python.
 # bacnet-wasm is a cdylib — needs wasm32-unknown-unknown target.

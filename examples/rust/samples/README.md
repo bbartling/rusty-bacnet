@@ -9,6 +9,8 @@ Standalone BACnet/IP **client and server binaries** that complement the single-f
 | [`mini-device-revisited/`](mini-device-revisited/) | BACnet **server** — 4-point test device (BACpypes3 port) |
 | [`whois-scan/`](whois-scan/) | **Who-Is** scanner — list I-Am responses, exit |
 | [`point-discover/`](point-discover/) | **Point discovery** — object-list, present-value, priority arrays |
+| [`bacnet-write/`](bacnet-write/) | **WriteProperty** — write, verify, relinquish |
+| [`rpm-read/`](rpm-read/) | **ReadPropertyMultiple** — bulk sensor read |
 
 Helper script:
 
@@ -27,6 +29,12 @@ cd whois-scan && ./run.sh
 
 # Terminal 3 — enumerate a device (defaults target instance 5007)
 cd point-discover && ./run-5007.sh
+
+# Terminal 4 — RPM read three sensors in one request
+cd rpm-read && ./run-5007.sh
+
+# Terminal 5 — WriteProperty demo (writes then reverts)
+cd bacnet-write && ./run-5007.sh
 ```
 
 Override bench defaults with environment variables (`BACNET_BIND_ADDRESS`, `BACNET_BROADCAST`, etc.) — see each crate's README.
