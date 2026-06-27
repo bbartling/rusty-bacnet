@@ -342,6 +342,7 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
         vendor_id: VENDOR_ID,
         model_name: "mini-device-revisited".into(),
         application_software_version: env!("CARGO_PKG_VERSION").into(),
+        max_apdu_length: MAX_APDU_LENGTH,
         ..DeviceConfig::default()
     })?;
     device.set_object_list(object_list);
