@@ -24,10 +24,10 @@ struct Args {
     #[arg(long, short = 'd', default_value_t = 5007)]
     device: u32,
 
-    #[arg(long, short = 'p', default_value = "analog-output:10032")]
+    #[arg(long, short = 'p', default_value = "analog-output:10035")]
     point: String,
 
-    #[arg(long, short = 'v', default_value_t = 12.0)]
+    #[arg(long, short = 'v', default_value_t = 5.0)]
     value: f32,
 
     #[arg(long, default_value_t = 8)]
@@ -324,21 +324,11 @@ fn verify_write_taken(
     priority: u8,
     tolerance: f32,
 ) -> bool {
-    let pv_ok = values_match(expected_pv, &snap.present_value, tolerance);
     let slot_ok = snap
         .priority_slot
         .as_ref()
         .is_some_and(|v| values_match(expected_pv, v, tolerance));
-    let cmd_ok = snap.current_priority == Some(priority)
-        || snap.current_priority.is_none(); // some devices omit current-command-priority
 
-    if !pv_ok {
-        eprintln!(
-            "FAIL: present-value expected {} got {}",
-            present_value_hint(expected_pv),
-            present_value_hint(&snap.present_value)
-        );
-    }
     if !slot_ok {
         eprintln!(
             "FAIL: priority-array[P{priority}] expected {} got {}",
@@ -348,15 +338,31 @@ fn verify_write_taken(
                 .map(present_value_hint)
                 .unwrap_or_else(|| "null".into())
         );
-    }
-    if !cmd_ok {
-        eprintln!(
-            "WARN: current-command-priority is {:?}, expected P{priority}",
-            snap.current_priority
-        );
+        return false;
     }
 
-    pv_ok && slot_ok
+    let pv_matches = values_match(expected_pv, &snap.present_value, tolerance);
+    if pv_matches {
+        println!("OK: present-value matches written value");
+        return true;
+    }
+
+    // Priority slot holds the write; a higher-priority (lower P number) slot may still command PV.
+    if snap.current_priority.is_some_and(|p| p < priority) {
+        println!(
+            "OK: priority-array[P{priority}] holds write; present-value still commanded by higher priority P{} (= {})",
+            snap.current_priority.unwrap(),
+            present_value_hint(&snap.present_value)
+        );
+        return true;
+    }
+
+    eprintln!(
+        "FAIL: present-value expected {} got {} (and no higher priority explains the difference)",
+        present_value_hint(expected_pv),
+        present_value_hint(&snap.present_value)
+    );
+    false
 }
 
 fn verify_relinquished(

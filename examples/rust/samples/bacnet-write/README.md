@@ -23,7 +23,9 @@ chmod +x run-5007.sh
 ./run-5007.sh
 ```
 
-Default target on device **5007**: `analog-output:10032` (`C06-0-10VDC-O`), value `12.0` @ **P8**, then auto-revert.
+Default target on device **5007**: `analog-output:10035` (`C07-0-10VDC-O`, relinquished — no higher priority blocking), value `5.0` @ **P8**, then auto-revert.
+
+Use `analog-output:10032` only if you understand P1 may hold present-value while P8 still receives the write in the priority array.
 
 ## Example output
 

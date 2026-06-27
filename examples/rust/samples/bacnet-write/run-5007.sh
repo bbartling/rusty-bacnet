@@ -13,7 +13,7 @@ exec "$BIN" \
   --device "${BACNET_DEVICE_INSTANCE:-5007}" \
   --interface "${BACNET_BIND_ADDRESS:-192.168.204.55}" \
   --broadcast "${BACNET_BROADCAST:-192.168.204.255}" \
-  --point "${BACNET_WRITE_POINT:-analog-output:10032}" \
-  --value "${BACNET_WRITE_VALUE:-12}" \
+  --point "${BACNET_WRITE_POINT:-analog-output:10035}" \
+  --value "${BACNET_WRITE_VALUE:-5}" \
   --priority "${BACNET_WRITE_PRIORITY:-8}" \
   "$@"
