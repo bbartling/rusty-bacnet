@@ -15,7 +15,10 @@ use bytes::BytesMut;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "whois-scan", about = "BACnet Who-Is discovery scan (rusty-bacnet)")]
+#[command(
+    name = "whois-scan",
+    about = "BACnet Who-Is discovery scan (rusty-bacnet)"
+)]
 struct Args {
     /// Local NIC IPv4 to bind (auto-detects enp3s0 if omitted)
     #[arg(long, short = 'i')]
@@ -72,6 +75,35 @@ fn subnet_broadcast(ip: Ipv4Addr) -> Ipv4Addr {
     Ipv4Addr::new(o[0], o[1], o[2], 255)
 }
 
+fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
+    if interface.is_unspecified() {
+        Ipv4Addr::BROADCAST
+    } else {
+        subnet_broadcast(interface)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
+}
+
 fn resolve_interface(args: &Args) -> Ipv4Addr {
     if let Some(ip) = args.interface {
         return ip;
@@ -88,7 +120,10 @@ fn format_bip_mac(mac: &[u8]) -> String {
     if mac.len() == 6 {
         format!(
             "{}.{}.{}.{}:{}",
-            mac[0], mac[1], mac[2], mac[3],
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
             u16::from_be_bytes([mac[4], mac[5]])
         )
     } else {
@@ -118,7 +153,7 @@ async fn main() {
     let interface = resolve_interface(&args);
     let broadcast = args
         .broadcast
-        .unwrap_or_else(|| subnet_broadcast(interface));
+        .unwrap_or_else(|| default_broadcast(interface));
 
     if args.low.is_some() ^ args.high.is_some() {
         eprintln!("ERROR: --low and --high must be used together");

@@ -18,6 +18,10 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 use clap::Parser;
 
+mod net_defaults;
+
+use net_defaults::default_broadcast;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "point-discover",
@@ -78,11 +82,6 @@ fn detect_enp3s0_address() -> Option<Ipv4Addr> {
     None
 }
 
-fn subnet_broadcast(ip: Ipv4Addr) -> Ipv4Addr {
-    let o = ip.octets();
-    Ipv4Addr::new(o[0], o[1], o[2], 255)
-}
-
 fn resolve_interface(args: &Args) -> Ipv4Addr {
     if let Some(ip) = args.interface {
         return ip;
@@ -99,7 +98,10 @@ fn format_bip_mac(mac: &[u8]) -> String {
     if mac.len() == 6 {
         format!(
             "{}.{}.{}.{}:{}",
-            mac[0], mac[1], mac[2], mac[3],
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
             u16::from_be_bytes([mac[4], mac[5]])
         )
     } else {
@@ -115,9 +117,7 @@ fn format_oid(oid: &ObjectIdentifier) -> String {
 }
 
 fn decode_prop(bytes: &[u8]) -> Option<PropertyValue> {
-    decode_application_value(bytes, 0)
-        .ok()
-        .map(|(v, _)| v)
+    decode_application_value(bytes, 0).ok().map(|(v, _)| v)
 }
 
 fn parse_device_endpoint(s: &str) -> Result<(Ipv4Addr, u16), String> {
@@ -422,8 +422,7 @@ async fn scan_priority_arrays(
         }
 
         let current_priority = read_current_command_priority(client, device_instance, *oid).await;
-        let priority_slots =
-            read_priority_array_slots(client, device_instance, *oid).await;
+        let priority_slots = read_priority_array_slots(client, device_instance, *oid).await;
 
         results.push(CommandablePoint {
             oid: *oid,
@@ -437,10 +436,7 @@ async fn scan_priority_arrays(
     results
 }
 
-fn effective_command_priority(
-    current: Option<u8>,
-    slots: &[(u8, PropertyValue)],
-) -> Option<u8> {
+fn effective_command_priority(current: Option<u8>, slots: &[(u8, PropertyValue)]) -> Option<u8> {
     current.or_else(|| slots.iter().map(|(p, _)| *p).min())
 }
 
@@ -450,9 +446,7 @@ fn should_print_priority_point(point: &CommandablePoint) -> bool {
     }
     matches!(
         point.oid.object_type(),
-        ObjectType::ANALOG_OUTPUT
-            | ObjectType::BINARY_OUTPUT
-            | ObjectType::MULTI_STATE_OUTPUT
+        ObjectType::ANALOG_OUTPUT | ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT
     )
 }
 
@@ -484,7 +478,11 @@ fn print_priority_scan(results: &[CommandablePoint]) {
             .unwrap_or_else(|| "cmd@—".into());
 
         if point.pv.is_empty() {
-            println!("  {:<28}  {:<32}  {cmd}", format_oid(&point.oid), point.name);
+            println!(
+                "  {:<28}  {:<32}  {cmd}",
+                format_oid(&point.oid),
+                point.name
+            );
         } else {
             println!(
                 "  {:<28}  {:<32}  pv={}  {cmd}",
@@ -557,7 +555,12 @@ async fn read_point_present_value(
     oid: ObjectIdentifier,
 ) -> String {
     match client
-        .read_property_from_device(device_instance, oid, PropertyIdentifier::PRESENT_VALUE, None)
+        .read_property_from_device(
+            device_instance,
+            oid,
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
         .await
     {
         Ok(ack) => decode_prop(&ack.property_value)
@@ -630,7 +633,7 @@ async fn main() {
     let interface = resolve_interface(&args);
     let broadcast = args
         .broadcast
-        .unwrap_or_else(|| subnet_broadcast(interface));
+        .unwrap_or_else(|| default_broadcast(interface));
     let bind_port = if args.ephemeral { 0 } else { args.port };
 
     eprintln!(
@@ -723,7 +726,12 @@ async fn main() {
 
     // Device object-name
     let device_name = match client
-        .read_property_from_device(args.device, device_oid, PropertyIdentifier::OBJECT_NAME, None)
+        .read_property_from_device(
+            args.device,
+            device_oid,
+            PropertyIdentifier::OBJECT_NAME,
+            None,
+        )
         .await
     {
         Ok(ack) => decode_prop(&ack.property_value)
@@ -738,7 +746,10 @@ async fn main() {
         }
     };
 
-    println!("\nDevice {} at {addr}  name \"{device_name}\"\n", args.device);
+    println!(
+        "\nDevice {} at {addr}  name \"{device_name}\"\n",
+        args.device
+    );
 
     let object_list = match read_object_list(&client, args.device, device_oid).await {
         Ok(list) => list,

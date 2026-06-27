@@ -75,6 +75,35 @@ fn subnet_broadcast(ip: Ipv4Addr) -> Ipv4Addr {
     Ipv4Addr::new(o[0], o[1], o[2], 255)
 }
 
+fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
+    if interface.is_unspecified() {
+        Ipv4Addr::BROADCAST
+    } else {
+        subnet_broadcast(interface)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
+}
+
 fn resolve_interface(args: &Args) -> Ipv4Addr {
     if let Some(ip) = args.interface {
         return ip;
@@ -131,9 +160,7 @@ fn present_value_hint(value: &PropertyValue) -> String {
 }
 
 fn decode_prop(bytes: &[u8]) -> Option<PropertyValue> {
-    decode_application_value(bytes, 0)
-        .ok()
-        .map(|(v, _)| v)
+    decode_application_value(bytes, 0).ok().map(|(v, _)| v)
 }
 
 fn parse_device_endpoint(s: &str) -> Result<(Ipv4Addr, u16), String> {
@@ -208,7 +235,7 @@ async fn main() {
     let interface = resolve_interface(&args);
     let broadcast = args
         .broadcast
-        .unwrap_or_else(|| subnet_broadcast(interface));
+        .unwrap_or_else(|| default_broadcast(interface));
     let bind_port = if args.ephemeral { 0 } else { args.port };
 
     let point_oids: Vec<ObjectIdentifier> = match args
@@ -279,7 +306,10 @@ async fn main() {
         })
         .collect();
 
-    eprintln!("Sending ReadPropertyMultiple ({} object(s))...", specs.len());
+    eprintln!(
+        "Sending ReadPropertyMultiple ({} object(s))...",
+        specs.len()
+    );
 
     let rpm = match client
         .read_property_multiple_from_device(args.device, specs)

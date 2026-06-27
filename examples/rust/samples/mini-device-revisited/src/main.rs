@@ -24,13 +24,13 @@ use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_server::server::BACnetServer;
+use bacnet_server::server::{BACnetServer, IAmBroadcaster};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use clap::Parser;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 const UNITS_DEGF: u32 = 62; // degreesFahrenheit
@@ -208,12 +208,12 @@ fn kill_prior_listeners(port: u16) {
 fn verify_udp_bind(bind_ip: Ipv4Addr, port: u16) {
     let socket = match Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)) {
         Ok(s) => s,
-        Err(e) => die_on_bind_error(format!("cannot create UDP socket for {bind_ip}:{port}: {e}")),
+        Err(e) => die_on_bind_error(format!(
+            "cannot create UDP socket for {bind_ip}:{port}: {e}"
+        )),
     };
     if let Err(e) = socket.set_reuse_address(true) {
-        die_on_bind_error(format!(
-            "cannot set SO_REUSEADDR on {bind_ip}:{port}: {e}"
-        ));
+        die_on_bind_error(format!("cannot set SO_REUSEADDR on {bind_ip}:{port}: {e}"));
     }
     if let Err(e) = socket.bind(&SocketAddrV4::new(bind_ip, port).into()) {
         die_on_bind_error(format!(
@@ -237,15 +237,13 @@ fn resolve_device_ip(args: &Args) -> Ipv4Addr {
 
 fn resolve_network_config(args: &Args) -> NetworkConfig {
     let device_ip = resolve_device_ip(args);
-    let broadcast = args
-        .broadcast
-        .unwrap_or_else(|| {
-            if device_ip.is_unspecified() {
-                Ipv4Addr::BROADCAST
-            } else {
-                subnet_broadcast(device_ip)
-            }
-        });
+    let broadcast = args.broadcast.unwrap_or_else(|| {
+        if device_ip.is_unspecified() {
+            Ipv4Addr::BROADCAST
+        } else {
+            subnet_broadcast(device_ip)
+        }
+    });
     NetworkConfig {
         device_ip,
         socket_bind: Ipv4Addr::UNSPECIFIED,
@@ -273,7 +271,7 @@ fn verify_server_mac(device_ip: Ipv4Addr, port: u16, mac: &[u8]) {
 }
 
 async fn iam_announcement_task(
-    server: Arc<Mutex<BACnetServer<bacnet_transport::bip::BipTransport>>>,
+    announcer: IAmBroadcaster<bacnet_transport::bip::BipTransport>,
     instance: u32,
     interval_secs: u64,
 ) {
@@ -282,7 +280,7 @@ async fn iam_announcement_task(
     }
     loop {
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-        match server.lock().await.broadcast_i_am().await {
+        match announcer.broadcast_i_am().await {
             Ok(()) => info!("I-Am announcement sent for device {instance}"),
             Err(e) => warn!("I-Am announcement failed: {e}"),
         }
@@ -355,12 +353,7 @@ async fn simulation_task(db: Arc<RwLock<ObjectDatabase>>) {
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).expect("ai:1");
     let bi_oid = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 1).expect("bi:1");
 
-    let samples: [(bool, f32); 4] = [
-        (true, 1.0),
-        (false, 2.0),
-        (true, 3.0),
-        (false, 4.0),
-    ];
+    let samples: [(bool, f32); 4] = [(true, 1.0), (false, 2.0), (true, 3.0), (false, 4.0)];
     let mut idx = 0usize;
 
     loop {
@@ -401,7 +394,14 @@ async fn discovery_self_check(
 ) {
     let server_mac: Vec<u8> = {
         let o = net.device_ip.octets();
-        vec![o[0], o[1], o[2], o[3], (port >> 8) as u8, (port & 0xff) as u8]
+        vec![
+            o[0],
+            o[1],
+            o[2],
+            o[3],
+            (port >> 8) as u8,
+            (port & 0xff) as u8,
+        ]
     };
 
     let mut client = match BACnetClient::bip_builder()
@@ -461,9 +461,7 @@ async fn discovery_self_check(
         .iter()
         .any(|d| d.object_identifier.instance_number() == device_instance)
     {
-        info!(
-            "Who-Is self-check OK — device {device_instance} visible on broadcast"
-        );
+        info!("Who-Is self-check OK — device {device_instance} visible on broadcast");
     } else if device_name.is_empty() {
         warn!(
             "Who-Is self-check: device {device_instance} not seen (broadcast may be filtered on this NIC/subnet)"
@@ -482,7 +480,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging(&args);
 
     if args.log_packets {
-        warn!("--log-packets is disabled (SO_REUSEPORT steals Who-Is from the server); use --trace");
+        warn!(
+            "--log-packets is disabled (SO_REUSEPORT steals Who-Is from the server); use --trace"
+        );
     }
 
     let net = resolve_network_config(&args);
@@ -503,7 +503,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db.len()
     );
 
-    let server = match BACnetServer::bip_builder()
+    let mut server = match BACnetServer::bip_builder()
         .interface(net.socket_bind)
         .port(args.port)
         .broadcast_address(net.broadcast)
@@ -519,40 +519,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
     };
 
-    let server = Arc::new(Mutex::new(server));
-    let mac: [u8; 6] = {
-        let guard = server.lock().await;
-        guard
-            .local_mac()
-            .try_into()
-            .expect("BACnet/IP local MAC must be 6 bytes")
-    };
+    let announcer = server.i_am_broadcaster();
+    let mac: [u8; 6] = server
+        .local_mac()
+        .try_into()
+        .expect("BACnet/IP local MAC must be 6 bytes");
     verify_server_mac(net.device_ip, args.port, &mac);
     info!(
         "BACnet/IP server up — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (Who-Is/I-Am enabled, vendor {VENDOR_ID})",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     );
+    info!("Points: AI:1 read-only, BI:1 read-only, AV:2 commandable, BV:2 commandable");
     info!(
-        "Points: AI:1 read-only, BI:1 read-only, AV:2 commandable, BV:2 commandable"
+        "Simulation interval: {}s (read-only points only)",
+        SIM_INTERVAL_SECS
     );
-    info!("Simulation interval: {}s (read-only points only)", SIM_INTERVAL_SECS);
     log_discovery_help(&net, args.port, args.instance);
 
     if args.announce_interval > 0 {
-        if let Err(e) = server.lock().await.broadcast_i_am().await {
+        if let Err(e) = announcer.broadcast_i_am().await {
             warn!("startup I-Am broadcast failed: {e}");
         } else {
             info!("startup I-Am broadcast sent for device {}", args.instance);
         }
-        let server_ann = Arc::clone(&server);
         tokio::spawn(iam_announcement_task(
-            server_ann,
+            announcer.clone(),
             args.instance,
             args.announce_interval,
         ));
     }
 
-    let db_arc = Arc::clone(server.lock().await.database());
+    let db_arc = Arc::clone(server.database());
     tokio::spawn(simulation_task(db_arc));
 
     if args.skip_self_check {
@@ -567,6 +564,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
-    let _ = server.lock().await.stop().await;
+    let _ = server.stop().await;
     Ok(())
 }

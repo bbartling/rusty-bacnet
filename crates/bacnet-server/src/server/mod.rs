@@ -373,6 +373,23 @@ pub struct BACnetServer<T: TransportPort> {
     local_mac: MacAddr,
 }
 
+/// Cloneable handle for sending unsolicited I-Am announcements.
+pub struct IAmBroadcaster<T: TransportPort> {
+    config: ServerConfig,
+    network: Arc<NetworkLayer<T>>,
+    db: Arc<RwLock<ObjectDatabase>>,
+}
+
+impl<T: TransportPort> Clone for IAmBroadcaster<T> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            network: Arc::clone(&self.network),
+            db: Arc::clone(&self.db),
+        }
+    }
+}
+
 impl BACnetServer<BipTransport> {
     /// Create a BIP-specific builder with interface/port/broadcast fields.
     pub fn bip_builder() -> BipServerBuilder {

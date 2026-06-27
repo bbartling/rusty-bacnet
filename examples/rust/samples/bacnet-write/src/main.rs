@@ -96,6 +96,35 @@ fn subnet_broadcast(ip: Ipv4Addr) -> Ipv4Addr {
     Ipv4Addr::new(o[0], o[1], o[2], 255)
 }
 
+fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
+    if interface.is_unspecified() {
+        Ipv4Addr::BROADCAST
+    } else {
+        subnet_broadcast(interface)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
+}
+
 fn resolve_interface(args: &Args) -> Ipv4Addr {
     if let Some(ip) = args.interface {
         return ip;
@@ -157,9 +186,7 @@ fn present_value_hint(value: &PropertyValue) -> String {
 }
 
 fn decode_prop(bytes: &[u8]) -> Option<PropertyValue> {
-    decode_application_value(bytes, 0)
-        .ok()
-        .map(|(v, _)| v)
+    decode_application_value(bytes, 0).ok().map(|(v, _)| v)
 }
 
 fn values_match(expected: &PropertyValue, actual: &PropertyValue, tolerance: f32) -> bool {
@@ -427,7 +454,7 @@ async fn main() {
     let interface = resolve_interface(&args);
     let broadcast = args
         .broadcast
-        .unwrap_or_else(|| subnet_broadcast(interface));
+        .unwrap_or_else(|| default_broadcast(interface));
     let bind_port = if args.ephemeral { 0 } else { args.port };
 
     let point_oid = match parse_point(&args.point) {
@@ -528,7 +555,10 @@ async fn main() {
         let _ = client.stop().await;
         process::exit(1);
     }
-    println!("OK: write taken at P{} (present-value + priority-array match)", args.priority);
+    println!(
+        "OK: write taken at P{} (present-value + priority-array match)",
+        args.priority
+    );
 
     if args.no_revert {
         let _ = client.stop().await;
