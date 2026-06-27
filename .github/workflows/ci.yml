@@ -111,6 +111,34 @@ jobs:
           key: msrv
       - run: cargo check --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked
 
+  network-samples:
+    name: Network samples
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sample:
+          - mini-device-revisited
+          - whois-scan
+          - point-discover
+          - bacnet-write
+          - rpm-read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: network-samples-${{ matrix.sample }}
+      - name: Check ${{ matrix.sample }}
+        working-directory: examples/rust/samples/${{ matrix.sample }}
+        run: cargo check --locked
+      - name: Clippy ${{ matrix.sample }}
+        working-directory: examples/rust/samples/${{ matrix.sample }}
+        run: cargo clippy --no-deps --locked -- -D warnings
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -18,6 +18,8 @@ Helper script:
 ./run-with-logs.sh          # run mini-device in foreground with debug logging
 ```
 
+Pass `--replace-existing` to the mini-device binary (via the script) if UDP `:47808` is already in use and you intend to take over the port.
+
 ## Typical workflow
 
 ```bash
@@ -56,4 +58,3 @@ cd point-discover       && cargo build --release
 ```
 
 The `run.sh` / `run-5007.sh` wrappers build automatically on first use. Build artifacts go to each crate's `target/` directory (gitignored).
-

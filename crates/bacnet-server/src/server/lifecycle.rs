@@ -469,6 +469,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         crate::pics::PicsGenerator::new(&db, &self.config, pics_config).generate()
     }
 
+    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
+    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
+        let db = self.db.read().await;
+        let device_oid = db
+            .list_objects()
+            .into_iter()
+            .find(|oid| oid.object_type() == ObjectType::DEVICE)
+            .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
+
+        let i_am = IAmRequest {
+            object_identifier: device_oid,
+            max_apdu_length: self.config.max_apdu_length,
+            segmentation_supported: self.config.segmentation_supported,
+            vendor_id: self.config.vendor_id,
+        };
+
+        let mut service_buf = BytesMut::new();
+        i_am.encode(&mut service_buf);
+
+        let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+            service_choice: UnconfirmedServiceChoice::I_AM,
+            service_request: service_buf.freeze(),
+        });
+
+        let mut buf = BytesMut::new();
+        encode_apdu(&mut buf, &pdu)?;
+
+        self.network
+            .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+            .await
+    }
+
     /// Stop the server.
     pub async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.fault_detection_task.take() {

@@ -28,9 +28,9 @@ struct Args {
     #[arg(long, short = 'd', default_value_t = 5007)]
     device: u32,
 
-    /// Skip Who-Is and use this device IPv4 (e.g. 192.168.204.200)
+    /// Skip Who-Is and use device IPv4 or ip:port (e.g. 192.168.204.200:47808)
     #[arg(long, short = 'a')]
-    address: Option<Ipv4Addr>,
+    address: Option<String>,
 
     /// Local NIC IPv4 to bind (auto-detects enp3s0 if omitted)
     #[arg(long, short = 'i')]
@@ -44,7 +44,7 @@ struct Args {
     #[arg(long, short = 't', default_value_t = 3)]
     timeout: u64,
 
-    /// Client UDP bind port (default 47808; use 0 if 47808 busy)
+    /// Client UDP bind port (not the remote device port)
     #[arg(long, default_value_t = DEFAULT_BACNET_PORT)]
     port: u16,
 
@@ -120,6 +120,56 @@ fn decode_prop(bytes: &[u8]) -> Option<PropertyValue> {
         .map(|(v, _)| v)
 }
 
+fn parse_device_endpoint(s: &str) -> Result<(Ipv4Addr, u16), String> {
+    if let Some((host, port_str)) = s.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                return Ok((ip, port));
+            }
+        }
+    }
+    s.parse::<Ipv4Addr>()
+        .map(|ip| (ip, DEFAULT_BACNET_PORT))
+        .map_err(|e| format!("invalid device address {s:?}: {e}"))
+}
+
+fn decode_object_identifier_list(bytes: &[u8]) -> Vec<ObjectIdentifier> {
+    let mut oids = Vec::new();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        match decode_application_value(bytes, offset) {
+            Ok((PropertyValue::ObjectIdentifier(oid), next)) if next > offset => {
+                oids.push(oid);
+                offset = next;
+            }
+            Ok((_, next)) if next > offset => offset = next,
+            _ => break,
+        }
+    }
+    oids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_encoding::primitives::encode_property_value;
+    use bytes::BytesMut;
+
+    #[test]
+    fn decode_full_object_list_sequence() {
+        let device = ObjectIdentifier::new(ObjectType::DEVICE, 5007).unwrap();
+        let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1173).unwrap();
+        let mut buf = BytesMut::new();
+        encode_property_value(&mut buf, &PropertyValue::ObjectIdentifier(device)).unwrap();
+        encode_property_value(&mut buf, &PropertyValue::ObjectIdentifier(ai)).unwrap();
+
+        let oids = decode_object_identifier_list(&buf);
+        assert_eq!(oids.len(), 2);
+        assert_eq!(oids[0], device);
+        assert_eq!(oids[1], ai);
+    }
+}
+
 async fn read_object_list(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
     device_instance: u32,
@@ -161,19 +211,11 @@ async fn read_object_list(
         }
     }
 
-    // Fallback: single ReadProperty for the full list.
+    // Fallback: single ReadProperty for the full list (sequential object identifiers).
     let ack = read_prop(client, device_instance, device_oid, None).await?;
-    if let Some(PropertyValue::List(items)) = decode_prop(&ack.property_value) {
-        let oids: Vec<_> = items
-            .into_iter()
-            .filter_map(|v| match v {
-                PropertyValue::ObjectIdentifier(oid) => Some(oid),
-                _ => None,
-            })
-            .collect();
-        if !oids.is_empty() {
-            return Ok(oids);
-        }
+    let oids = decode_object_identifier_list(&ack.property_value);
+    if !oids.is_empty() {
+        return Ok(oids);
     }
 
     Err(bacnet_types::error::Error::Encoding(
@@ -624,9 +666,16 @@ async fn main() {
         }
     };
 
-    if let Some(device_ip) = args.address {
-        let mac = encode_bip_mac(device_ip.octets(), DEFAULT_BACNET_PORT).to_vec();
-        eprintln!("Using fixed address {device_ip}:{} (skip Who-Is)", DEFAULT_BACNET_PORT);
+    if let Some(ref addr) = args.address {
+        let (device_ip, device_port) = match parse_device_endpoint(addr) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                process::exit(1);
+            }
+        };
+        let mac = encode_bip_mac(device_ip.octets(), device_port).to_vec();
+        eprintln!("Using fixed address {device_ip}:{device_port} (skip Who-Is)");
         if let Err(e) = client.add_device(args.device, &mac).await {
             eprintln!("ERROR: add_device failed: {e}");
             process::exit(1);

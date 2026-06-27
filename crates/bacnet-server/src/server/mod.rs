@@ -306,6 +306,12 @@ impl BipServerBuilder {
         self
     }
 
+    /// Set the vendor identifier advertised in I-Am responses.
+    pub fn vendor_id(mut self, id: u16) -> Self {
+        self.config.vendor_id = id;
+        self
+    }
+
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
         let transport = BipTransport::new(

@@ -33,8 +33,8 @@ struct Args {
     #[arg(long, default_value_t = 8)]
     priority: u8,
 
-    #[arg(long, short = 'a')]
-    address: Option<Ipv4Addr>,
+    #[arg(long, short = 'a', help = "Device IPv4 or ip:port (skip Who-Is)")]
+    address: Option<String>,
 
     #[arg(long, short = 'i')]
     interface: Option<Ipv4Addr>,
@@ -45,6 +45,7 @@ struct Args {
     #[arg(long, short = 't', default_value_t = 3)]
     timeout: u64,
 
+    /// Local client UDP bind port (not the remote device port)
     #[arg(long, default_value_t = DEFAULT_BACNET_PORT)]
     port: u16,
 
@@ -53,6 +54,10 @@ struct Args {
 
     #[arg(long)]
     no_revert: bool,
+
+    /// Overwrite a non-null priority slot (default: refuse if slot already active)
+    #[arg(long)]
+    force: bool,
 
     /// Float compare tolerance for verify steps
     #[arg(long, default_value_t = 0.05)]
@@ -103,6 +108,19 @@ fn resolve_interface(args: &Args) -> Ipv4Addr {
     Ipv4Addr::UNSPECIFIED
 }
 
+fn parse_device_endpoint(s: &str) -> Result<(Ipv4Addr, u16), String> {
+    if let Some((host, port_str)) = s.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                return Ok((ip, port));
+            }
+        }
+    }
+    s.parse::<Ipv4Addr>()
+        .map(|ip| (ip, DEFAULT_BACNET_PORT))
+        .map_err(|e| format!("invalid device address {s:?}: {e}"))
+}
+
 fn parse_point(s: &str) -> Result<ObjectIdentifier, String> {
     let (ty, inst) = s
         .split_once(':')
@@ -111,20 +129,12 @@ fn parse_point(s: &str) -> Result<ObjectIdentifier, String> {
         .parse()
         .map_err(|_| format!("bad instance number in {s:?}"))?;
     let object_type = match ty.to_ascii_lowercase().replace('-', "_").as_str() {
-        "analog_input" | "ai" => ObjectType::ANALOG_INPUT,
         "analog_output" | "ao" => ObjectType::ANALOG_OUTPUT,
         "analog_value" | "av" => ObjectType::ANALOG_VALUE,
-        "binary_input" | "bi" => ObjectType::BINARY_INPUT,
-        "binary_output" | "bo" => ObjectType::BINARY_OUTPUT,
-        "binary_value" | "bv" => ObjectType::BINARY_VALUE,
-        "multi_state_value" | "msv" => ObjectType::MULTI_STATE_VALUE,
-        "multi_state_output" | "mso" => ObjectType::MULTI_STATE_OUTPUT,
         other => {
-            if let Ok(code) = other.parse::<u32>() {
-                ObjectType::from_raw(code)
-            } else {
-                return Err(format!("unknown object type {ty:?}"));
-            }
+            return Err(format!(
+                "unsupported object type {other:?} — bacnet-write accepts analog-output/analog-value only"
+            ));
         }
     };
     ObjectIdentifier::new(object_type, inst).map_err(|e| e.to_string())
@@ -254,9 +264,16 @@ async fn discover_device(
     client: &mut BACnetClient<bacnet_transport::bip::BipTransport>,
     args: &Args,
 ) {
-    if let Some(device_ip) = args.address {
-        let mac = encode_bip_mac(device_ip.octets(), DEFAULT_BACNET_PORT).to_vec();
-        eprintln!("Using fixed address {device_ip}:{} (skip Who-Is)", DEFAULT_BACNET_PORT);
+    if let Some(ref addr) = args.address {
+        let (device_ip, device_port) = match parse_device_endpoint(addr) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                process::exit(1);
+            }
+        };
+        let mac = encode_bip_mac(device_ip.octets(), device_port).to_vec();
+        eprintln!("Using fixed address {device_ip}:{device_port} (skip Who-Is)");
         if let Err(e) = client.add_device(args.device, &mac).await {
             eprintln!("ERROR: add_device failed: {e}");
             process::exit(1);
@@ -371,12 +388,22 @@ fn verify_relinquished(
     priority: u8,
     tolerance: f32,
 ) -> bool {
-    let slot_ok = snap.priority_slot.is_none();
+    let slot_ok = match (&baseline.priority_slot, &snap.priority_slot) {
+        (None, None) => true,
+        (Some(expected), Some(actual)) => values_match(expected, actual, tolerance),
+        (Some(_), None) => false,
+        (None, Some(_)) => false,
+    };
     let pv_ok = values_match(&baseline.present_value, &snap.present_value, tolerance);
 
     if !slot_ok {
         eprintln!(
-            "FAIL: priority-array[P{priority}] expected null got {}",
+            "FAIL: priority-array[P{priority}] expected {} got {}",
+            baseline
+                .priority_slot
+                .as_ref()
+                .map(present_value_hint)
+                .unwrap_or_else(|| "null".into()),
             snap.priority_slot
                 .as_ref()
                 .map(present_value_hint)
@@ -385,11 +412,10 @@ fn verify_relinquished(
     }
     if !pv_ok {
         eprintln!(
-            "FAIL: present-value after relinquish expected {} (baseline) got {}",
+            "FAIL: present-value after restore expected {} (baseline) got {}",
             present_value_hint(&baseline.present_value),
             present_value_hint(&snap.present_value)
         );
-        eprintln!("NOTE: if a lower priority slot is active, PV may legitimately differ");
     }
 
     slot_ok && pv_ok
@@ -456,6 +482,15 @@ async fn main() {
     println!("\n=== Baseline ===");
     print_snapshot("Before", &point_oid, &baseline, args.priority);
 
+    if baseline.priority_slot.is_some() && !args.force {
+        eprintln!(
+            "ERROR: priority-array[P{}] already active — use --force to overwrite or choose another priority",
+            args.priority
+        );
+        let _ = client.stop().await;
+        process::exit(1);
+    }
+
     let write_val = PropertyValue::Real(args.value);
     if let Err(e) = write_present_value(
         &client,
@@ -501,24 +536,33 @@ async fn main() {
         return;
     }
 
+    let restore_val = baseline
+        .priority_slot
+        .clone()
+        .unwrap_or(PropertyValue::Null);
     if let Err(e) = write_present_value(
         &client,
         args.device,
         point_oid,
-        &PropertyValue::Null,
+        &restore_val,
         Some(args.priority),
     )
     .await
     {
-        eprintln!("ERROR: relinquish (Null @ P{}) failed: {e}", args.priority);
+        eprintln!("ERROR: restore @ P{} failed: {e}", args.priority);
         let _ = client.stop().await;
         process::exit(1);
     }
     println!(
-        "\n=== Relinquish P{} (Null write) ===",
-        args.priority
+        "\n=== Restore P{} ({}) ===",
+        args.priority,
+        if matches!(restore_val, PropertyValue::Null) {
+            "Null write"
+        } else {
+            "original slot value"
+        }
     );
-    println!("WriteProperty Null ACK");
+    println!("WriteProperty restore ACK");
 
     let after_revert = match read_snapshot(&client, args.device, point_oid, args.priority).await {
         Ok(s) => s,
@@ -537,7 +581,7 @@ async fn main() {
         process::exit(1);
     }
     println!(
-        "OK: P{} relinquished (priority-array null, present-value restored to baseline)",
+        "OK: P{} restored to baseline (priority-array + present-value match)",
         args.priority
     );
 

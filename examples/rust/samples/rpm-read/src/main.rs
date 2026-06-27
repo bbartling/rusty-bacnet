@@ -32,7 +32,7 @@ struct Args {
     points: String,
 
     #[arg(long, short = 'a')]
-    address: Option<Ipv4Addr>,
+    address: Option<String>,
 
     #[arg(long, short = 'i')]
     interface: Option<Ipv4Addr>,
@@ -136,13 +136,33 @@ fn decode_prop(bytes: &[u8]) -> Option<PropertyValue> {
         .map(|(v, _)| v)
 }
 
+fn parse_device_endpoint(s: &str) -> Result<(Ipv4Addr, u16), String> {
+    if let Some((host, port_str)) = s.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                return Ok((ip, port));
+            }
+        }
+    }
+    s.parse::<Ipv4Addr>()
+        .map(|ip| (ip, DEFAULT_BACNET_PORT))
+        .map_err(|e| format!("invalid device address {s:?}: {e}"))
+}
+
 async fn discover_device(
     client: &mut BACnetClient<bacnet_transport::bip::BipTransport>,
     args: &Args,
 ) {
-    if let Some(device_ip) = args.address {
-        let mac = encode_bip_mac(device_ip.octets(), DEFAULT_BACNET_PORT).to_vec();
-        eprintln!("Using fixed address {device_ip}:{} (skip Who-Is)", DEFAULT_BACNET_PORT);
+    if let Some(ref addr) = args.address {
+        let (device_ip, device_port) = match parse_device_endpoint(addr) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                process::exit(1);
+            }
+        };
+        let mac = encode_bip_mac(device_ip.octets(), device_port).to_vec();
+        eprintln!("Using fixed address {device_ip}:{device_port} (skip Who-Is)");
         if let Err(e) = client.add_device(args.device, &mac).await {
             eprintln!("ERROR: add_device failed: {e}");
             process::exit(1);

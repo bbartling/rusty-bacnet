@@ -1,43 +1,36 @@
 //! Mini BACnet device — Rust port of BACpypes3 `mini-device-revisited.py`.
 //!
 //! Exposes four points on a BACnet/IP device:
-//! - analogValue:1  read-only (simulated ramp)
-//! - binaryValue:1  read-only (simulated active/inactive)
-//! - analogValue:2  commandable (priority array)
-//! - binaryValue:2  commandable (priority array)
+//! - analogInput:1   read-only (simulated ramp; rejects client writes)
+//! - binaryInput:1   read-only (simulated active/inactive)
+//! - analogValue:2   commandable (priority array)
+//! - binaryValue:2   commandable (priority array)
 //!
 //! Bind UDP on 0.0.0.0 (rusty-bacnet-mcp style) with a directed broadcast so
 //! subnet Who-Is reaches the socket on Linux; advertise the NIC IP in I-Am.
 
 use std::env;
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket as StdUdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::{Bytes, BytesMut};
 use socket2::{Domain, Protocol, Socket, Type};
 
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::apdu::{encode_apdu, Apdu, UnconfirmedRequest as UnconfirmedRequestPdu};
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_objects::analog::AnalogValueObject;
-use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
+use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
-use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
-use bacnet_transport::bvll::{encode_bip_mac, encode_bvll};
-use bacnet_types::enums::{
-    BvlcFunction, NetworkPriority, ObjectType, PropertyIdentifier, Segmentation,
-    UnconfirmedServiceChoice,
-};
+use bacnet_transport::bvll::encode_bip_mac;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use clap::Parser;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 const UNITS_DEGF: u32 = 62; // degreesFahrenheit
@@ -95,6 +88,10 @@ struct Args {
     /// Skip startup Who-Is self-check (avoids extra client on same NIC)
     #[arg(long)]
     skip_self_check: bool,
+
+    /// Kill prior instances of this binary and free UDP port before bind (local demos only)
+    #[arg(long)]
+    replace_existing: bool,
 
     /// Deprecated: breaks Who-Is (SO_REUSEPORT steals packets). Use --trace instead.
     #[arg(long, hide = true)]
@@ -275,73 +272,18 @@ fn verify_server_mac(device_ip: Ipv4Addr, port: u16, mac: &[u8]) {
     }
 }
 
-fn build_iam_broadcast_frame(instance: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, instance)?;
-    let i_am = IAmRequest {
-        object_identifier: device_oid,
-        max_apdu_length: MAX_APDU_LENGTH,
-        segmentation_supported: Segmentation::NONE,
-        vendor_id: VENDOR_ID,
-    };
-    let mut service_buf = BytesMut::new();
-    i_am.encode(&mut service_buf);
-
-    let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-        service_choice: UnconfirmedServiceChoice::I_AM,
-        service_request: service_buf.freeze(),
-    });
-    let mut apdu_buf = BytesMut::new();
-    encode_apdu(&mut apdu_buf, &pdu)?;
-
-    let npdu = Npdu {
-        is_network_message: false,
-        expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
-        destination: None,
-        source: None,
-        payload: Bytes::from(apdu_buf.to_vec()),
-        ..Npdu::default()
-    };
-    let mut npdu_buf = BytesMut::new();
-    encode_npdu(&mut npdu_buf, &npdu)?;
-
-    let mut frame = BytesMut::new();
-    encode_bvll(
-        &mut frame,
-        BvlcFunction::ORIGINAL_BROADCAST_NPDU,
-        &npdu_buf,
-    )?;
-    Ok(frame.to_vec())
-}
-
-fn send_iam_broadcast(
-    net: &NetworkConfig,
-    port: u16,
+async fn iam_announcement_task(
+    server: Arc<Mutex<BACnetServer<bacnet_transport::bip::BipTransport>>>,
     instance: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let frame = build_iam_broadcast_frame(instance)?;
-    let socket = StdUdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
-    socket.set_broadcast(true)?;
-    let dest = SocketAddrV4::new(net.broadcast, port);
-    socket.send_to(&frame, dest)?;
-    debug!(
-        "I-Am broadcast sent for device {instance} -> {dest} ({} bytes)",
-        frame.len()
-    );
-    Ok(())
-}
-
-async fn iam_announcement_task(net: NetworkConfig, port: u16, instance: u32, interval_secs: u64) {
+    interval_secs: u64,
+) {
     if interval_secs == 0 {
         return;
     }
     loop {
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-        match send_iam_broadcast(&net, port, instance) {
-            Ok(()) => info!(
-                "I-Am announcement: device {instance} on {}:{} (broadcast {}:{port})",
-                net.device_ip, port, net.broadcast
-            ),
+        match server.lock().await.broadcast_i_am().await {
+            Ok(()) => info!("I-Am announcement sent for device {instance}"),
             Err(e) => warn!("I-Am announcement failed: {e}"),
         }
     }
@@ -351,28 +293,17 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
     let mut db = ObjectDatabase::new();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, args.instance)?;
 
-    // --- Read-only analogValue:1 ---
-    let mut read_only_av = AnalogValueObject::new(1, "read-only-av", UNITS_DEGF)?;
-    read_only_av.set_description("Simulated Read-Only Analog Value");
-    read_only_av.set_present_value(4.0);
-    read_only_av.write_property(
-        PropertyIdentifier::COV_INCREMENT,
-        None,
-        PropertyValue::Real(1.0),
-        None,
-    )?;
-    db.add(Box::new(read_only_av))?;
+    // --- Read-only analogInput:1 (input objects reject Present_Value writes) ---
+    let mut read_only_ai = AnalogInputObject::new(1, "read-only-ai", UNITS_DEGF)?;
+    read_only_ai.set_description("Simulated Read-Only Analog Input");
+    read_only_ai.set_present_value(4.0);
+    db.add(Box::new(read_only_ai))?;
 
-    // --- Read-only binaryValue:1 ---
-    let mut read_only_bv = BinaryValueObject::new(1, "read-only-bv")?;
-    read_only_bv.set_description("Simulated Read-Only Binary Value");
-    read_only_bv.write_property(
-        PropertyIdentifier::PRESENT_VALUE,
-        None,
-        PropertyValue::Enumerated(1), // active
-        None,
-    )?;
-    db.add(Box::new(read_only_bv))?;
+    // --- Read-only binaryInput:1 ---
+    let mut read_only_bi = BinaryInputObject::new(1, "read-only-bi")?;
+    read_only_bi.set_description("Simulated Read-Only Binary Input");
+    read_only_bi.set_present_value(1); // active
+    db.add(Box::new(read_only_bi))?;
 
     // --- Commandable analogValue:2 ---
     let mut commandable_av = AnalogValueObject::new(2, "commandable-av", UNITS_DEGF)?;
@@ -420,8 +351,8 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
 }
 
 async fn simulation_task(db: Arc<RwLock<ObjectDatabase>>) {
-    let av_oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).expect("av:1");
-    let bv_oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 1).expect("bv:1");
+    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).expect("ai:1");
+    let bi_oid = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 1).expect("bi:1");
 
     let samples: [(bool, f32); 4] = [
         (true, 1.0),
@@ -437,7 +368,7 @@ async fn simulation_task(db: Arc<RwLock<ObjectDatabase>>) {
         idx = (idx + 1) % samples.len();
 
         let mut db = db.write().await;
-        if let Some(obj) = db.get_mut(&av_oid) {
+        if let Some(obj) = db.get_mut(&ai_oid) {
             let _ = obj.write_property(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
@@ -445,17 +376,17 @@ async fn simulation_task(db: Arc<RwLock<ObjectDatabase>>) {
                 None,
             );
         }
-        if let Some(obj) = db.get_mut(&bv_oid) {
-            let bv_val = if active { 1 } else { 0 };
+        if let Some(obj) = db.get_mut(&bi_oid) {
+            let bi_val = if active { 1 } else { 0 };
             let _ = obj.write_property(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
-                PropertyValue::Enumerated(bv_val),
+                PropertyValue::Enumerated(bi_val),
                 None,
             );
         }
         debug!(
-            "sim tick: read-only-av={av_val} read-only-bv={}",
+            "sim tick: read-only-ai={av_val} read-only-bi={}",
             if active { "active" } else { "inactive" }
         );
     }
@@ -560,7 +491,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.name, args.instance, net.device_ip, net.socket_bind, args.port, net.broadcast
     );
 
-    kill_prior_listeners(args.port);
+    if args.replace_existing {
+        kill_prior_listeners(args.port);
+    }
     verify_udp_bind(net.socket_bind, args.port);
 
     let db = build_database(&args)?;
@@ -569,10 +502,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db.len()
     );
 
-    let mut server = match BACnetServer::bip_builder()
+    let server = match BACnetServer::bip_builder()
         .interface(net.socket_bind)
         .port(args.port)
         .broadcast_address(net.broadcast)
+        .vendor_id(VENDOR_ID)
         .database(db)
         .build()
         .await
@@ -584,35 +518,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
     };
 
-    let mac = server.local_mac();
-    verify_server_mac(net.device_ip, args.port, mac);
+    let server = Arc::new(Mutex::new(server));
+    let mac: [u8; 6] = {
+        let guard = server.lock().await;
+        guard
+            .local_mac()
+            .try_into()
+            .expect("BACnet/IP local MAC must be 6 bytes")
+    };
+    verify_server_mac(net.device_ip, args.port, &mac);
     info!(
         "BACnet/IP server up — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (Who-Is/I-Am enabled, vendor {VENDOR_ID})",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     );
     info!(
-        "Points: AV:1 read-only, BV:1 read-only, AV:2 commandable, BV:2 commandable"
+        "Points: AI:1 read-only, BI:1 read-only, AV:2 commandable, BV:2 commandable"
     );
     info!("Simulation interval: {}s (read-only points only)", SIM_INTERVAL_SECS);
     log_discovery_help(&net, args.port, args.instance);
 
-    // Immediate I-Am so passive scanners see us without waiting for Who-Is.
     if args.announce_interval > 0 {
-        if let Err(e) = send_iam_broadcast(&net, args.port, args.instance) {
+        if let Err(e) = server.lock().await.broadcast_i_am().await {
             warn!("startup I-Am broadcast failed: {e}");
         } else {
             info!("startup I-Am broadcast sent for device {}", args.instance);
         }
-        let net_ann = net;
+        let server_ann = Arc::clone(&server);
         tokio::spawn(iam_announcement_task(
-            net_ann,
-            args.port,
+            server_ann,
             args.instance,
             args.announce_interval,
         ));
     }
 
-    let db_arc = Arc::clone(server.database());
+    let db_arc = Arc::clone(server.lock().await.database());
     tokio::spawn(simulation_task(db_arc));
 
     if args.skip_self_check {
@@ -627,6 +566,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
-    let _ = server.stop().await;
+    let _ = server.lock().await.stop().await;
     Ok(())
 }

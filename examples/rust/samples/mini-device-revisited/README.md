@@ -6,8 +6,8 @@
 
 | Object | Instance | Access | Behavior |
 |--------|----------|--------|----------|
-| `analogValue` | 1 | Read-only | Simulated temperature ramp (°F) |
-| `binaryValue` | 1 | Read-only | Simulated active/inactive toggle |
+| `analogInput` | 1 | Read-only | Simulated temperature ramp (°F) |
+| `binaryInput` | 1 | Read-only | Simulated active/inactive toggle |
 | `analogValue` | 2 | Commandable | Priority array (write at priority 8–16) |
 | `binaryValue` | 2 | Commandable | Priority array (write at priority 8–16) |
 
@@ -61,14 +61,16 @@ cargo build --release
 | `--debug` | Stack + discovery logging |
 | `--trace` | Full UDP/NPDU/APDU trace |
 | `--skip-self-check` | Skip startup Who-Is self-check |
+| `--replace-existing` | Kill other listeners on UDP port before bind (destructive) |
 
 **Do not use `--log-packets`** — it binds a second socket with `SO_REUSEPORT` and steals Who-Is from the server.
 
 ## Discovery notes
 
 - Binds **`0.0.0.0:47808`** with directed broadcast (rusty-bacnet-mcp style) so subnet Who-Is reaches the socket on Linux.
-- Sends startup + periodic **I-Am** so network scanners find the device without a Who-Is.
-- Kills prior listeners on startup (`/proc/*/exe` + `fuser`) and exits immediately if UDP bind fails.
+- Sends startup + periodic **I-Am** via the server transport (correct BIP MAC), so network scanners find the device without a Who-Is.
+- Use **`--replace-existing`** only when you intend to free UDP `:47808` (kills other listeners on that port).
+- Exits immediately if UDP bind fails when the port is already in use.
 - Same-host clients on the bind IP may not see this device (see root README).
 
 ## Extra binary
