@@ -1,8 +1,8 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "60e443246ad37597580bfc0e4fe170c321545ca4",
-  "review_scope": "Annex J Read-BDT-Ack and Read-FDT-Ack malformed management ACK payload validation evidence.",
+  "repo_sha": "c4bde6391f73bc6fc887110aae5c96f3d75d8f4a",
+  "review_scope": "Annex J Read-BDT-Ack and Read-FDT-Ack BBMD wire-format entry-list evidence.",
   "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.2.4 Read-Broadcast-Distribution-Table-Ack N*10 BDT entry format, Annex J.4.4.1 BBMD Read-BDT behavior, Annex J.2.8 Read-Foreign-Device-Table-Ack N*10 FDT entry format, and Annex J.5.2.1.1 BBMD Read-FDT behavior; no separate addenda/errata source is committed for this tranche.",
   "status_taxonomy": [
     "in-progress",
@@ -326,6 +326,7 @@
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_uses_broadcast_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_unicast_with_full_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_needs_local_broadcast_for_unicast_peer",
+        "crates/bacnet-transport/src/bip/management_ack_tests.rs::read_bdt_ack_encodes_bdt_entries_as_n10_payload",
         "crates/bacnet-transport/src/bip/acl_tests.rs::management_acl_allows_listed_sender_write_bdt_and_delete_fdt",
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
@@ -345,7 +346,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands", "docs/rust-api.md BBMD example"],
-      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, Forwarded-NPDUs are not forwarded onward to other BDT peers, and non-BDT senders are rejected before BDT fanout. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets without extra duplicate frames. J-07 adds project ACL evidence for the legacy Write-BDT path: listed management senders can update the table, and unlisted senders receive the standard Write-BDT NAK without table mutation. J-08 adds BDT persistence evidence: successful Write-BDT stores the current wire-format BDT for restart load, and invalid persisted bytes fall back to the configured BDT without accepting malformed state. J-11 adds client-side Read-Broadcast-Distribution-Table-Ack validation that rejects malformed payload lengths not divisible by the Annex J.2.4 N*10 BDT entry size."
+      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, Forwarded-NPDUs are not forwarded onward to other BDT peers, and non-BDT senders are rejected before BDT fanout. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets without extra duplicate frames. J-07 adds project ACL evidence for the legacy Write-BDT path: listed management senders can update the table, and unlisted senders receive the standard Write-BDT NAK without table mutation. J-08 adds BDT persistence evidence: successful Write-BDT stores the current wire-format BDT for restart load, and invalid persisted bytes fall back to the configured BDT without accepting malformed state. J-11 adds client-side Read-Broadcast-Distribution-Table-Ack validation that rejects malformed payload lengths not divisible by the Annex J.2.4 N*10 BDT entry size. J-12 adds raw BBMD Read-Broadcast-Distribution-Table-Ack wire evidence for ACK function code and N*10 BDT entry bytes."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",
@@ -365,6 +366,7 @@
         "crates/bacnet-transport/src/bip/acl_tests.rs::management_acl_allows_listed_sender_write_bdt_and_delete_fdt",
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo",
+        "crates/bacnet-transport/src/bip/management_ack_tests.rs::read_fdt_ack_encodes_fdt_entries_as_n10_payload",
         "crates/bacnet-transport/src/bbmd.rs::register_and_lookup_foreign_device",
         "crates/bacnet-transport/src/bbmd.rs::re_register_updates_existing",
         "crates/bacnet-transport/src/bbmd.rs::delete_foreign_device",
@@ -392,7 +394,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, verifies no echo to the originating foreign device, checks for no extra duplicate FDT frames, and verifies a registered origin receives X'0060' when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. J-06 adds a BBMD-owned timer purge task for Annex J.5.2.3, covers expiration without an inbound BVLC request, and covers re-registration resetting the entry before the purge task removes it. J-07 adds project ACL evidence for Delete-FDT: listed management senders can delete registered entries, and unlisted senders receive the standard Delete-FDT NAK without removing the entry. J-11 adds client-side Read-Foreign-Device-Table-Ack validation that rejects malformed payload lengths not divisible by the Annex J.2.8 N*10 FDT entry size."
+      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, verifies no echo to the originating foreign device, checks for no extra duplicate FDT frames, and verifies a registered origin receives X'0060' when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. J-06 adds a BBMD-owned timer purge task for Annex J.5.2.3, covers expiration without an inbound BVLC request, and covers re-registration resetting the entry before the purge task removes it. J-07 adds project ACL evidence for Delete-FDT: listed management senders can delete registered entries, and unlisted senders receive the standard Delete-FDT NAK without removing the entry. J-11 adds client-side Read-Foreign-Device-Table-Ack validation that rejects malformed payload lengths not divisible by the Annex J.2.8 N*10 FDT entry size. J-12 adds raw BBMD Read-Foreign-Device-Table-Ack wire evidence for ACK function code and N*10 FDT entry fields."
     },
     {
       "id": "BACNET-J-NAT-TRAVERSAL",
