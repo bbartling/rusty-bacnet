@@ -11,6 +11,16 @@ async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     decode_bvll(&recv_buf[..len]).unwrap()
 }
 
+async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
+    let mut recv_buf = [0u8; 2048];
+    assert!(
+        timeout(Duration::from_millis(100), socket.recv_from(&mut recv_buf))
+            .await
+            .is_err(),
+        "{label} received an unexpected extra BVLL frame"
+    );
+}
+
 #[tokio::test]
 async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
     let bbmd_socket = Arc::new(
@@ -96,14 +106,12 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         assert_eq!(frame.payload.as_ref(), msg.payload.as_ref(), "{label}");
     }
 
-    let mut origin_echo_buf = [0u8; 2048];
-    assert!(
-        timeout(
-            Duration::from_millis(100),
-            origin_fd_sink.recv_from(&mut origin_echo_buf)
-        )
-        .await
-        .is_err(),
-        "DBTN fanout must exclude the originating foreign device"
-    );
+    for (label, socket) in [
+        ("local broadcast", &local_broadcast_sink),
+        ("BDT peer", &bdt_peer_sink),
+        ("foreign device peer", &peer_fd_sink),
+    ] {
+        assert_no_bvll(socket, label).await;
+    }
+    assert_no_bvll(&origin_fd_sink, "originating foreign device").await;
 }

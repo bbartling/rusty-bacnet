@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `a0ab55d9a4803704712a740be469c9edaf2cce71`
-- Scope: Annex J J.4.5 Distribute-Broadcast-To-Network fanout evidence for registered foreign devices.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP DBTN broadcast distribution changes found for this tranche.
+- Repository SHA reviewed: `6ab1fe7a517de24a95436d5ea586546c7f77216d`
+- Scope: Annex J J.4.5 Forwarded-NPDU non-BDT rejection and DBTN duplicate fanout evidence.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Forwarded-NPDU source validation or DBTN duplicate-fanout changes found for this tranche.
 
 ## Counts
 
