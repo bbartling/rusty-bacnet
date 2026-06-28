@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `598b2e132de3a32a67662633bcc69bfc9f34094a`
-- Scope: Annex J BBMD management ACL evidence for legacy Write-BDT and Delete-FDT caller paths.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; Annex J.4.4.2 legacy Write-BDT behavior and J.5.2.1.2 Delete-FDT result semantics checked for this tranche.
+- Implementation evidence SHA reviewed: `559074f503c423575b3bf2eff6bd873947e3ed04`
+- Scope: Annex J BBMD BDT persistence evidence for successful legacy Write-BDT restart load and invalid persisted-data fallback.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.4.4 BBMD configuration and J.4.4.1 Read-BDT current-table semantics; no separate addenda/errata source is committed for this tranche.
 
 ## Counts
 
@@ -51,7 +51,7 @@
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |
 | `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 2 |
-| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | implementation-present-needs-conformance-tests | 2 |
+| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | implementation-present-needs-conformance-tests | 3 |
 | `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | implementation-present-needs-conformance-tests | 1 |
 | `BACNET-J-NAT-TRAVERSAL` | Annex J.7.5 | P0 | deferred-pending-owner-decision | 0 |
 | `BACNET-J-IP-MULTICAST` | Annex J.8 | P0 | deferred-pending-owner-decision | 0 |
