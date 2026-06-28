@@ -134,10 +134,15 @@ impl BbmdState {
     ///
     /// Returns an error if the number of entries exceeds `MAX_BDT_ENTRIES`.
     pub fn set_bdt(&mut self, entries: Vec<BdtEntry>) -> Result<(), Error> {
-        if entries.len() > Self::MAX_BDT_ENTRIES {
+        let needs_self = !entries
+            .iter()
+            .any(|e| e.ip == self.local_ip && e.port == self.local_port);
+        let effective_len = entries.len() + usize::from(needs_self);
+
+        if effective_len > Self::MAX_BDT_ENTRIES {
             return Err(Error::Encoding(format!(
-                "BDT size {} exceeds maximum of {}",
-                entries.len(),
+                "BDT size {} exceeds maximum of {} after self-entry insertion",
+                effective_len,
                 Self::MAX_BDT_ENTRIES
             )));
         }
@@ -219,6 +224,10 @@ impl BbmdState {
 
     /// Register or re-register a foreign device.
     pub fn register_foreign_device(&mut self, ip: [u8; 4], port: u16, ttl: u16) -> BvlcResultCode {
+        if ttl == 0 {
+            return BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK;
+        }
+
         // Update existing or insert new
         if let Some(entry) = self.fdt.iter_mut().find(|e| e.ip == ip && e.port == port) {
             entry.ttl = ttl;
@@ -410,6 +419,21 @@ mod tests {
     }
 
     #[test]
+    fn set_bdt_rejects_max_entries_when_self_insert_would_exceed_limit() {
+        let mut bbmd = make_bbmd();
+        let entries = (0..BbmdState::MAX_BDT_ENTRIES)
+            .map(|i| BdtEntry {
+                ip: [10, 0, (i / 256) as u8, i as u8],
+                port: 0xBAC0,
+                broadcast_mask: [255, 255, 255, 255],
+            })
+            .collect();
+
+        assert!(bbmd.set_bdt(entries).is_err());
+        assert!(bbmd.bdt().is_empty());
+    }
+
+    #[test]
     fn register_and_lookup_foreign_device() {
         let mut bbmd = make_bbmd();
         let result = bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
@@ -417,6 +441,14 @@ mod tests {
         assert_eq!(bbmd.fdt().len(), 1);
         assert_eq!(bbmd.fdt()[0].ip, [10, 0, 0, 5]);
         assert_eq!(bbmd.fdt()[0].ttl, 60);
+    }
+
+    #[test]
+    fn register_foreign_device_zero_ttl_naks() {
+        let mut bbmd = make_bbmd();
+        let result = bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 0);
+        assert_eq!(result, BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK);
+        assert!(bbmd.fdt().is_empty());
     }
 
     #[test]
@@ -473,6 +505,20 @@ mod tests {
         assert_eq!(u16::from_be_bytes([buf[4], buf[5]]), 0xBAC0);
         // TTL
         assert_eq!(u16::from_be_bytes([buf[6], buf[7]]), 60);
+    }
+
+    #[test]
+    fn fdt_encode_caps_max_ttl_remaining_time() {
+        let mut bbmd = make_bbmd();
+        let result = bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, u16::MAX);
+        assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+        let mut buf = BytesMut::new();
+        bbmd.encode_fdt(&mut buf);
+
+        assert_eq!(buf.len(), FDT_ENTRY_SIZE);
+        assert_eq!(u16::from_be_bytes([buf[6], buf[7]]), u16::MAX);
+        assert_eq!(u16::from_be_bytes([buf[8], buf[9]]), u16::MAX);
     }
 
     #[test]
@@ -543,6 +589,29 @@ mod tests {
         let targets = bbmd.forwarding_targets([192, 168, 1, 100], 0xBAC0);
         assert_eq!(targets.len(), 1);
         assert!(targets.contains(&([10, 0, 0, 1], 0xBAC0)));
+    }
+
+    #[test]
+    fn forwarding_targets_excludes_originating_foreign_device_and_expired_entries() {
+        let mut bbmd = BbmdState::new([192, 168, 1, 1], 0xBAC0);
+        bbmd.set_bdt(vec![BdtEntry {
+            ip: [192, 168, 2, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+        bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
+        bbmd.fdt.push(FdtEntry {
+            ip: [10, 0, 0, 6],
+            port: 0xBAC0,
+            ttl: 60,
+            registered_at: Instant::now() - Duration::from_secs(91),
+        });
+
+        let targets = bbmd.forwarding_targets([10, 0, 0, 5], 0xBAC0);
+
+        assert_eq!(targets, vec![([192, 168, 2, 1], 0xBAC0)]);
+        assert_eq!(bbmd.fdt().len(), 1);
     }
 
     #[test]

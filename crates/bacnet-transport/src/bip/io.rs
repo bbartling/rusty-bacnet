@@ -273,7 +273,7 @@ pub(super) async fn handle_bvll_message(
 
         f if f == BvlcFunction::REGISTER_FOREIGN_DEVICE => {
             if let Some(bbmd) = &ctx.bbmd {
-                if msg.payload.len() < 2 {
+                if msg.payload.len() != 2 {
                     send_bvlc_result(
                         &ctx.socket,
                         sender,
@@ -452,7 +452,7 @@ pub(super) async fn handle_bvll_message(
                         BvlcResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK,
                     )
                     .await;
-                } else if msg.payload.len() >= 6 {
+                } else if msg.payload.len() == 6 {
                     let ip = [
                         msg.payload[0],
                         msg.payload[1],
