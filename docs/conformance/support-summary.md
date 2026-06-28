@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `828ee3fca2233600d09a68267e791d3f7ebbe6c1`
-- Scope: Annex J.5.2.3 Foreign Device Table timer operation.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; FDT timer requirements remain anchored in Annex J.5.2.3 for this tranche.
+- Repository SHA reviewed: `598b2e132de3a32a67662633bcc69bfc9f34094a`
+- Scope: Annex J BBMD management ACL evidence for legacy Write-BDT and Delete-FDT caller paths.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; Annex J.4.4.2 legacy Write-BDT behavior and J.5.2.1.2 Delete-FDT result semantics checked for this tranche.
 
 ## Counts
 
