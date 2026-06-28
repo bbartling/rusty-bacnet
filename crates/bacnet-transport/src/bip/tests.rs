@@ -738,7 +738,7 @@ async fn bvlc_request_rejects_concurrent_calls() {
 }
 
 #[tokio::test]
-async fn bind_address_is_inaddr_any() {
+async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
     // Regression for the "user-supplied interface IP" silently rejecting
     // broadcast traffic.  Even when the caller passes a specific interface,
     // the underlying socket must bind 0.0.0.0 so the kernel delivers
@@ -757,6 +757,18 @@ async fn bind_address_is_inaddr_any() {
     assert!(
         local.ip().is_unspecified(),
         "BIP socket must bind to 0.0.0.0 for broadcast reception; got {local}"
+    );
+    assert!(
+        socket2::SockRef::from(
+            transport
+                .socket
+                .as_ref()
+                .expect("socket exists after start")
+                .as_ref()
+        )
+        .broadcast()
+        .expect("SO_BROADCAST is queryable"),
+        "BIP socket must enable SO_BROADCAST for Original-Broadcast-NPDU sends"
     );
 
     // The announced local MAC must still reflect the user-supplied interface,

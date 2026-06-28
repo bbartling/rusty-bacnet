@@ -409,9 +409,9 @@ impl TransportPort for BipTransport {
         // Linux UDP socket bound to a specific interface IP only receives
         // packets whose destination IP matches the bound IP, so binding to
         // self.interface would silently drop every inbound broadcast — see
-        // tests::bind_address_is_inaddr_any.  `self.interface` is still used
-        // below for the announced local MAC (line 318), so I-Am responses
-        // continue to advertise the correct source IP.
+        // tests::socket_is_broadcast_capable_and_binds_inaddr_any. `self.interface`
+        // is still used below for the announced local MAC (line 318), so I-Am
+        // responses continue to advertise the correct source IP.
         let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.port);
         socket2.bind(&bind_addr.into()).map_err(Error::Transport)?;
 

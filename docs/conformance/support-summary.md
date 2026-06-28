@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Implementation evidence SHA reviewed: `559074f503c423575b3bf2eff6bd873947e3ed04`
-- Scope: Annex J BBMD BDT persistence evidence for successful legacy Write-BDT restart load and invalid persisted-data fallback.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.4.4 BBMD configuration and J.4.4.1 Read-BDT current-table semantics; no separate addenda/errata source is committed for this tranche.
+- Implementation evidence SHA reviewed: `617e8af53b056f46aaa76d39b4f0a4dadf46a1ef`
+- Scope: Annex J B/IP platform broadcast socket evidence for Original-Broadcast-NPDU send and receive prerequisites.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.1.2 B/IP broadcast-address semantics, J.2.12 Original-Broadcast-NPDU format, and J.4.1 local broadcast behavior; no separate addenda/errata source is committed for this tranche.
 
 ## Counts
 
