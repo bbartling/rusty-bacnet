@@ -436,7 +436,41 @@ comparable to pure Rust's single-threaded 48K/s.
 
 ---
 
-## 7. How to Reproduce
+## 7. A/B Benchmark Harness
+
+The benchmark runner scripts capture current-revision evidence without comparing
+new runs to the historical tables above by hand.
+
+```bash
+# Local suite wrappers
+scripts/bench-local.sh smoke
+scripts/bench-local.sh bip --quick --noplot
+scripts/bench-local.sh bbmd --duration 5 --steps 1,3 --json
+
+# Base/head comparison with raw artifacts and a Markdown summary
+scripts/bench-ab.sh \
+  --base origin/dev \
+  --head HEAD \
+  --suites bip,bbmd \
+  --duration 5 \
+  --quick \
+  --noplot \
+  --output-dir bench-output/ab-annex-j
+```
+
+`bench-output/` is intentionally ignored by git. Each A/B run records
+environment metadata, per-suite stdout/stderr/status files for base and head,
+and `summary.md`. Stress suites emit JSON and are summarized automatically;
+Criterion suites are retained as raw textual logs until a Criterion JSON export
+is added.
+
+Machine-readable benchmark history rows should conform to
+`benchmarks/schema/benchmark-result.schema.json` when results are promoted from
+local artifacts into tracked history.
+
+---
+
+## 8. How to Reproduce
 
 ```bash
 # Criterion benchmarks (all 9 suites — run sequentially for accurate results)
