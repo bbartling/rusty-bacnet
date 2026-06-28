@@ -6,6 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main, dev]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,7 +26,7 @@ permissions:
   id-token: write
 
 # =============================================================================
-# Tier 1 — CI (runs on PRs to main/dev, pushes to main, and v* tags)
+# Tier 1 — CI (runs on PR updates to main/dev, pushes to main, and v* tags)
 # =============================================================================
 
 jobs:
