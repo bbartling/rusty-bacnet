@@ -10,7 +10,7 @@ This draft summarizes implementation evidence that may feed a future formal Prot
 |---|---|---|---|
 | `BACNET-7-ETHERNET-LLC` | Clause 7 | implementation-present-needs-platform-tests | `crates/bacnet-transport/src/ethernet*`, `crates/bacnet-transport/Cargo.toml` |
 | `BACNET-9-MSTP-FRAMES` | Clause 9.3 | implementation-present-needs-source-review | `crates/bacnet-transport/src/mstp_frame.rs`, `crates/bacnet-transport/src/mstp`, `crates/bacnet-transport/src/mstp/tests.rs` |
-| `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-types/src/enums/bvll.rs` |
+| `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bip/mod.rs`, `crates/bacnet-types/src/enums/bvll.rs` |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bip` |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bip` |
 | `BACNET-J-FORWARDED-NPDU` | Annex J | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bbmd.rs` |

@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "1308e4a7c6b67a1d225a112201f9381c6f9f006d",
-  "review_scope": "Annex J J-01 BVLL codec evidence update; no runtime protocol behavior changes.",
-  "addenda_errata_status": "Local Standard 135-2020 Annex J.2 text checked for this tranche; current addenda/errata still require follow-up review before strengthening support claims.",
+  "repo_sha": "8961537a43f82dfa7675f2fd00c76f7de699f892",
+  "review_scope": "Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.",
+  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -219,23 +219,28 @@
       "id": "BACNET-J-BVLC-FUNCTION-CODES",
       "standard_anchor": "Annex J.2",
       "priority": "P0",
-      "requirement_summary": "BACnet/IPv4 BVLC type, Annex J.2 function code, and length handling is table-tested through Original-Broadcast-NPDU, with deleted-value passthrough tracked separately.",
+      "requirement_summary": "BACnet/IPv4 BVLC type, Annex J.2 function code, length handling, and BVLC-Result result-code parsing are table-tested, with deleted-value passthrough tracked separately.",
       "status": "implementation-present-needs-conformance-tests",
-      "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-types/src/enums/bvll.rs"],
+      "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-transport/src/bip/mod.rs", "crates/bacnet-types/src/enums/bvll.rs"],
       "positive_tests": [
         "crates/bacnet-transport/src/bvll.rs::annex_j_bvlc_function_constants_are_stable",
-        "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough"
+        "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
+        "crates/bacnet-transport/src/bip/tests.rs::decode_bvlc_result_code_accepts_named_and_unknown_codes",
+        "crates/bacnet-transport/src/bip/tests.rs::pending_bvlc_response_requires_sender_and_expected_function"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bvll.rs::decode_wrong_type",
         "crates/bacnet-transport/src/bvll.rs::decode_length_shorter_than_header_errors",
         "crates/bacnet-transport/src/bvll.rs::decode_length_exceeds_data",
         "crates/bacnet-transport/src/bvll.rs::decode_preserves_unknown_bvlc_function_code",
-        "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length"
+        "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length",
+        "crates/bacnet-transport/src/bip/tests.rs::decode_bvlc_result_code_rejects_wrong_function",
+        "crates/bacnet-transport/src/bip/tests.rs::decode_bvlc_result_code_rejects_malformed_payload_lengths",
+        "crates/bacnet-transport/src/bip/tests.rs::expect_bvlc_function_rejects_unexpected_response_function"
       ],
       "benchmarks": ["benchmarks/benches/bip_latency.rs", "benchmarks/benches/bip_throughput.rs"],
       "public_claims": ["README BACnet/IP feature", "README transports table: BACnet/IP"],
-      "notes": "J-01 now covers Annex J.2 function constants through 0x0B, representative frames, wrong type, short/overlong declared lengths, unknown function passthrough, and the current decoder policy for bytes beyond the declared BVLC Length. SECURE_BVLL 0x0C is tested only as deleted-value passthrough. Function-specific management payload semantics remain for J-02/J-03."
+      "notes": "J-01 covers Annex J.2 function constants through 0x0B, representative frames, wrong type, short/overlong declared lengths, unknown function passthrough, and current decoder policy for bytes beyond the declared BVLC Length. J-02 adds exact two-byte BVLC-Result parsing, unknown result-code passthrough, malformed result rejection, and sender/expected-function correlation for pending management responses. SECURE_BVLL 0x0C is tested only as deleted-value passthrough. BBMD/FDT lifecycle semantics remain for later J-03 work."
     },
     {
       "id": "BACNET-J-ORIGINAL-UNICAST-NPDU",
@@ -286,11 +291,17 @@
       "requirement_summary": "BBMD Broadcast Distribution Table write/read/ACK behavior and peer broadcast fanout are validated.",
       "status": "implementation-present-needs-conformance-tests",
       "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "positive_tests": [
+        "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_bbmd",
+        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_bbmd"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_non_bbmd_surfaces_typed_nak",
+        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_non_bbmd_surfaces_typed_nak"
+      ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands"],
-      "notes": "Needs BDT overwrite, read ACK, fanout, and loop prevention tests."
+      "notes": "J-02 covers read/write BDT caller paths and typed non-BBMD BVLC-Result NAK propagation. BDT overwrite, fanout, loop prevention, persistence, and ACL matrix tests remain for later lifecycle work."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",
@@ -299,11 +310,18 @@
       "requirement_summary": "Foreign-device registration, TTL bounds, re-registration, read/delete FDT, expiry, and DBTN authorization are validated.",
       "status": "implementation-present-needs-conformance-tests",
       "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "positive_tests": [
+        "crates/bacnet-transport/src/bip/tests.rs::read_fdt_from_bbmd",
+        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_via_bvlc"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/bip/tests.rs::read_fdt_from_non_bbmd_surfaces_typed_nak",
+        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_to_non_bbmd_surfaces_typed_nak",
+        "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_to_non_bbmd_surfaces_typed_nak"
+      ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "Needs unregistered/expired foreign device rejection evidence."
+      "notes": "J-02 covers FDT read/register/delete caller paths and typed non-BBMD BVLC-Result NAK propagation. TTL bounds, expiry, re-registration, DBTN authorization, and delete lifecycle semantics remain for later lifecycle work."
     },
     {
       "id": "BACNET-K-BIBBS",
