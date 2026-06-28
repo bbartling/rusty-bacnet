@@ -1,7 +1,7 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "e8abd2d605bea2336dbb1016017eaf2d892343f8",
+  "repo_sha": "8961537a43f82dfa7675f2fd00c76f7de699f892",
   "review_scope": "Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.",
   "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.",
   "status_taxonomy": [
