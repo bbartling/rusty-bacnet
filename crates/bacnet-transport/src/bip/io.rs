@@ -143,9 +143,12 @@ pub(super) async fn handle_bvll_message(
 
             // BBMD mode: only accept FORWARDED_NPDU from BDT peers
             if let Some(bbmd) = &ctx.bbmd {
-                let is_bdt_peer = {
+                let (is_bdt_peer, needs_local_broadcast) = {
                     let state = bbmd.lock().await;
-                    state.is_bdt_peer(sender.0, sender.1)
+                    (
+                        state.is_bdt_peer(sender.0, sender.1),
+                        state.forwarded_npdu_needs_local_broadcast(sender.0, sender.1),
+                    )
                 };
                 if !is_bdt_peer {
                     debug!(
@@ -184,14 +187,16 @@ pub(super) async fn handle_bvll_message(
                 };
                 forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets).await;
 
-                // Re-broadcast on local subnet as Forwarded-NPDU
-                let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                match encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload) {
-                    Ok(()) => {
-                        let _ = ctx.socket.send_to(&buf, dest).await;
+                // Full-mask BDT peers forward by unicast; masked peers forward by directed broadcast.
+                if needs_local_broadcast {
+                    let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
+                    let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
+                    match encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload) {
+                        Ok(()) => {
+                            let _ = ctx.socket.send_to(&buf, dest).await;
+                        }
+                        Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
                     }
-                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
                 }
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).

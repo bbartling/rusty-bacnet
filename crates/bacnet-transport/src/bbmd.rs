@@ -289,6 +289,14 @@ impl BbmdState {
         self.bdt.iter().any(|e| e.ip == ip && e.port == port)
     }
 
+    /// Whether a Forwarded-NPDU from this BDT peer still needs a local subnet broadcast.
+    pub fn forwarded_npdu_needs_local_broadcast(&self, ip: [u8; 4], port: u16) -> bool {
+        self.bdt
+            .iter()
+            .find(|e| e.ip == ip && e.port == port)
+            .is_some_and(|e| e.broadcast_mask == [0xff, 0xff, 0xff, 0xff])
+    }
+
     /// Check if a sender is a registered (non-expired) foreign device.
     pub fn is_registered_foreign_device(&mut self, ip: [u8; 4], port: u16) -> bool {
         self.purge_expired();
@@ -676,6 +684,39 @@ mod tests {
         .unwrap();
         assert!(bbmd.is_bdt_peer([10, 0, 0, 1], 0xBAC0));
         assert!(!bbmd.is_bdt_peer([10, 0, 0, 2], 0xBAC0));
+    }
+
+    #[test]
+    fn forwarded_npdu_needs_local_broadcast_for_unicast_peer() {
+        let mut bbmd = make_bbmd();
+        bbmd.set_bdt(vec![BdtEntry {
+            ip: [10, 0, 0, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+
+        assert!(bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], 0xBAC0));
+    }
+
+    #[test]
+    fn forwarded_npdu_skips_local_broadcast_for_directed_broadcast_peer() {
+        let mut bbmd = make_bbmd();
+        bbmd.set_bdt(vec![BdtEntry {
+            ip: [10, 0, 0, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 0],
+        }])
+        .unwrap();
+
+        assert!(!bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], 0xBAC0));
+    }
+
+    #[test]
+    fn forwarded_npdu_skips_local_broadcast_for_unknown_peer() {
+        let bbmd = make_bbmd();
+
+        assert!(!bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], 0xBAC0));
     }
 
     #[test]

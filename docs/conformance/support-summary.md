@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `ed21fc339c5aa73b82fee2176ba40ad7a1010ece`
-- Scope: Annex J J-03 BBMD BDT/FDT lifecycle validation evidence update; malformed management payloads, TTL bounds, table limits, delete semantics, and DBTN authorization hardened.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BBMD/FDT lifecycle changes found for this tranche.
+- Repository SHA reviewed: `607255450009d3f5b470b7f361938886228abd70`
+- Scope: Annex J J-04 BBMD Forwarded-NPDU source and loop-prevention evidence update; directed-broadcast peer forwarding hardened.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Forwarded-NPDU forwarding changes found for this tranche.
 
 ## Counts
 
