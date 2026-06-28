@@ -840,6 +840,60 @@ async fn original_broadcast_npdu_preserves_global_npdu_destination() {
 }
 
 #[tokio::test]
+async fn original_broadcast_npdu_preserves_remote_npdu_destination() {
+    let sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let sink_port = sink.local_addr().unwrap().port();
+    let source_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, sink_port, Ipv4Addr::LOCALHOST);
+    transport.socket = Some(Arc::new(source_socket));
+
+    let mut npdu_buf = BytesMut::new();
+    encode_npdu(
+        &mut npdu_buf,
+        &Npdu {
+            destination: Some(NpduAddress {
+                network: 0x1234,
+                mac_address: MacAddr::new(),
+            }),
+            hop_count: 64,
+            payload: Bytes::from_static(&[0x10, 0x09]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let npdu = npdu_buf.freeze();
+
+    transport.send_broadcast(&npdu).await.unwrap();
+
+    let mut recv_buf = [0u8; 2048];
+    let (len, _addr) = timeout(Duration::from_secs(2), sink.recv_from(&mut recv_buf))
+        .await
+        .expect("timed out waiting for Original-Broadcast-NPDU")
+        .unwrap();
+    let frame = decode_bvll(&recv_buf[..len]).unwrap();
+
+    assert_eq!(frame.function, BvlcFunction::ORIGINAL_BROADCAST_NPDU);
+    assert_eq!(
+        frame.payload.as_ref(),
+        npdu.as_ref(),
+        "Original-Broadcast-NPDU must preserve remote NPDU addressing bytes"
+    );
+
+    let decoded = decode_npdu(frame.payload).unwrap();
+    let destination = decoded
+        .destination
+        .expect("remote broadcast NPDU must keep DNET/DADR destination");
+    assert_eq!(destination.network, 0x1234);
+    assert!(destination.mac_address.is_empty());
+    assert_eq!(decoded.hop_count, 64);
+    assert_eq!(decoded.payload.as_ref(), &[0x10, 0x09]);
+}
+
+#[tokio::test]
 async fn start_fails_on_nonlocal_interface() {
     // Now that we bind the real socket to 0.0.0.0, a typo'd interface IP
     // would otherwise succeed at bind and only fail silently later when
