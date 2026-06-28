@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "f01688bbfd6b164e6ed74fd5f871df9e7e67951b",
-  "review_scope": "Annex J J.7.5 NAT traversal and J.8 BACnet/IP multicast support-status decisions.",
-  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no additional Annex J NAT or BACnet/IP multicast changes found for this tranche.",
+  "repo_sha": "828ee3fca2233600d09a68267e791d3f7ebbe6c1",
+  "review_scope": "Annex J.5.2.3 Foreign Device Table timer operation.",
+  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; FDT timer requirements remain anchored in Annex J.5.2.3 for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -352,6 +352,8 @@
         "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_accepts_max_ttl_and_caps_remaining",
         "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_removes_registered_foreign_device",
         "crates/bacnet-transport/src/bip/tests.rs::foreign_device_broadcast_via_bbmd",
+        "crates/bacnet-transport/src/bip/fdt_tests.rs::bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request",
+        "crates/bacnet-transport/src/bip/fdt_tests.rs::register_foreign_device_resets_entry_before_purge_task_removes_it",
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo",
         "crates/bacnet-transport/src/bbmd.rs::register_and_lookup_foreign_device",
@@ -379,7 +381,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, verifies no echo to the originating foreign device, checks for no extra duplicate FDT frames, and verifies a registered origin receives X'0060' when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. Timer-driven expiry integration remains open."
+      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, verifies no echo to the originating foreign device, checks for no extra duplicate FDT frames, and verifies a registered origin receives X'0060' when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. J-06 adds a BBMD-owned timer purge task for Annex J.5.2.3, covers expiration without an inbound BVLC request, and covers re-registration resetting the entry before the purge task removes it."
     },
     {
       "id": "BACNET-J-NAT-TRAVERSAL",

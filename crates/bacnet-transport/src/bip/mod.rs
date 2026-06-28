@@ -123,6 +123,8 @@ pub struct BipTransport {
     bbmd_config: Option<BbmdConfig>,
     /// BBMD state (when acting as a BBMD, created in `start()`).
     bbmd: Option<Arc<Mutex<BbmdState>>>,
+    /// BBMD FDT expiry purge task.
+    bbmd_fdt_purge_task: Option<JoinHandle<()>>,
     /// Foreign device config (when registered as a foreign device).
     foreign_device: Option<ForeignDeviceConfig>,
     /// Re-registration timer task.
@@ -149,6 +151,7 @@ impl BipTransport {
             recv_task: None,
             bbmd_config: None,
             bbmd: None,
+            bbmd_fdt_purge_task: None,
             foreign_device: None,
             registration_task: None,
             pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -198,6 +201,12 @@ impl BipTransport {
     /// Timeout for BVLC management response waiting.
     const BVLC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
+    #[cfg(not(test))]
+    const BBMD_FDT_PURGE_INTERVAL: Duration = Duration::from_secs(1);
+
+    #[cfg(test)]
+    const BBMD_FDT_PURGE_INTERVAL: Duration = Duration::from_millis(20);
+
     /// Get the socket, returning an error if not started.
     fn require_socket(&self) -> Result<&Arc<UdpSocket>, Error> {
         self.socket.as_ref().ok_or_else(|| {
@@ -205,6 +214,22 @@ impl BipTransport {
                 std::io::ErrorKind::NotConnected,
                 "Transport not started",
             ))
+        })
+    }
+
+    fn spawn_bbmd_fdt_purge_task(bbmd: Arc<Mutex<BbmdState>>) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Self::BBMD_FDT_PURGE_INTERVAL);
+            loop {
+                ticker.tick().await;
+                let purged = {
+                    let mut state = bbmd.lock().await;
+                    state.purge_expired()
+                };
+                if purged > 0 {
+                    debug!(purged, "Purged expired BBMD FDT entries");
+                }
+            }
         })
     }
 
@@ -487,6 +512,10 @@ impl TransportPort for BipTransport {
 
         self.recv_task = Some(recv_task);
 
+        if let Some(bbmd) = self.bbmd.clone() {
+            self.bbmd_fdt_purge_task = Some(Self::spawn_bbmd_fdt_purge_task(bbmd));
+        }
+
         if let Some(fd) = &self.foreign_device {
             let bbmd_addr = SocketAddrV4::new(fd.bbmd_ip, fd.bbmd_port);
             let ttl = fd.ttl;
@@ -512,6 +541,10 @@ impl TransportPort for BipTransport {
 
     async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.registration_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.bbmd_fdt_purge_task.take() {
             task.abort();
             let _ = task.await;
         }
@@ -572,6 +605,8 @@ impl TransportPort for BipTransport {
 
 #[cfg(test)]
 mod dbtn_tests;
+#[cfg(test)]
+mod fdt_tests;
 #[cfg(test)]
 mod forwarded_tests;
 #[cfg(test)]
