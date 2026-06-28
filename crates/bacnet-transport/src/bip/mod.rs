@@ -569,4 +569,6 @@ impl TransportPort for BipTransport {
 }
 
 #[cfg(test)]
+mod forwarded_tests;
+#[cfg(test)]
 mod tests;
