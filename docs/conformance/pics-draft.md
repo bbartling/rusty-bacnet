@@ -14,8 +14,8 @@ This draft summarizes implementation evidence that may feed a future formal Prot
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bip` |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bip` |
 | `BACNET-J-FORWARDED-NPDU` | Annex J | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/bvll.rs`, `crates/bacnet-transport/src/bbmd.rs` |
-| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bbmd.rs`, `crates/bacnet-cli/src/shell/bbmd.rs` |
-| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bbmd.rs`, `crates/bacnet-cli/src/shell/bbmd.rs` |
+| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bbmd.rs`, `crates/bacnet-transport/src/bip/io.rs`, `crates/bacnet-cli/src/shell/bbmd.rs` |
+| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bbmd.rs`, `crates/bacnet-transport/src/bip/io.rs`, `crates/bacnet-cli/src/shell/bbmd.rs` |
 | `BACNET-U-IPV6-BVLL` | Annex U | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/bip6`, `crates/bacnet-types/src/enums/bvll.rs` |
 | `BACNET-AB-SC-FRAME` | Annex AB.2 | implementation-present-needs-negative-tests | `crates/bacnet-transport/src/sc_frame.rs`, `crates/bacnet-wasm/src/sc_frame.rs` |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/sc/mod.rs`, `crates/bacnet-transport/src/sc_hub.rs` |

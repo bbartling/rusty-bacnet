@@ -6,10 +6,10 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-28.
-- Repository SHA reviewed: `8961537a43f82dfa7675f2fd00c76f7de699f892`.
+- Repository SHA reviewed: `ed21fc339c5aa73b82fee2176ba40ad7a1010ece`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Current scope: Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.
-- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.
+- Current scope: Annex J J-03 BBMD BDT/FDT lifecycle validation evidence update; malformed management payloads, TTL bounds, table limits, delete semantics, and DBTN authorization hardened.
+- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BBMD/FDT lifecycle changes found for this tranche.
 
 ## Status Taxonomy
 
@@ -87,8 +87,8 @@
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; B/IP source/reply semantics need tests. |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; broadcast semantics need tests. |
 | `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic originating-address parsing and truncated-address rejection are covered; BBMD source/loop behavior needs tests. |
-| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-02 covers read/write BDT caller paths and typed non-BBMD BVLC-Result NAK propagation; lifecycle tests remain open. |
-| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-02 covers FDT read/register/delete caller paths and typed non-BBMD BVLC-Result NAK propagation; TTL/expiry/lifecycle tests remain open. |
+| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. Persistence, ACL matrix, and multi-BBMD fanout/loop behavior remain open. |
+| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. Multi-device forwarded fanout and timer-driven expiry integration remain open. |
 
 ## Annex K BIBBs
 
@@ -125,4 +125,4 @@
 
 ## Follow-Up Backlog
 
-Rows not marked `supported-with-clause-evidence` are follow-up work. The next Annex J tranche should continue BBMD/BDT/FDT lifecycle evidence, including TTL/expiry, delete semantics, DBTN authorization, BDT persistence, ACL behavior, and forwarding loop prevention.
+Rows not marked `supported-with-clause-evidence` are follow-up work. The next Annex J tranche should continue BBMD/BDT/FDT lifecycle evidence, including timer-driven expiry integration, multi-device forwarded fanout, BDT persistence, ACL behavior, and forwarding loop prevention.
