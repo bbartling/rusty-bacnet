@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "c7af6a68b20339ad009597c76f539b54222fe1f7",
-  "review_scope": "Initial ledger seed and public-claim guard only; no runtime protocol behavior changes.",
-  "addenda_errata_status": "Not checked in this initial local seed; re-check current addenda/errata before each protocol PR.",
+  "repo_sha": "1308e4a7c6b67a1d225a112201f9381c6f9f006d",
+  "review_scope": "Annex J J-01 BVLL codec evidence update; no runtime protocol behavior changes.",
+  "addenda_errata_status": "Local Standard 135-2020 Annex J.2 text checked for this tranche; current addenda/errata still require follow-up review before strengthening support claims.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -219,14 +219,23 @@
       "id": "BACNET-J-BVLC-FUNCTION-CODES",
       "standard_anchor": "Annex J.2",
       "priority": "P0",
-      "requirement_summary": "BACnet/IPv4 BVLC type, function code, and length handling is table-tested for every exposed function.",
+      "requirement_summary": "BACnet/IPv4 BVLC type, Annex J.2 function code, and length handling is table-tested through Original-Broadcast-NPDU, with deleted-value passthrough tracked separately.",
       "status": "implementation-present-needs-conformance-tests",
       "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-types/src/enums/bvll.rs"],
-      "positive_tests": ["crates/bacnet-transport/src/bvll.rs"],
-      "negative_tests": ["crates/bacnet-transport/src/bvll.rs"],
+      "positive_tests": [
+        "crates/bacnet-transport/src/bvll.rs::annex_j_bvlc_function_constants_are_stable",
+        "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/bvll.rs::decode_wrong_type",
+        "crates/bacnet-transport/src/bvll.rs::decode_length_shorter_than_header_errors",
+        "crates/bacnet-transport/src/bvll.rs::decode_length_exceeds_data",
+        "crates/bacnet-transport/src/bvll.rs::decode_preserves_unknown_bvlc_function_code",
+        "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length"
+      ],
       "benchmarks": ["benchmarks/benches/bip_latency.rs", "benchmarks/benches/bip_throughput.rs"],
       "public_claims": ["README BACnet/IP feature", "README transports table: BACnet/IP"],
-      "notes": "Needs explicit all-function table and malformed length/type cases."
+      "notes": "J-01 now covers Annex J.2 function constants through 0x0B, representative frames, wrong type, short/overlong declared lengths, unknown function passthrough, and the current decoder policy for bytes beyond the declared BVLC Length. SECURE_BVLL 0x0C is tested only as deleted-value passthrough. Function-specific management payload semantics remain for J-02/J-03."
     },
     {
       "id": "BACNET-J-ORIGINAL-UNICAST-NPDU",
@@ -235,11 +244,11 @@
       "requirement_summary": "Original-Unicast-NPDU frames preserve exact BVLC length, payload validation, and source/reply semantics.",
       "status": "implementation-present-needs-negative-tests",
       "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-transport/src/bip"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "positive_tests": ["crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough"],
+      "negative_tests": ["crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length"],
       "benchmarks": ["benchmarks/benches/bip_latency.rs"],
       "public_claims": ["README BACnet/IP feature"],
-      "notes": "Needs malformed and reply-path tests."
+      "notes": "Generic BVLL envelope coverage exists; source/reply path and NPDU semantic tests remain."
     },
     {
       "id": "BACNET-J-ORIGINAL-BROADCAST-NPDU",
@@ -248,11 +257,11 @@
       "requirement_summary": "Original-Broadcast-NPDU frames are encoded, decoded, and routed according to BACnet/IP broadcast semantics.",
       "status": "implementation-present-needs-negative-tests",
       "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-transport/src/bip"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "positive_tests": ["crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough"],
+      "negative_tests": ["crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length"],
       "benchmarks": ["benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["README BACnet/IP feature"],
-      "notes": "Needs local, remote, and global broadcast tests."
+      "notes": "Generic BVLL envelope coverage exists; local, remote, and global broadcast behavior tests remain."
     },
     {
       "id": "BACNET-J-FORWARDED-NPDU",
@@ -261,11 +270,14 @@
       "requirement_summary": "Forwarded-NPDU includes a valid originating BACnet/IP MAC and preserves source-address semantics.",
       "status": "implementation-present-needs-negative-tests",
       "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-transport/src/bbmd.rs"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "positive_tests": [
+        "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
+        "crates/bacnet-transport/src/bvll.rs::encode_decode_forwarded_npdu"
+      ],
+      "negative_tests": ["crates/bacnet-transport/src/bvll.rs::decode_forwarded_too_short_for_address"],
       "benchmarks": ["benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["README BACnet/IP feature", "docs/CLI.md BBMD commands"],
-      "notes": "Needs truncated-originating-address and echo/loop-prevention tests."
+      "notes": "Generic originating-address parsing and truncated-address rejection are covered; BBMD echo/loop-prevention and source semantics remain."
     },
     {
       "id": "BACNET-J-BBMD-BDT",

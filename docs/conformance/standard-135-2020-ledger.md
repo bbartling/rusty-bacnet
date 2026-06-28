@@ -6,10 +6,10 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-28.
-- Repository SHA reviewed: `c7af6a68b20339ad009597c76f539b54222fe1f7`.
+- Repository SHA reviewed: `1308e4a7c6b67a1d225a112201f9381c6f9f006d`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Initial scope: seed ledger and public-claim guard only; no runtime protocol behavior changes.
-- Addenda/errata status: not checked in this initial seed. Re-check current addenda and errata before each protocol PR.
+- Current scope: Annex J J-01 BVLL codec evidence update; no runtime protocol behavior changes.
+- Addenda/errata status: local Standard 135-2020 Annex J.2 text checked for this tranche; current addenda and errata still require follow-up review before strengthening support claims.
 
 ## Status Taxonomy
 
@@ -83,10 +83,10 @@
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | BVLL codec and enum paths exist. |
-| `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | B/IP BVLL and transport paths exist. |
-| `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Broadcast B/IP paths exist; broadcast semantics need tests. |
-| `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Forwarded-NPDU and BBMD paths exist; origin handling needs tests. |
+| `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | J-01 covers Annex J.2 constants through `0x0B`, representative frames, malformed type/length, unknown function passthrough, deleted-value passthrough, and current decoder policy for extra bytes beyond BVLC Length. |
+| `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; B/IP source/reply semantics need tests. |
+| `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; broadcast semantics need tests. |
+| `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic originating-address parsing and truncated-address rejection are covered; BBMD source/loop behavior needs tests. |
 | `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | BBMD/BDT paths exist; lifecycle tests remain open. |
 | `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | FDT paths exist; TTL/delete/rejection tests remain open. |
 
@@ -125,4 +125,4 @@
 
 ## Follow-Up Backlog
 
-Rows not marked `supported-with-clause-evidence` are follow-up work. The next tranche should harden Annex J BVLL/BACnet/IP rows with table-driven positive and negative tests, then update this ledger and the generated draft summaries.
+Rows not marked `supported-with-clause-evidence` are follow-up work. The next Annex J tranche should harden BVLC-Result and management-function typed result handling, then continue BBMD/BDT/FDT lifecycle evidence.

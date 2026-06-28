@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `c7af6a68b20339ad009597c76f539b54222fe1f7`
-- Scope: Initial ledger seed and public-claim guard only; no runtime protocol behavior changes.
-- Addenda/errata: Not checked in this initial local seed; re-check current addenda/errata before each protocol PR.
+- Repository SHA reviewed: `1308e4a7c6b67a1d225a112201f9381c6f9f006d`
+- Scope: Annex J J-01 BVLL codec evidence update; no runtime protocol behavior changes.
+- Addenda/errata: Local Standard 135-2020 Annex J.2 text checked for this tranche; current addenda/errata still require follow-up review before strengthening support claims.
 
 ## Counts
 
