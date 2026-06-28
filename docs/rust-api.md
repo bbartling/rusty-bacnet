@@ -426,7 +426,7 @@ use bacnet_network::router::BACnetRouter;
 
 ## bacnet-objects
 
-BACnet object model: trait, database, and 65 object type implementations.
+BACnet object model: trait, database, and object implementations.
 
 ### BACnetObject Trait
 

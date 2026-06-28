@@ -23,6 +23,7 @@ dist/
 .ruff_cache/
 
 # AI assistants
+codex-id.json
 .claude/
 CLAUDE.md
 .copilot/
