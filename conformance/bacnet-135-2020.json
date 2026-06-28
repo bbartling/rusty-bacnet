@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "607255450009d3f5b470b7f361938886228abd70",
-  "review_scope": "Annex J J-04 BBMD Forwarded-NPDU source and loop-prevention evidence update; directed-broadcast peer forwarding hardened.",
-  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Forwarded-NPDU forwarding changes found for this tranche.",
+  "repo_sha": "ccece409211cdcc85d5736e1701db928b66cfaf8",
+  "review_scope": "Annex J J-04 Original-Unicast/Original-Broadcast B/IP source and BBMD fanout evidence update; Original-Broadcast local Forwarded-NPDU echo removed.",
+  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Original-NPDU broadcast forwarding changes found for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -249,11 +249,17 @@
       "requirement_summary": "Original-Unicast-NPDU frames preserve exact BVLC length, payload validation, and source/reply semantics.",
       "status": "implementation-present-needs-negative-tests",
       "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-transport/src/bip"],
-      "positive_tests": ["crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough"],
-      "negative_tests": ["crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length"],
+      "positive_tests": [
+        "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self"
+      ],
       "benchmarks": ["benchmarks/benches/bip_latency.rs"],
       "public_claims": ["README BACnet/IP feature"],
-      "notes": "Generic BVLL envelope coverage exists; source/reply path and NPDU semantic tests remain."
+      "notes": "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery to the upper layer and self-originated frame suppression. Directed reply-path integration remains open."
     },
     {
       "id": "BACNET-J-ORIGINAL-BROADCAST-NPDU",
@@ -262,11 +268,17 @@
       "requirement_summary": "Original-Broadcast-NPDU frames are encoded, decoded, and routed according to BACnet/IP broadcast semantics.",
       "status": "implementation-present-needs-negative-tests",
       "code_anchors": ["crates/bacnet-transport/src/bvll.rs", "crates/bacnet-transport/src/bip"],
-      "positive_tests": ["crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough"],
-      "negative_tests": ["crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length"],
+      "positive_tests": [
+        "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
+      ],
       "benchmarks": ["benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["README BACnet/IP feature"],
-      "notes": "Generic BVLL envelope coverage exists; local, remote, and global broadcast behavior tests remain."
+      "notes": "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers BBMD handling of Original-Broadcast-NPDU: local delivery uses sender B/IP MAC, remote BDT peer and registered FDT targets receive Forwarded-NPDU with the original sender encoded, and the BBMD does not echo the already-local broadcast back onto the local subnet as Forwarded-NPDU. Remote/global NPDU DNET/DADR broadcast addressing remains open."
     },
     {
       "id": "BACNET-J-FORWARDED-NPDU",
@@ -278,15 +290,17 @@
       "positive_tests": [
         "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
         "crates/bacnet-transport/src/bvll.rs::encode_decode_forwarded_npdu",
-        "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_bdt_peer_uses_originating_source_mac"
+        "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_bdt_peer_uses_originating_source_mac",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bvll.rs::decode_forwarded_too_short_for_address",
-        "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast"
+        "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "benchmarks": ["benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["README BACnet/IP feature", "docs/CLI.md BBMD commands"],
-      "notes": "J-04 covers generic originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, and no onward forwarding to other BDT peers. Non-BDT source rejection and Original-Broadcast/DBTN multi-target fanout remain open."
+      "notes": "J-04 covers generic originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, and no onward forwarding to other BDT peers. Original-Broadcast fanout now covers BDT/FDT Forwarded-NPDU emission with original sender preservation and no local echoed Forwarded-NPDU. Non-BDT source rejection and DBTN multi-target fanout remain open."
     },
     {
       "id": "BACNET-J-BBMD-BDT",
@@ -303,7 +317,8 @@
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_excludes_source",
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_uses_broadcast_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_unicast_with_full_mask",
-        "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_needs_local_broadcast_for_unicast_peer"
+        "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_needs_local_broadcast_for_unicast_peer",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_non_bbmd_surfaces_typed_nak",
@@ -311,11 +326,12 @@
         "crates/bacnet-transport/src/bip/tests.rs::write_bdt_rejects_malformed_payload_and_preserves_table",
         "crates/bacnet-transport/src/bbmd.rs::set_bdt_rejects_max_entries_when_self_insert_would_exceed_limit",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_directed_broadcast_peer",
-        "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_unknown_peer"
+        "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_unknown_peer",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands"],
-      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, and Forwarded-NPDUs are not forwarded onward to other BDT peers. Persistence, ACL matrix, Original-Broadcast fanout, and DBTN multi-target fanout remain open."
+      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, and Forwarded-NPDUs are not forwarded onward to other BDT peers. Original-Broadcast fanout now covers one remote BDT target and verifies no local Forwarded-NPDU echo. Persistence, ACL matrix, and DBTN multi-target fanout remain open."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",
@@ -330,6 +346,7 @@
         "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_accepts_max_ttl_and_caps_remaining",
         "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_removes_registered_foreign_device",
         "crates/bacnet-transport/src/bip/tests.rs::foreign_device_broadcast_via_bbmd",
+        "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo",
         "crates/bacnet-transport/src/bbmd.rs::register_and_lookup_foreign_device",
         "crates/bacnet-transport/src/bbmd.rs::re_register_updates_existing",
         "crates/bacnet-transport/src/bbmd.rs::delete_foreign_device",
@@ -352,7 +369,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. Multi-device forwarded fanout and timer-driven expiry integration remain for later lifecycle work."
+      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. Multi-device forwarded fanout and timer-driven expiry integration remain for later lifecycle work."
     },
     {
       "id": "BACNET-K-BIBBS",
