@@ -6,7 +6,7 @@
 >
 > **Software:** macOS 26.4 | Rust 1.94.0 | Release mode | TLS provider: aws-lc-rs
 >
-> All tests ran on localhost with zero errors unless noted.
+> Historical localhost benchmark report. Raw current-revision artifacts are not tracked in this repository; rerun the benchmark commands below before using these numbers as evidence.
 
 ---
 
@@ -425,13 +425,13 @@ comparable to pure Rust's single-threaded 48K/s.
 - **BIP throughput at ~48K/s**: Per-request task spawning enables concurrent `db.read()` — reads and writes now achieve equal throughput
 - **BIP6 matches BIP**: IPv6 adds <1% latency overhead vs IPv4 — effectively identical performance
 - **SC overhead is ~2.2×**: TLS WebSocket adds ~26 µs per operation vs raw UDP — acceptable for secure deployments
-- **Object count doesn't matter**: 100 → 5,000 objects shows zero latency degradation (19 µs p50 across all sizes)
+- **Object count had little effect in this run**: 100 to 5,000 objects stayed near 19 µs p50 across recorded sizes
 - **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions (native) and 100 (Docker)
-- **Zero errors across all tests**: No timeouts, no panics, no dropped messages
+- **Historical run completed cleanly**: No timeouts, panics, or dropped messages were observed in the recorded run
 - **Docker validates real networking**: Cross-container BIP, routing, BBMD foreign device, and SC all work correctly
 - **Minimal router/BBMD overhead**: Cross-subnet routing adds ~7% latency; BBMD foreign device adds ~5%
 - **Musl/Alpine single-client 4 µs p50**: In-container loopback latency is extremely low, 206K ops/s single-threaded
-- **Python API is production-ready**: ~80 µs PyO3 overhead per call; 36K concurrent ops/s from Python
+- **Python API benchmark coverage exists**: Recorded PyO3 overhead was ~80 µs per call, with 36K concurrent ops/s from Python in the historical run
 - **SC from Python works**: ScHub + SC client/server all work via PyO3; 29K ops/s at 25 concurrent clients
 
 ---

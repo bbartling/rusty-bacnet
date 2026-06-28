@@ -313,6 +313,7 @@ dependencies = [
  "bacnet-transport",
  "bacnet-types",
  "bytes",
+ "serde_json",
  "tokio",
 ]
 

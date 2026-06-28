@@ -15,7 +15,7 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     |         |
     |     bacnet-network      Network layer, BACnetRouter, RouterTable
     |         |
-    +---> bacnet-objects      BACnetObject trait, ObjectDatabase, 65 object types
+    +---> bacnet-objects      BACnetObject trait, ObjectDatabase, object implementations
     |         |
     |     bacnet-client       Async BACnet client (TSM, segmentation, discovery)
     |     bacnet-server       Async BACnet server (dispatch, COV, events, scheduling)
@@ -30,7 +30,7 @@ The bottom rows are "application" crates — they compose the library crates int
 
 The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
-- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — BTL Test Plan 26.1 compliance harness
+- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — BTL Test Plan 26.1-oriented test harness
 
 Both consume the published `bacnet-*` crates from this workspace.
 
@@ -185,4 +185,4 @@ The server handles 20+ services including ReadProperty, WriteProperty, ReadPrope
 The HTTP/MCP gateway and BTL compliance test harness live in separate repositories that consume this workspace's published crates:
 
 - **[`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp)** — HTTP REST API (Axum) and MCP server (rmcp) on top of `BACnetClient` + `BACnetServer`. Single shared `GatewayState` handles both surfaces — no duplicated BACnet logic.
-- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — BTL Test Plan 26.1 compliance test harness. 3,808 tests across all 13 BTL sections; in-process self-test runs in <1 second.
+- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — external BTL Test Plan 26.1 harness project. Formal support status is tracked separately in the conformance ledger.
