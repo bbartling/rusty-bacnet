@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `1308e4a7c6b67a1d225a112201f9381c6f9f006d`
-- Scope: Annex J J-01 BVLL codec evidence update; no runtime protocol behavior changes.
-- Addenda/errata: Local Standard 135-2020 Annex J.2 text checked for this tranche; current addenda/errata still require follow-up review before strengthening support claims.
+- Repository SHA reviewed: `e8abd2d605bea2336dbb1016017eaf2d892343f8`
+- Scope: Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.
 
 ## Counts
 

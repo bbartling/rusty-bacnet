@@ -6,10 +6,10 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-28.
-- Repository SHA reviewed: `1308e4a7c6b67a1d225a112201f9381c6f9f006d`.
+- Repository SHA reviewed: `e8abd2d605bea2336dbb1016017eaf2d892343f8`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Current scope: Annex J J-01 BVLL codec evidence update; no runtime protocol behavior changes.
-- Addenda/errata status: local Standard 135-2020 Annex J.2 text checked for this tranche; current addenda and errata still require follow-up review before strengthening support claims.
+- Current scope: Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.
+- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.
 
 ## Status Taxonomy
 
@@ -83,12 +83,12 @@
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | J-01 covers Annex J.2 constants through `0x0B`, representative frames, malformed type/length, unknown function passthrough, deleted-value passthrough, and current decoder policy for extra bytes beyond BVLC Length. |
+| `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | J-01 covers Annex J.2 constants through `0x0B`, representative frames, malformed type/length, unknown function passthrough, deleted-value passthrough, and current decoder policy for extra bytes beyond BVLC Length. J-02 adds exact two-byte BVLC-Result parsing, unknown result-code passthrough, malformed result rejection, and sender/expected-function correlation for pending management responses. |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; B/IP source/reply semantics need tests. |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; broadcast semantics need tests. |
 | `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic originating-address parsing and truncated-address rejection are covered; BBMD source/loop behavior needs tests. |
-| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | BBMD/BDT paths exist; lifecycle tests remain open. |
-| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | FDT paths exist; TTL/delete/rejection tests remain open. |
+| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-02 covers read/write BDT caller paths and typed non-BBMD BVLC-Result NAK propagation; lifecycle tests remain open. |
+| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-02 covers FDT read/register/delete caller paths and typed non-BBMD BVLC-Result NAK propagation; TTL/expiry/lifecycle tests remain open. |
 
 ## Annex K BIBBs
 

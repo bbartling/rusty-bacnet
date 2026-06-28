@@ -3,15 +3,17 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
 
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::MacAddr;
 
 use crate::bbmd::BbmdState;
-use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded, BvllMessage};
+use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
 use crate::port::ReceivedNpdu;
+
+use super::{decode_bvlc_result_code, PendingBvlcResponse};
 
 /// Send a Register-Foreign-Device message to a BBMD.
 pub(super) async fn send_register_foreign_device(
@@ -41,8 +43,26 @@ pub(super) struct RecvContext {
     pub(super) bbmd: Option<Arc<Mutex<BbmdState>>>,
     pub(super) broadcast_addr: Ipv4Addr,
     pub(super) broadcast_port: u16,
-    pub(super) bvlc_response: Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
+    pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
     pub(super) bdt_persist_path: Option<std::path::PathBuf>,
+}
+
+async fn complete_pending_bvlc_response(
+    msg: &bvll::BvllMessage,
+    sender: ([u8; 4], u16),
+    ctx: &RecvContext,
+) -> bool {
+    let mut slot = ctx.pending_bvlc_response.lock().await;
+    if slot
+        .as_ref()
+        .is_some_and(|pending| pending.matches(sender, msg.function))
+    {
+        let pending = slot.take().expect("pending response exists");
+        let _ = pending.tx.send(msg.clone());
+        true
+    } else {
+        false
+    }
 }
 
 /// Handle a decoded BVLL message in the recv loop.
@@ -464,57 +484,40 @@ pub(super) async fn handle_bvll_message(
         }
 
         f if f == BvlcFunction::BVLC_RESULT => {
-            let sender_opt = {
-                let mut slot = ctx.bvlc_response.lock().await;
-                slot.take()
-            };
-            if let Some(response_tx) = sender_opt {
-                let _ = response_tx.send(msg.clone());
-            } else if msg.payload.len() >= 2 {
-                let code =
-                    BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]));
-                match code {
-                    BvlcResultCode::SUCCESSFUL_COMPLETION => {
+            if !complete_pending_bvlc_response(msg, sender, ctx).await {
+                match decode_bvlc_result_code(msg) {
+                    Ok(BvlcResultCode::SUCCESSFUL_COMPLETION) => {
                         debug!("Received BVLC-Result: successful");
                     }
-                    BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK => {
+                    Ok(BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK) => {
                         tracing::error!(
                             "BVLC-Result NAK: foreign device registration rejected by BBMD"
                         );
                     }
-                    BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK => {
+                    Ok(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK) => {
                         tracing::error!(
-                            "BVLC-Result NAK: broadcast distribution rejected — \
+                            "BVLC-Result NAK: broadcast distribution rejected - \
                              foreign device registration may have failed or expired"
                         );
                     }
-                    _ => {
+                    Ok(code) => {
                         warn!(code = ?code, "Received BVLC-Result NAK");
+                    }
+                    Err(err) => {
+                        warn!(error = %err, "Received malformed BVLC-Result");
                     }
                 }
             }
         }
 
         f if f == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK => {
-            let sender_opt = {
-                let mut slot = ctx.bvlc_response.lock().await;
-                slot.take()
-            };
-            if let Some(response_tx) = sender_opt {
-                let _ = response_tx.send(msg.clone());
-            } else {
+            if !complete_pending_bvlc_response(msg, sender, ctx).await {
                 debug!("Received Read-BDT-ACK with no pending request");
             }
         }
 
         f if f == BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK => {
-            let sender_opt = {
-                let mut slot = ctx.bvlc_response.lock().await;
-                slot.take()
-            };
-            if let Some(response_tx) = sender_opt {
-                let _ = response_tx.send(msg.clone());
-            } else {
+            if !complete_pending_bvlc_response(msg, sender, ctx).await {
                 debug!("Received Read-FDT-ACK with no pending request");
             }
         }
