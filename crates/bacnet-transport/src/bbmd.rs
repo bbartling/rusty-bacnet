@@ -257,9 +257,11 @@ impl BbmdState {
         }
     }
 
-    /// Purge expired FDT entries.
-    pub fn purge_expired(&mut self) {
+    /// Purge expired FDT entries and return the number removed.
+    pub fn purge_expired(&mut self) -> usize {
+        let before = self.fdt.len();
         self.fdt.retain(|e| !e.is_expired());
+        before - self.fdt.len()
     }
 
     /// Get the current FDT (purges expired entries first).
@@ -317,6 +319,26 @@ impl BbmdState {
     /// Set the management ACL. An empty list means all sources are allowed.
     pub fn set_management_acl(&mut self, acl: Vec<[u8; 4]>) {
         self.management_acl = acl;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backdate_foreign_device_for_test(
+        &mut self,
+        ip: [u8; 4],
+        port: u16,
+        elapsed: Duration,
+    ) {
+        let entry = self
+            .fdt
+            .iter_mut()
+            .find(|entry| entry.ip == ip && entry.port == port)
+            .expect("foreign device entry exists");
+        entry.registered_at = Instant::now() - elapsed;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fdt_len_for_test(&self) -> usize {
+        self.fdt.len()
     }
 
     // -----------------------------------------------------------------------
