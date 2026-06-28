@@ -405,10 +405,26 @@ Variants: `Bip`, `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 ### BBMD
 
 ```rust
-use bacnet_transport::bbmd::BbmdConfig;
+use std::net::Ipv4Addr;
 
-// BBMD with broadcast distribution table + foreign device table
-// management_acl gates Write-BDT/Delete-FDT (empty = allow all)
+use bacnet_transport::bbmd::BdtEntry;
+use bacnet_transport::bip::{BipTransport, DEFAULT_BACNET_PORT};
+
+let mut transport = BipTransport::new(
+    Ipv4Addr::UNSPECIFIED,
+    DEFAULT_BACNET_PORT,
+    Ipv4Addr::BROADCAST,
+);
+
+transport.enable_bbmd(vec![BdtEntry {
+    ip: [192, 168, 1, 10],
+    port: DEFAULT_BACNET_PORT,
+    broadcast_mask: [255, 255, 255, 255],
+}]);
+
+// Optional: restrict Write-BDT and Delete-FDT management operations.
+// An empty ACL allows all sources.
+transport.set_bbmd_management_acl(vec![[192, 168, 1, 100]]);
 ```
 
 ---
