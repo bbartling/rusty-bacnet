@@ -4,6 +4,7 @@ target/
 **/*.rs.bk
 *.rlib
 *.rmeta
+bench-output/
 
 # Python
 *.pyo

@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Implementation evidence SHA reviewed: `c4bde6391f73bc6fc887110aae5c96f3d75d8f4a`
-- Scope: Annex J Read-BDT-Ack and Read-FDT-Ack BBMD wire-format entry-list evidence.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.2.4 Read-Broadcast-Distribution-Table-Ack N*10 BDT entry format, Annex J.4.4.1 BBMD Read-BDT behavior, Annex J.2.8 Read-Foreign-Device-Table-Ack N*10 FDT entry format, and Annex J.5.2.1.1 BBMD Read-FDT behavior; no separate addenda/errata source is committed for this tranche.
+- Implementation evidence SHA reviewed: `8468ce4b9045f9ef9e30684195ada0214ab5ccca`
+- Scope: Annex J BACnet/IP BIP and BBMD benchmark A/B harness evidence.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J BACnet/IP BVLC, Original-NPDU, BBMD, BDT, FDT, and foreign-device benchmark scope; benchmark harness changes add no new normative protocol behavior and no separate addenda/errata source is committed for this tranche.
 
 ## Counts
 
