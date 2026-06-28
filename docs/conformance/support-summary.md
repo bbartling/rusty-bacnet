@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Implementation evidence SHA reviewed: `617e8af53b056f46aaa76d39b4f0a4dadf46a1ef`
-- Scope: Annex J B/IP platform broadcast socket evidence for Original-Broadcast-NPDU send and receive prerequisites.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.1.2 B/IP broadcast-address semantics, J.2.12 Original-Broadcast-NPDU format, and J.4.1 local broadcast behavior; no separate addenda/errata source is committed for this tranche.
+- Implementation evidence SHA reviewed: `7ca907d775c9eb6d561ed12f5ad7184e68c55031`
+- Scope: Annex J Original-Broadcast-NPDU remote/global NPDU addressing preservation evidence.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Clause 6.2.2 destination specifier/DLEN broadcast semantics, Clause 6 remote/global broadcast behavior, Annex J.2.12 Original-Broadcast-NPDU format, and J.4.1 local broadcast behavior; no separate addenda/errata source is committed for this tranche.
 
 ## Counts
 
