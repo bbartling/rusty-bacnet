@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `8961537a43f82dfa7675f2fd00c76f7de699f892`
-- Scope: Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.
+- Repository SHA reviewed: `ed21fc339c5aa73b82fee2176ba40ad7a1010ece`
+- Scope: Annex J J-03 BBMD BDT/FDT lifecycle validation evidence update; malformed management payloads, TTL bounds, table limits, delete semantics, and DBTN authorization hardened.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BBMD/FDT lifecycle changes found for this tranche.
 
 ## Counts
 

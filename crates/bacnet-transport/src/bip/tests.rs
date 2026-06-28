@@ -1,5 +1,5 @@
 use super::*;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use tokio::time::{timeout, Duration};
 
 fn test_bvll_message(function: BvlcFunction, payload: &[u8]) -> BvllMessage {
@@ -9,6 +9,25 @@ fn test_bvll_message(function: BvlcFunction, payload: &[u8]) -> BvllMessage {
         originating_ip: None,
         originating_port: None,
     }
+}
+
+async fn raw_bvlc_request(target: &[u8], function: BvlcFunction, payload: &[u8]) -> BvllMessage {
+    let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let (ip, port) = decode_bip_mac(target).unwrap();
+    let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
+
+    let mut buf = BytesMut::new();
+    encode_bvll(&mut buf, function, payload).unwrap();
+    socket.send_to(&buf, dest).await.unwrap();
+
+    let mut recv_buf = [0u8; 2048];
+    let (len, _addr) = timeout(Duration::from_secs(2), socket.recv_from(&mut recv_buf))
+        .await
+        .expect("timed out waiting for BVLC response")
+        .unwrap();
+    decode_bvll(&recv_buf[..len]).unwrap()
 }
 
 #[test]
@@ -304,7 +323,12 @@ async fn read_fdt_from_non_bbmd_surfaces_typed_nak() {
 #[tokio::test]
 async fn write_bdt_to_bbmd() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-    bbmd_transport.enable_bbmd(vec![]);
+    let old_bdt_entry = BdtEntry {
+        ip: [10, 0, 0, 1],
+        port: 0xBAC0,
+        broadcast_mask: [255, 255, 255, 0],
+    };
+    bbmd_transport.enable_bbmd(vec![old_bdt_entry.clone()]);
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -327,6 +351,45 @@ async fn write_bdt_to_bbmd() {
     assert!(bdt
         .iter()
         .any(|e| e.ip == [192, 168, 1, 1] && e.port == 0xBAC0));
+    assert!(
+        !bdt.iter().any(|e| e == &old_bdt_entry),
+        "Write-BDT must replace the prior configured BDT entries"
+    );
+
+    client_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn write_bdt_rejects_malformed_payload_and_preserves_table() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let initial_entry = BdtEntry {
+        ip: [10, 0, 0, 1],
+        port: 0xBAC0,
+        broadcast_mask: [255, 255, 255, 0],
+    };
+    bbmd_transport.enable_bbmd(vec![initial_entry.clone()]);
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let response = raw_bvlc_request(
+        &bbmd_mac,
+        BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+        &[0; bbmd::BDT_ENTRY_SIZE - 1],
+    )
+    .await;
+    assert_eq!(
+        decode_bvlc_result_code(&response).unwrap(),
+        BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK
+    );
+
+    let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _client_rx = client_transport.start().await.unwrap();
+    let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
+    assert!(
+        bdt.iter().any(|e| e == &initial_entry),
+        "malformed Write-BDT must leave the existing BDT intact"
+    );
 
     client_transport.stop().await.unwrap();
     bbmd_transport.stop().await.unwrap();
@@ -366,6 +429,82 @@ async fn register_foreign_device_via_bvlc() {
         .await
         .unwrap();
     assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+    client_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn register_foreign_device_rejects_zero_ttl() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _client_rx = client_transport.start().await.unwrap();
+
+    let result = client_transport
+        .register_foreign_device_bvlc(&bbmd_mac, 0)
+        .await
+        .unwrap();
+    assert_eq!(result, BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK);
+
+    {
+        let state = bbmd_transport.bbmd_state().unwrap();
+        let mut state = state.lock().await;
+        assert!(state.fdt().is_empty());
+    }
+
+    client_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn register_foreign_device_rejects_malformed_ttl_payload_lengths() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    for payload in [&[0x00][..], &[0x00, 0x3c, 0x00][..]] {
+        let response =
+            raw_bvlc_request(&bbmd_mac, BvlcFunction::REGISTER_FOREIGN_DEVICE, payload).await;
+        assert_eq!(
+            decode_bvlc_result_code(&response).unwrap(),
+            BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK
+        );
+    }
+
+    {
+        let state = bbmd_transport.bbmd_state().unwrap();
+        let mut state = state.lock().await;
+        assert!(state.fdt().is_empty());
+    }
+
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn register_foreign_device_accepts_max_ttl_and_caps_remaining() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _client_rx = client_transport.start().await.unwrap();
+
+    let result = client_transport
+        .register_foreign_device_bvlc(&bbmd_mac, u16::MAX)
+        .await
+        .unwrap();
+    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+    let fdt = client_transport.read_fdt(&bbmd_mac).await.unwrap();
+    assert_eq!(fdt.len(), 1);
+    assert_eq!(fdt[0].ttl, u16::MAX);
+    assert_eq!(fdt[0].seconds_remaining, u16::MAX);
 
     client_transport.stop().await.unwrap();
     bbmd_transport.stop().await.unwrap();
@@ -413,6 +552,79 @@ async fn delete_fdt_entry_to_non_bbmd_surfaces_typed_nak() {
 }
 
 #[tokio::test]
+async fn delete_fdt_entry_removes_registered_foreign_device() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _client_rx = client_transport.start().await.unwrap();
+
+    let result = client_transport
+        .register_foreign_device_bvlc(&bbmd_mac, 60)
+        .await
+        .unwrap();
+    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+    let (fd_ip, fd_port) = decode_bip_mac(client_transport.local_mac()).unwrap();
+    let result = client_transport
+        .delete_fdt_entry(&bbmd_mac, fd_ip, fd_port)
+        .await
+        .unwrap();
+    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+    let fdt = client_transport.read_fdt(&bbmd_mac).await.unwrap();
+    assert!(fdt.is_empty());
+
+    client_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_fdt_entry_rejects_malformed_payload_and_preserves_entry() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _client_rx = client_transport.start().await.unwrap();
+
+    let result = client_transport
+        .register_foreign_device_bvlc(&bbmd_mac, 60)
+        .await
+        .unwrap();
+    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+    let (fd_ip, fd_port) = decode_bip_mac(client_transport.local_mac()).unwrap();
+    let mut payload_with_trailing_byte = Vec::from(fd_ip);
+    payload_with_trailing_byte.extend_from_slice(&fd_port.to_be_bytes());
+    payload_with_trailing_byte.push(0);
+
+    for payload in [&[0; 5][..], payload_with_trailing_byte.as_slice()] {
+        let response = raw_bvlc_request(
+            &bbmd_mac,
+            BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+            payload,
+        )
+        .await;
+        assert_eq!(
+            decode_bvlc_result_code(&response).unwrap(),
+            BvlcResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK
+        );
+    }
+
+    let fdt = client_transport.read_fdt(&bbmd_mac).await.unwrap();
+    assert_eq!(fdt.len(), 1);
+    assert_eq!(fdt[0].ip, fd_ip);
+    assert_eq!(fdt[0].port, fd_port);
+
+    client_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn foreign_device_broadcast_via_bbmd() {
     // BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -446,6 +658,34 @@ async fn foreign_device_broadcast_via_bbmd() {
     assert_eq!(received.npdu, test_npdu);
 
     fd_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn distribute_broadcast_from_unregistered_foreign_device_naks_without_delivery() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    let mut bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let response = raw_bvlc_request(
+        &bbmd_mac,
+        BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
+        &[0x01, 0x00, 0xAA, 0xBB],
+    )
+    .await;
+    assert_eq!(
+        decode_bvlc_result_code(&response).unwrap(),
+        BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK
+    );
+
+    assert!(
+        timeout(Duration::from_millis(100), bbmd_rx.recv())
+            .await
+            .is_err(),
+        "unregistered DBTN must not deliver an NPDU to the BBMD"
+    );
+
     bbmd_transport.stop().await.unwrap();
 }
 

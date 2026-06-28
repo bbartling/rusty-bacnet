@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "8961537a43f82dfa7675f2fd00c76f7de699f892",
-  "review_scope": "Annex J J-02 BVLC-Result typed handling evidence update; management response parsing and diagnostics hardened.",
-  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BVLC-Result changes found for this tranche.",
+  "repo_sha": "ed21fc339c5aa73b82fee2176ba40ad7a1010ece",
+  "review_scope": "Annex J J-03 BBMD BDT/FDT lifecycle validation evidence update; malformed management payloads, TTL bounds, table limits, delete semantics, and DBTN authorization hardened.",
+  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BBMD/FDT lifecycle changes found for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -290,18 +290,25 @@
       "priority": "P0",
       "requirement_summary": "BBMD Broadcast Distribution Table write/read/ACK behavior and peer broadcast fanout are validated.",
       "status": "implementation-present-needs-conformance-tests",
-      "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
+      "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-transport/src/bip/io.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
       "positive_tests": [
         "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_bbmd",
-        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_bbmd"
+        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_bbmd",
+        "crates/bacnet-transport/src/bbmd.rs::set_bdt_auto_inserts_self",
+        "crates/bacnet-transport/src/bbmd.rs::set_bdt_does_not_duplicate_self",
+        "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_excludes_source",
+        "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_uses_broadcast_mask",
+        "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_unicast_with_full_mask"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_non_bbmd_surfaces_typed_nak",
-        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_non_bbmd_surfaces_typed_nak"
+        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_non_bbmd_surfaces_typed_nak",
+        "crates/bacnet-transport/src/bip/tests.rs::write_bdt_rejects_malformed_payload_and_preserves_table",
+        "crates/bacnet-transport/src/bbmd.rs::set_bdt_rejects_max_entries_when_self_insert_would_exceed_limit"
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands"],
-      "notes": "J-02 covers read/write BDT caller paths and typed non-BBMD BVLC-Result NAK propagation. BDT overwrite, fanout, loop prevention, persistence, and ACL matrix tests remain for later lifecycle work."
+      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. Persistence, ACL matrix, and multi-BBMD fanout/loop behavior remain for later lifecycle work."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",
@@ -309,19 +316,36 @@
       "priority": "P0",
       "requirement_summary": "Foreign-device registration, TTL bounds, re-registration, read/delete FDT, expiry, and DBTN authorization are validated.",
       "status": "implementation-present-needs-conformance-tests",
-      "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
+      "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-transport/src/bip/io.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
       "positive_tests": [
         "crates/bacnet-transport/src/bip/tests.rs::read_fdt_from_bbmd",
-        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_via_bvlc"
+        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_via_bvlc",
+        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_accepts_max_ttl_and_caps_remaining",
+        "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_removes_registered_foreign_device",
+        "crates/bacnet-transport/src/bip/tests.rs::foreign_device_broadcast_via_bbmd",
+        "crates/bacnet-transport/src/bbmd.rs::register_and_lookup_foreign_device",
+        "crates/bacnet-transport/src/bbmd.rs::re_register_updates_existing",
+        "crates/bacnet-transport/src/bbmd.rs::delete_foreign_device",
+        "crates/bacnet-transport/src/bbmd.rs::fdt_encode",
+        "crates/bacnet-transport/src/bbmd.rs::fdt_encode_caps_max_ttl_remaining_time",
+        "crates/bacnet-transport/src/bbmd.rs::seconds_remaining_includes_grace_period"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bip/tests.rs::read_fdt_from_non_bbmd_surfaces_typed_nak",
         "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_to_non_bbmd_surfaces_typed_nak",
-        "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_to_non_bbmd_surfaces_typed_nak"
+        "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_to_non_bbmd_surfaces_typed_nak",
+        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_rejects_zero_ttl",
+        "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_rejects_malformed_ttl_payload_lengths",
+        "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_rejects_malformed_payload_and_preserves_entry",
+        "crates/bacnet-transport/src/bip/tests.rs::distribute_broadcast_from_unregistered_foreign_device_naks_without_delivery",
+        "crates/bacnet-transport/src/bbmd.rs::register_foreign_device_zero_ttl_naks",
+        "crates/bacnet-transport/src/bbmd.rs::delete_nonexistent_foreign_device_naks",
+        "crates/bacnet-transport/src/bbmd.rs::expired_entries_purged",
+        "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_excludes_originating_foreign_device_and_expired_entries"
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "J-02 covers FDT read/register/delete caller paths and typed non-BBMD BVLC-Result NAK propagation. TTL bounds, expiry, re-registration, DBTN authorization, and delete lifecycle semantics remain for later lifecycle work."
+      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. Multi-device forwarded fanout and timer-driven expiry integration remain for later lifecycle work."
     },
     {
       "id": "BACNET-K-BIBBS",
