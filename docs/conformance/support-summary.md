@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `f01688bbfd6b164e6ed74fd5f871df9e7e67951b`
-- Scope: Annex J J.7.5 NAT traversal and J.8 BACnet/IP multicast support-status decisions.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no additional Annex J NAT or BACnet/IP multicast changes found for this tranche.
+- Repository SHA reviewed: `828ee3fca2233600d09a68267e791d3f7ebbe6c1`
+- Scope: Annex J.5.2.3 Foreign Device Table timer operation.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; FDT timer requirements remain anchored in Annex J.5.2.3 for this tranche.
 
 ## Counts
 
