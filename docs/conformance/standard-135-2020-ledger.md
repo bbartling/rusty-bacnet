@@ -6,10 +6,10 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-28.
-- Repository SHA reviewed: `ed21fc339c5aa73b82fee2176ba40ad7a1010ece`.
+- Repository SHA reviewed: `ccece409211cdcc85d5736e1701db928b66cfaf8`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Current scope: Annex J J-03 BBMD BDT/FDT lifecycle validation evidence update; malformed management payloads, TTL bounds, table limits, delete semantics, and DBTN authorization hardened.
-- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP BBMD/FDT lifecycle changes found for this tranche.
+- Current scope: Annex J J-04 Original-Unicast/Original-Broadcast B/IP source and BBMD fanout evidence update; Original-Broadcast local Forwarded-NPDU echo removed.
+- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Original-NPDU broadcast forwarding changes found for this tranche.
 
 ## Status Taxonomy
 
@@ -84,11 +84,11 @@
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | J-01 covers Annex J.2 constants through `0x0B`, representative frames, malformed type/length, unknown function passthrough, deleted-value passthrough, and current decoder policy for extra bytes beyond BVLC Length. J-02 adds exact two-byte BVLC-Result parsing, unknown result-code passthrough, malformed result rejection, and sender/expected-function correlation for pending management responses. |
-| `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; B/IP source/reply semantics need tests. |
-| `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | Generic BVLL envelope coverage exists; broadcast semantics need tests. |
-| `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 covers originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, and no onward forwarding to other BDT peers. Non-BDT source rejection and Original-Broadcast/DBTN multi-target fanout remain open. |
-| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior for local rebroadcast decisions and no onward forwarding to other BDT peers. Persistence, ACL matrix, Original-Broadcast fanout, and DBTN multi-target fanout remain open. |
-| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. Multi-device forwarded fanout and timer-driven expiry integration remain open. |
+| `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery and self-originated frame suppression; directed reply-path integration remains open. |
+| `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 Original-NPDU evidence covers BBMD Original-Broadcast local delivery, BDT/FDT Forwarded-NPDU fanout with original sender preservation, and no local Forwarded-NPDU echo. Remote/global NPDU broadcast addressing remains open. |
+| `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 covers originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, no onward forwarding to other BDT peers, and Original-Broadcast BDT/FDT Forwarded-NPDU emission. Non-BDT source rejection and DBTN multi-target fanout remain open. |
+| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior, no onward forwarding to other BDT peers, and Original-Broadcast one-peer fanout without local echo. Persistence, ACL matrix, and DBTN multi-target fanout remain open. |
+| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers one registered FDT target; multi-device forwarded fanout and timer-driven expiry integration remain open. |
 
 ## Annex K BIBBs
 

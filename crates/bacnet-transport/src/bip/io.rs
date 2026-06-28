@@ -115,16 +115,6 @@ pub(super) async fn handle_bvll_message(
                     state.forwarding_targets(sender.0, sender.1)
                 };
                 forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
-
-                // Re-broadcast on local subnet as Forwarded-NPDU.
-                let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                match encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload) {
-                    Ok(()) => {
-                        let _ = ctx.socket.send_to(&buf, dest).await;
-                    }
-                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
-                }
             }
         }
 
