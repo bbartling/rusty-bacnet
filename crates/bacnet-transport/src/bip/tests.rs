@@ -118,6 +118,7 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         broadcast_port: 47808,
         pending_bvlc_response: pending_bvlc_response.clone(),
         bdt_persist_path: None,
+        force_dbtn_forward_failure: false,
     };
 
     let result = test_bvll_message(BvlcFunction::BVLC_RESULT, &[0x00, 0x00]);

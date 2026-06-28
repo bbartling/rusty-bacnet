@@ -65,6 +65,7 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         bdt_persist_path: None,
+        force_dbtn_forward_failure: false,
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -149,6 +150,7 @@ async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         bdt_persist_path: None,
+        force_dbtn_forward_failure: false,
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -223,6 +225,7 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         bdt_persist_path: None,
+        force_dbtn_forward_failure: false,
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
