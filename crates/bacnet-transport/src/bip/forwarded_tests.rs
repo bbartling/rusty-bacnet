@@ -11,6 +11,16 @@ async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     decode_bvll(&recv_buf[..len]).unwrap()
 }
 
+async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
+    let mut recv_buf = [0u8; 2048];
+    assert!(
+        timeout(Duration::from_millis(100), socket.recv_from(&mut recv_buf))
+            .await
+            .is_err(),
+        "{label} received an unexpected BVLL frame"
+    );
+}
+
 #[tokio::test]
 async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
     let socket = Arc::new(
@@ -91,6 +101,73 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
         .is_err(),
         "Forwarded-NPDU from a BDT peer must not be re-forwarded to BDT peers"
     );
+}
+
+#[tokio::test]
+async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
+    let bbmd_socket = Arc::new(
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap(),
+    );
+    let local_port = bbmd_socket.local_addr().unwrap().port();
+    let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let local_broadcast_port = local_broadcast_sink.local_addr().unwrap().port();
+    let bdt_peer_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let bdt_peer_port = bdt_peer_sink.local_addr().unwrap().port();
+    let fdt_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let fdt_port = fdt_socket.local_addr().unwrap().port();
+    let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
+    let sender = ([192, 0, 2, 250], 0xBAC4);
+    let origin = ([192, 0, 2, 20], 0xBAC1);
+
+    let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state
+        .set_bdt(vec![BdtEntry {
+            ip: Ipv4Addr::LOCALHOST.octets(),
+            port: bdt_peer_port,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+    assert_eq!(
+        state.register_foreign_device(Ipv4Addr::LOCALHOST.octets(), fdt_port, 60),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+
+    let ctx = RecvContext {
+        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
+        socket: bbmd_socket,
+        npdu_tx,
+        bbmd: Some(Arc::new(Mutex::new(state))),
+        broadcast_addr: Ipv4Addr::LOCALHOST,
+        broadcast_port: local_broadcast_port,
+        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        bdt_persist_path: None,
+    };
+    let msg = BvllMessage {
+        function: BvlcFunction::FORWARDED_NPDU,
+        payload: Bytes::from_static(&[0x01, 0x00, 0xAA, 0xBB]),
+        originating_ip: Some(origin.0),
+        originating_port: Some(origin.1),
+    };
+
+    handle_bvll_message(&msg, sender, &ctx).await;
+
+    assert!(
+        timeout(Duration::from_millis(100), npdu_rx.recv())
+            .await
+            .is_err(),
+        "Forwarded-NPDU from a non-BDT sender must not be delivered locally"
+    );
+    assert_no_bvll(&local_broadcast_sink, "local broadcast").await;
+    assert_no_bvll(&bdt_peer_sink, "BDT peer").await;
+    assert_no_bvll(&fdt_socket, "foreign device").await;
 }
 
 #[tokio::test]
