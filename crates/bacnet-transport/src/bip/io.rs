@@ -45,6 +45,8 @@ pub(super) struct RecvContext {
     pub(super) broadcast_port: u16,
     pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
     pub(super) bdt_persist_path: Option<std::path::PathBuf>,
+    #[cfg(test)]
+    pub(super) force_dbtn_forward_failure: bool,
 }
 
 async fn complete_pending_bvlc_response(
@@ -114,7 +116,7 @@ pub(super) async fn handle_bvll_message(
                     let mut state = bbmd.lock().await;
                     state.forwarding_targets(sender.0, sender.1)
                 };
-                forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
+                let _ = forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
             }
         }
 
@@ -175,18 +177,15 @@ pub(super) async fn handle_bvll_message(
                         .map(|e| (e.ip, e.port))
                         .collect::<Vec<_>>()
                 };
-                forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets).await;
+                let _ =
+                    forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets).await;
 
                 // Full-mask BDT peers forward by unicast; masked peers forward by directed broadcast.
                 if needs_local_broadcast {
                     let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                    let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                    match encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload) {
-                        Ok(()) => {
-                            let _ = ctx.socket.send_to(&buf, dest).await;
-                        }
-                        Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
-                    }
+                    let _ =
+                        send_forwarded_npdu(&ctx.socket, dest, orig_ip, orig_port, &msg.payload)
+                            .await;
                 }
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).
@@ -244,16 +243,25 @@ pub(super) async fn handle_bvll_message(
                     let mut state = bbmd.lock().await;
                     state.forwarding_targets(sender.0, sender.1)
                 };
-                forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
+                let mut forwarding_ok =
+                    forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
 
                 // Broadcast locally as Forwarded-NPDU
                 let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                match encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload) {
-                    Ok(()) => {
-                        let _ = ctx.socket.send_to(&buf, dest).await;
-                    }
-                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU broadcast"),
+                forwarding_ok &= if should_force_dbtn_forward_failure(ctx) {
+                    warn!("Forced DBTN forwarding failure");
+                    false
+                } else {
+                    send_forwarded_npdu(&ctx.socket, dest, sender.0, sender.1, &msg.payload).await
+                };
+
+                if !forwarding_ok {
+                    send_bvlc_result(
+                        &ctx.socket,
+                        sender,
+                        BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
+                    )
+                    .await;
                 }
             } else {
                 // Non-BBMD: reject with NAK (spec J.4.5)
@@ -535,6 +543,38 @@ async fn send_bvlc_result(socket: &UdpSocket, dest: ([u8; 4], u16), code: BvlcRe
     let _ = socket.send_to(&buf, addr).await;
 }
 
+#[cfg(test)]
+fn should_force_dbtn_forward_failure(ctx: &RecvContext) -> bool {
+    ctx.force_dbtn_forward_failure
+}
+
+#[cfg(not(test))]
+fn should_force_dbtn_forward_failure(_ctx: &RecvContext) -> bool {
+    false
+}
+
+async fn send_forwarded_npdu(
+    socket: &UdpSocket,
+    dest: SocketAddrV4,
+    orig_ip: [u8; 4],
+    orig_port: u16,
+    npdu: &[u8],
+) -> bool {
+    let mut buf = BytesMut::with_capacity(10 + npdu.len());
+    if let Err(e) = encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu) {
+        warn!(error = %e, "Failed to encode Forwarded-NPDU");
+        return false;
+    }
+
+    match socket.send_to(&buf, dest).await {
+        Ok(_) => true,
+        Err(e) => {
+            warn!(error = %e, dest = %dest, "Failed to send Forwarded-NPDU");
+            false
+        }
+    }
+}
+
 /// Forward an NPDU as Forwarded-NPDU to a list of targets.
 ///
 /// Yields between sends for large target lists to avoid starving the recv loop
@@ -545,20 +585,22 @@ async fn forward_npdu(
     orig_ip: [u8; 4],
     orig_port: u16,
     targets: &[([u8; 4], u16)],
-) {
+) -> bool {
     if targets.is_empty() {
-        return;
+        return true;
     }
     let mut buf = BytesMut::with_capacity(10 + npdu.len());
     if let Err(e) = encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu) {
         warn!(error = %e, "Failed to encode Forwarded-NPDU");
-        return;
+        return false;
     }
     let frame = buf.freeze();
+    let mut all_sent = true;
 
     for (i, &(ip, port)) in targets.iter().enumerate() {
         let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
         if let Err(e) = socket.send_to(&frame, dest).await {
+            all_sent = false;
             warn!(error = %e, dest = %dest, "Failed to forward NPDU");
         }
         // Yield every 32 sends to let the recv loop process incoming packets
@@ -566,6 +608,7 @@ async fn forward_npdu(
             tokio::task::yield_now().await;
         }
     }
+    all_sent
 }
 
 /// Resolve the local IPv4 address by connecting a UDP socket to a remote

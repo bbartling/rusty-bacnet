@@ -452,6 +452,8 @@ impl TransportPort for BipTransport {
             broadcast_port: self.port,
             pending_bvlc_response: self.pending_bvlc_response.clone(),
             bdt_persist_path: self.bdt_persist_path.clone(),
+            #[cfg(test)]
+            force_dbtn_forward_failure: false,
         };
 
         let recv_task = tokio::spawn(async move {

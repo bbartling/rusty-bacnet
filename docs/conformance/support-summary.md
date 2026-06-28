@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `6ab1fe7a517de24a95436d5ea586546c7f77216d`
-- Scope: Annex J J.4.5 Forwarded-NPDU non-BDT rejection and DBTN duplicate fanout evidence.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Forwarded-NPDU source validation or DBTN duplicate-fanout changes found for this tranche.
+- Repository SHA reviewed: `db481e1c8d2e93b876022b33443da124b1df2303`
+- Scope: Annex J J.4.5 Distribute-Broadcast-To-Network unable-to-forward NAK evidence.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP DBTN unable-to-forward NAK changes found for this tranche.
 
 ## Counts
 
