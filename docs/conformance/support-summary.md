@@ -3,10 +3,10 @@
 > DRAFT internal support evidence. Generated from `conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.
 
 - Standard: ANSI/ASHRAE Standard 135-2020
-- Reviewed at: 2026-06-28
-- Implementation evidence SHA reviewed: `8468ce4b9045f9ef9e30684195ada0214ab5ccca`
-- Scope: Annex J BACnet/IP BIP and BBMD benchmark A/B harness evidence.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J BACnet/IP BVLC, Original-NPDU, BBMD, BDT, FDT, and foreign-device benchmark scope; benchmark harness changes add no new normative protocol behavior and no separate addenda/errata source is committed for this tranche.
+- Reviewed at: 2026-06-29
+- Implementation evidence SHA reviewed: `3c609ebef3f2f166ff73f36d9b3d76ffd0ff27c6`
+- Scope: Annex AB.2 BACnet/SC BVLC-SC frame and header-option codec evidence.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2 BACnet/SC frame/header-option impacts. Addendum 135-2020cf changes AB.2.3 Data Options bit 6 naming from Must Understand to Every Segment while leaving Destination Options Must Understand unchanged; addendum 135-2020cp adds standard header option types 2..5. No addendum reviewed changes AB.2 control reserved bits, header option type range 1..31, option length/data framing, VMAC field ordering, or payload ordering covered by this tranche.
 
 ## Counts
 

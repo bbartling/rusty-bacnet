@@ -5,11 +5,11 @@
 ## Scope
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
-- Reviewed at: 2026-06-28.
-- Implementation evidence SHA reviewed: `8468ce4b9045f9ef9e30684195ada0214ab5ccca`.
+- Reviewed at: 2026-06-29.
+- Implementation evidence SHA reviewed: `3c609ebef3f2f166ff73f36d9b3d76ffd0ff27c6`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Current scope: Annex J BACnet/IP BIP and BBMD benchmark A/B harness evidence.
-- Addenda/errata status: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J BACnet/IP BVLC, Original-NPDU, BBMD, BDT, FDT, and foreign-device benchmark scope; benchmark harness changes add no new normative protocol behavior and no separate addenda/errata source is committed for this tranche.
+- Current scope: Annex AB.2 BACnet/SC BVLC-SC frame and header-option codec evidence.
+- Addenda/errata status: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2 BACnet/SC frame/header-option impacts. Addendum 135-2020cf changes AB.2.3 Data Options bit 6 naming from Must Understand to Every Segment while leaving Destination Options Must Understand unchanged; addendum 135-2020cp adds standard header option types 2..5. No addendum reviewed changes AB.2 control reserved bits, header option type range 1..31, option length/data framing, VMAC field ordering, or payload ordering covered by this tranche.
 
 ## Status Taxonomy
 
@@ -114,7 +114,7 @@
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | `implementation-present-needs-negative-tests` | SC frame codecs exist in transport and WASM crates. |
+| `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | `implementation-present-needs-negative-tests` | AB-01 adds transport and WASM codec evidence for reserved control bit rejection, Header Option Type `1..31` enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option length/data truncation rejection, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 accepted by the generic `1..31` parser. Function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain open. |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | `implementation-present-needs-conformance-tests` | SC transport and hub paths exist. |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | `implementation-present-needs-security-tests` | WebSocket/TLS paths exist; mTLS/security tests remain open. |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | `implementation-present-needs-timeout-tests` | SC heartbeat code exists; deterministic timeout tests remain open. |

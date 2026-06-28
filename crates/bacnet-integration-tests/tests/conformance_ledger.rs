@@ -181,7 +181,7 @@ fn read_repo_file(path: &str) -> String {
 fn ledger_schema_has_required_seed_rows_and_unique_ids() {
     let data = ledger();
     assert_eq!(data["standard"], "ANSI/ASHRAE Standard 135-2020");
-    assert_eq!(data["reviewed_at"], "2026-06-28");
+    assert_eq!(data["reviewed_at"], "2026-06-29");
     assert!(
         data["repo_sha"].as_str().is_some_and(|sha| sha.len() == 40),
         "repo_sha must be a full git SHA"
