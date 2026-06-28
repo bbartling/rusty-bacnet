@@ -604,6 +604,8 @@ impl TransportPort for BipTransport {
 }
 
 #[cfg(test)]
+mod acl_tests;
+#[cfg(test)]
 mod dbtn_tests;
 #[cfg(test)]
 mod fdt_tests;

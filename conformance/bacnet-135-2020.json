@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "828ee3fca2233600d09a68267e791d3f7ebbe6c1",
-  "review_scope": "Annex J.5.2.3 Foreign Device Table timer operation.",
-  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; FDT timer requirements remain anchored in Annex J.5.2.3 for this tranche.",
+  "repo_sha": "598b2e132de3a32a67662633bcc69bfc9f34094a",
+  "review_scope": "Annex J BBMD management ACL evidence for legacy Write-BDT and Delete-FDT caller paths.",
+  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; Annex J.4.4.2 legacy Write-BDT behavior and J.5.2.1.2 Delete-FDT result semantics checked for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -322,6 +322,7 @@
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_uses_broadcast_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_unicast_with_full_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_needs_local_broadcast_for_unicast_peer",
+        "crates/bacnet-transport/src/bip/acl_tests.rs::management_acl_allows_listed_sender_write_bdt_and_delete_fdt",
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
@@ -332,12 +333,13 @@
         "crates/bacnet-transport/src/bbmd.rs::set_bdt_rejects_max_entries_when_self_insert_would_exceed_limit",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_directed_broadcast_peer",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_unknown_peer",
+        "crates/bacnet-transport/src/bip/acl_tests.rs::management_acl_denies_unlisted_sender_and_preserves_bdt_and_fdt",
         "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands"],
-      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, Forwarded-NPDUs are not forwarded onward to other BDT peers, and non-BDT senders are rejected before BDT fanout. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets without extra duplicate frames. Persistence and ACL matrix remain open."
+      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, Forwarded-NPDUs are not forwarded onward to other BDT peers, and non-BDT senders are rejected before BDT fanout. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets without extra duplicate frames. J-07 adds project ACL evidence for the legacy Write-BDT path: listed management senders can update the table, and unlisted senders receive the standard Write-BDT NAK without table mutation. BDT persistence remains open."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",
@@ -354,6 +356,7 @@
         "crates/bacnet-transport/src/bip/tests.rs::foreign_device_broadcast_via_bbmd",
         "crates/bacnet-transport/src/bip/fdt_tests.rs::bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request",
         "crates/bacnet-transport/src/bip/fdt_tests.rs::register_foreign_device_resets_entry_before_purge_task_removes_it",
+        "crates/bacnet-transport/src/bip/acl_tests.rs::management_acl_allows_listed_sender_write_bdt_and_delete_fdt",
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo",
         "crates/bacnet-transport/src/bbmd.rs::register_and_lookup_foreign_device",
@@ -374,6 +377,7 @@
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_naks_when_forwarding_fails",
         "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery",
+        "crates/bacnet-transport/src/bip/acl_tests.rs::management_acl_denies_unlisted_sender_and_preserves_bdt_and_fdt",
         "crates/bacnet-transport/src/bbmd.rs::register_foreign_device_zero_ttl_naks",
         "crates/bacnet-transport/src/bbmd.rs::delete_nonexistent_foreign_device_naks",
         "crates/bacnet-transport/src/bbmd.rs::expired_entries_purged",
@@ -381,7 +385,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, verifies no echo to the originating foreign device, checks for no extra duplicate FDT frames, and verifies a registered origin receives X'0060' when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. J-06 adds a BBMD-owned timer purge task for Annex J.5.2.3, covers expiration without an inbound BVLC request, and covers re-registration resetting the entry before the purge task removes it."
+      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, verifies no echo to the originating foreign device, checks for no extra duplicate FDT frames, and verifies a registered origin receives X'0060' when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. J-06 adds a BBMD-owned timer purge task for Annex J.5.2.3, covers expiration without an inbound BVLC request, and covers re-registration resetting the entry before the purge task removes it. J-07 adds project ACL evidence for Delete-FDT: listed management senders can delete registered entries, and unlisted senders receive the standard Delete-FDT NAK without removing the entry."
     },
     {
       "id": "BACNET-J-NAT-TRAVERSAL",
