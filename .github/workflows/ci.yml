@@ -30,8 +30,11 @@ permissions:
 # =============================================================================
 
 jobs:
+  # Defense in depth with the top-level trigger: PRs run on main/dev,
+  # but merge pushes to dev must not spend CI if push filters change later.
   fmt:
     name: Rustfmt
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +46,7 @@ jobs:
 
   clippy:
     name: Clippy
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +59,7 @@ jobs:
 
   wasm-check:
     name: WASM Check
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +72,7 @@ jobs:
 
   audit:
     name: Cargo Audit
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +88,7 @@ jobs:
 
   file-size-cap:
     name: File-size cap (700 LOC)
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +96,7 @@ jobs:
 
   no-secret-scan:
     name: No-secret scan
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +104,7 @@ jobs:
 
   msrv:
     name: MSRV (1.93)
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     env:
       # Override `rust-toolchain.toml` (which pins the dev/CI channel to
@@ -114,6 +123,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -145,6 +155,7 @@ jobs:
 
   deny:
     name: Cargo Deny
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
