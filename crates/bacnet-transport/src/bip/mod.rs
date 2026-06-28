@@ -614,6 +614,8 @@ mod fdt_tests;
 #[cfg(test)]
 mod forwarded_tests;
 #[cfg(test)]
+mod npdu_addressing_tests;
+#[cfg(test)]
 mod original_tests;
 #[cfg(test)]
 mod tests;
