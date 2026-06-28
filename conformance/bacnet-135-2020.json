@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "ccece409211cdcc85d5736e1701db928b66cfaf8",
-  "review_scope": "Annex J J-04 Original-Unicast/Original-Broadcast B/IP source and BBMD fanout evidence update; Original-Broadcast local Forwarded-NPDU echo removed.",
-  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Original-NPDU broadcast forwarding changes found for this tranche.",
+  "repo_sha": "a0ab55d9a4803704712a740be469c9edaf2cce71",
+  "review_scope": "Annex J J.4.5 Distribute-Broadcast-To-Network fanout evidence for registered foreign devices.",
+  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP DBTN broadcast distribution changes found for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -291,16 +291,18 @@
         "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
         "crates/bacnet-transport/src/bvll.rs::encode_decode_forwarded_npdu",
         "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_bdt_peer_uses_originating_source_mac",
+        "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bvll.rs::decode_forwarded_too_short_for_address",
         "crates/bacnet-transport/src/bip/forwarded_tests.rs::forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast",
+        "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "benchmarks": ["benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["README BACnet/IP feature", "docs/CLI.md BBMD commands"],
-      "notes": "J-04 covers generic originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, and no onward forwarding to other BDT peers. Original-Broadcast fanout now covers BDT/FDT Forwarded-NPDU emission with original sender preservation and no local echoed Forwarded-NPDU. Non-BDT source rejection and DBTN multi-target fanout remain open."
+      "notes": "J-04 covers generic originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, and no onward forwarding to other BDT peers. Original-Broadcast fanout covers BDT/FDT Forwarded-NPDU emission with original sender preservation and no local echoed Forwarded-NPDU. DBTN evidence now covers registered foreign-device fanout to local broadcast, BDT peer, and non-origin FDT peer while preserving the origin and excluding origin echo. Non-BDT source rejection remains open."
     },
     {
       "id": "BACNET-J-BBMD-BDT",
@@ -318,6 +320,7 @@
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_uses_broadcast_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_unicast_with_full_mask",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_needs_local_broadcast_for_unicast_peer",
+        "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "negative_tests": [
@@ -331,7 +334,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands"],
-      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, and Forwarded-NPDUs are not forwarded onward to other BDT peers. Original-Broadcast fanout now covers one remote BDT target and verifies no local Forwarded-NPDU echo. Persistence, ACL matrix, and DBTN multi-target fanout remain open."
+      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, and Forwarded-NPDUs are not forwarded onward to other BDT peers. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout now covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets. Persistence and ACL matrix remain open."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",
@@ -346,6 +349,7 @@
         "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_accepts_max_ttl_and_caps_remaining",
         "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_removes_registered_foreign_device",
         "crates/bacnet-transport/src/bip/tests.rs::foreign_device_broadcast_via_bbmd",
+        "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo",
         "crates/bacnet-transport/src/bbmd.rs::register_and_lookup_foreign_device",
         "crates/bacnet-transport/src/bbmd.rs::re_register_updates_existing",
@@ -362,6 +366,7 @@
         "crates/bacnet-transport/src/bip/tests.rs::register_foreign_device_rejects_malformed_ttl_payload_lengths",
         "crates/bacnet-transport/src/bip/tests.rs::delete_fdt_entry_rejects_malformed_payload_and_preserves_entry",
         "crates/bacnet-transport/src/bip/tests.rs::distribute_broadcast_from_unregistered_foreign_device_naks_without_delivery",
+        "crates/bacnet-transport/src/bip/dbtn_tests.rs::dbtn_registered_foreign_device_fans_out_without_origin_echo",
         "crates/bacnet-transport/src/bbmd.rs::register_foreign_device_zero_ttl_naks",
         "crates/bacnet-transport/src/bbmd.rs::delete_nonexistent_foreign_device_naks",
         "crates/bacnet-transport/src/bbmd.rs::expired_entries_purged",
@@ -369,7 +374,7 @@
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
       "public_claims": ["docs/CLI.md foreign device commands"],
-      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. Multi-device forwarded fanout and timer-driven expiry integration remain for later lifecycle work."
+      "notes": "J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers fanout to one registered foreign device while preserving the original sender in the Forwarded-NPDU. DBTN evidence covers registered origin plus peer FDT fanout, preserves the original foreign-device B/IP source, and verifies no echo to the originating foreign device. Timer-driven expiry integration remains open."
     },
     {
       "id": "BACNET-K-BIBBS",
