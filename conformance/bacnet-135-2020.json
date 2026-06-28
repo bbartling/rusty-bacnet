@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "598b2e132de3a32a67662633bcc69bfc9f34094a",
-  "review_scope": "Annex J BBMD management ACL evidence for legacy Write-BDT and Delete-FDT caller paths.",
-  "addenda_errata_status": "Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; Annex J.4.4.2 legacy Write-BDT behavior and J.5.2.1.2 Delete-FDT result semantics checked for this tranche.",
+  "repo_sha": "559074f503c423575b3bf2eff6bd873947e3ed04",
+  "review_scope": "Annex J BBMD BDT persistence evidence for successful legacy Write-BDT restart load and invalid persisted-data fallback.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J.4.4 BBMD configuration and J.4.4.1 Read-BDT current-table semantics; no separate addenda/errata source is committed for this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -312,10 +312,11 @@
       "priority": "P0",
       "requirement_summary": "BBMD Broadcast Distribution Table write/read/ACK behavior and peer broadcast fanout are validated.",
       "status": "implementation-present-needs-conformance-tests",
-      "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-transport/src/bip/io.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
+      "code_anchors": ["crates/bacnet-transport/src/bbmd.rs", "crates/bacnet-transport/src/bip/mod.rs", "crates/bacnet-transport/src/bip/io.rs", "crates/bacnet-cli/src/shell/bbmd.rs"],
       "positive_tests": [
         "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_bbmd",
         "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_bbmd",
+        "crates/bacnet-transport/src/bip/bdt_persistence_tests.rs::write_bdt_persists_wire_format_and_restart_loads_it",
         "crates/bacnet-transport/src/bbmd.rs::set_bdt_auto_inserts_self",
         "crates/bacnet-transport/src/bbmd.rs::set_bdt_does_not_duplicate_self",
         "crates/bacnet-transport/src/bbmd.rs::forwarding_targets_excludes_source",
@@ -330,6 +331,7 @@
         "crates/bacnet-transport/src/bip/tests.rs::read_bdt_from_non_bbmd_surfaces_typed_nak",
         "crates/bacnet-transport/src/bip/tests.rs::write_bdt_to_non_bbmd_surfaces_typed_nak",
         "crates/bacnet-transport/src/bip/tests.rs::write_bdt_rejects_malformed_payload_and_preserves_table",
+        "crates/bacnet-transport/src/bip/bdt_persistence_tests.rs::invalid_persisted_bdt_falls_back_to_configured_bdt",
         "crates/bacnet-transport/src/bbmd.rs::set_bdt_rejects_max_entries_when_self_insert_would_exceed_limit",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_directed_broadcast_peer",
         "crates/bacnet-transport/src/bbmd.rs::forwarded_npdu_skips_local_broadcast_for_unknown_peer",
@@ -338,8 +340,8 @@
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo"
       ],
       "benchmarks": ["benchmarks/src/bin/bacnet_bbmd.rs", "benchmarks/src/stress/bbmd.rs"],
-      "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands"],
-      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, Forwarded-NPDUs are not forwarded onward to other BDT peers, and non-BDT senders are rejected before BDT fanout. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets without extra duplicate frames. J-07 adds project ACL evidence for the legacy Write-BDT path: listed management senders can update the table, and unlisted senders receive the standard Write-BDT NAK without table mutation. BDT persistence remains open."
+      "public_claims": ["docs/CLI.md BBMD commands", "README CLI BBMD commands", "docs/rust-api.md BBMD example"],
+      "notes": "J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior: full-mask peers require local rebroadcast, directed-broadcast and unknown peers skip it, Forwarded-NPDUs are not forwarded onward to other BDT peers, and non-BDT senders are rejected before BDT fanout. Original-Broadcast fanout covers one remote BDT target and verifies no local Forwarded-NPDU echo. DBTN fanout covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets without extra duplicate frames. J-07 adds project ACL evidence for the legacy Write-BDT path: listed management senders can update the table, and unlisted senders receive the standard Write-BDT NAK without table mutation. J-08 adds BDT persistence evidence: successful Write-BDT stores the current wire-format BDT for restart load, and invalid persisted bytes fall back to the configured BDT without accepting malformed state."
     },
     {
       "id": "BACNET-J-FOREIGN-DEVICE-FDT",

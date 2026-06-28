@@ -406,6 +406,7 @@ Variants: `Bip`, `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 
 ```rust
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 
 use bacnet_transport::bbmd::BdtEntry;
 use bacnet_transport::bip::{BipTransport, DEFAULT_BACNET_PORT};
@@ -421,6 +422,9 @@ transport.enable_bbmd(vec![BdtEntry {
     port: DEFAULT_BACNET_PORT,
     broadcast_mask: [255, 255, 255, 255],
 }]);
+
+// Optional: persist successful legacy Write-BDT updates and reload them on restart.
+transport.set_bdt_persist_path(PathBuf::from("/var/lib/rusty-bacnet/bdt.bin"));
 
 // Optional: restrict Write-BDT and Delete-FDT management operations.
 // An empty ACL allows all sources.

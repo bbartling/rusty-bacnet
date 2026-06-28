@@ -44,7 +44,7 @@ def support_summary(data: dict) -> str:
     lines += [
         f"- Standard: {data['standard']}",
         f"- Reviewed at: {data['reviewed_at']}",
-        f"- Repository SHA reviewed: `{data['repo_sha']}`",
+        f"- Implementation evidence SHA reviewed: `{data['repo_sha']}`",
         f"- Scope: {data['review_scope']}",
         f"- Addenda/errata: {data['addenda_errata_status']}",
         "",
