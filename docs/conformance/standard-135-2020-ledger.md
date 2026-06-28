@@ -6,10 +6,10 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-28.
-- Repository SHA reviewed: `ccece409211cdcc85d5736e1701db928b66cfaf8`.
+- Repository SHA reviewed: `a0ab55d9a4803704712a740be469c9edaf2cce71`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Current scope: Annex J J-04 Original-Unicast/Original-Broadcast B/IP source and BBMD fanout evidence update; Original-Broadcast local Forwarded-NPDU echo removed.
-- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Original-NPDU broadcast forwarding changes found for this tranche.
+- Current scope: Annex J J.4.5 Distribute-Broadcast-To-Network fanout evidence for registered foreign devices.
+- Addenda/errata status: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP DBTN broadcast distribution changes found for this tranche.
 
 ## Status Taxonomy
 
@@ -86,9 +86,9 @@
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | J-01 covers Annex J.2 constants through `0x0B`, representative frames, malformed type/length, unknown function passthrough, deleted-value passthrough, and current decoder policy for extra bytes beyond BVLC Length. J-02 adds exact two-byte BVLC-Result parsing, unknown result-code passthrough, malformed result rejection, and sender/expected-function correlation for pending management responses. |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery and self-originated frame suppression; directed reply-path integration remains open. |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 Original-NPDU evidence covers BBMD Original-Broadcast local delivery, BDT/FDT Forwarded-NPDU fanout with original sender preservation, and no local Forwarded-NPDU echo. Remote/global NPDU broadcast addressing remains open. |
-| `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 covers originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, no onward forwarding to other BDT peers, and Original-Broadcast BDT/FDT Forwarded-NPDU emission. Non-BDT source rejection and DBTN multi-target fanout remain open. |
-| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior, no onward forwarding to other BDT peers, and Original-Broadcast one-peer fanout without local echo. Persistence, ACL matrix, and DBTN multi-target fanout remain open. |
-| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers one registered FDT target; multi-device forwarded fanout and timer-driven expiry integration remain open. |
+| `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | `implementation-present-needs-negative-tests` | J-04 covers originating-address parsing, truncated-address rejection, BBMD delivery with originating B/IP source MAC, FDT fanout preserving the origin, local rebroadcast for unicast peer arrivals, directed-broadcast peer local-rebroadcast suppression, no onward forwarding to other BDT peers, and Original-Broadcast BDT/FDT Forwarded-NPDU emission. DBTN evidence now covers registered foreign-device fanout to local broadcast, BDT peer, and non-origin FDT peer while preserving the origin and excluding origin echo. Non-BDT source rejection remains open. |
+| `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers read/write BDT caller paths, replacement semantics, malformed Write-BDT NAK without table mutation, self-entry insertion without overflow, and directed-broadcast forwarding target calculation. J-04 adds Forwarded-NPDU BDT mask behavior, no onward forwarding to other BDT peers, and Original-Broadcast one-peer fanout without local echo. DBTN fanout now covers a registered foreign-device request forwarded to a BDT peer plus local broadcast and FDT targets. Persistence and ACL matrix remain open. |
+| `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers one registered FDT target; DBTN evidence covers registered origin plus peer FDT fanout, source preservation, and no echo to the originating foreign device. Timer-driven expiry integration remains open. |
 
 ## Annex K BIBBs
 
@@ -125,4 +125,4 @@
 
 ## Follow-Up Backlog
 
-Rows not marked `supported-with-clause-evidence` are follow-up work. The next Annex J tranche should continue BBMD/BDT/FDT lifecycle evidence, including timer-driven expiry integration, multi-device forwarded fanout, BDT persistence, ACL behavior, and forwarding loop prevention.
+Rows not marked `supported-with-clause-evidence` are follow-up work. The next Annex J tranche should continue BBMD/BDT/FDT lifecycle evidence, including timer-driven expiry integration, BDT persistence, ACL behavior, non-BDT source rejection, NAT/multicast decisions, and forwarding loop prevention.

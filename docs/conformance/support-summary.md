@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `ccece409211cdcc85d5736e1701db928b66cfaf8`
-- Scope: Annex J J-04 Original-Unicast/Original-Broadcast B/IP source and BBMD fanout evidence update; Original-Broadcast local Forwarded-NPDU echo removed.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP Original-NPDU broadcast forwarding changes found for this tranche.
+- Repository SHA reviewed: `a0ab55d9a4803704712a740be469c9edaf2cce71`
+- Scope: Annex J J.4.5 Distribute-Broadcast-To-Network fanout evidence for registered foreign devices.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP DBTN broadcast distribution changes found for this tranche.
 
 ## Counts
 
