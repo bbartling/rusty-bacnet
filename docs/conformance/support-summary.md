@@ -4,7 +4,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Implementation evidence SHA reviewed: `b26c9cdd8534170a7eb64a8c154f2f0de9b0a941`
+- Implementation evidence SHA reviewed: `dbe4aef7f37cd8436959ea4a4f2590cd4c720f34`
 - Scope: Annex J Original-Broadcast-NPDU remote/global NPDU addressing preservation evidence.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Clause 6.2.2 destination specifier/DLEN broadcast semantics, Clause 6 remote/global broadcast behavior, Annex J.2.12 Original-Broadcast-NPDU format, and J.4.1 local broadcast behavior; no separate addenda/errata source is committed for this tranche.
 

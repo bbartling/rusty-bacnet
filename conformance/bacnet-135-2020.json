@@ -1,7 +1,7 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-28",
-  "repo_sha": "b26c9cdd8534170a7eb64a8c154f2f0de9b0a941",
+  "repo_sha": "dbe4aef7f37cd8436959ea4a4f2590cd4c720f34",
   "review_scope": "Annex J Original-Broadcast-NPDU remote/global NPDU addressing preservation evidence.",
   "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Clause 6.2.2 destination specifier/DLEN broadcast semantics, Clause 6 remote/global broadcast behavior, Annex J.2.12 Original-Broadcast-NPDU format, and J.4.1 local broadcast behavior; no separate addenda/errata source is committed for this tranche.",
   "status_taxonomy": [
@@ -272,8 +272,8 @@
         "crates/bacnet-transport/src/bvll.rs::decode_annex_j_bvlc_functions_and_deleted_secure_passthrough",
         "crates/bacnet-transport/src/bip/original_tests.rs::original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo",
         "crates/bacnet-transport/src/bip/tests.rs::socket_is_broadcast_capable_and_binds_inaddr_any",
-        "crates/bacnet-transport/src/bip/tests.rs::original_broadcast_npdu_preserves_global_npdu_destination",
-        "crates/bacnet-transport/src/bip/tests.rs::original_broadcast_npdu_preserves_remote_npdu_destination"
+        "crates/bacnet-transport/src/bip/npdu_addressing_tests.rs::original_broadcast_npdu_preserves_global_npdu_destination",
+        "crates/bacnet-transport/src/bip/npdu_addressing_tests.rs::original_broadcast_npdu_preserves_remote_npdu_destination"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length",
