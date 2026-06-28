@@ -340,6 +340,8 @@ The table below lists implemented transport code paths. Clause-level support evi
 | MS/TP (serial token-passing) | Linux | `serial` |
 | Ethernet (802.3 via BPF) | Linux | `ethernet` |
 
+Annex J NAT traversal and IPv4 BACnet/IP multicast (B/IP-M) are not claimed by the current BACnet/IP transport; their support direction is tracked in the conformance ledger.
+
 ## Python Bindings
 
 The `rusty-bacnet` crate provides Python bindings for the core client, server, and hub APIs:

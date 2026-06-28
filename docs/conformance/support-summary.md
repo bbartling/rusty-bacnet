@@ -4,18 +4,19 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-28
-- Repository SHA reviewed: `db481e1c8d2e93b876022b33443da124b1df2303`
-- Scope: Annex J J.4.5 Distribute-Broadcast-To-Network unable-to-forward NAK evidence.
-- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no Annex J/BACnet/IP DBTN unable-to-forward NAK changes found for this tranche.
+- Repository SHA reviewed: `f01688bbfd6b164e6ed74fd5f871df9e7e67951b`
+- Scope: Annex J J.7.5 NAT traversal and J.8 BACnet/IP multicast support-status decisions.
+- Addenda/errata: Official BACnet Committee Standard 135-2020 addenda through 135-2020cm checked on 2026-06-28; no additional Annex J NAT or BACnet/IP multicast changes found for this tranche.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
-| Priority | P0 | 10 |
+| Priority | P0 | 12 |
 | Priority | P1 | 10 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
+| Status | deferred-pending-owner-decision | 2 |
 | Status | implementation-present-needs-conformance-tests | 8 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
@@ -52,6 +53,8 @@
 | `BACNET-J-FORWARDED-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-J-BBMD-BDT` | Annex J.4/J.5 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | implementation-present-needs-conformance-tests | 1 |
+| `BACNET-J-NAT-TRAVERSAL` | Annex J.7.5 | P0 | deferred-pending-owner-decision | 0 |
+| `BACNET-J-IP-MULTICAST` | Annex J.8 | P0 | deferred-pending-owner-decision | 0 |
 | `BACNET-K-BIBBS` | Annex K | P1 | in-progress | 0 |
 | `BACNET-L-PROFILES` | Annex L | P2 | in-progress | 0 |
 | `BACNET-O-ZIGBEE` | Annex O | P3 | unknown-pending-source-review | 0 |
