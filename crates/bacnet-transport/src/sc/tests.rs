@@ -252,11 +252,10 @@ fn connect_accept_with_payload_sets_hub_max_apdu() {
 }
 
 #[test]
-fn connect_accept_empty_payload_keeps_default_max_apdu() {
+fn connect_accept_rejects_short_payload() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let _req = conn.build_connect_request();
 
-    // Legacy hub that sends no payload.
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
         message_id: 1,
@@ -264,10 +263,11 @@ fn connect_accept_empty_payload_keeps_default_max_apdu() {
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::new(),
+        payload: Bytes::from_static(&[0x10; 6]),
     };
-    assert!(conn.handle_connect_accept(&accept));
-    assert_eq!(conn.hub_max_apdu_length, 1476); // default preserved
+    assert!(!conn.handle_connect_accept(&accept));
+    assert_eq!(conn.state, ScConnectionState::Connecting);
+    assert_eq!(conn.hub_vmac, None);
 }
 
 #[tokio::test]
@@ -533,6 +533,49 @@ async fn sc_connect_timeout() {
 }
 
 #[tokio::test]
+async fn sc_connect_rejects_mismatched_accept_message_id() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    let vmac = [0x01; 6];
+    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        let data = ws_server.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+
+        let mut payload = Vec::with_capacity(26);
+        payload.extend_from_slice(&[0x10; 6]);
+        payload.extend_from_slice(&[0u8; 16]);
+        payload.extend_from_slice(&1476u16.to_be_bytes());
+        payload.extend_from_slice(&1476u16.to_be_bytes());
+        let accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: req.message_id.wrapping_add(1),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(payload),
+        };
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &accept);
+        ws_server.send(&buf).await.unwrap();
+    });
+
+    let result = transport.start().await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("Connect-Accept"),
+        "Expected Connect-Accept mismatch error, got: {}",
+        err_msg
+    );
+    let conn = transport.connection().unwrap();
+    assert_eq!(conn.lock().await.state, ScConnectionState::Disconnected);
+    hub_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn sc_heartbeat_sent_periodically() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -624,8 +667,9 @@ async fn sc_connect_succeeds_within_timeout() {
         let req = decode_sc_message(&data).unwrap();
         assert_eq!(req.function, ScFunction::ConnectRequest);
 
-        let mut payload = Vec::with_capacity(10);
+        let mut payload = Vec::with_capacity(26);
         payload.extend_from_slice(&[0x10; 6]); // hub VMAC
+        payload.extend_from_slice(&[0u8; 16]); // hub Device UUID
         payload.extend_from_slice(&1476u16.to_be_bytes()); // Max-BVLC-Length
         payload.extend_from_slice(&1476u16.to_be_bytes()); // Max-NPDU-Length
         let accept = ScMessage {

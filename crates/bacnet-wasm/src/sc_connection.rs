@@ -33,6 +33,7 @@ pub struct ScConnection {
     pub max_apdu_length: u16,
     pub hub_max_apdu_length: u16,
     next_message_id: u16,
+    pending_connect_message_id: Option<u16>,
     pub disconnect_ack_to_send: Option<ScMessage>,
 }
 
@@ -46,6 +47,7 @@ impl ScConnection {
             max_apdu_length: 1476,
             hub_max_apdu_length: 1476,
             next_message_id: 1,
+            pending_connect_message_id: None,
             disconnect_ack_to_send: None,
         }
     }
@@ -62,6 +64,8 @@ impl ScConnection {
     /// No Originating/Destination Virtual Address.
     pub fn build_connect_request(&mut self) -> ScMessage {
         self.state = ScConnectionState::Connecting;
+        let message_id = self.next_id();
+        self.pending_connect_message_id = Some(message_id);
         let mut payload_buf = Vec::with_capacity(26);
         payload_buf.extend_from_slice(&self.local_vmac);
         payload_buf.extend_from_slice(&self.device_uuid);
@@ -69,7 +73,7 @@ impl ScConnection {
         payload_buf.extend_from_slice(&self.max_apdu_length.to_be_bytes());
         ScMessage {
             function: ScFunction::ConnectRequest,
-            message_id: self.next_id(),
+            message_id,
             originating_vmac: None,
             destination_vmac: None,
             dest_options: Vec::new(),
@@ -86,17 +90,17 @@ impl ScConnection {
         if msg.function != ScFunction::ConnectAccept {
             return false;
         }
-        // AB.2.11.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26
-        if msg.payload.len() >= 26 {
-            let mut hub_vmac = [0u8; 6];
-            hub_vmac.copy_from_slice(&msg.payload[0..6]);
-            self.hub_vmac = Some(hub_vmac);
-            self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
-        } else if msg.payload.len() >= 6 {
-            let mut hub_vmac = [0u8; 6];
-            hub_vmac.copy_from_slice(&msg.payload[0..6]);
-            self.hub_vmac = Some(hub_vmac);
+        if self.pending_connect_message_id != Some(msg.message_id) {
+            return false;
         }
+        if msg.payload.len() != 26 {
+            return false;
+        }
+        self.pending_connect_message_id = None;
+        let mut hub_vmac = [0u8; 6];
+        hub_vmac.copy_from_slice(&msg.payload[0..6]);
+        self.hub_vmac = Some(hub_vmac);
+        self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
     }
@@ -189,6 +193,7 @@ impl ScConnection {
                     Ok(ScBvlcResult::Ack { .. }) => {}
                     Ok(ScBvlcResult::Nak { .. }) | Err(_) => {
                         self.state = ScConnectionState::Disconnected;
+                        self.pending_connect_message_id = None;
                     }
                 }
                 None
@@ -251,6 +256,63 @@ mod tests {
             payload: Bytes::from(vec![0; 10]),
         };
         assert!(!conn.handle_connect_accept(&msg));
+    }
+
+    #[test]
+    fn connect_accept_rejects_wrong_message_id() {
+        let mut conn = ScConnection::new([1; 6]);
+        let req = conn.build_connect_request();
+        let hub_vmac = [2; 6];
+        let mut payload = Vec::with_capacity(26);
+        payload.extend_from_slice(&hub_vmac);
+        payload.extend_from_slice(&[0u8; 16]);
+        payload.extend_from_slice(&1476u16.to_be_bytes());
+        payload.extend_from_slice(&1476u16.to_be_bytes());
+
+        let wrong_accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: req.message_id.wrapping_add(1),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(payload.clone()),
+        };
+        assert!(!conn.handle_connect_accept(&wrong_accept));
+        assert_eq!(conn.state, ScConnectionState::Connecting);
+        assert_eq!(conn.hub_vmac, None);
+
+        let right_accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: req.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(payload),
+        };
+        assert!(conn.handle_connect_accept(&right_accept));
+        assert_eq!(conn.state, ScConnectionState::Connected);
+        assert_eq!(conn.hub_vmac, Some(hub_vmac));
+    }
+
+    #[test]
+    fn connect_accept_rejects_short_payload() {
+        let mut conn = ScConnection::new([1; 6]);
+        let req = conn.build_connect_request();
+        let short_accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: req.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[2; 6]),
+        };
+
+        assert!(!conn.handle_connect_accept(&short_accept));
+        assert_eq!(conn.state, ScConnectionState::Connecting);
+        assert_eq!(conn.hub_vmac, None);
     }
 
     #[test]

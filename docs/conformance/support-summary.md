@@ -4,15 +4,15 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `a2bee8bda604e50a501b81dcb4de392b16b8c4a9`
-- Scope: Annex AB.2.4 BACnet/SC BVLC-Result parser and connection handling evidence.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2.4 BACnet/SC BVLC-Result impacts. Addendum 135-2020ci clarifies that BVLC-Result NAK is used for standard BVLC message failures while ACK may be used for proprietary BVLC messages, and it expands AB.3.1.5 common error situations. Addenda 135-2020cf/cp/cc/cm were also searched for AB.2.4/BVLC-Result impacts; no additional BVLC-Result payload grammar changes were found.
+- Implementation evidence SHA reviewed: `bfc1009a16d16cb7d775bf256e51191a7e862a1d`
+- Scope: Annex AB.6.2 BACnet/SC connection state-machine evidence and Annex AB BVLC-Result error-code use.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda set checked on 2026-06-29 were reviewed for Annex AB.6.2 connection-state impacts. The Standard ASN.1 lists BACnet Error Class COMMUNICATION as 7 and Error Code node-duplicate-vmac as 151; no reviewed addendum changes the AB.6.2 Connect-Accept message-id matching or duplicate-VMAC BVLC-Result NAK behavior covered by this tranche.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
-| Priority | P0 | 13 |
+| Priority | P0 | 14 |
 | Priority | P1 | 10 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
@@ -22,7 +22,7 @@
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
 | Status | implementation-present-needs-source-review | 2 |
-| Status | implementation-present-needs-state-machine-audit | 2 |
+| Status | implementation-present-needs-state-machine-audit | 3 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
@@ -61,6 +61,7 @@
 | `BACNET-U-IPV6-BVLL` | Annex U | P2 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-AB-SC-BVLC-RESULT` | Annex AB.2.4 | P0 | implementation-present-needs-conformance-tests | 2 |
+| `BACNET-AB-SC-CONNECTION-STATE` | Annex AB.6.2 | P0 | implementation-present-needs-state-machine-audit | 2 |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 1 |
