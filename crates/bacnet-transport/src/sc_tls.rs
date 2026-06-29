@@ -76,6 +76,12 @@ fn parse_wss_uri(url: &str) -> Result<tokio_tungstenite::tungstenite::http::Uri,
         ));
     }
 
+    if uri.host().map(str::is_empty).unwrap_or(true) {
+        return Err(Error::Encoding(
+            "BACnet/SC WebSocket URI must include a hub host".into(),
+        ));
+    }
+
     Ok(uri)
 }
 
@@ -157,6 +163,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_wss_uri_preserves_configured_hub_authority_path_and_query() {
+        let uri = parse_wss_uri("wss://hub.example.com:47808/.bacnet/sc?profile=primary").unwrap();
+
+        assert_eq!(uri.scheme_str(), Some("wss"));
+        assert_eq!(uri.host(), Some("hub.example.com"));
+        assert_eq!(uri.port_u16(), Some(47808));
+        assert_eq!(
+            uri.path_and_query().map(|path| path.as_str()),
+            Some("/.bacnet/sc?profile=primary")
+        );
+    }
+
+    #[test]
     fn parse_wss_uri_rejects_plain_websocket_scheme() {
         let err = parse_wss_uri("ws://hub.example.com:80").unwrap_err();
         assert!(err.to_string().contains("wss"));
@@ -166,6 +185,18 @@ mod tests {
     fn parse_wss_uri_rejects_non_websocket_scheme() {
         let err = parse_wss_uri("https://hub.example.com").unwrap_err();
         assert!(err.to_string().contains("wss"));
+    }
+
+    #[test]
+    fn parse_wss_uri_rejects_missing_hub_host() {
+        let err = parse_wss_uri("wss://:443").unwrap_err();
+        assert!(err.to_string().contains("hub host"));
+    }
+
+    #[test]
+    fn parse_wss_uri_rejects_malformed_hub_uri() {
+        let err = parse_wss_uri("wss://[::1").unwrap_err();
+        assert!(err.to_string().contains("Invalid WebSocket URL"));
     }
 
     #[test]
