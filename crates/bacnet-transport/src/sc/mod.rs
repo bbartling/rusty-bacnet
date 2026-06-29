@@ -317,8 +317,6 @@ impl ScConnection {
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
-const MIN_CONFIGURABLE_HEARTBEAT_INTERVAL_MS: u64 = 3_000;
-const MAX_CONFIGURABLE_HEARTBEAT_INTERVAL_MS: u64 = 300_000;
 
 /// BACnet/SC transport implementing [`TransportPort`].
 pub struct ScTransport<W: WebSocketPort> {
@@ -418,9 +416,7 @@ impl<W: WebSocketPort> ScTransport<W> {
 }
 
 fn validate_heartbeat_timing_ms(interval_ms: u64, timeout_ms: u64) -> Result<(), Error> {
-    if !(MIN_CONFIGURABLE_HEARTBEAT_INTERVAL_MS..=MAX_CONFIGURABLE_HEARTBEAT_INTERVAL_MS)
-        .contains(&interval_ms)
-    {
+    if !(3_000..=300_000).contains(&interval_ms) {
         return Err(Error::OutOfRange(format!(
             "BACnet/SC heartbeat interval must be in the configurable Annex AB.6.3 range \
              of 3..300 seconds (3000..=300000 ms), got {interval_ms} ms"
