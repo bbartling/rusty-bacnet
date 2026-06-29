@@ -140,28 +140,18 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<(), Error> {
-        let npdu = Npdu {
-            is_network_message: false,
-            expecting_reply,
-            priority,
-            destination: None,
-            source: None,
-            payload: Bytes::copy_from_slice(apdu),
-            ..Npdu::default()
-        };
-
-        let mut buf = BytesMut::with_capacity(2 + apdu.len());
-        encode_npdu(&mut buf, &npdu)?;
-
-        self.transport.send_unicast(&buf, destination_mac).await
+        self.send_apdu_with_data_attributes(apdu, destination_mac, expecting_reply, priority, &[])
+            .await
     }
 
-    /// Broadcast an APDU on the local network.
-    pub async fn broadcast_apdu(
+    /// Send an APDU with data attributes to a specific local destination.
+    pub async fn send_apdu_with_data_attributes(
         &self,
         apdu: &[u8],
+        destination_mac: &[u8],
         expecting_reply: bool,
         priority: NetworkPriority,
+        data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         let npdu = Npdu {
             is_network_message: false,
@@ -176,7 +166,46 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let mut buf = BytesMut::with_capacity(2 + apdu.len());
         encode_npdu(&mut buf, &npdu)?;
 
-        self.transport.send_broadcast(&buf).await
+        self.transport
+            .send_unicast_with_data_attributes(&buf, destination_mac, data_attributes)
+            .await
+    }
+
+    /// Broadcast an APDU on the local network.
+    pub async fn broadcast_apdu(
+        &self,
+        apdu: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        self.broadcast_apdu_with_data_attributes(apdu, expecting_reply, priority, &[])
+            .await
+    }
+
+    /// Broadcast an APDU with data attributes on the local network.
+    pub async fn broadcast_apdu_with_data_attributes(
+        &self,
+        apdu: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply,
+            priority,
+            destination: None,
+            source: None,
+            payload: Bytes::copy_from_slice(apdu),
+            ..Npdu::default()
+        };
+
+        let mut buf = BytesMut::with_capacity(2 + apdu.len());
+        encode_npdu(&mut buf, &npdu)?;
+
+        self.transport
+            .send_broadcast_with_data_attributes(&buf, data_attributes)
+            .await
     }
 
     /// Broadcast an APDU globally (DNET=0xFFFF, hop_count=255).
@@ -188,6 +217,18 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         apdu: &[u8],
         expecting_reply: bool,
         priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        self.broadcast_global_apdu_with_data_attributes(apdu, expecting_reply, priority, &[])
+            .await
+    }
+
+    /// Broadcast an APDU globally with data attributes (DNET=0xFFFF, hop_count=255).
+    pub async fn broadcast_global_apdu_with_data_attributes(
+        &self,
+        apdu: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+        data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         let npdu = Npdu {
             is_network_message: false,
@@ -205,7 +246,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
         let mut buf = BytesMut::with_capacity(8 + apdu.len());
         encode_npdu(&mut buf, &npdu)?;
-        self.transport.send_broadcast(&buf).await
+        self.transport
+            .send_broadcast_with_data_attributes(&buf, data_attributes)
+            .await
     }
 
     /// Broadcast an APDU to a specific remote network via routers.
@@ -218,6 +261,25 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         dest_network: u16,
         expecting_reply: bool,
         priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        self.broadcast_to_network_with_data_attributes(
+            apdu,
+            dest_network,
+            expecting_reply,
+            priority,
+            &[],
+        )
+        .await
+    }
+
+    /// Broadcast an APDU with data attributes to a specific remote network via routers.
+    pub async fn broadcast_to_network_with_data_attributes(
+        &self,
+        apdu: &[u8],
+        dest_network: u16,
+        expecting_reply: bool,
+        priority: NetworkPriority,
+        data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         if dest_network == 0xFFFF {
             return Err(Error::Encoding(
@@ -240,7 +302,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
         let mut buf = BytesMut::with_capacity(8 + apdu.len());
         encode_npdu(&mut buf, &npdu)?;
-        self.transport.send_broadcast(&buf).await
+        self.transport
+            .send_broadcast_with_data_attributes(&buf, data_attributes)
+            .await
     }
 
     /// Send an APDU to a remote device through a local router.
@@ -256,6 +320,29 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         router_mac: &[u8],
         expecting_reply: bool,
         priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        self.send_apdu_routed_with_data_attributes(
+            apdu,
+            dest_network,
+            dest_mac,
+            router_mac,
+            expecting_reply,
+            priority,
+            &[],
+        )
+        .await
+    }
+
+    /// Send an APDU with data attributes to a remote device through a local router.
+    pub async fn send_apdu_routed_with_data_attributes(
+        &self,
+        apdu: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+        router_mac: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+        data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         let npdu = Npdu {
             is_network_message: false,
@@ -274,7 +361,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let mut buf = BytesMut::with_capacity(8 + dest_mac.len() + apdu.len());
         encode_npdu(&mut buf, &npdu)?;
 
-        self.transport.send_unicast(&buf, router_mac).await
+        self.transport
+            .send_unicast_with_data_attributes(&buf, router_mac, data_attributes)
+            .await
     }
 
     /// Access the underlying transport.
@@ -438,6 +527,63 @@ mod tests {
         assert_eq!(received.data_attributes[1].option_type, 31);
         assert!(!received.data_attributes[1].must_understand);
         assert_eq!(received.data_attributes[1].data, vec![0x12, 0x34, 0x56]);
+
+        net.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_apdu_data_attributes_reach_sc_data_options() {
+        let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+        let hub_vmac = [0x10; 6];
+        let dest_vmac: Vmac = [0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        let mut net = NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]));
+        let data_attributes = vec![
+            DataAttribute {
+                option_type: 1,
+                must_understand: true,
+                data: Vec::new(),
+            },
+            DataAttribute {
+                option_type: 31,
+                must_understand: false,
+                data: vec![0x12, 0x34, 0x56],
+            },
+        ];
+
+        let hub_accept_task = tokio::spawn(async move {
+            sc_hub_accept(&ws_hub, hub_vmac).await;
+            ws_hub
+        });
+
+        let _rx = net.start().await.unwrap();
+        let ws_hub = hub_accept_task.await.unwrap();
+
+        let apdu = Bytes::from_static(&[0x10, 0x08]);
+        net.send_apdu_with_data_attributes(
+            &apdu,
+            &dest_vmac,
+            false,
+            NetworkPriority::NORMAL,
+            &data_attributes,
+        )
+        .await
+        .unwrap();
+
+        let data = ws_hub.recv().await.unwrap();
+        let msg = decode_sc_message(&data).unwrap();
+        assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
+        assert_eq!(msg.destination_vmac, Some(dest_vmac));
+        assert_eq!(msg.data_options.len(), 2);
+        assert_eq!(msg.data_options[0].option_type, 1);
+        assert!(msg.data_options[0].must_understand);
+        assert_eq!(msg.data_options[1].option_type, 31);
+        assert!(!msg.data_options[1].must_understand);
+        assert_eq!(msg.data_options[1].data, vec![0x12, 0x34, 0x56]);
+
+        let npdu = decode_npdu(msg.payload).unwrap();
+        assert_eq!(npdu.payload, apdu);
+        assert!(!npdu.expecting_reply);
+        assert_eq!(npdu.priority, NetworkPriority::NORMAL);
 
         net.stop().await.unwrap();
     }

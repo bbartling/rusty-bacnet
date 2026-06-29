@@ -479,6 +479,124 @@ async fn transport_send_unicast_delivers_message() {
 }
 
 #[tokio::test]
+async fn transport_send_unicast_encodes_data_attributes_as_options() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+    let dest_vmac: Vmac = [0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+    let npdu_payload = vec![0x01, 0x00, 0x30, 0x42];
+    let data_attributes = vec![
+        DataAttribute {
+            option_type: 1,
+            must_understand: true,
+            data: Vec::new(),
+        },
+        DataAttribute {
+            option_type: 31,
+            must_understand: false,
+            data: vec![0x12, 0x34, 0x56],
+        },
+    ];
+
+    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let hub_accept_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_accept_task.await.unwrap();
+
+    transport
+        .send_unicast_with_data_attributes(&npdu_payload, &dest_vmac, &data_attributes)
+        .await
+        .unwrap();
+
+    let data = ws_hub.recv().await.unwrap();
+    let msg = decode_sc_message(&data).unwrap();
+    assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(msg.destination_vmac, Some(dest_vmac));
+    assert_eq!(msg.data_options.len(), 2);
+    assert_eq!(msg.data_options[0].option_type, 1);
+    assert!(msg.data_options[0].must_understand);
+    assert!(msg.data_options[0].data.is_empty());
+    assert_eq!(msg.data_options[1].option_type, 31);
+    assert!(!msg.data_options[1].must_understand);
+    assert_eq!(msg.data_options[1].data, vec![0x12, 0x34, 0x56]);
+    assert_eq!(msg.payload, npdu_payload);
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn transport_send_unicast_rejects_invalid_data_attribute_type() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let invalid_attribute = DataAttribute {
+        option_type: 0,
+        must_understand: false,
+        data: Vec::new(),
+    };
+
+    let hub_accept_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, [0x10; 6]).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_accept_task.await.unwrap();
+
+    let err = transport
+        .send_unicast_with_data_attributes(&[0x01, 0x02], &[0x02; 6], &[invalid_attribute])
+        .await
+        .unwrap_err();
+
+    assert!(format!("{err}").contains("1..31"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err()
+    );
+
+    transport.stop().await.unwrap();
+}
+
+#[test]
+fn connection_rejects_too_many_data_attributes_on_encode() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    let attributes = vec![
+        DataAttribute {
+            option_type: 1,
+            must_understand: false,
+            data: Vec::new(),
+        };
+        65
+    ];
+
+    let err = conn
+        .build_encapsulated_npdu_with_data_attributes([0x02; 6], &[0x01, 0x02], &attributes)
+        .unwrap_err();
+
+    assert!(format!("{err}").contains("exceed 64"));
+}
+
+#[test]
+fn connection_rejects_oversize_data_attribute_payload_on_encode() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    let attribute = DataAttribute {
+        option_type: 1,
+        must_understand: false,
+        data: vec![0; u16::MAX as usize + 1],
+    };
+
+    let err = conn
+        .build_encapsulated_npdu_with_data_attributes([0x02; 6], &[0x01, 0x02], &[attribute])
+        .unwrap_err();
+
+    assert!(format!("{err}").contains("exceeds 65535"));
+}
+
+#[tokio::test]
 async fn transport_send_unicast_rejects_peer_max_npdu() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(ws_client, [0x01; 6]);
