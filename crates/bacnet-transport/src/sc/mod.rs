@@ -17,6 +17,7 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, is_broadcast_vmac, ScBvlcResult,
     ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
 };
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
@@ -174,6 +175,36 @@ impl ScConnection {
         true
     }
 
+    /// Handle a BVLC-Result received while waiting for Connect-Accept.
+    ///
+    /// AB.6.2.2 requires an initiating peer that receives a
+    /// NODE_DUPLICATE_VMAC NAK for its Connect-Request to select a new
+    /// Random-48 VMAC before any subsequent connection attempt.
+    pub fn handle_connect_result(&mut self, result: &ScBvlcResult) -> Result<bool, Error> {
+        self.state = ScConnectionState::Disconnected;
+        self.pending_connect_message_id = None;
+
+        let ScBvlcResult::Nak {
+            result_for,
+            error_class,
+            error_code,
+            ..
+        } = result
+        else {
+            return Ok(false);
+        };
+
+        if *result_for == ScFunction::ConnectRequest
+            && *error_class == ErrorClass::COMMUNICATION.to_raw()
+            && *error_code == ErrorCode::NODE_DUPLICATE_VMAC.to_raw()
+        {
+            self.local_vmac = generate_random48_vmac()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Build a Disconnect-Request message (no VMACs).
     ///
     /// Returns an error if not yet connected (no hub VMAC available).
@@ -322,6 +353,18 @@ impl ScConnection {
             _ => None,
         }
     }
+}
+
+/// Generate an Annex H.7.3 Random-48 VMAC.
+///
+/// The low nibble of the first octet is fixed at X'2'; the high nibble and
+/// remaining five octets carry 44 bits of OS randomness.
+pub(crate) fn generate_random48_vmac() -> Result<Vmac, Error> {
+    let mut vmac = [0u8; 6];
+    getrandom::fill(&mut vmac)
+        .map_err(|e| Error::Encoding(format!("failed to generate Random-48 VMAC: {e}")))?;
+    vmac[0] = (vmac[0] & 0xF0) | 0x02;
+    Ok(vmac)
 }
 
 // ---------------------------------------------------------------------------
@@ -487,17 +530,22 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                         // Reset connection state for the retry.
                         {
                             let mut c = conn.lock().await;
-                            *c = ScConnection::new(self.local_vmac, self.device_uuid);
+                            let vmac = c.local_vmac;
+                            let uuid = c.device_uuid;
+                            *c = ScConnection::new(vmac, uuid);
                         }
                         perform_handshake(&*failover, &conn, self.connect_timeout_ms)
                             .await
                             .map(|()| (failover, ActiveHub::Failover))
                             .map_err(|_| primary_err)?
                     } else {
+                        self.local_vmac = conn.lock().await.local_vmac;
                         return Err(primary_err);
                     }
                 }
             };
+
+        self.local_vmac = conn.lock().await.local_vmac;
 
         let active_ws = Arc::new(Mutex::new(ws.clone()));
         self.ws_shared = Some(active_ws.clone());

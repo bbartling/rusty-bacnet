@@ -19,7 +19,9 @@ use crate::data_attributes::{
 };
 use crate::sc_connection::ReceivedScNpdu;
 use crate::sc_connection::{ScConnection, ScConnectionState};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
+use crate::sc_frame::{
+    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC,
+};
 use crate::ws_transport::BrowserWebSocket;
 use bacnet_encoding::apdu;
 use bacnet_encoding::npdu;
@@ -55,32 +57,7 @@ impl BACnetScClient {
     /// Create a new BACnet/SC client with a random VMAC.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        // Generate random 6-byte VMAC
-        let mut vmac = [0u8; 6];
-        let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
-            .ok()
-            .and_then(|c| js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues")).ok());
-        if crypto.is_some() {
-            let array = js_sys::Uint8Array::new_with_length(6);
-            let _ = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto")).and_then(
-                |c| {
-                    js_sys::Reflect::apply(
-                        &js_sys::Function::from(
-                            js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues"))
-                                .unwrap(),
-                        ),
-                        &c,
-                        &js_sys::Array::of1(&array),
-                    )
-                },
-            );
-            array.copy_to(&mut vmac);
-        } else {
-            // Fallback: use js_sys::Math::random
-            for byte in &mut vmac {
-                *byte = (js_sys::Math::random() * 256.0) as u8;
-            }
-        }
+        let vmac = Self::generate_random48_vmac();
 
         Self {
             ws: Rc::new(RefCell::new(None)),
@@ -109,6 +86,20 @@ impl BACnetScClient {
         // Wait for ConnectAccept
         let response = ws.recv().await.map_err(|e| JsError::new(&e))?;
         let msg = decode_sc_message(&response).map_err(|e| JsError::new(&e.to_string()))?;
+        if msg.function == ScFunction::Result {
+            let result = decode_sc_bvlc_result(&msg).map_err(|e| JsError::new(&e.to_string()))?;
+            let replacement_vmac = Self::generate_random48_vmac();
+            let duplicate_vmac = self
+                .connection
+                .borrow_mut()
+                .handle_connect_result(&result, replacement_vmac);
+            ws.close();
+            return Err(JsError::new(if duplicate_vmac {
+                "BACnet/SC ConnectRequest rejected with duplicate VMAC; selected new Random-48 VMAC"
+            } else {
+                "BACnet/SC ConnectRequest rejected by BVLC-Result"
+            }));
+        }
         if !self.connection.borrow_mut().handle_connect_accept(&msg) {
             return Err(JsError::new("ConnectAccept not received or invalid"));
         }
@@ -294,6 +285,35 @@ impl BACnetScClient {
 
 // Private methods
 impl BACnetScClient {
+    fn generate_random48_vmac() -> Vmac {
+        let mut vmac = [0u8; 6];
+        let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
+            .ok()
+            .and_then(|c| js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues")).ok());
+        if crypto.is_some() {
+            let array = js_sys::Uint8Array::new_with_length(6);
+            let _ = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto")).and_then(
+                |c| {
+                    js_sys::Reflect::apply(
+                        &js_sys::Function::from(
+                            js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues"))
+                                .unwrap(),
+                        ),
+                        &c,
+                        &js_sys::Array::of1(&array),
+                    )
+                },
+            );
+            array.copy_to(&mut vmac);
+        } else {
+            for byte in &mut vmac {
+                *byte = (js_sys::Math::random() * 256.0) as u8;
+            }
+        }
+        vmac[0] = (vmac[0] & 0xF0) | 0x02;
+        vmac
+    }
+
     fn next_invoke_id(&self) -> u8 {
         let mut id = self.next_invoke_id.borrow_mut();
         let current = *id;

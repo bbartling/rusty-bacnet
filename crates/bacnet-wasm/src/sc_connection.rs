@@ -9,6 +9,7 @@ use crate::data_attributes::{self, DataAttribute};
 use crate::sc_frame::{
     decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
 };
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
 const DEFAULT_MAX_BVLC_LENGTH: u16 = 1476;
@@ -126,6 +127,35 @@ impl ScConnection {
         self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
+    }
+
+    /// Handle a BVLC-Result received while waiting for Connect-Accept.
+    ///
+    /// Returns true when AB.6.2.2 duplicate-VMAC recovery installed the
+    /// supplied replacement Random-48 VMAC.
+    pub fn handle_connect_result(&mut self, result: &ScBvlcResult, replacement_vmac: Vmac) -> bool {
+        self.state = ScConnectionState::Disconnected;
+        self.pending_connect_message_id = None;
+
+        let ScBvlcResult::Nak {
+            result_for,
+            error_class,
+            error_code,
+            ..
+        } = result
+        else {
+            return false;
+        };
+
+        if *result_for == ScFunction::ConnectRequest
+            && *error_class == ErrorClass::COMMUNICATION.to_raw()
+            && *error_code == ErrorCode::NODE_DUPLICATE_VMAC.to_raw()
+        {
+            self.local_vmac = replacement_vmac;
+            true
+        } else {
+            false
+        }
     }
 
     /// Build a Disconnect-Request message.
@@ -567,6 +597,52 @@ mod tests {
         };
         conn.handle_received(&msg);
         assert_eq!(conn.state, ScConnectionState::Disconnected);
+    }
+
+    #[test]
+    fn handle_connect_result_duplicate_vmac_installs_replacement() {
+        let mut conn = ScConnection::new([1; 6]);
+        let req = conn.build_connect_request();
+        let replacement = [0x12, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: req.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x97]),
+        };
+        let result = decode_sc_bvlc_result(&msg).unwrap();
+
+        assert!(conn.handle_connect_result(&result, replacement));
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
+        assert_eq!(conn.local_vmac, replacement);
+
+        let retry = conn.build_connect_request();
+        assert_eq!(&retry.payload[0..6], replacement.as_slice());
+    }
+
+    #[test]
+    fn handle_connect_result_generic_nak_does_not_replace_vmac() {
+        let original = [0x22, 1, 2, 3, 4, 5];
+        let mut conn = ScConnection::new(original);
+        let req = conn.build_connect_request();
+        let replacement = [0x12, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: req.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x96]),
+        };
+        let result = decode_sc_bvlc_result(&msg).unwrap();
+
+        assert!(!conn.handle_connect_result(&result, replacement));
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
+        assert_eq!(conn.local_vmac, original);
     }
 
     #[test]

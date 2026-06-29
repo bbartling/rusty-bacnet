@@ -43,6 +43,7 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                 Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
                     let mut c = conn.lock().await;
                     c.state = ScConnectionState::Disconnected;
+                    c.pending_connect_message_id = None;
                     return Err(Error::Encoding(format!(
                         "malformed BACnet/SC BVLC-Result during connect: {e}"
                     )));
@@ -55,29 +56,46 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
             if msg.function == ScFunction::Result {
                 let result = decode_sc_bvlc_result(&msg);
                 let mut c = conn.lock().await;
-                c.state = ScConnectionState::Disconnected;
                 return match result {
-                    Ok(ScBvlcResult::Nak {
-                        result_for,
-                        error_class,
-                        error_code,
-                        error_details,
-                        ..
-                    }) => Err(Error::Encoding(format!(
-                        "BACnet/SC BVLC-Result NAK during connect: function={:#x} \
-                         error_class={} error_code={} details={}",
-                        result_for.to_raw(),
-                        error_class,
-                        error_code,
-                        error_details
-                    ))),
-                    Ok(ScBvlcResult::Ack { result_for }) => Err(Error::Encoding(format!(
-                        "unexpected BACnet/SC BVLC-Result ACK during connect: function={:#x}",
-                        result_for.to_raw()
-                    ))),
-                    Err(e) => Err(Error::Encoding(format!(
-                        "malformed BACnet/SC BVLC-Result during connect: {e}"
-                    ))),
+                    Ok(result) => match &result {
+                        ScBvlcResult::Nak {
+                            result_for,
+                            error_class,
+                            error_code,
+                            error_details,
+                            ..
+                        } => {
+                            let duplicate_vmac = c.handle_connect_result(&result)?;
+                            let duplicate_note = if duplicate_vmac {
+                                "; selected new Random-48 local VMAC"
+                            } else {
+                                ""
+                            };
+                            Err(Error::Encoding(format!(
+                                "BACnet/SC BVLC-Result NAK during connect: function={:#x} \
+                                 error_class={} error_code={} details={}{}",
+                                result_for.to_raw(),
+                                error_class,
+                                error_code,
+                                error_details,
+                                duplicate_note
+                            )))
+                        }
+                        ScBvlcResult::Ack { result_for } => {
+                            let _ = c.handle_connect_result(&result);
+                            Err(Error::Encoding(format!(
+                                "unexpected BACnet/SC BVLC-Result ACK during connect: function={:#x}",
+                                result_for.to_raw()
+                            )))
+                        }
+                    },
+                    Err(e) => {
+                        c.state = ScConnectionState::Disconnected;
+                        c.pending_connect_message_id = None;
+                        Err(Error::Encoding(format!(
+                            "malformed BACnet/SC BVLC-Result during connect: {e}"
+                        )))
+                    }
                 };
             }
         }

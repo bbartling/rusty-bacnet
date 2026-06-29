@@ -98,7 +98,7 @@ import init, {
 // Initialize the WASM module (required once before any API calls)
 await init();
 
-// Create a client (generates a random 6-byte VMAC automatically)
+// Create a client (generates an Annex H Random-48 VMAC automatically)
 const client = new BACnetScClient();
 
 // Connect to a BACnet/SC hub
@@ -143,7 +143,7 @@ The main client class for BACnet/SC communication. Uses browser WebSocket to con
 new BACnetScClient(): BACnetScClient
 ```
 
-Creates a new BACnet/SC client with a randomly generated 6-byte VMAC (Virtual MAC address). Uses `crypto.getRandomValues()` when available, falling back to `Math.random()`.
+Creates a new BACnet/SC client with an Annex H Random-48 VMAC (Virtual MAC address). Uses `crypto.getRandomValues()` when available, falling back to `Math.random()`, and sets the Random-48 marker nibble required by Standard 135.
 
 **Example:**
 
@@ -161,7 +161,7 @@ connect(url: string): Promise<void>
 
 Connect to a BACnet/SC hub via WebSocket.
 
-Opens a WebSocket connection to the specified URL using the `hub.bsc.bacnet.org` subprotocol, sends a ConnectRequest with the client's VMAC and device UUID, and waits for a ConnectAccept response from the hub. Once connected, starts a background receive loop that dispatches incoming messages to pending request promises and event callbacks.
+Opens a WebSocket connection to the specified URL using the `hub.bsc.bacnet.org` subprotocol, sends a ConnectRequest with the client's VMAC and device UUID, and waits for a ConnectAccept response from the hub. If the hub rejects the ConnectRequest with NODE_DUPLICATE_VMAC, the client closes the WebSocket and selects a new Random-48 VMAC for a later retry. Once connected, starts a background receive loop that dispatches incoming messages to pending request promises and event callbacks.
 
 **Parameters:**
 
