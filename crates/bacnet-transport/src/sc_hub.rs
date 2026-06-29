@@ -25,7 +25,7 @@ use tracing::{debug, warn};
 
 use crate::sc_frame::{
     decode_sc_message, encode_sc_message, is_broadcast_vmac, ScFunction, ScMessage, Vmac,
-    BROADCAST_VMAC,
+    BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
 };
 
 type TlsStream = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
@@ -246,7 +246,7 @@ async fn accept_loop(
                 }
             };
 
-            // WebSocket upgrade — echo the BACnet/SC subprotocol only if the client offered it.
+            // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
             let ws_stream = match tokio_tungstenite::accept_hdr_async(
                 tls_stream,
                 |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -255,18 +255,13 @@ async fn accept_loop(
                     tokio_tungstenite::tungstenite::handshake::server::Response,
                     tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
                 > {
-                    let client_offers = request
-                        .headers()
-                        .get("Sec-WebSocket-Protocol")
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.split(',').any(|p| p.trim() == "hub.bsc.bacnet.org"))
-                        .unwrap_or(false);
-                    if client_offers {
-                        response.headers_mut().insert(
-                            "Sec-WebSocket-Protocol",
-                            "hub.bsc.bacnet.org".parse().unwrap(),
-                        );
+                    if !offers_websocket_subprotocol(request, BACNET_SC_HUB_SUBPROTOCOL) {
+                        return Err(websocket_subprotocol_error_response());
                     }
+                    response.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap(),
+                    );
                     Ok(response)
                 },
             )
@@ -619,6 +614,28 @@ async fn handle_client(
     }
 }
 
+fn offers_websocket_subprotocol(
+    request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+    expected: &str,
+) -> bool {
+    request
+        .headers()
+        .get("Sec-WebSocket-Protocol")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').any(|p| p.trim() == expected))
+        .unwrap_or(false)
+}
+
+fn websocket_subprotocol_error_response(
+) -> tokio_tungstenite::tungstenite::handshake::server::ErrorResponse {
+    tokio_tungstenite::tungstenite::http::Response::builder()
+        .status(tokio_tungstenite::tungstenite::http::StatusCode::BAD_REQUEST)
+        .body(Some(format!(
+            "BACnet/SC hub requires WebSocket subprotocol {BACNET_SC_HUB_SUBPROTOCOL}"
+        )))
+        .expect("static WebSocket error response is valid")
+}
+
 fn unexpected_bvlc_function_error_code(function: ScFunction) -> ErrorCode {
     match function {
         ScFunction::Unknown(_) => ErrorCode::BVLC_FUNCTION_UNKNOWN,
@@ -743,5 +760,58 @@ mod tests {
             unexpected_bvlc_function_error_code(ScFunction::Unknown(0x42)),
             ErrorCode::BVLC_FUNCTION_UNKNOWN
         );
+    }
+
+    #[test]
+    fn websocket_subprotocol_offer_accepts_hub_protocol_in_list() {
+        let request = tokio_tungstenite::tungstenite::handshake::server::Request::builder()
+            .header(
+                "Sec-WebSocket-Protocol",
+                format!("chat, {BACNET_SC_HUB_SUBPROTOCOL}, other"),
+            )
+            .body(())
+            .unwrap();
+
+        assert!(offers_websocket_subprotocol(
+            &request,
+            BACNET_SC_HUB_SUBPROTOCOL
+        ));
+    }
+
+    #[test]
+    fn websocket_subprotocol_offer_rejects_missing_hub_protocol() {
+        let request = tokio_tungstenite::tungstenite::handshake::server::Request::builder()
+            .header("Sec-WebSocket-Protocol", "dc.bsc.bacnet.org")
+            .body(())
+            .unwrap();
+
+        assert!(!offers_websocket_subprotocol(
+            &request,
+            BACNET_SC_HUB_SUBPROTOCOL
+        ));
+
+        let request_without_header =
+            tokio_tungstenite::tungstenite::handshake::server::Request::builder()
+                .body(())
+                .unwrap();
+        assert!(!offers_websocket_subprotocol(
+            &request_without_header,
+            BACNET_SC_HUB_SUBPROTOCOL
+        ));
+    }
+
+    #[test]
+    fn websocket_subprotocol_error_response_is_bad_request() {
+        let response = websocket_subprotocol_error_response();
+
+        assert_eq!(
+            response.status(),
+            tokio_tungstenite::tungstenite::http::StatusCode::BAD_REQUEST
+        );
+        assert!(response
+            .body()
+            .as_ref()
+            .unwrap()
+            .contains(BACNET_SC_HUB_SUBPROTOCOL));
     }
 }

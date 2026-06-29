@@ -3,6 +3,7 @@ use wasm_bindgen::prelude::*;
 pub mod codec;
 pub mod sc_connection;
 pub mod sc_frame;
+pub mod sc_websocket;
 pub mod types;
 
 // Only compile browser-dependent modules on wasm32 target

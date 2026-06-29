@@ -232,6 +232,7 @@ dependencies = [
  "clap",
  "console-subscriber",
  "criterion",
+ "futures-util",
  "hdrhistogram",
  "rand 0.10.1",
  "rcgen",
@@ -241,6 +242,7 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "tracing-subscriber",
 ]
 

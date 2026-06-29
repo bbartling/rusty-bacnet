@@ -16,6 +16,9 @@ mod result;
 
 pub use result::{decode_sc_bvlc_result, ScBvlcResult};
 
+/// BACnet/SC hub WebSocket subprotocol (Annex AB.7.1).
+pub const BACNET_SC_HUB_SUBPROTOCOL: &str = "hub.bsc.bacnet.org";
+
 /// BACnet/SC BVLC function codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
