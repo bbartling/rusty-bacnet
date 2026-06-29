@@ -4,8 +4,8 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `d249bc7ae61783e96649108a440cc2e7aa51b50c`
-- Scope: Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing and Annex AB.3.1.4/AB.3.4 native unsupported Must Understand Data Option receive policy, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery and router forwarding preservation, non-SC empty/ignore behavior, and native fail-closed handling for unsupported Must Understand Data Options.
+- Implementation evidence SHA reviewed: `1d2dcbd9e7b963bb77b9f8bfc28bd87d01bb2c12`
+- Scope: Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing and Annex AB.3.1.4/AB.3.4 unsupported Must Understand Data Option receive policy, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery and router forwarding preservation, non-SC empty/ignore behavior, native fail-closed handling, and WASM/browser raw NPDU data-attribute parity.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.3 Data Options, AB.2.3.1 Secure Path, AB.3.1.4 Must Understand processing, AB.3.4 NPDU Exchange data_attributes mapping, and Clause 6.5 data_attributes forwarding/ignore behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. Addendum 135-2020cf renames the Data Options bit 6 label to Every Segment without changing this data_attributes mapping; no checked addendum or erratum changes the AB.3.4 behavior covered by this tranche.
 
 ## Counts

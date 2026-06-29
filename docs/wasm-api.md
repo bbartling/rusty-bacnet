@@ -322,6 +322,66 @@ client.whoIs(1234, 1234);
 
 ---
 
+### sendNpdu
+
+```typescript
+sendNpdu(npduBytes: Uint8Array): void
+```
+
+Send raw NPDU bytes through the established BACnet/SC hub connection without Data Options.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds the peer limits learned from ConnectAccept.
+
+---
+
+### sendNpduWithDataAttributes
+
+```typescript
+sendNpduWithDataAttributes(
+  npduBytes: Uint8Array,
+  dataAttributes: DataAttribute[]
+): void
+
+type DataAttribute = {
+  option_type: number;
+  must_understand: boolean;
+  data: number[];
+};
+```
+
+Send raw NPDU bytes with BACnet/SC Data Options. Each data attribute maps to one BACnet/SC Data Option. The aliases `optionType` and `mustUnderstand` are also accepted on input.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+| `dataAttributes` | `DataAttribute[]` | Data Options to attach to the Encapsulated-NPDU. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- Data Option validation errors for option types outside `1..31`, more than 64 attributes, or payloads larger than 65535 bytes.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds peer limits.
+
+**Example:**
+
+```javascript
+client.sendNpduWithDataAttributes(rawNpdu, [
+  { optionType: 1, mustUnderstand: true, data: [] },
+  { optionType: 31, mustUnderstand: false, data: [0x12, 0x34, 0x56] },
+]);
+```
+
+---
+
 ### subscribeCov
 
 ```typescript
@@ -421,6 +481,41 @@ client.onCovNotification((data) => {
 
 // Subscribe to trigger future notifications
 await client.subscribeCov(1, 0, 1, false, 300);
+```
+
+---
+
+### onNpdu
+
+```typescript
+onNpdu(
+  callback: (npduBytes: Uint8Array, metadata: ReceivedNpduMetadata) => void
+): void
+
+type ReceivedNpduMetadata = {
+  source_vmac: number[];
+  data_attributes: DataAttribute[];
+};
+```
+
+Register a callback for every received NPDU that is delivered to the browser client. The callback receives the full NPDU bytes plus BACnet/SC metadata, including Data Options converted to data attributes.
+
+Unsupported Must Understand Data Options are handled before this callback runs. Non-broadcast traffic receives a BVLC-Result NAK with `COMMUNICATION/HEADER_NOT_UNDERSTOOD`, broadcast traffic is dropped without a result, and unsupported non-Must-Understand Data Options are preserved in `metadata.data_attributes`.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `callback` | `(npduBytes, metadata) => void` | Function called for each delivered NPDU. |
+
+**Example:**
+
+```javascript
+client.onNpdu((npduBytes, metadata) => {
+  for (const attr of metadata.data_attributes) {
+    console.log(attr.option_type, attr.must_understand, attr.data);
+  }
+});
 ```
 
 ---
@@ -925,10 +1020,23 @@ client.onCovNotification((data) => {
 await client.subscribeCov(1, 0, 1, false, 300);
 ```
 
+### Raw NPDU And Data Attributes Pattern
+
+Register `onNpdu()` when an application needs the full NPDU or BACnet/SC Data Options:
+
+```javascript
+client.onNpdu((npduBytes, metadata) => {
+  console.log("NPDU:", npduBytes);
+  console.log("Source VMAC:", metadata.source_vmac);
+  console.log("Data attributes:", metadata.data_attributes);
+});
+```
+
 ### Callback Notes
 
 - Only one callback can be registered per event type. Setting a new callback replaces the previous one.
-- Callbacks receive raw BACnet service request bytes as `Uint8Array`. Use `decodeApdu()` or manual parsing to extract structured data.
+- `onIAm()` and `onCovNotification()` receive raw BACnet service request bytes as `Uint8Array`. Use `decodeApdu()` or manual parsing to extract structured data.
+- `onNpdu()` receives the full NPDU bytes plus `source_vmac` and `data_attributes` metadata.
 - Callbacks are invoked from the internal receive loop running via `wasm-bindgen-futures`. They execute on the browser's microtask queue.
 
 ## TypeScript Support
@@ -1040,7 +1148,9 @@ try {
 
 - **Raw value bytes** -- ReadProperty responses return raw application-tagged bytes in `value_bytes`. Higher-level value decoding (e.g., parsing a Real from 4 bytes, extracting strings) must be done in JavaScript.
 
-- **Single callback per event** -- Only one `onIAm` and one `onCovNotification` callback can be active at a time. Setting a new callback replaces the previous one.
+- **Data attributes are raw NPDU metadata** -- BACnet/SC Data Options are exposed through `onNpdu()` metadata and `sendNpduWithDataAttributes()`. High-level helpers such as `readProperty()`, `writeProperty()`, `whoIs()`, and `subscribeCov()` send without Data Options and do not include Data Option metadata in decoded results.
+
+- **Single callback per event** -- Only one `onIAm`, one `onCovNotification`, and one `onNpdu` callback can be active at a time. Setting a new callback replaces the previous one.
 
 - **No automatic reconnection** -- If the WebSocket connection drops, the client moves to the Disconnected state. The application must detect this (via the `connected` getter) and call `connect()` again.
 
