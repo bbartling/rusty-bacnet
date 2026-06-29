@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `7683d12b4ed4adbf22fbf7baf3fbf38b8767c81b`
-- Scope: Annex AB.6.2.3 BACnet/SC accepting-peer duplicate Device UUID replacement at the hub.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2.2 and AB.6.2.3 duplicate Device UUID replacement, VMAC-collision NAK behavior, and initiating-peer Random-48 reselection context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. The listed 135-2020 addenda/errata text was searched for AB.6.2, Device UUID, NODE_DUPLICATE_VMAC, VMAC collision, Random-48, Connect-Request, and Connect-Accept. Base 135-2020 errata corrects an AB.6.2.3 Disconnect-ACK peer-label typo; Addendum cc references AB.6.2.2/AB.6.2.3 for Network Port/hub-connection metadata; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.6.2.3 duplicate Device UUID or VMAC-collision transitions covered by this tranche.
+- Implementation evidence SHA reviewed: `4d7b924b8e2c7fa1baae210b144d376234b26bac`
+- Scope: Annex AB.5 BACnet/SC hub connector primary/failover behavior after established primary loss and reconnect exhaustion.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.2 and AB.5.4 primary/failover hub connector behavior, plus surrounding AB.5.3 hub connection and forwarding context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. Addendum cc changes AB.5.3.1 hub-connection metadata and Network Port properties; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.5.2/AB.5.4 primary/failover retry behavior covered by this tranche.
 
 ## Counts
 
