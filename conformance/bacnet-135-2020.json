@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "6f2596465b4f21eb1f74053e3db3f0ae5fd69772",
-  "review_scope": "Annex AB.6.2 BACnet/SC initiating-peer duplicate VMAC recovery and Clause H.7.3 Random-48 VMAC generation, including native Connect-Request BVLC-Result NAK handling, initial failover retry payloads, primary-restore probe VMAC/retry-state preservation, native duplicate-VMAC reseed-failure fail-closed behavior, native connect-time/I/O cleanup, WASM/browser VMAC generation and retry state, and generic Connect-Request NAK fail-closed behavior.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.4 BVLC-Result, AB.2.10 Connect-Request, AB.6.2 initiating and accepting peer duplicate VMAC behavior, Clause H.7.3 Random-48 VMAC format, and Clause 18/21 communication error values. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.2 duplicate VMAC recovery or H.7.3 Random-48 VMAC behavior covered by this tranche.",
+  "repo_sha": "08cc5c5ef5996be9c27ffdb01c9fdd76578dd9f8",
+  "review_scope": "Annex AB.6.3 BACnet/SC heartbeat initiation and liveness behavior for browser/WASM clients, covering post-Connect-Accept heartbeat tracking, monotonic Performance-clock scheduling, no-VMAC Heartbeat-ACK correlation, timeout/send-failure fail-closed disconnect, receive-loop/timer cleanup, and pending confirmed-service Promise rejection on terminal disconnect paths.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.14 Heartbeat-Request, AB.2.15 Heartbeat-ACK, Annex AB.6.3 heartbeat interval/timeout behavior, and Table AB-1 BVLC-SC function constraints. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.3 browser heartbeat behavior covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -840,7 +840,8 @@
         "crates/bacnet-transport/src/sc_hub/connection.rs",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs",
         "crates/bacnet-wasm/src/client.rs",
-        "crates/bacnet-wasm/src/sc_connection.rs"
+        "crates/bacnet-wasm/src/sc_connection.rs",
+        "crates/bacnet-wasm/src/ws_transport.rs"
       ],
       "positive_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::build_heartbeat",
@@ -866,11 +867,14 @@
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_start_rejects_heartbeat_interval_below_annex_ab_range",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_removes_client_when_pending_heartbeat_exceeds_ack_timeout",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack_rejects_vmac_fields_until_timeout"
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack_rejects_vmac_fields_until_timeout",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack_rejects_destination_options_until_timeout",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_scheduler_fails_closed_on_non_monotonic_time",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_scheduler_times_out_on_large_forward_elapsed_time"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
-      "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms"],
-      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. WASM/browser evidence now starts a browser `Window` heartbeat timer after Connect-Accept, sends Heartbeat-Requests after idle BVLC activity, accepts only matching no-VMAC Heartbeat-ACKs as liveness, clears the timer on disconnect/receive-loop exit, closes on heartbeat send failure or scheduler timeout, and includes deterministic scheduler tests for initiation, ACK correlation, invalid-ACK timeout, and inbound activity deferral. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because live browser/WebSocket heartbeat and timeout smoke coverage still needs follow-up."
+      "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms", "docs/wasm-api.md Heartbeat-Request/Heartbeat-ACK keep-alive handling", "crates/bacnet-wasm/README.md Heartbeat-Request/Heartbeat-ACK keep-alive handling"],
+      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. WASM/browser evidence now starts a browser `Window` heartbeat timer after Connect-Accept, schedules with the browser Performance monotonic clock, sends Heartbeat-Requests after idle BVLC activity, accepts only matching no-VMAC/no-Destination-Options Heartbeat-ACKs as liveness, clears the timer on disconnect or receive-loop exit, closes on heartbeat send failure or scheduler timeout, fail-closes on non-monotonic clock samples, clones the WebSocket receive handle before awaiting to avoid terminal cleanup borrow conflicts, and rejects pending confirmed-service Promises on terminal disconnect paths. Deterministic scheduler tests cover initiation, ACK correlation, invalid ACK VMAC/Destination Options timeout, inbound activity deferral, non-monotonic samples, and timeout disconnect. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because live browser/WebSocket heartbeat, timeout, and pending-Promise smoke coverage still needs follow-up."
     }
   ]
 }
