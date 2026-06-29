@@ -1,5 +1,5 @@
 use super::*;
-use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult};
+use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
 
 #[test]
 fn bvlc_result_nak_uses_standard_error_values() {
@@ -63,6 +63,139 @@ fn relay_limit_decision_rejects_oversized_encoded_bvlc() {
         relay_limit_decision(20, 41, 20, 40),
         RelayLimitDecision::DropMaxBvlc
     );
+}
+
+#[test]
+fn hub_relay_target_requires_destination_and_no_originating_vmac() {
+    let mut msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 1,
+        originating_vmac: Some([0x01; 6]),
+        destination_vmac: Some([0x02; 6]),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x20]),
+    };
+
+    assert_eq!(
+        hub_relay_target(&msg),
+        Err(HubRelayReject::OriginatingVmacPresent)
+    );
+
+    msg.originating_vmac = None;
+    msg.destination_vmac = None;
+    assert_eq!(
+        hub_relay_target(&msg),
+        Err(HubRelayReject::MissingDestinationVmac)
+    );
+}
+
+#[test]
+fn hub_relay_target_classifies_unicast_and_broadcast_destinations() {
+    let mut msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 1,
+        originating_vmac: None,
+        destination_vmac: Some([0x02; 6]),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x20]),
+    };
+
+    assert_eq!(
+        hub_relay_target(&msg).unwrap(),
+        HubRelayTarget::Unicast([0x02; 6])
+    );
+
+    msg.destination_vmac = Some(BROADCAST_VMAC);
+    assert_eq!(hub_relay_target(&msg).unwrap(), HubRelayTarget::Broadcast);
+}
+
+#[test]
+fn hub_relay_unicast_adds_originating_vmac_and_strips_destination_vmac() {
+    let inbound = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x1234,
+        originating_vmac: None,
+        destination_vmac: Some([0x02; 6]),
+        dest_options: vec![ScOption {
+            option_type: 2,
+            must_understand: false,
+            data: vec![0xAA, 0xBB],
+        }],
+        data_options: vec![ScOption {
+            option_type: 3,
+            must_understand: true,
+            data: Vec::new(),
+        }],
+        payload: Bytes::from_static(&[0x01, 0x20, 0xFF]),
+    };
+
+    let relay = build_hub_relay_message(&inbound, [0x01; 6], HubRelayTarget::Unicast([0x02; 6]));
+
+    assert_eq!(relay.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(relay.message_id, 0x1234);
+    assert_eq!(relay.originating_vmac, Some([0x01; 6]));
+    assert_eq!(relay.destination_vmac, None);
+    assert_eq!(relay.dest_options, inbound.dest_options);
+    assert_eq!(relay.data_options, inbound.data_options);
+    assert_eq!(relay.payload, inbound.payload);
+
+    let mut encoded = BytesMut::new();
+    encode_sc_message(&mut encoded, &relay);
+    let decoded = decode_sc_message(&encoded).unwrap();
+    assert_eq!(decoded.originating_vmac, Some([0x01; 6]));
+    assert_eq!(decoded.destination_vmac, None);
+    assert_eq!(decoded.dest_options.len(), 1);
+    assert_eq!(decoded.data_options.len(), 1);
+}
+
+#[test]
+fn hub_relay_broadcast_adds_originating_vmac_and_preserves_broadcast_destination() {
+    let inbound = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x5678,
+        originating_vmac: None,
+        destination_vmac: Some(BROADCAST_VMAC),
+        dest_options: Vec::new(),
+        data_options: vec![ScOption {
+            option_type: 1,
+            must_understand: false,
+            data: vec![0x01],
+        }],
+        payload: Bytes::from_static(&[0x01, 0x04, 0x05]),
+    };
+
+    let relay = build_hub_relay_message(&inbound, [0x09; 6], HubRelayTarget::Broadcast);
+
+    assert_eq!(relay.originating_vmac, Some([0x09; 6]));
+    assert_eq!(relay.destination_vmac, Some(BROADCAST_VMAC));
+    assert_eq!(relay.data_options, inbound.data_options);
+    assert_eq!(relay.payload, inbound.payload);
+}
+
+#[test]
+fn hub_relay_recipients_selects_only_matching_unicast_destination() {
+    let connected = [[0x01; 6], [0x02; 6], [0x03; 6]];
+
+    assert_eq!(
+        hub_relay_recipient_vmacs(HubRelayTarget::Unicast([0x02; 6]), [0x01; 6], connected,),
+        vec![[0x02; 6]]
+    );
+    assert!(
+        hub_relay_recipient_vmacs(HubRelayTarget::Unicast([0x04; 6]), [0x01; 6], connected,)
+            .is_empty()
+    );
+}
+
+#[test]
+fn hub_relay_recipients_broadcasts_to_all_except_origin() {
+    let connected = [[0x01; 6], [0x02; 6], [0x03; 6]];
+
+    let mut recipients = hub_relay_recipient_vmacs(HubRelayTarget::Broadcast, [0x01; 6], connected);
+    recipients.sort();
+
+    assert_eq!(recipients, vec![[0x02; 6], [0x03; 6]]);
 }
 
 #[test]

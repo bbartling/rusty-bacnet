@@ -71,7 +71,7 @@ fn message_id_wraps() {
 }
 
 #[test]
-fn encapsulated_npdu_for_us() {
+fn encapsulated_npdu_unicast_from_hub() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     conn.state = ScConnectionState::Connected;
 
@@ -79,7 +79,7 @@ fn encapsulated_npdu_for_us() {
         function: ScFunction::EncapsulatedNpdu,
         message_id: 1,
         originating_vmac: Some([0x02; 6]),
-        destination_vmac: Some([0x01; 6]),
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::from_static(&[0x01, 0x00, 0x30]),
@@ -121,6 +121,24 @@ fn encapsulated_npdu_not_for_us() {
         message_id: 1,
         originating_vmac: Some([0x02; 6]),
         destination_vmac: Some([0x03; 6]),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x00]),
+    };
+
+    assert!(conn.handle_received(&msg).is_none());
+}
+
+#[test]
+fn encapsulated_npdu_rejects_non_broadcast_destination_from_hub() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+
+    let msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 1,
+        originating_vmac: Some([0x02; 6]),
+        destination_vmac: Some([0x01; 6]),
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::from_static(&[0x01, 0x00]),
@@ -396,7 +414,7 @@ async fn transport_send_unicast_delivers_message() {
     let data = ws_hub.recv().await.unwrap();
     let msg = decode_sc_message(&data).unwrap();
     assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
-    assert_eq!(msg.originating_vmac, Some(client_vmac));
+    assert_eq!(msg.originating_vmac, None);
     assert_eq!(msg.destination_vmac, Some(dest_vmac));
     assert_eq!(msg.payload, npdu_payload);
 
@@ -435,7 +453,7 @@ async fn transport_send_unicast_rejects_peer_max_bvlc() {
     let mut transport = ScTransport::new(ws_client, [0x01; 6]);
 
     let hub_accept_task = tokio::spawn(async move {
-        hub_accept_with_limits(&ws_hub, [0x10; 6], 19, 1476).await;
+        hub_accept_with_limits(&ws_hub, [0x10; 6], 13, 1476).await;
         ws_hub
     });
 
@@ -520,7 +538,7 @@ async fn transport_send_broadcast_delivers_message() {
     let data = ws_hub.recv().await.unwrap();
     let msg = decode_sc_message(&data).unwrap();
     assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
-    assert_eq!(msg.originating_vmac, Some(client_vmac));
+    assert_eq!(msg.originating_vmac, None);
     assert_eq!(msg.destination_vmac, Some(BROADCAST_VMAC));
     assert_eq!(msg.payload, npdu_payload);
 

@@ -219,7 +219,7 @@ impl ScConnection {
         ScMessage {
             function: ScFunction::EncapsulatedNpdu,
             message_id: self.next_id(),
-            originating_vmac: Some(self.local_vmac),
+            originating_vmac: None,
             destination_vmac: Some(dest_vmac),
             dest_options: Vec::new(),
             data_options: Vec::new(),
@@ -235,9 +235,10 @@ impl ScConnection {
                     debug!("Ignoring EncapsulatedNpdu in {:?} state", self.state);
                     return None;
                 }
-                // Check destination
+                // Hub-relayed unicast messages do not carry a Destination
+                // Virtual Address; broadcast relay keeps the broadcast VMAC.
                 if let Some(dest) = msg.destination_vmac {
-                    if dest != self.local_vmac && !is_broadcast_vmac(&dest) {
+                    if !is_broadcast_vmac(&dest) {
                         return None;
                     }
                 }
