@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "bfc1009a16d16cb7d775bf256e51191a7e862a1d",
-  "review_scope": "Annex AB.6.2 BACnet/SC connection state-machine evidence and Annex AB BVLC-Result error-code use.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda set checked on 2026-06-29 were reviewed for Annex AB.6.2 connection-state impacts. The Standard ASN.1 lists BACnet Error Class COMMUNICATION as 7 and Error Code node-duplicate-vmac as 151; no reviewed addendum changes the AB.6.2 Connect-Accept message-id matching or duplicate-VMAC BVLC-Result NAK behavior covered by this tranche.",
+  "repo_sha": "b74c574bd5b13278bb65f8116605a9b2cb5b9ecd",
+  "review_scope": "Annex AB.7 BACnet/SC WebSocket layer evidence for wss peer URIs, hub subprotocol negotiation, binary-frame enforcement, unsupported-data close behavior, and scoped direct-connection deferral.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.7 WebSocket layer requirements. No repo-local AB.7-specific addenda note was found for this tranche; direct WebSocket connection behavior using `dc.bsc.bacnet.org` remains deferred because direct connections are not implemented or publicly claimed.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -638,12 +638,39 @@
       "priority": "P0",
       "requirement_summary": "BACnet/SC WebSocket subprotocol, binary frames, wss/TLS, TLS 1.3, and mutual TLS expectations are enforced or explicitly limited.",
       "status": "implementation-present-needs-security-tests",
-      "code_anchors": ["crates/bacnet-transport/src/sc_hub.rs", "crates/rusty-bacnet/src/tls.rs", "crates/bacnet-wasm/src/ws_transport.rs"],
-      "positive_tests": ["benchmarks/tests/sc_mtls.rs"],
-      "negative_tests": [],
+      "code_anchors": [
+        "crates/bacnet-transport/src/sc_frame.rs",
+        "crates/bacnet-transport/src/sc_hub.rs",
+        "crates/bacnet-transport/src/sc_tls.rs",
+        "crates/bacnet-wasm/src/sc_websocket.rs",
+        "crates/bacnet-wasm/src/ws_transport.rs",
+        "crates/rusty-bacnet/src/tls.rs"
+      ],
+      "positive_tests": [
+        "benchmarks/tests/sc_mtls.rs",
+        "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_subprotocol_handshake_succeeds",
+        "crates/bacnet-transport/src/sc_hub.rs::tests::websocket_subprotocol_offer_accepts_hub_protocol_in_list",
+        "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_accepts_secure_websocket_scheme",
+        "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_accepts_selected_hub_protocol",
+        "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_hub_subprotocol_accepts_hub_protocol",
+        "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_wss_uri_accepts_secure_websocket_scheme"
+      ],
+      "negative_tests": [
+        "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_rejects_missing_or_wrong_subprotocol",
+        "benchmarks/tests/sc_websocket.rs::sc_websocket_text_frame_closes_with_unsupported_data",
+        "crates/bacnet-transport/src/sc_hub.rs::tests::websocket_subprotocol_error_response_is_bad_request",
+        "crates/bacnet-transport/src/sc_hub.rs::tests::websocket_subprotocol_offer_rejects_missing_hub_protocol",
+        "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_rejects_non_websocket_scheme",
+        "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_rejects_plain_websocket_scheme",
+        "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_rejects_missing_or_wrong_protocol",
+        "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_hub_subprotocol_rejects_missing_or_wrong_protocol",
+        "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_wss_uri_rejects_missing_scheme",
+        "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_wss_uri_rejects_plain_websocket_scheme",
+        "crates/bacnet-wasm/src/sc_websocket.rs::tests::websocket_data_not_accepted_close_code_is_unsupported_data"
+      ],
       "benchmarks": ["benchmarks/benches/sc_mtls_latency.rs", "benchmarks/benches/sc_mtls_throughput.rs"],
       "public_claims": ["README BACnet/SC WebSocket+TLS", "docs/python-api.md BACnet/SC"],
-      "notes": "Server-auth-only examples must remain clearly non-conformant/experimental unless mTLS requirements are satisfied."
+      "notes": "AB-04 adds native and WASM WebSocket evidence for configured-peer URI scheme rejection before dialing unless the scheme is wss, native and WASM initiating-peer verification that the selected hub subprotocol is hub.bsc.bacnet.org, accepting-hub rejection of missing/wrong subprotocol offers, successful real TLS WebSocket hub subprotocol negotiation, real TLS WebSocket text-frame close with status 1003, and browser-adapter close/error handling for non-ArrayBuffer messages. Native and hub adapters already send BVLC-SC payloads as binary WebSocket frames and ignore Ping/Pong as optional WebSocket control traffic. Direct WebSocket connections using dc.bsc.bacnet.org remain deferred/unsupported because direct connections are not implemented or publicly claimed. The combined AB.7 row remains implementation-present-needs-security-tests until the AB-05 TLS 1.3/mTLS certificate validation matrix is fully evidenced; server-auth-only examples must remain clearly non-conformant/experimental unless mTLS requirements are satisfied."
     },
     {
       "id": "BACNET-AB-SC-HEARTBEAT",

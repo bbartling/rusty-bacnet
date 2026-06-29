@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `bfc1009a16d16cb7d775bf256e51191a7e862a1d`
-- Scope: Annex AB.6.2 BACnet/SC connection state-machine evidence and Annex AB BVLC-Result error-code use.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda set checked on 2026-06-29 were reviewed for Annex AB.6.2 connection-state impacts. The Standard ASN.1 lists BACnet Error Class COMMUNICATION as 7 and Error Code node-duplicate-vmac as 151; no reviewed addendum changes the AB.6.2 Connect-Accept message-id matching or duplicate-VMAC BVLC-Result NAK behavior covered by this tranche.
+- Implementation evidence SHA reviewed: `b74c574bd5b13278bb65f8116605a9b2cb5b9ecd`
+- Scope: Annex AB.7 BACnet/SC WebSocket layer evidence for wss peer URIs, hub subprotocol negotiation, binary-frame enforcement, unsupported-data close behavior, and scoped direct-connection deferral.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.7 WebSocket layer requirements. No repo-local AB.7-specific addenda note was found for this tranche; direct WebSocket connection behavior using `dc.bsc.bacnet.org` remains deferred because direct connections are not implemented or publicly claimed.
 
 ## Counts
 

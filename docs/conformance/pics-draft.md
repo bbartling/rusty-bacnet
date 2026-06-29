@@ -23,7 +23,7 @@ This draft summarizes implementation evidence that may feed a future formal Prot
 | `BACNET-AB-SC-BVLC-RESULT` | Annex AB.2.4 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/sc_frame.rs`, `crates/bacnet-transport/src/sc_frame/result.rs`, `crates/bacnet-transport/src/sc/mod.rs`, `crates/bacnet-transport/src/sc/result_tests.rs`, `crates/bacnet-wasm/src/sc_frame.rs`, `crates/bacnet-wasm/src/sc_frame/result.rs`, `crates/bacnet-wasm/src/sc_connection.rs` |
 | `BACNET-AB-SC-CONNECTION-STATE` | Annex AB.6.2 | implementation-present-needs-state-machine-audit | `crates/bacnet-transport/src/sc/mod.rs`, `crates/bacnet-transport/src/sc/tests.rs`, `crates/bacnet-transport/src/sc_hub.rs`, `crates/bacnet-wasm/src/sc_connection.rs`, `crates/bacnet-types/src/enums/protocol.rs` |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | implementation-present-needs-conformance-tests | `crates/bacnet-transport/src/sc/mod.rs`, `crates/bacnet-transport/src/sc_hub.rs` |
-| `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | implementation-present-needs-security-tests | `crates/bacnet-transport/src/sc_hub.rs`, `crates/rusty-bacnet/src/tls.rs`, `crates/bacnet-wasm/src/ws_transport.rs` |
+| `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | implementation-present-needs-security-tests | `crates/bacnet-transport/src/sc_frame.rs`, `crates/bacnet-transport/src/sc_hub.rs`, `crates/bacnet-transport/src/sc_tls.rs`, `crates/bacnet-wasm/src/sc_websocket.rs`, `crates/bacnet-wasm/src/ws_transport.rs`, `crates/rusty-bacnet/src/tls.rs` |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | implementation-present-needs-timeout-tests | `crates/bacnet-transport/src/sc/mod.rs`, `crates/bacnet-transport/src/sc_frame.rs` |
 
 ## PICS/Profile Rows
