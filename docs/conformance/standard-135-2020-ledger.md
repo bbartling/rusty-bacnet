@@ -6,7 +6,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-29.
-- Implementation evidence SHA reviewed: `967d44c922aa6066c3d14c1e5a860a1c245e73dd`.
+- Implementation evidence SHA reviewed: `f1e2b01755fca66ebb9f6964a1a0b008f32dc007`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
 - Current scope: Annex AB.7 BACnet/SC TLS 1.3 and mutual TLS validation evidence.
 - Addenda/errata status: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus AB.7.4 addenda/errata notes were reviewed for BACnet/SC TLS 1.3 and operational-certificate validation. This tranche adds TLS 1.3-only helper configuration and generated-certificate validation evidence without changing BVLC-SC wire bytes.
