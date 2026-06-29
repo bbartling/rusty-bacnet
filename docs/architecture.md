@@ -84,7 +84,7 @@ Loopback (local client/server) ─┘      |
 
 The router receives NPDUs from all transports, checks the destination network number in the NPDU header, and forwards to the appropriate transport. Messages for the local device (DNET matches a loopback port) are delivered to the client/server.
 
-Receive-side data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`. BACnet/SC maps inbound Annex AB Data Options to these attributes; data links that do not support attributes expose an empty list. Cross-port attribute forwarding remains tracked in the conformance ledger.
+Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. BACnet/SC maps inbound Annex AB Data Options to these attributes and maps outbound attributes back to SC Data Options. Data links that do not support attributes expose an empty list on receive and ignore attributes on send. Cross-port attribute forwarding remains tracked in the conformance ledger.
 
 ## Transport Abstraction
 

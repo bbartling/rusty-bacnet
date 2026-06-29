@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `83b712871e6fec8fda8fe2529fd8d65efe2d65fb`
-- Scope: Annex AB.3.4 BACnet/SC Data Options receive-side data_attributes plumbing, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, router local-delivery preservation, and non-SC empty-attribute receive behavior.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.3 Data Options, AB.2.3.1 Secure Path, AB.3.1.4 Must Understand processing, AB.3.4 NPDU Exchange data_attributes mapping, and Clause 6.5 data_attributes forwarding/ignore behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. Addendum 135-2020cf renames the Data Options bit 6 label to Every Segment without changing this receive-side data_attributes mapping; no checked addendum or erratum changes the AB.3.4 receive-side behavior covered by this tranche.
+- Implementation evidence SHA reviewed: `a8017fd0cde242576c7e16a33bfc8ae59501d605`
+- Scope: Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery preservation, and non-SC empty/ignore behavior.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.3 Data Options, AB.2.3.1 Secure Path, AB.3.1.4 Must Understand processing, AB.3.4 NPDU Exchange data_attributes mapping, and Clause 6.5 data_attributes forwarding/ignore behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. Addendum 135-2020cf renames the Data Options bit 6 label to Every Segment without changing this data_attributes mapping; no checked addendum or erratum changes the AB.3.4 behavior covered by this tranche.
 
 ## Counts
 
