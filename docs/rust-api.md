@@ -290,6 +290,9 @@ let transport = ScTransport::new(ws, vmac)
     .with_heartbeat_timeout_ms(60_000);
 ```
 
+Production BACnet/SC transports validate heartbeat settings at `start()`: the interval must be
+`3_000..=300_000` ms, and the disconnect timeout must be greater than the interval.
+
 ### BACnet/SC Hub
 
 ```rust
