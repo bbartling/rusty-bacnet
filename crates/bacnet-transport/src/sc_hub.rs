@@ -37,6 +37,7 @@ use crate::sc_frame::{
 
 type TlsStream = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
 type WsSink = SplitSink<WebSocketStream<TlsStream>, Message>;
+type DeviceUuid = [u8; 16];
 
 const HUB_MAX_BVLC_LENGTH: u16 = 1476;
 const HUB_MAX_NPDU_LENGTH: u16 = 1476;
@@ -55,9 +56,19 @@ enum RelayLimitDecision {
     DropMaxBvlc,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HubClientRegistrationDecision {
+    Accept,
+    Replace { old_vmac: Vmac },
+    NakDuplicateVmac,
+    NakMaxClients,
+}
+
 /// Per-client state tracked by the hub.
 struct HubClient {
     sink: Arc<Mutex<WsSink>>,
+    /// Device UUID from the accepted peer's Connect-Request.
+    device_uuid: DeviceUuid,
     /// Maximum encoded BACnet/SC BVLC message length this client can accept.
     max_bvlc: u16,
     /// Maximum NPDU length this client can accept (from ConnectRequest).
@@ -78,7 +89,7 @@ pub struct ScHub {
     hub_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     #[allow(dead_code)]
-    hub_uuid: [u8; 16],
+    hub_uuid: DeviceUuid,
     listener_task: Option<JoinHandle<()>>,
     local_addr: Option<SocketAddr>,
 }
@@ -102,7 +113,7 @@ impl ScHub {
         bind_addr: &str,
         tls_acceptor: TlsAcceptor,
         hub_vmac: Vmac,
-        hub_uuid: [u8; 16],
+        hub_uuid: DeviceUuid,
     ) -> Result<Self, bacnet_types::error::Error> {
         let listener = TcpListener::bind(bind_addr)
             .await
@@ -163,7 +174,7 @@ async fn accept_loop(
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,
     hub_vmac: Vmac,
-    hub_uuid: [u8; 16],
+    hub_uuid: DeviceUuid,
     clients: Clients,
 ) {
     // Track active TCP connections (pre-handshake) to limit DoS surface.
@@ -216,7 +227,12 @@ async fn accept_loop(
                     if let Err(_) | Ok(Err(_)) = result {
                         warn!("Hub: heartbeat send failed for {vmac:02x?}, removing client");
                         let mut map = clients_for_hb.lock().await;
-                        map.remove(&vmac);
+                        if map
+                            .get(&vmac)
+                            .is_some_and(|client| Arc::ptr_eq(&client.sink, &sink))
+                        {
+                            map.remove(&vmac);
+                        }
                     }
                 }
             }
@@ -308,7 +324,7 @@ async fn accept_loop(
 async fn handle_client(
     peer_addr: SocketAddr,
     hub_vmac: Vmac,
-    hub_uuid: [u8; 16],
+    hub_uuid: DeviceUuid,
     mut read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
     clients: Clients,
@@ -364,6 +380,13 @@ async fn handle_client(
             }
         };
 
+        if let Some(registered_vmac) = client_vmac {
+            if !registered_client_matches_sink(&clients, registered_vmac, &write).await {
+                debug!("Hub: client {peer_addr} (vmac={registered_vmac:02x?}) was superseded");
+                break;
+            }
+        }
+
         match sc_msg.function {
             ScFunction::ConnectRequest => {
                 // AB.2.10.1 defines a fixed 26-byte Connect-Request payload.
@@ -391,9 +414,9 @@ async fn handle_client(
                 }
                 let mut vmac = [0u8; 6];
                 vmac.copy_from_slice(&sc_msg.payload[0..6]);
-                // Parse Device UUID (bytes 6..22) and max lengths (bytes 22..26)
-                let mut _client_uuid = [0u8; 16];
-                _client_uuid.copy_from_slice(&sc_msg.payload[6..22]);
+                // Parse Device UUID (bytes 6..22) and max lengths (bytes 22..26).
+                let mut client_uuid = [0u8; 16];
+                client_uuid.copy_from_slice(&sc_msg.payload[6..22]);
                 let client_max_bvlc = u16::from_be_bytes([sc_msg.payload[22], sc_msg.payload[23]]);
                 let client_max_npdu = u16::from_be_bytes([sc_msg.payload[24], sc_msg.payload[25]]);
                 debug!("Hub: ConnectRequest from {peer_addr} vmac={vmac:02x?} max_bvlc={client_max_bvlc} max_npdu={client_max_npdu}");
@@ -420,52 +443,92 @@ async fn handle_client(
                     }
                 }
 
-                // Check for VMAC collision and register atomically under a
-                // single lock to prevent TOCTOU races.
+                // Check for VMAC collision / Device UUID replacement and
+                // register atomically under a single lock to prevent TOCTOU races.
                 const MAX_SC_CLIENTS: usize = 256;
-                {
+                let superseded_sink = {
                     let mut map = clients.lock().await;
-                    if map.contains_key(&vmac) {
-                        warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
-                        drop(map); // release lock before sending
-                        let error_result = build_bvlc_result_nak(
-                            sc_msg.message_id,
-                            ScFunction::ConnectRequest,
-                            ErrorClass::COMMUNICATION,
-                            ErrorCode::NODE_DUPLICATE_VMAC,
-                        );
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &error_result);
-                        let mut w = write.lock().await;
-                        let _ = w.send(Message::Binary(buf.to_vec().into())).await;
-                        break;
-                    }
-                    if map.len() >= MAX_SC_CLIENTS {
-                        warn!("SC Hub: max clients reached, rejecting connection");
-                        drop(map);
-                        let error_result = build_bvlc_result_nak(
-                            sc_msg.message_id,
-                            ScFunction::ConnectRequest,
-                            ErrorClass::RESOURCES,
-                            ErrorCode::OTHER,
-                        );
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &error_result);
-                        let mut w = write.lock().await;
-                        let _ = w.send(Message::Binary(buf.to_vec().into())).await;
-                        break;
-                    }
+                    let decision = hub_client_registration_decision(
+                        vmac,
+                        client_uuid,
+                        map.iter().map(|(vmac, client)| (*vmac, client.device_uuid)),
+                        MAX_SC_CLIENTS,
+                    );
+                    let superseded_sink = match decision {
+                        HubClientRegistrationDecision::Accept => None,
+                        HubClientRegistrationDecision::Replace { old_vmac } => {
+                            let old_client = map.remove(&old_vmac);
+                            if old_vmac == vmac {
+                                debug!(
+                                    "Hub: replacing existing connection for VMAC {vmac:02x?} and Device UUID from {peer_addr}"
+                                );
+                            } else {
+                                debug!(
+                                    "Hub: replacing existing Device UUID connection from VMAC {old_vmac:02x?} with {vmac:02x?}"
+                                );
+                            }
+                            old_client.and_then(|client| {
+                                if Arc::ptr_eq(&client.sink, &write) {
+                                    None
+                                } else {
+                                    Some(client.sink)
+                                }
+                            })
+                        }
+                        HubClientRegistrationDecision::NakDuplicateVmac => {
+                            warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
+                            drop(map); // release lock before sending
+                            let error_result = build_bvlc_result_nak(
+                                sc_msg.message_id,
+                                ScFunction::ConnectRequest,
+                                ErrorClass::COMMUNICATION,
+                                ErrorCode::NODE_DUPLICATE_VMAC,
+                            );
+                            let mut buf = BytesMut::new();
+                            encode_sc_message(&mut buf, &error_result);
+                            let mut w = write.lock().await;
+                            let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                            break;
+                        }
+                        HubClientRegistrationDecision::NakMaxClients => {
+                            warn!("SC Hub: max clients reached, rejecting connection");
+                            drop(map);
+                            let error_result = build_bvlc_result_nak(
+                                sc_msg.message_id,
+                                ScFunction::ConnectRequest,
+                                ErrorClass::RESOURCES,
+                                ErrorCode::OTHER,
+                            );
+                            let mut buf = BytesMut::new();
+                            encode_sc_message(&mut buf, &error_result);
+                            let mut w = write.lock().await;
+                            let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                            break;
+                        }
+                    };
                     map.insert(
                         vmac,
                         HubClient {
                             sink: write.clone(),
+                            device_uuid: client_uuid,
                             max_bvlc: client_max_bvlc,
                             max_npdu: client_max_npdu,
                             last_activity: client_activity.clone(),
                         },
                     );
-                }
+                    superseded_sink
+                };
                 client_vmac = Some(vmac);
+
+                if let Some(sink) = superseded_sink {
+                    tokio::spawn(async move {
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                            let mut old = sink.lock().await;
+                            old.send(Message::Close(None)).await
+                        })
+                        .await;
+                    });
+                }
 
                 let mut accept_payload = Vec::with_capacity(26);
                 accept_payload.extend_from_slice(&hub_vmac);
@@ -681,8 +744,15 @@ async fn handle_client(
 
     if let Some(vmac) = client_vmac {
         let mut map = clients.lock().await;
-        map.remove(&vmac);
-        debug!("Hub: client {peer_addr} (vmac={vmac:02x?}) disconnected");
+        let removed = map
+            .get(&vmac)
+            .is_some_and(|client| Arc::ptr_eq(&client.sink, &write));
+        if removed {
+            map.remove(&vmac);
+            debug!("Hub: client {peer_addr} (vmac={vmac:02x?}) disconnected");
+        } else {
+            debug!("Hub: client {peer_addr} (vmac={vmac:02x?}) disconnected after replacement");
+        }
     }
 }
 
@@ -726,6 +796,54 @@ fn connect_request_vmac_disposition(vmac: Vmac, hub_vmac: Vmac) -> ConnectReques
     } else {
         ConnectRequestVmacDisposition::Accept
     }
+}
+
+fn hub_client_registration_decision<I>(
+    requested_vmac: Vmac,
+    device_uuid: DeviceUuid,
+    existing_clients: I,
+    max_clients: usize,
+) -> HubClientRegistrationDecision
+where
+    I: IntoIterator<Item = (Vmac, DeviceUuid)>,
+{
+    let mut count = 0usize;
+    let mut requested_vmac_owner = None;
+    let mut existing_uuid_vmac = None;
+
+    for (existing_vmac, existing_uuid) in existing_clients {
+        count += 1;
+        if existing_vmac == requested_vmac {
+            requested_vmac_owner = Some(existing_uuid);
+        }
+        if existing_uuid == device_uuid {
+            existing_uuid_vmac = Some(existing_vmac);
+        }
+    }
+
+    if requested_vmac_owner.is_some_and(|owner_uuid| owner_uuid != device_uuid) {
+        return HubClientRegistrationDecision::NakDuplicateVmac;
+    }
+
+    if let Some(old_vmac) = existing_uuid_vmac {
+        return HubClientRegistrationDecision::Replace { old_vmac };
+    }
+
+    if count >= max_clients {
+        HubClientRegistrationDecision::NakMaxClients
+    } else {
+        HubClientRegistrationDecision::Accept
+    }
+}
+
+async fn registered_client_matches_sink(
+    clients: &Clients,
+    registered_vmac: Vmac,
+    sink: &Arc<Mutex<WsSink>>,
+) -> bool {
+    let map = clients.lock().await;
+    map.get(&registered_vmac)
+        .is_some_and(|client| Arc::ptr_eq(&client.sink, sink))
 }
 
 fn relay_limit_decision(

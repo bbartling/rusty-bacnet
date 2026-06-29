@@ -179,7 +179,69 @@ async fn sc_websocket_hub_relays_unicast_unknown_and_broadcast_with_vmac_rules()
     hub.stop().await;
 }
 
+#[tokio::test]
+async fn sc_websocket_hub_replaces_known_device_uuid_connection() {
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+
+    let device_uuid = [0x44; 16];
+    let old_vmac = [0xA4; 6];
+    let replacement_vmac = [0xA5; 6];
+    let peer_vmac = [0xB4; 6];
+
+    let mut old_ws = connect_sc_client_with_uuid(&url, &certs, old_vmac, device_uuid).await;
+    let mut peer_ws = connect_sc_client(&url, &certs, peer_vmac).await;
+    let mut replacement_ws =
+        connect_sc_client_with_uuid(&url, &certs, replacement_vmac, device_uuid).await;
+
+    let to_old_vmac = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x2101,
+        originating_vmac: None,
+        destination_vmac: Some(old_vmac),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x20, 0x44]),
+    };
+    send_sc_message(&mut peer_ws, &to_old_vmac).await;
+    assert_no_binary_sc_message(&mut old_ws).await;
+    assert_no_sc_message(&mut replacement_ws).await;
+
+    let from_old_connection = ScMessage {
+        message_id: 0x2102,
+        destination_vmac: Some(peer_vmac),
+        ..to_old_vmac.clone()
+    };
+    let _ = try_send_sc_message(&mut old_ws, &from_old_connection).await;
+    assert_no_sc_message(&mut peer_ws).await;
+
+    let to_replacement = ScMessage {
+        message_id: 0x2103,
+        destination_vmac: Some(replacement_vmac),
+        ..to_old_vmac
+    };
+    send_sc_message(&mut peer_ws, &to_replacement).await;
+
+    let relayed = recv_sc_message(&mut replacement_ws).await;
+    assert_eq!(relayed.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(relayed.message_id, to_replacement.message_id);
+    assert_eq!(relayed.originating_vmac, Some(peer_vmac));
+    assert_eq!(relayed.destination_vmac, None);
+    assert_eq!(relayed.payload, to_replacement.payload);
+
+    hub.stop().await;
+}
+
 async fn connect_sc_client(url: &str, certs: &CertMaterial, vmac: Vmac) -> ClientWs {
+    connect_sc_client_with_uuid(url, certs, vmac, [vmac[0]; 16]).await
+}
+
+async fn connect_sc_client_with_uuid(
+    url: &str,
+    certs: &CertMaterial,
+    vmac: Vmac,
+    device_uuid: [u8; 16],
+) -> ClientWs {
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
     let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config(certs));
@@ -190,7 +252,7 @@ async fn connect_sc_client(url: &str, certs: &CertMaterial, vmac: Vmac) -> Clien
 
     let mut payload = Vec::with_capacity(26);
     payload.extend_from_slice(&vmac);
-    payload.extend_from_slice(&[vmac[0]; 16]);
+    payload.extend_from_slice(&device_uuid);
     payload.extend_from_slice(&1476u16.to_be_bytes());
     payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -216,9 +278,16 @@ async fn connect_sc_client(url: &str, certs: &CertMaterial, vmac: Vmac) -> Clien
 }
 
 async fn send_sc_message(ws: &mut ClientWs, msg: &ScMessage) {
+    try_send_sc_message(ws, msg).await.unwrap();
+}
+
+async fn try_send_sc_message(
+    ws: &mut ClientWs,
+    msg: &ScMessage,
+) -> Result<(), tokio_tungstenite::tungstenite::Error> {
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, msg);
-    ws.send(Message::Binary(buf.to_vec().into())).await.unwrap();
+    ws.send(Message::Binary(buf.to_vec().into())).await
 }
 
 async fn recv_sc_message(ws: &mut ClientWs) -> ScMessage {
@@ -237,4 +306,12 @@ async fn recv_sc_message(ws: &mut ClientWs) -> ScMessage {
 async fn assert_no_sc_message(ws: &mut ClientWs) {
     let result = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
     assert!(result.is_err(), "unexpected WebSocket message: {result:?}");
+}
+
+async fn assert_no_binary_sc_message(ws: &mut ClientWs) {
+    let result = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
+    match result {
+        Err(_) | Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(Message::Close(_)))) => {}
+        Ok(other) => panic!("unexpected WebSocket message: {other:?}"),
+    }
 }

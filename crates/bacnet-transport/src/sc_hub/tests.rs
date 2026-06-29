@@ -42,6 +42,50 @@ fn connect_request_rejects_hub_vmac_as_duplicate() {
 }
 
 #[test]
+fn hub_registration_accepts_new_vmac_and_uuid() {
+    assert_eq!(
+        hub_client_registration_decision([0x02; 6], [0x22; 16], [([0x01; 6], [0x11; 16])], 2),
+        HubClientRegistrationDecision::Accept
+    );
+}
+
+#[test]
+fn hub_registration_replaces_known_device_uuid() {
+    assert_eq!(
+        hub_client_registration_decision([0x02; 6], [0x11; 16], [([0x01; 6], [0x11; 16])], 1),
+        HubClientRegistrationDecision::Replace {
+            old_vmac: [0x01; 6]
+        }
+    );
+}
+
+#[test]
+fn hub_registration_replaces_known_device_uuid_with_same_vmac() {
+    assert_eq!(
+        hub_client_registration_decision([0x01; 6], [0x11; 16], [([0x01; 6], [0x11; 16])], 1),
+        HubClientRegistrationDecision::Replace {
+            old_vmac: [0x01; 6]
+        }
+    );
+}
+
+#[test]
+fn hub_registration_rejects_duplicate_vmac_for_different_uuid() {
+    assert_eq!(
+        hub_client_registration_decision([0x01; 6], [0x22; 16], [([0x01; 6], [0x11; 16])], 2),
+        HubClientRegistrationDecision::NakDuplicateVmac
+    );
+}
+
+#[test]
+fn hub_registration_rejects_new_connection_at_capacity() {
+    assert_eq!(
+        hub_client_registration_decision([0x03; 6], [0x33; 16], [([0x01; 6], [0x11; 16])], 1),
+        HubClientRegistrationDecision::NakMaxClients
+    );
+}
+
+#[test]
 fn relay_limit_decision_accepts_within_target_limits() {
     assert_eq!(
         relay_limit_decision(20, 40, 20, 40),
