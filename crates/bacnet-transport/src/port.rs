@@ -84,11 +84,36 @@ pub trait TransportPort: Send + Sync {
         mac: &[u8],
     ) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
+    /// Send NPDU bytes with data attributes to a specific MAC address.
+    ///
+    /// Transports that cannot carry data attributes ignore them and send the
+    /// NPDU normally. Attribute-capable transports should override this.
+    fn send_unicast_with_data_attributes<'a>(
+        &'a self,
+        npdu: &'a [u8],
+        mac: &'a [u8],
+        _data_attributes: &'a [DataAttribute],
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'a {
+        async move { self.send_unicast(npdu, mac).await }
+    }
+
     /// Broadcast NPDU bytes on the local network.
     fn send_broadcast(
         &self,
         npdu: &[u8],
     ) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+
+    /// Broadcast NPDU bytes with data attributes on the local network.
+    ///
+    /// Transports that cannot carry data attributes ignore them and broadcast
+    /// the NPDU normally. Attribute-capable transports should override this.
+    fn send_broadcast_with_data_attributes<'a>(
+        &'a self,
+        npdu: &'a [u8],
+        _data_attributes: &'a [DataAttribute],
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'a {
+        async move { self.send_broadcast(npdu).await }
+    }
 
     /// This transport's local MAC address.
     fn local_mac(&self) -> &[u8];

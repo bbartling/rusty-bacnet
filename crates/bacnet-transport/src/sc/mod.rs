@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::port::{ReceivedNpdu, TransportPort};
+use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
 use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, is_broadcast_vmac, ScBvlcResult,
     ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
@@ -26,6 +26,7 @@ mod handshake;
 mod heartbeat;
 mod loopback;
 mod reconnect;
+mod send;
 use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
@@ -222,15 +223,26 @@ impl ScConnection {
 
     /// Build an Encapsulated-NPDU message.
     pub fn build_encapsulated_npdu(&mut self, dest_vmac: Vmac, npdu: &[u8]) -> ScMessage {
-        ScMessage {
+        self.build_encapsulated_npdu_with_data_attributes(dest_vmac, npdu, &[])
+            .expect("empty data attributes are valid")
+    }
+
+    /// Build an Encapsulated-NPDU message with BACnet/SC Data Options.
+    pub fn build_encapsulated_npdu_with_data_attributes(
+        &mut self,
+        dest_vmac: Vmac,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<ScMessage, Error> {
+        Ok(ScMessage {
             function: ScFunction::EncapsulatedNpdu,
             message_id: self.next_id(),
             originating_vmac: None,
             destination_vmac: Some(dest_vmac),
             dest_options: Vec::new(),
-            data_options: Vec::new(),
+            data_options: data_attributes::to_data_options(data_attributes)?,
             payload: Bytes::copy_from_slice(npdu),
-        }
+        })
     }
 
     /// Handle a received message. Returns NPDU data if it's an Encapsulated-NPDU for us.
@@ -781,60 +793,29 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        if mac.len() != 6 {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC VMAC must be 6 bytes, got {}",
-                mac.len()
-            )));
-        }
-        let ws = self.ws_shared.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "BACnet/SC transport not started",
-            ))
-        })?;
-        let ws = ws.lock().await.clone();
-        let conn = self.connection.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "BACnet/SC transport not started",
-            ))
-        })?;
+        self.send_unicast_inner(npdu, mac, &[]).await
+    }
 
-        let mut dest_vmac = [0u8; 6];
-        dest_vmac.copy_from_slice(mac);
-
-        let mut c = conn.lock().await;
-        if c.state != ScConnectionState::Connected {
-            return Err(Error::Encoding(
-                "BACnet/SC transport not in Connected state".into(),
-            ));
-        }
-        if npdu.len() > c.hub_max_apdu_length as usize {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC NPDU length {} exceeds peer Max-NPDU-Length {}",
-                npdu.len(),
-                c.hub_max_apdu_length
-            )));
-        }
-        let hub_max_bvlc_length = c.hub_max_bvlc_length;
-        let msg = c.build_encapsulated_npdu(dest_vmac, npdu);
-        drop(c);
-
-        let mut buf = BytesMut::new();
-        encode_sc_message(&mut buf, &msg);
-        if buf.len() > hub_max_bvlc_length as usize {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
-                buf.len(),
-                hub_max_bvlc_length
-            )));
-        }
-        ws.send(&buf).await
+    async fn send_unicast_with_data_attributes(
+        &self,
+        npdu: &[u8],
+        mac: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        self.send_unicast_inner(npdu, mac, data_attributes).await
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
         self.send_unicast(npdu, &BROADCAST_VMAC).await
+    }
+
+    async fn send_broadcast_with_data_attributes(
+        &self,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        self.send_unicast_inner(npdu, &BROADCAST_VMAC, data_attributes)
+            .await
     }
 
     fn local_mac(&self) -> &[u8] {
