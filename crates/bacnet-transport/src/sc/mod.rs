@@ -20,6 +20,7 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod data_attributes;
 mod failover;
 mod handshake;
 mod heartbeat;
@@ -584,6 +585,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                             .try_send(ReceivedNpdu {
                                                 npdu,
                                                 source_mac: MacAddr::from_slice(&source_vmac),
+                                                data_attributes: data_attributes::from_data_options(&msg),
                                                 reply_tx: None,
                                             })
                                             .is_err()

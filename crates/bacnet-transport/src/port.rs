@@ -10,12 +10,29 @@ use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 
+/// Data-link attributes that accompany an NPDU.
+///
+/// BACnet/SC maps these to Annex AB Data Options. Transports that cannot
+/// carry data attributes ignore them on send and report an empty list on
+/// receive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataAttribute {
+    /// Attribute/header option type. BACnet/SC uses values 1..31.
+    pub option_type: u8,
+    /// Whether the final consumer must understand this attribute.
+    pub must_understand: bool,
+    /// Attribute payload bytes, if any.
+    pub data: Vec<u8>,
+}
+
 /// A received NPDU from the transport layer.
 pub struct ReceivedNpdu {
     /// Raw NPDU bytes (NPDU header + APDU/network-message payload).
     pub npdu: Bytes,
     /// Source MAC address in transport-native format.
     pub source_mac: MacAddr,
+    /// Optional data attributes carried by the data link.
+    pub data_attributes: Vec<DataAttribute>,
     /// Optional reply channel for MS/TP DataExpectingReply frames.
     /// When present, the application layer should send the reply NPDU bytes
     /// through this channel instead of via normal send_unicast.
@@ -27,6 +44,7 @@ impl Clone for ReceivedNpdu {
         Self {
             npdu: self.npdu.clone(),
             source_mac: self.source_mac.clone(),
+            data_attributes: self.data_attributes.clone(),
             reply_tx: None, // oneshot::Sender is not Clone; clones lose the reply channel
         }
     }
@@ -37,6 +55,7 @@ impl std::fmt::Debug for ReceivedNpdu {
         f.debug_struct("ReceivedNpdu")
             .field("npdu", &self.npdu)
             .field("source_mac", &self.source_mac)
+            .field("data_attributes", &self.data_attributes)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(Sender)"))
             .finish()
     }

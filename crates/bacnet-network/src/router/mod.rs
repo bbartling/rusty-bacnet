@@ -229,6 +229,7 @@ impl BACnetRouter {
                                         apdu: npdu.payload,
                                         source_mac: received.source_mac,
                                         source_network: npdu.source,
+                                        data_attributes: received.data_attributes,
                                         reply_tx: received.reply_tx,
                                     };
                                     let _ = local_tx.send(apdu).await;
@@ -281,6 +282,7 @@ impl BACnetRouter {
                                                 apdu: npdu.payload,
                                                 source_mac: received.source_mac,
                                                 source_network: npdu.source,
+                                                data_attributes: received.data_attributes,
                                                 reply_tx: received.reply_tx,
                                             };
                                             let _ = local_tx.send(apdu).await;
@@ -292,6 +294,9 @@ impl BACnetRouter {
                                                     apdu: npdu.payload.clone(),
                                                     source_mac: received.source_mac.clone(),
                                                     source_network: npdu.source.clone(),
+                                                    data_attributes: received
+                                                        .data_attributes
+                                                        .clone(),
                                                     reply_tx: None,
                                                 };
                                                 let _ = local_tx.send(apdu).await;
@@ -329,6 +334,7 @@ impl BACnetRouter {
                                     apdu: npdu.payload,
                                     source_mac: received.source_mac,
                                     source_network: npdu.source,
+                                    data_attributes: received.data_attributes,
                                     reply_tx: received.reply_tx,
                                 };
                                 let _ = local_tx.send(apdu).await;

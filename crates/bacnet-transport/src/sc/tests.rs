@@ -1,4 +1,5 @@
 use super::*;
+use crate::sc_frame::ScOption;
 
 #[test]
 fn connection_initial_state() {
@@ -338,6 +339,62 @@ async fn transport_start_stop() {
     let _rx = transport.start().await.unwrap();
     transport.stop().await.unwrap();
     let _ = hub_task.await;
+}
+
+#[tokio::test]
+async fn transport_receive_preserves_data_options_as_attributes() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+    let mut transport = ScTransport::new(ws_client, client_vmac);
+
+    let hub_accept_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let mut rx = transport.start().await.unwrap();
+    let ws_hub = hub_accept_task.await.unwrap();
+
+    let msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x1234,
+        originating_vmac: Some(hub_vmac),
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: vec![
+            ScOption {
+                option_type: 1,
+                must_understand: true,
+                data: Vec::new(),
+            },
+            ScOption {
+                option_type: 31,
+                must_understand: false,
+                data: vec![0x12, 0x34, 0x56],
+            },
+        ],
+        payload: Bytes::from_static(&[0x01, 0x00, 0x30]),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &msg);
+    ws_hub.send(&buf).await.unwrap();
+
+    let received = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("timed out waiting for SC NPDU")
+        .expect("SC NPDU channel closed");
+    assert_eq!(received.npdu, msg.payload);
+    assert_eq!(received.source_mac.as_slice(), hub_vmac);
+    assert_eq!(received.data_attributes.len(), 2);
+    assert_eq!(received.data_attributes[0].option_type, 1);
+    assert!(received.data_attributes[0].must_understand);
+    assert!(received.data_attributes[0].data.is_empty());
+    assert_eq!(received.data_attributes[1].option_type, 31);
+    assert!(!received.data_attributes[1].must_understand);
+    assert_eq!(received.data_attributes[1].data, vec![0x12, 0x34, 0x56]);
+
+    transport.stop().await.unwrap();
 }
 
 #[tokio::test]
