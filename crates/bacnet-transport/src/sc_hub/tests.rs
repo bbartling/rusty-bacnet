@@ -305,6 +305,27 @@ fn known_unhandled_function_is_not_classified_as_unknown() {
 }
 
 #[test]
+fn direct_connection_function_naks_as_unexpected_data() {
+    let nak = build_bvlc_result_nak(
+        0x2233,
+        ScFunction::AddressResolution,
+        ErrorClass::COMMUNICATION,
+        unexpected_bvlc_function_error_code(ScFunction::AddressResolution),
+    );
+
+    assert_eq!(
+        decode_sc_bvlc_result(&nak).unwrap(),
+        ScBvlcResult::Nak {
+            result_for: ScFunction::AddressResolution,
+            error_header_marker: 0,
+            error_class: 7,
+            error_code: 150,
+            error_details: String::new(),
+        }
+    );
+}
+
+#[test]
 fn websocket_subprotocol_offer_accepts_hub_protocol_in_list() {
     let request = tokio_tungstenite::tungstenite::handshake::server::Request::builder()
         .header(
@@ -315,6 +336,19 @@ fn websocket_subprotocol_offer_accepts_hub_protocol_in_list() {
         .unwrap();
 
     assert!(offers_websocket_subprotocol(
+        &request,
+        BACNET_SC_HUB_SUBPROTOCOL
+    ));
+}
+
+#[test]
+fn websocket_subprotocol_offer_rejects_direct_connection_protocol() {
+    let request = tokio_tungstenite::tungstenite::handshake::server::Request::builder()
+        .header("Sec-WebSocket-Protocol", "dc.bsc.bacnet.org")
+        .body(())
+        .unwrap();
+
+    assert!(!offers_websocket_subprotocol(
         &request,
         BACNET_SC_HUB_SUBPROTOCOL
     ));
