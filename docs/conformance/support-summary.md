@@ -4,8 +4,8 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `848c22b23e9824de505bb8958e0fbfc01da19144`
-- Scope: Annex AB.6.2 BACnet/SC initiating-peer duplicate VMAC recovery and Clause H.7.3 Random-48 VMAC generation, including native Connect-Request BVLC-Result NAK handling, initial failover retry payloads, WASM/browser VMAC generation and retry state, and generic Connect-Request NAK fail-closed behavior.
+- Implementation evidence SHA reviewed: `4e9948bf7196f7437597d38291febeb097c1c12f`
+- Scope: Annex AB.6.2 BACnet/SC initiating-peer duplicate VMAC recovery and Clause H.7.3 Random-48 VMAC generation, including native Connect-Request BVLC-Result NAK handling, initial failover retry payloads, native connect-time cleanup, WASM/browser VMAC generation and retry state, and generic Connect-Request NAK fail-closed behavior.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.4 BVLC-Result, AB.2.10 Connect-Request, AB.6.2 initiating and accepting peer duplicate VMAC behavior, Clause H.7.3 Random-48 VMAC format, and Clause 18/21 communication error values. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.2 duplicate VMAC recovery or H.7.3 Random-48 VMAC behavior covered by this tranche.
 
 ## Counts
