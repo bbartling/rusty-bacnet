@@ -44,12 +44,12 @@ Physical network (UDP socket / WebSocket / serial port)
     v
 TransportPort::start() -> mpsc::Receiver<ReceivedNpdu>
     |  Decodes data-link framing (BVLL for BIP, BVLC-SC for SC, MS/TP frames)
-    |  Extracts NPDU bytes + source MAC address
+    |  Extracts NPDU bytes + source MAC address + optional data attributes
     v
 NetworkLayer::start() -> mpsc::Receiver<ReceivedApdu>
     |  Decodes NPDU header (version, control, DNET/DADR/SNET/SADR)
     |  Filters: drops messages not for this device (wrong DNET)
-    |  Extracts APDU bytes + source network/address info
+    |  Extracts APDU bytes + source network/address info + data attributes
     v
 Client dispatch task / Server dispatch task
     |  Decodes APDU header (PDU type, service choice, invoke ID)
@@ -83,6 +83,8 @@ Loopback (local client/server) ─┘      |
 ```
 
 The router receives NPDUs from all transports, checks the destination network number in the NPDU header, and forwards to the appropriate transport. Messages for the local device (DNET matches a loopback port) are delivered to the client/server.
+
+Receive-side data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`. BACnet/SC maps inbound Annex AB Data Options to these attributes; data links that do not support attributes expose an empty list. Cross-port attribute forwarding remains tracked in the conformance ledger.
 
 ## Transport Abstraction
 
