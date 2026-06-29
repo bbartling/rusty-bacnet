@@ -1,7 +1,7 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "835d796805e7e9ae30a7684c0f9d6ee12bfddd49",
+  "repo_sha": "7683d12b4ed4adbf22fbf7baf3fbf38b8767c81b",
   "review_scope": "Annex AB.6.2.3 BACnet/SC accepting-peer duplicate Device UUID replacement at the hub.",
   "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2.2 and AB.6.2.3 duplicate Device UUID replacement, VMAC-collision NAK behavior, and initiating-peer Random-48 reselection context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. The listed 135-2020 addenda/errata text was searched for AB.6.2, Device UUID, NODE_DUPLICATE_VMAC, VMAC collision, Random-48, Connect-Request, and Connect-Accept. Base 135-2020 errata corrects an AB.6.2.3 Disconnect-ACK peer-label typo; Addendum cc references AB.6.2.2/AB.6.2.3 for Network Port/hub-connection metadata; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.6.2.3 duplicate Device UUID or VMAC-collision transitions covered by this tranche.",
   "status_taxonomy": [
