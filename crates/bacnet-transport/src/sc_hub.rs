@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -24,10 +24,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, warn};
 
+mod client;
 mod connection;
+mod heartbeat;
 mod helpers;
 mod relay;
 
+use client::HubClient;
 use connection::accept_loop;
 use helpers::*;
 
@@ -65,23 +68,6 @@ enum HubClientRegistrationDecision {
     Replace { old_vmac: Vmac },
     NakDuplicateVmac,
     NakMaxClients,
-}
-
-/// Per-client state tracked by the hub.
-struct HubClient {
-    sink: Arc<Mutex<WsSink>>,
-    /// Set when this handler has been superseded and should stop processing.
-    closed: Arc<AtomicBool>,
-    /// Wakes the handler when a replacement connection supersedes it.
-    close_notify: Arc<Notify>,
-    /// Device UUID from the accepted peer's Connect-Request.
-    device_uuid: DeviceUuid,
-    /// Maximum encoded BACnet/SC BVLC message length this client can accept.
-    max_bvlc: u16,
-    /// Maximum NPDU length this client can accept (from ConnectRequest).
-    max_npdu: u16,
-    /// Last activity time (epoch seconds) — updated on every received message.
-    last_activity: Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct HubRelaySink {
@@ -175,10 +161,6 @@ impl ScHub {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Per-client handler
-// ---------------------------------------------------------------------------
-
 async fn handle_client(
     peer_addr: SocketAddr,
     hub_vmac: Vmac,
@@ -190,8 +172,7 @@ async fn handle_client(
     let mut client_vmac: Option<Vmac> = None;
     let close_requested = Arc::new(AtomicBool::new(false));
     let close_notify = Arc::new(Notify::new());
-    let client_activity: Arc<std::sync::atomic::AtomicU64> =
-        Arc::new(std::sync::atomic::AtomicU64::new(now_secs()));
+    let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(now_secs()));
 
     loop {
         let msg_result = tokio::select! {
@@ -394,15 +375,15 @@ async fn handle_client(
                     };
                     map.insert(
                         vmac,
-                        HubClient {
-                            sink: write.clone(),
-                            closed: close_requested.clone(),
-                            close_notify: close_notify.clone(),
-                            device_uuid: client_uuid,
-                            max_bvlc: client_max_bvlc,
-                            max_npdu: client_max_npdu,
-                            last_activity: client_activity.clone(),
-                        },
+                        HubClient::new(
+                            write.clone(),
+                            close_requested.clone(),
+                            close_notify.clone(),
+                            client_uuid,
+                            client_max_bvlc,
+                            client_max_npdu,
+                            client_activity.clone(),
+                        ),
                     );
                     superseded
                 };
@@ -461,6 +442,18 @@ async fn handle_client(
                 if let Err(e) = w.send(Message::Binary(buf.to_vec().into())).await {
                     warn!("Hub: failed to send HeartbeatAck to {peer_addr}: {e}");
                     break;
+                }
+            }
+
+            ScFunction::HeartbeatAck => {
+                if let Some(registered_vmac) = client_vmac {
+                    heartbeat::clear_matching_heartbeat_ack(
+                        &clients,
+                        registered_vmac,
+                        &write,
+                        sc_msg.message_id,
+                    )
+                    .await;
                 }
             }
 
