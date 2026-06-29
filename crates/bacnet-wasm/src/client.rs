@@ -140,6 +140,15 @@ impl BACnetScClient {
                 "BACnet/SC ConnectRequest rejected by BVLC-Result"
             }));
         }
+        // Validate the monotonic clock before accepting the connection state.
+        let heartbeat_start_ms = match Self::monotonic_now_ms() {
+            Ok(now_ms) => now_ms,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(e);
+            }
+        };
         if !self.connection.borrow_mut().handle_connect_accept(&msg) {
             self.connection.borrow_mut().abort_connect();
             ws.close();
@@ -147,7 +156,7 @@ impl BACnetScClient {
         }
         self.connection
             .borrow_mut()
-            .start_heartbeat_tracking(Self::monotonic_now_ms()?);
+            .start_heartbeat_tracking(heartbeat_start_ms);
 
         *self.ws.borrow_mut() = Some(ws);
 
@@ -812,7 +821,7 @@ impl BACnetScClient {
             }
 
             if connection.borrow().state == ScConnectionState::Disconnected {
-                Self::terminate_connection(
+                Self::terminate_connection_from_heartbeat_callback(
                     &ws,
                     &connection,
                     &pending,
@@ -864,6 +873,45 @@ impl BACnetScClient {
         }
         Self::clear_heartbeat_timer(heartbeat_interval_id, heartbeat_interval_closure);
         Self::reject_pending(pending, reason);
+    }
+
+    fn terminate_connection_from_heartbeat_callback(
+        ws: &Rc<RefCell<Option<BrowserWebSocket>>>,
+        connection: &Rc<RefCell<ScConnection>>,
+        pending: &Rc<RefCell<HashMap<u8, (Function, Function)>>>,
+        heartbeat_interval_id: &Rc<RefCell<Option<i32>>>,
+        heartbeat_interval_closure: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+        reason: &str,
+    ) {
+        connection.borrow_mut().mark_disconnected();
+        if let Some(ws) = ws.borrow_mut().take() {
+            ws.close();
+        }
+        Self::clear_heartbeat_interval_id(heartbeat_interval_id);
+        Self::reject_pending(pending, reason);
+        // This path runs inside the interval callback, so drop the retained
+        // Closure after the callback returns.
+        Self::defer_heartbeat_closure_drop(heartbeat_interval_closure.clone());
+    }
+
+    fn defer_heartbeat_closure_drop(
+        heartbeat_interval_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    ) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let cleanup = Closure::<dyn FnMut()>::once(move || {
+            heartbeat_interval_closure.borrow_mut().take();
+        });
+        if window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                cleanup.as_ref().unchecked_ref(),
+                0,
+            )
+            .is_ok()
+        {
+            cleanup.forget();
+        }
     }
 
     fn reject_pending(pending: &Rc<RefCell<HashMap<u8, (Function, Function)>>>, reason: &str) {
