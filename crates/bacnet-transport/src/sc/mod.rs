@@ -20,10 +20,12 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod failover;
 mod handshake;
 mod heartbeat;
 mod loopback;
 mod reconnect;
+use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
 pub use reconnect::ScReconnectConfig;
@@ -61,6 +63,7 @@ pub enum ScConnectionState {
 }
 
 /// BACnet/SC hub connection manager.
+#[derive(Clone)]
 pub struct ScConnection {
     pub state: ScConnectionState,
     pub local_vmac: Vmac,
@@ -409,30 +412,31 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             .take()
             .ok_or_else(|| Error::Encoding("BACnet/SC transport already started".into()))?;
 
-        let ws = Arc::new(primary_ws);
+        let primary_ws = Arc::new(primary_ws);
         let mut failover_ws = self.failover_ws.take().map(Arc::new);
 
         // Attempt handshake on the primary WebSocket.
-        let ws = match perform_handshake(&*ws, &conn, self.connect_timeout_ms).await {
-            Ok(()) => ws,
-            Err(primary_err) => {
-                // Primary failed — try failover if configured.
-                if let Some(failover) = failover_ws.take() {
-                    debug!("BACnet/SC primary connect failed, attempting failover");
-                    // Reset connection state for the retry.
-                    {
-                        let mut c = conn.lock().await;
-                        *c = ScConnection::new(self.local_vmac, self.device_uuid);
+        let (ws, active_hub) =
+            match perform_handshake(&*primary_ws, &conn, self.connect_timeout_ms).await {
+                Ok(()) => (primary_ws.clone(), ActiveHub::Primary),
+                Err(primary_err) => {
+                    // Primary failed — try failover if configured.
+                    if let Some(failover) = failover_ws.take() {
+                        debug!("BACnet/SC primary connect failed, attempting failover");
+                        // Reset connection state for the retry.
+                        {
+                            let mut c = conn.lock().await;
+                            *c = ScConnection::new(self.local_vmac, self.device_uuid);
+                        }
+                        perform_handshake(&*failover, &conn, self.connect_timeout_ms)
+                            .await
+                            .map(|()| (failover, ActiveHub::Failover))
+                            .map_err(|_| primary_err)?
+                    } else {
+                        return Err(primary_err);
                     }
-                    perform_handshake(&*failover, &conn, self.connect_timeout_ms)
-                        .await
-                        .map(|()| failover)
-                        .map_err(|_| primary_err)?
-                } else {
-                    return Err(primary_err);
                 }
-            }
-        };
+            };
 
         let active_ws = Arc::new(Mutex::new(ws.clone()));
         self.ws_shared = Some(active_ws.clone());
@@ -442,9 +446,20 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let heartbeat_timeout_ms = self.heartbeat_timeout_ms;
         let reconnect_config = self.reconnect_config.clone();
         let connect_timeout_ms = self.connect_timeout_ms;
+        let restore_enabled = reconnect_config.is_some();
+        let restore_interval_ms = reconnect_config
+            .as_ref()
+            .map(|cfg| cfg.initial_delay_ms.max(1))
+            .unwrap_or(heartbeat_interval_ms.max(1));
 
+        let primary_ws = primary_ws.clone();
         let mut ws_clone = ws.clone();
+        let mut active_hub = active_hub;
         let task = tokio::spawn(async move {
+            let mut primary_restore_interval =
+                tokio::time::interval(Duration::from_millis(restore_interval_ms));
+            primary_restore_interval.tick().await;
+
             'transport: loop {
                 let mut hb_interval =
                     tokio::time::interval(Duration::from_millis(heartbeat_interval_ms));
@@ -453,8 +468,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 let mut pending_heartbeat_id = None;
 
                 loop {
+                    let recv_ws = ws_clone.clone();
                     tokio::select! {
-                        data = ws_clone.recv() => {
+                        data = recv_ws.recv() => {
                             match data {
                                 Ok(data) => {
                                     if data.len() > conn.lock().await.max_bvlc_length as usize {
@@ -550,6 +566,28 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 }
                             }
                         }
+                        _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ActiveHub::Failover => {
+                            match attempt_primary_restore(
+                                &primary_ws,
+                                &ws_clone,
+                                &active_ws,
+                                &conn,
+                                connect_timeout_ms,
+                            )
+                            .await
+                            {
+                                Ok(()) => {
+                                    ws_clone = primary_ws.clone();
+                                    active_hub = ActiveHub::Primary;
+                                    last_bvlc_received = Instant::now();
+                                    pending_heartbeat_id = None;
+                                    info!("SC restored primary hub while failover was active");
+                                }
+                                Err(e) => {
+                                    debug!(%e, "SC primary restore attempt failed while failover active");
+                                }
+                            }
+                        }
                         _ = hb_interval.tick() => {
                             let idle_for = last_bvlc_received.elapsed();
                             if idle_for >= Duration::from_millis(heartbeat_interval_ms)
@@ -633,6 +671,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     *current = failover.clone();
                                 }
                                 ws_clone = failover;
+                                active_hub = ActiveHub::Failover;
                                 info!("SC connected to failover hub after primary reconnect exhaustion");
                                 reconnected = true;
                             }

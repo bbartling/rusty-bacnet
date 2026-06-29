@@ -40,6 +40,21 @@ async fn wait_for_connection_state(
     false
 }
 
+async fn wait_for_hub_vmac(conn: &Arc<Mutex<ScConnection>>, expected: Vmac, timeout: Duration) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if conn.lock().await.hub_vmac == Some(expected) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "timed out waiting for hub VMAC {:02x?}, last state: {:?}",
+        expected,
+        conn.lock().await.hub_vmac
+    );
+}
+
 #[tokio::test]
 async fn sc_connect_timeout() {
     let (ws_client, _ws_server) = LoopbackWebSocket::pair();
@@ -569,6 +584,75 @@ async fn test_reconnect_exhaustion_uses_failover_and_send_path() {
     let data = tokio::time::timeout(Duration::from_secs(1), failover_hub.recv())
         .await
         .expect("timed out waiting for failover unicast")
+        .unwrap();
+    let msg = decode_sc_message(&data).unwrap();
+    assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(msg.destination_vmac, Some(dest_vmac));
+    assert_eq!(msg.payload.as_ref(), payload);
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_failover_restores_primary_and_send_path() {
+    let (primary_client, primary_hub) = LoopbackWebSocket::pair();
+    let (failover_client, failover_hub) = LoopbackWebSocket::pair();
+
+    let client_vmac = [0x01; 6];
+    let primary_hub_vmac = [0x10; 6];
+    let failover_hub_vmac = [0x20; 6];
+
+    let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_connect_timeout_ms(100)
+        .with_heartbeat_interval_ms(5_000)
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 25,
+            max_delay_ms: 25,
+            max_retries: 1,
+        })
+        .with_failover(failover_client);
+
+    let failover_task = tokio::spawn(async move {
+        hub_accept(&failover_hub, failover_hub_vmac).await;
+        failover_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let failover_hub = failover_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+    assert_eq!(conn.lock().await.hub_vmac, Some(failover_hub_vmac));
+
+    let primary_restore_task = tokio::spawn(async move {
+        let stale = primary_hub.recv().await.unwrap();
+        assert_eq!(
+            decode_sc_message(&stale).unwrap().function,
+            ScFunction::ConnectRequest
+        );
+        hub_accept(&primary_hub, primary_hub_vmac).await;
+        primary_hub
+    });
+
+    let primary_hub = tokio::time::timeout(Duration::from_secs(2), primary_restore_task)
+        .await
+        .expect("timed out waiting for primary restore connect")
+        .unwrap();
+
+    wait_for_hub_vmac(&conn, primary_hub_vmac, Duration::from_secs(1)).await;
+
+    let failover_data = tokio::time::timeout(Duration::from_secs(1), failover_hub.recv())
+        .await
+        .expect("timed out waiting for failover disconnect")
+        .unwrap();
+    let failover_msg = decode_sc_message(&failover_data).unwrap();
+    assert_eq!(failover_msg.function, ScFunction::DisconnectRequest);
+
+    let payload = [0x04, 0x05, 0x06];
+    let dest_vmac = [0x44; 6];
+    transport.send_unicast(&payload, &dest_vmac).await.unwrap();
+
+    let data = tokio::time::timeout(Duration::from_secs(1), primary_hub.recv())
+        .await
+        .expect("timed out waiting for primary unicast after restore")
         .unwrap();
     let msg = decode_sc_message(&data).unwrap();
     assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
