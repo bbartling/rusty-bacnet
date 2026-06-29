@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
-  "reviewed_at": "2026-06-28",
-  "repo_sha": "8468ce4b9045f9ef9e30684195ada0214ab5ccca",
-  "review_scope": "Annex J BACnet/IP BIP and BBMD benchmark A/B harness evidence.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` checked on 2026-06-28 for Annex J BACnet/IP BVLC, Original-NPDU, BBMD, BDT, FDT, and foreign-device benchmark scope; benchmark harness changes add no new normative protocol behavior and no separate addenda/errata source is committed for this tranche.",
+  "reviewed_at": "2026-06-29",
+  "repo_sha": "3c609ebef3f2f166ff73f36d9b3d76ffd0ff27c6",
+  "review_scope": "Annex AB.2 BACnet/SC BVLC-SC frame and header-option codec evidence.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2 BACnet/SC frame/header-option impacts. Addendum 135-2020cf changes AB.2.3 Data Options bit 6 naming from Must Understand to Every Segment while leaving Destination Options Must Understand unchanged; addendum 135-2020cp adds standard header option types 2..5. No addendum reviewed changes AB.2 control reserved bits, header option type range 1..31, option length/data framing, VMAC field ordering, or payload ordering covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -519,11 +519,27 @@
       "requirement_summary": "BACnet/SC BVLC-SC frame function, control, options, VMAC, and payload validation.",
       "status": "implementation-present-needs-negative-tests",
       "code_anchors": ["crates/bacnet-transport/src/sc_frame.rs", "crates/bacnet-wasm/src/sc_frame.rs"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "positive_tests": [
+        "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_decode_marker_fields_and_payload_split",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_decode_marker_fields_and_payload_split",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::wire_format_check_both_vmacs",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::wire_format_check_both_vmacs"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/sc_frame.rs::tests::decode_rejects_reserved_control_bits",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::decode_rejects_reserved_control_bits",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_option_type_zero",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_option_type_zero",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_option_count_exhaustion",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_option_count_exhaustion",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_truncated_length_and_data",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_truncated_length_and_data",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_unterminated_chain",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_unterminated_chain"
+      ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
-      "notes": "Needs Table AB-1, reserved-bit, unknown must-understand option, and VMAC tests."
+      "notes": "AB-01 adds transport and WASM codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader BVLC-SC function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
     },
     {
       "id": "BACNET-AB-SC-HUB-CONNECTOR",
