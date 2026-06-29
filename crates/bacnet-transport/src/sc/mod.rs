@@ -26,11 +26,15 @@ mod failover;
 mod handshake;
 mod heartbeat;
 mod loopback;
+mod random48;
 mod reconnect;
 mod send;
 use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
+pub(crate) use random48::generate_random48_vmac;
+#[cfg(test)]
+pub(crate) use random48::set_test_random48_vmac_generator;
 pub use reconnect::ScReconnectConfig;
 
 // ---------------------------------------------------------------------------
@@ -88,6 +92,8 @@ pub struct ScConnection {
     pending_connect_message_id: Option<u16>,
     /// Device UUID of the connected hub.
     pub hub_device_uuid: Option<[u8; 16]>,
+    /// Whether the last connect failure permits another connection attempt.
+    connect_retry_allowed: bool,
 }
 
 impl ScConnection {
@@ -105,7 +111,18 @@ impl ScConnection {
             disconnect_ack_to_send: None,
             pending_connect_message_id: None,
             hub_device_uuid: None,
+            connect_retry_allowed: true,
         }
+    }
+
+    fn reset_for_connect_retry(&mut self) {
+        let vmac = self.local_vmac;
+        let uuid = self.device_uuid;
+        *self = Self::new(vmac, uuid);
+    }
+
+    fn connect_retry_allowed(&self) -> bool {
+        self.connect_retry_allowed
     }
 
     /// Generate the next message ID.
@@ -325,18 +342,6 @@ impl ScConnection {
     }
 }
 
-/// Generate an Annex H.7.3 Random-48 VMAC.
-///
-/// The low nibble of the first octet is fixed at X'2'; the high nibble and
-/// remaining five octets carry 44 bits of OS randomness.
-pub(crate) fn generate_random48_vmac() -> Result<Vmac, Error> {
-    let mut vmac = [0u8; 6];
-    getrandom::fill(&mut vmac)
-        .map_err(|e| Error::Encoding(format!("failed to generate Random-48 VMAC: {e}")))?;
-    vmac[0] = (vmac[0] & 0xF0) | 0x02;
-    Ok(vmac)
-}
-
 // ---------------------------------------------------------------------------
 // BACnet/SC Transport
 // ---------------------------------------------------------------------------
@@ -476,14 +481,15 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 Ok(()) => (primary_ws.clone(), ActiveHub::Primary),
                 Err(primary_err) => {
                     // Primary failed — try failover if configured.
-                    if let Some(failover) = failover_ws.take() {
+                    if !conn.lock().await.connect_retry_allowed() {
+                        self.local_vmac = conn.lock().await.local_vmac;
+                        return Err(primary_err);
+                    } else if let Some(failover) = failover_ws.take() {
                         debug!("BACnet/SC primary connect failed, attempting failover");
                         // Reset connection state for the retry.
                         {
                             let mut c = conn.lock().await;
-                            let vmac = c.local_vmac;
-                            let uuid = c.device_uuid;
-                            *c = ScConnection::new(vmac, uuid);
+                            c.reset_for_connect_retry();
                         }
                         perform_handshake(&*failover, &conn, self.connect_timeout_ms)
                             .await
@@ -705,9 +711,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     // Reset connection state, preserving VMAC and UUID
                     {
                         let mut c = conn.lock().await;
-                        let vmac = c.local_vmac;
-                        let uuid = c.device_uuid;
-                        *c = ScConnection::new(vmac, uuid);
+                        c.reset_for_connect_retry();
                     }
 
                     match perform_handshake(&*ws_clone, &conn, connect_timeout_ms).await {
@@ -717,21 +721,27 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             break;
                         }
                         Err(e) => {
+                            if !conn.lock().await.connect_retry_allowed() {
+                                warn!(
+                                    %e,
+                                    attempt,
+                                    "SC reconnection failed without retry eligibility"
+                                );
+                                break;
+                            }
                             warn!(%e, attempt, "SC reconnection failed, retrying in {:?}", backoff);
                             backoff = (backoff * 2).min(max_backoff);
                         }
                     }
                 }
 
-                if !reconnected {
+                if !reconnected && conn.lock().await.connect_retry_allowed() {
                     if let Some(failover) = failover_ws.take() {
                         warn!("SC primary reconnection exhausted, attempting failover hub");
 
                         {
                             let mut c = conn.lock().await;
-                            let vmac = c.local_vmac;
-                            let uuid = c.device_uuid;
-                            *c = ScConnection::new(vmac, uuid);
+                            c.reset_for_connect_retry();
                         }
 
                         match perform_handshake(&*failover, &conn, connect_timeout_ms).await {

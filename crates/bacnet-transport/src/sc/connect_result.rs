@@ -25,7 +25,16 @@ impl ScConnection {
         self.abort_connect();
 
         if duplicate_vmac {
-            self.local_vmac = generate_random48_vmac()?;
+            match generate_random48_vmac() {
+                Ok(vmac) => {
+                    self.local_vmac = vmac;
+                    self.connect_retry_allowed = true;
+                }
+                Err(e) => {
+                    self.connect_retry_allowed = false;
+                    return Err(e);
+                }
+            }
             Ok(true)
         } else {
             Ok(false)

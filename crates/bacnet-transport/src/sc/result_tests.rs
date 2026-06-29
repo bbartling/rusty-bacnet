@@ -1,4 +1,5 @@
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::Error;
 
 use super::*;
 
@@ -211,6 +212,12 @@ fn connect_result_generic_nak_does_not_reseed_local_vmac() {
     assert_eq!(conn.local_vmac, original_vmac);
 }
 
+fn fail_random48_vmac() -> Result<Vmac, Error> {
+    Err(Error::Encoding(
+        "test Random-48 VMAC generation failure".into(),
+    ))
+}
+
 #[tokio::test]
 async fn sc_connect_result_nak_fails_without_timeout() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
@@ -296,6 +303,52 @@ async fn sc_connect_duplicate_vmac_nak_retries_failover_with_new_vmac() {
     drop(c);
 
     transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_connect_duplicate_vmac_reseed_failure_does_not_try_failover() {
+    let _random48_guard = set_test_random48_vmac_generator(fail_random48_vmac);
+    let (primary_client, primary_hub) = LoopbackWebSocket::pair();
+    let (failover_client, failover_hub) = LoopbackWebSocket::pair();
+    let original_vmac = [0x01; 6];
+    let mut transport = ScTransport::new(primary_client, original_vmac)
+        .with_connect_timeout_ms(5000)
+        .with_failover(failover_client);
+
+    let primary_task = tokio::spawn(async move {
+        let data = primary_hub.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+        assert_eq!(&req.payload[0..6], &original_vmac);
+        send_message(
+            &primary_hub,
+            &connect_result_nak(req.message_id, ErrorCode::NODE_DUPLICATE_VMAC.to_raw()),
+        )
+        .await;
+    });
+
+    let result = transport.start().await;
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("test Random-48 VMAC generation failure"),
+        "expected reseed failure, got: {err_msg}"
+    );
+    primary_task.await.unwrap();
+
+    match tokio::time::timeout(Duration::from_millis(100), failover_hub.recv()).await {
+        Ok(Ok(data)) => panic!(
+            "failover received stale-VMAC Connect-Request: {:02x?}",
+            data
+        ),
+        Ok(Err(_)) | Err(_) => {}
+    }
+
+    let conn = transport.connection().unwrap();
+    let c = conn.lock().await;
+    assert_eq!(c.state, ScConnectionState::Disconnected);
+    assert_eq!(c.pending_connect_message_id, None);
+    assert_eq!(c.local_vmac, original_vmac);
 }
 
 #[tokio::test]
