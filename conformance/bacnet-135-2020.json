@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "3c609ebef3f2f166ff73f36d9b3d76ffd0ff27c6",
-  "review_scope": "Annex AB.2 BACnet/SC BVLC-SC frame and header-option codec evidence.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2 BACnet/SC frame/header-option impacts. Addendum 135-2020cf changes AB.2.3 Data Options bit 6 naming from Must Understand to Every Segment while leaving Destination Options Must Understand unchanged; addendum 135-2020cp adds standard header option types 2..5. No addendum reviewed changes AB.2 control reserved bits, header option type range 1..31, option length/data framing, VMAC field ordering, or payload ordering covered by this tranche.",
+  "repo_sha": "9b884e9fef0fcb8b407dc121adcecbc75ee2de5b",
+  "review_scope": "Annex AB.2.4 BACnet/SC BVLC-Result parser and connection handling evidence.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2.4 BACnet/SC BVLC-Result impacts. Addendum 135-2020ci clarifies that BVLC-Result NAK is used for standard BVLC message failures while ACK may be used for proprietary BVLC messages, and it expands AB.3.1.5 common error situations. Addenda 135-2020cf/cp/cc/cm were also searched for AB.2.4/BVLC-Result impacts; no additional BVLC-Result payload grammar changes were found.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -539,7 +539,42 @@
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
-      "notes": "AB-01 adds transport and WASM codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader BVLC-SC function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
+      "notes": "AB-01 adds transport and WASM codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader non-Result BVLC-SC function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
+    },
+    {
+      "id": "BACNET-AB-SC-BVLC-RESULT",
+      "standard_anchor": "Annex AB.2.4",
+      "priority": "P0",
+      "requirement_summary": "BACnet/SC BVLC-Result ACK/NAK payload parsing and connection handling.",
+      "status": "implementation-present-needs-conformance-tests",
+      "code_anchors": [
+        "crates/bacnet-transport/src/sc_frame.rs",
+        "crates/bacnet-transport/src/sc/mod.rs",
+        "crates/bacnet-wasm/src/sc_frame.rs",
+        "crates/bacnet-wasm/src/sc_connection.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-transport/src/sc_frame.rs::tests::bvlc_result_ack_decode",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::bvlc_result_ack_decode",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::bvlc_result_nak_decode_with_details",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::bvlc_result_nak_decode_with_details",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::bvlc_result_nak_decode_without_details",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::bvlc_result_nak_decode_without_details",
+        "crates/bacnet-transport/src/sc/tests.rs::bvlc_result_success_no_disconnect",
+        "crates/bacnet-transport/src/sc/tests.rs::bvlc_result_ack_with_payload_no_disconnect",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_bvlc_result_ack_keeps_connected"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/sc_frame.rs::tests::bvlc_result_rejects_malformed_payloads",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::bvlc_result_rejects_malformed_payloads",
+        "crates/bacnet-transport/src/sc/tests.rs::bvlc_result_nak_disconnects",
+        "crates/bacnet-transport/src/sc/tests.rs::malformed_bvlc_result_disconnects",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_bvlc_result_nak_disconnects",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_malformed_bvlc_result_disconnects"
+      ],
+      "benchmarks": ["benchmarks/benches/sc_latency.rs"],
+      "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
+      "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport and WASM. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, and Data Options absence. Transport and WASM connection handling now keeps ACK benign, disconnects on NAK, and disconnects on malformed Result without generating a Result response. Remaining work includes request correlation, BVLC-Result generation for every AB.3.1.5 error situation, destination-option Must Understand NAK behavior, and hub/direct response-routing behavior."
     },
     {
       "id": "BACNET-AB-SC-HUB-CONNECTOR",
