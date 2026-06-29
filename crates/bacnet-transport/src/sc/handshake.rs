@@ -1,0 +1,107 @@
+//! Connect-Request / Connect-Accept handshake for BACnet/SC transports.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use bacnet_types::error::Error;
+use bytes::BytesMut;
+use tokio::sync::Mutex;
+use tracing::{debug, warn};
+
+use crate::sc_frame::{
+    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
+};
+
+use super::{heartbeat, ScConnection, ScConnectionState, WebSocketPort};
+
+/// Perform the Connect-Request / Connect-Accept handshake on a WebSocket.
+///
+/// Used for both the initial connection and reconnection attempts.
+pub(super) async fn perform_handshake<W: WebSocketPort>(
+    ws: &W,
+    conn: &Arc<Mutex<ScConnection>>,
+    timeout_ms: u64,
+) -> Result<(), Error> {
+    {
+        let mut c = conn.lock().await;
+        let msg = c.build_connect_request();
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &msg);
+        ws.send(&buf).await?;
+    }
+
+    let timeout_dur = Duration::from_millis(timeout_ms);
+    let accept_result = tokio::time::timeout(timeout_dur, async {
+        loop {
+            let data = ws.recv().await?;
+            if data.len() > conn.lock().await.max_bvlc_length as usize {
+                warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping");
+                continue;
+            }
+            let msg = match decode_sc_message(&data) {
+                Ok(msg) => msg,
+                Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
+                    let mut c = conn.lock().await;
+                    c.state = ScConnectionState::Disconnected;
+                    return Err(Error::Encoding(format!(
+                        "malformed BACnet/SC BVLC-Result during connect: {e}"
+                    )));
+                }
+                Err(e) => return Err(e),
+            };
+            if msg.function == ScFunction::ConnectAccept {
+                return Ok::<_, Error>(msg);
+            }
+            if msg.function == ScFunction::Result {
+                let result = decode_sc_bvlc_result(&msg);
+                let mut c = conn.lock().await;
+                c.state = ScConnectionState::Disconnected;
+                return match result {
+                    Ok(ScBvlcResult::Nak {
+                        result_for,
+                        error_class,
+                        error_code,
+                        error_details,
+                        ..
+                    }) => Err(Error::Encoding(format!(
+                        "BACnet/SC BVLC-Result NAK during connect: function={:#x} \
+                         error_class={} error_code={} details={}",
+                        result_for.to_raw(),
+                        error_class,
+                        error_code,
+                        error_details
+                    ))),
+                    Ok(ScBvlcResult::Ack { result_for }) => Err(Error::Encoding(format!(
+                        "unexpected BACnet/SC BVLC-Result ACK during connect: function={:#x}",
+                        result_for.to_raw()
+                    ))),
+                    Err(e) => Err(Error::Encoding(format!(
+                        "malformed BACnet/SC BVLC-Result during connect: {e}"
+                    ))),
+                };
+            }
+        }
+    })
+    .await;
+
+    match accept_result {
+        Ok(Ok(msg)) => {
+            let mut c = conn.lock().await;
+            if c.handle_connect_accept(&msg) {
+                debug!("BACnet/SC connected");
+                Ok(())
+            } else {
+                c.state = ScConnectionState::Disconnected;
+                Err(Error::Encoding(
+                    "BACnet/SC Connect-Accept did not match pending Connect-Request".into(),
+                ))
+            }
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            let mut c = conn.lock().await;
+            c.state = ScConnectionState::Disconnected;
+            Err(Error::Encoding("BACnet/SC connect timeout".into()))
+        }
+    }
+}

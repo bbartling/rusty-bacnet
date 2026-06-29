@@ -515,6 +515,69 @@ async fn test_failover_primary_succeeds_no_failover_used() {
     let _ = hub_task.await;
 }
 
+#[tokio::test]
+async fn test_reconnect_exhaustion_uses_failover_and_send_path() {
+    let (primary_client, primary_hub) = LoopbackWebSocket::pair();
+    let (failover_client, failover_hub) = LoopbackWebSocket::pair();
+
+    let client_vmac = [0x01; 6];
+    let primary_hub_vmac = [0x10; 6];
+    let failover_hub_vmac = [0x20; 6];
+
+    let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_connect_timeout_ms(100)
+        .with_heartbeat_interval_ms(5_000)
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 25,
+            max_delay_ms: 25,
+            max_retries: 1,
+        })
+        .with_failover(failover_client);
+
+    let primary_task = tokio::spawn(async move {
+        hub_accept(&primary_hub, primary_hub_vmac).await;
+        primary_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let primary_hub = primary_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+    assert_eq!(conn.lock().await.hub_vmac, Some(primary_hub_vmac));
+
+    let failover_task = tokio::spawn(async move {
+        hub_accept(&failover_hub, failover_hub_vmac).await;
+        failover_hub
+    });
+
+    drop(primary_hub);
+
+    let failover_hub = tokio::time::timeout(Duration::from_secs(2), failover_task)
+        .await
+        .expect("timed out waiting for failover connect")
+        .unwrap();
+
+    assert!(
+        wait_for_connection_state(&conn, ScConnectionState::Connected, Duration::from_secs(1))
+            .await
+    );
+    assert_eq!(conn.lock().await.hub_vmac, Some(failover_hub_vmac));
+
+    let payload = [0x01, 0x02, 0x03];
+    let dest_vmac = [0x33; 6];
+    transport.send_unicast(&payload, &dest_vmac).await.unwrap();
+
+    let data = tokio::time::timeout(Duration::from_secs(1), failover_hub.recv())
+        .await
+        .expect("timed out waiting for failover unicast")
+        .unwrap();
+    let msg = decode_sc_message(&data).unwrap();
+    assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(msg.destination_vmac, Some(dest_vmac));
+    assert_eq!(msg.payload.as_ref(), payload);
+
+    transport.stop().await.unwrap();
+}
+
 #[test]
 fn reconnect_config_default() {
     let config = ScReconnectConfig::default();
