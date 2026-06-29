@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "8a7c6da04e2a4cdd01115aade6dc90e7df48e3d1",
-  "review_scope": "Annex AB.6.2 BACnet/SC connection state cleanup for WebSocket close/error receive paths, heartbeat send failures, reconnect exhaustion, and browser close/error state reporting.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2 connection state behavior in prior AB-03 work. This tranche adds implementation evidence for transport-level WebSocket close/error cleanup without changing wire bytes.",
+  "repo_sha": "967d44c922aa6066c3d14c1e5a860a1c245e73dd",
+  "review_scope": "Annex AB.7 BACnet/SC TLS 1.3 and mutual TLS validation evidence.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` and AB.7.4 addenda/errata notes were reviewed for BACnet/SC TLS 1.3 and operational-certificate validation. This tranche adds TLS 1.3-only helper configuration and generated-certificate validation evidence without changing BVLC-SC wire bytes.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -658,10 +658,15 @@
         "crates/bacnet-transport/src/sc_tls.rs",
         "crates/bacnet-wasm/src/sc_websocket.rs",
         "crates/bacnet-wasm/src/ws_transport.rs",
-        "crates/rusty-bacnet/src/tls.rs"
+        "crates/rusty-bacnet/src/tls.rs",
+        "benchmarks/src/sc_helpers.rs",
+        "benchmarks/src/bin/bacnet_sc_hub.rs",
+        "benchmarks/src/bin/bacnet_device.rs"
       ],
       "positive_tests": [
-        "benchmarks/tests/sc_mtls.rs",
+        "benchmarks/tests/sc_mtls.rs::sc_mtls_connection_succeeds",
+        "benchmarks/tests/sc_mtls.rs::sc_mtls_helpers_roundtrip",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_negotiates_tls13",
         "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_subprotocol_handshake_succeeds",
         "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_offer_accepts_hub_protocol_in_list",
         "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_accepts_secure_websocket_scheme",
@@ -670,6 +675,16 @@
         "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_wss_uri_accepts_secure_websocket_scheme"
       ],
       "negative_tests": [
+        "benchmarks/tests/sc_mtls.rs::sc_mtls_rejects_expired_client_cert",
+        "benchmarks/tests/sc_mtls.rs::sc_mtls_rejects_not_yet_valid_client_cert",
+        "benchmarks/tests/sc_mtls.rs::sc_mtls_rejects_unauthenticated_client",
+        "benchmarks/tests/sc_mtls.rs::sc_mtls_rejects_client_cert_from_wrong_ca",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_config_rejects_malformed_cert_or_key",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_config_rejects_mismatched_cert_key_pairs",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_rejects_expired_server_cert",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_rejects_not_yet_valid_server_cert",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_rejects_tls12_only_client",
+        "benchmarks/tests/sc_mtls.rs::sc_tls_rejects_wrong_server_name",
         "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_rejects_missing_or_wrong_subprotocol",
         "benchmarks/tests/sc_websocket.rs::sc_websocket_text_frame_closes_with_unsupported_data",
         "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_error_response_is_bad_request",
@@ -684,7 +699,7 @@
       ],
       "benchmarks": ["benchmarks/benches/sc_mtls_latency.rs", "benchmarks/benches/sc_mtls_throughput.rs"],
       "public_claims": ["README BACnet/SC WebSocket+TLS", "docs/python-api.md BACnet/SC"],
-      "notes": "AB-04 adds native and WASM WebSocket evidence for configured-peer URI scheme rejection before dialing unless the scheme is wss, native and WASM initiating-peer verification that the selected hub subprotocol is hub.bsc.bacnet.org, accepting-hub rejection of missing/wrong subprotocol offers, successful real TLS WebSocket hub subprotocol negotiation, real TLS WebSocket text-frame close with status 1003, and browser-adapter close/error handling for non-ArrayBuffer messages. Native and hub adapters already send BVLC-SC payloads as binary WebSocket frames and ignore Ping/Pong as optional WebSocket control traffic. Direct WebSocket connections using dc.bsc.bacnet.org remain deferred/unsupported because direct connections are not implemented or publicly claimed. The combined AB.7 row remains implementation-present-needs-security-tests until the AB-05 TLS 1.3/mTLS certificate validation matrix is fully evidenced; server-auth-only examples must remain clearly non-conformant/experimental unless mTLS requirements are satisfied."
+      "notes": "AB-04 adds native and WASM WebSocket evidence for configured-peer URI scheme rejection before dialing unless the scheme is wss, native and WASM initiating-peer verification that the selected hub subprotocol is hub.bsc.bacnet.org, accepting-hub rejection of missing/wrong subprotocol offers, successful real TLS WebSocket hub subprotocol negotiation, real TLS WebSocket text-frame close with status 1003, and browser-adapter close/error handling for non-ArrayBuffer messages. Native and hub adapters already send BVLC-SC payloads as binary WebSocket frames and ignore Ping/Pong as optional WebSocket control traffic. AB-05 adds TLS 1.3-only native Python hub configuration, TLS 1.3-only benchmark/test helper configuration, generated-certificate evidence for valid mTLS, missing client certificate, wrong client issuer, expired/not-yet-valid client and server certificates, wrong server SAN, malformed PEM, mismatched cert/key pairs, explicit TLS 1.3 negotiation, and TLS 1.2-only client rejection. The benchmark SC hub now enforces client certificates when --ca is supplied. Direct WebSocket connections using dc.bsc.bacnet.org remain deferred/unsupported because direct connections are not implemented or publicly claimed. The combined AB.7 row remains implementation-present-needs-security-tests until TLS 1.3 application profile/cipher-suite evidence, revocation behavior when configured, production file-path helper tests, and any optional certificate identity policy are fully evidenced; server-auth-only examples remain documented as non-conformant example/benchmark mode."
     },
     {
       "id": "BACNET-AB-SC-HEARTBEAT",

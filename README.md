@@ -176,6 +176,7 @@ async def main():
     hub = ScHub(
         listen="127.0.0.1:0",
         cert="hub-cert.pem", key="hub-key.pem",
+        ca_cert="ca-cert.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
     )
     await hub.start()
@@ -212,6 +213,11 @@ async def main():
 
 asyncio.run(main())
 ```
+
+For Annex AB production deployments, configure the hub with a trusted issuer CA
+(`ca_cert`) and configure every SC node with its own certificate/key pair.
+Omitting `ca_cert` leaves the hub in server-auth-only example mode, which is not
+claimed as BACnet/SC mTLS conformance evidence.
 
 ## CLI Tool
 

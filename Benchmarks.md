@@ -60,6 +60,10 @@
 
 ### 1.4 BACnet/SC — TLS WebSocket (Server Auth Only)
 
+Server-auth-only SC measurements are retained as a benchmark comparison mode.
+They are not BACnet/SC mTLS conformance evidence; secure Annex AB deployments
+use TLS 1.3 with mutual TLS as shown in the mTLS benchmarks.
+
 #### Latency
 
 | Operation | Latency |
@@ -424,7 +428,7 @@ comparable to pure Rust's single-threaded 48K/s.
 - **Encoding is fast**: Full RP encode/decode stack in ~82 ns (CPU-bound, no allocation hot paths thanks to `Bytes` zero-copy)
 - **BIP throughput at ~48K/s**: Per-request task spawning enables concurrent `db.read()` — reads and writes now achieve equal throughput
 - **BIP6 matches BIP**: IPv6 adds <1% latency overhead vs IPv4 — effectively identical performance
-- **SC overhead is ~2.2×**: TLS WebSocket adds ~26 µs per operation vs raw UDP — acceptable for secure deployments
+- **SC overhead is ~2.2×**: TLS WebSocket adds ~26 µs per operation vs raw UDP; secure Annex AB deployments use TLS 1.3 with mutual TLS
 - **Object count had little effect in this run**: 100 to 5,000 objects stayed near 19 µs p50 across recorded sizes
 - **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions (native) and 100 (Docker)
 - **Historical run completed cleanly**: No timeouts, panics, or dropped messages were observed in the recorded run
