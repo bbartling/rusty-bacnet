@@ -4,7 +4,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `08cc5c5ef5996be9c27ffdb01c9fdd76578dd9f8`
+- Implementation evidence SHA reviewed: `b3e4d9ad6ecc81a1aa42746e2a1de98f043d0a93`
 - Scope: Annex AB.6.3 BACnet/SC heartbeat initiation and liveness behavior for browser/WASM clients, covering post-Connect-Accept heartbeat tracking, monotonic Performance-clock scheduling, no-VMAC Heartbeat-ACK correlation, timeout/send-failure fail-closed disconnect, receive-loop/timer cleanup, and pending confirmed-service Promise rejection on terminal disconnect paths.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.14 Heartbeat-Request, AB.2.15 Heartbeat-ACK, Annex AB.6.3 heartbeat interval/timeout behavior, and Table AB-1 BVLC-SC function constraints. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.3 browser heartbeat behavior covered by this tranche.
 
