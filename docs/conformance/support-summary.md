@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `88968d0c3ee2e55a34ba7f258ca26d7d379bc98b`
-- Scope: Annex AB.5 BACnet/SC hub connector and hub forwarding evidence.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.1, AB.5.3.1-AB.5.3.3, AB.5.4, AB.3.1.4, and AB.6.2.1 hub forwarding and connection semantics. The ASHRAE Standards Addenda page was checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs; Addendum cc changes AB.5.3.1 hub-connection/Network Port metadata but does not change the unicast/broadcast forwarding field transformations covered by this tranche.
+- Implementation evidence SHA reviewed: `4bbff541adac97d6ba78066ea6cb4342f10a75e5`
+- Scope: Annex AB.6.2.3 BACnet/SC accepting-peer duplicate Device UUID replacement at the hub.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2.2 and AB.6.2.3 duplicate Device UUID replacement, VMAC-collision NAK behavior, and initiating-peer Random-48 reselection context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. The listed 135-2020 addenda/errata text was searched for AB.6.2, Device UUID, NODE_DUPLICATE_VMAC, VMAC collision, Random-48, Connect-Request, and Connect-Accept. Base 135-2020 errata corrects an AB.6.2.3 Disconnect-ACK peer-label typo; Addendum cc references AB.6.2.2/AB.6.2.3 for Network Port/hub-connection metadata; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.6.2.3 duplicate Device UUID or VMAC-collision transitions covered by this tranche.
 
 ## Counts
 
