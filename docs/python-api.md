@@ -267,8 +267,8 @@ client = BACnetClient(
     sc_ca_cert=None,             # CA certificate path
     sc_client_cert=None,         # Client certificate path
     sc_client_key=None,          # Client private key path
-    sc_heartbeat_interval_ms=None,
-    sc_heartbeat_timeout_ms=None,
+    sc_heartbeat_interval_ms=None,  # 3000..=300000 ms when configured
+    sc_heartbeat_timeout_ms=None,   # must be greater than interval
 )
 ```
 
@@ -1487,3 +1487,6 @@ server = BACnetServer(
     sc_client_key="server-key.pem",
 )
 ```
+
+Production BACnet/SC clients validate the configured heartbeat interval as `3000..=300000`
+ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.

@@ -156,9 +156,8 @@ async fn sc_result_nak_closes_receive_loop_before_heartbeat() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(500)
-        .with_heartbeat_timeout_ms(5000);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(500, 5000);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -188,9 +187,8 @@ async fn malformed_wire_bvlc_result_closes_receive_loop() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(500)
-        .with_heartbeat_timeout_ms(5000);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(500, 5000);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;

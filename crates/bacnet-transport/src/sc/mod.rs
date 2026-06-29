@@ -315,6 +315,9 @@ impl ScConnection {
 // BACnet/SC Transport
 // ---------------------------------------------------------------------------
 
+const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
+
 /// BACnet/SC transport implementing [`TransportPort`].
 pub struct ScTransport<W: WebSocketPort> {
     ws: Option<W>,
@@ -329,6 +332,8 @@ pub struct ScTransport<W: WebSocketPort> {
     heartbeat_timeout_ms: u64,
     failover_ws: Option<W>,
     reconnect_config: Option<ScReconnectConfig>,
+    #[cfg(test)]
+    allow_test_heartbeat_timing: bool,
 }
 
 impl<W: WebSocketPort> ScTransport<W> {
@@ -341,10 +346,12 @@ impl<W: WebSocketPort> ScTransport<W> {
             connection: None,
             recv_task: None,
             connect_timeout_ms: 10_000,
-            heartbeat_interval_ms: 30_000,
-            heartbeat_timeout_ms: 60_000,
+            heartbeat_interval_ms: DEFAULT_HEARTBEAT_INTERVAL_MS,
+            heartbeat_timeout_ms: DEFAULT_HEARTBEAT_TIMEOUT_MS,
             failover_ws: None,
             reconnect_config: None,
+            #[cfg(test)]
+            allow_test_heartbeat_timing: false,
         }
     }
 
@@ -361,14 +368,28 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 
     /// Set the heartbeat send interval in milliseconds (builder-style).
+    ///
+    /// Production transports validate this at [`TransportPort::start`] against
+    /// the Annex AB.6.3 configurable heartbeat timeout range of 3..300 seconds.
     pub fn with_heartbeat_interval_ms(mut self, ms: u64) -> Self {
         self.heartbeat_interval_ms = ms;
         self
     }
 
     /// Set the heartbeat ack timeout in milliseconds (builder-style).
+    ///
+    /// This disconnect timeout must be greater than the heartbeat interval so
+    /// the peer has a chance to send a Heartbeat-ACK.
     pub fn with_heartbeat_timeout_ms(mut self, ms: u64) -> Self {
         self.heartbeat_timeout_ms = ms;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_heartbeat_timing_ms(mut self, interval_ms: u64, timeout_ms: u64) -> Self {
+        self.heartbeat_interval_ms = interval_ms;
+        self.heartbeat_timeout_ms = timeout_ms;
+        self.allow_test_heartbeat_timing = true;
         self
     }
 
@@ -394,10 +415,37 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 }
 
+fn validate_heartbeat_timing_ms(interval_ms: u64, timeout_ms: u64) -> Result<(), Error> {
+    if !(3_000..=300_000).contains(&interval_ms) {
+        return Err(Error::OutOfRange(format!(
+            "BACnet/SC heartbeat interval must be in the configurable Annex AB.6.3 range \
+             of 3..300 seconds (3000..=300000 ms), got {interval_ms} ms"
+        )));
+    }
+
+    if timeout_ms <= interval_ms {
+        return Err(Error::OutOfRange(format!(
+            "BACnet/SC heartbeat disconnect timeout must be greater than the heartbeat \
+             interval so a Heartbeat-ACK can arrive, got interval={interval_ms} ms \
+             timeout={timeout_ms} ms"
+        )));
+    }
+
+    Ok(())
+}
+
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         /// NPDU receive channel capacity — smaller than BIP/Ethernet since SC is hub-relayed.
         const NPDU_CHANNEL_CAPACITY: usize = 64;
+
+        #[cfg(test)]
+        let validate_heartbeat_timing = !self.allow_test_heartbeat_timing;
+        #[cfg(not(test))]
+        let validate_heartbeat_timing = true;
+        if validate_heartbeat_timing {
+            validate_heartbeat_timing_ms(self.heartbeat_interval_ms, self.heartbeat_timeout_ms)?;
+        }
 
         let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 

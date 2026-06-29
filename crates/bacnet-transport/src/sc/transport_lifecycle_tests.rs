@@ -120,9 +120,8 @@ async fn sc_heartbeat_sent_periodically() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(200)
-        .with_heartbeat_timeout_ms(5000);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(200, 5000);
 
     // Hub accepts the connection, then we interact with the hub ws
     let hub_task = tokio::spawn(async move {
@@ -168,9 +167,8 @@ async fn sc_heartbeat_ack_requires_matching_message_id() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(100)
-        .with_heartbeat_timeout_ms(300);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -218,9 +216,8 @@ async fn sc_heartbeat_ack_rejects_vmac_fields() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(100)
-        .with_heartbeat_timeout_ms(300);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -268,9 +265,8 @@ async fn sc_inbound_bvlc_activity_defers_client_heartbeat() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(100)
-        .with_heartbeat_timeout_ms(1000);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 1000);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -318,9 +314,8 @@ async fn sc_inbound_bvlc_activity_resets_heartbeat_timeout() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(100)
-        .with_heartbeat_timeout_ms(300);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -376,9 +371,8 @@ async fn sc_heartbeat_timeout_disconnects() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac)
-        .with_heartbeat_interval_ms(100)
-        .with_heartbeat_timeout_ms(300);
+    let mut transport =
+        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
 
     // Hub accepts the connection but will NOT respond to heartbeats
     let hub_task = tokio::spawn(async move {
@@ -399,6 +393,40 @@ async fn sc_heartbeat_timeout_disconnects() {
     drop(c);
 
     transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_start_rejects_heartbeat_interval_below_annex_ab_range() {
+    let (ws_client, _ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_heartbeat_interval_ms(2999)
+        .with_heartbeat_timeout_ms(60_000);
+
+    let result = transport.start().await;
+
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("3..300 seconds"),
+        "expected Annex AB.6.3 range error, got: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn sc_start_rejects_heartbeat_disconnect_timeout_at_interval() {
+    let (ws_client, _ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_heartbeat_interval_ms(3_000)
+        .with_heartbeat_timeout_ms(3_000);
+
+    let result = transport.start().await;
+
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("disconnect timeout must be greater"),
+        "expected disconnect timeout ordering error, got: {err_msg}"
+    );
 }
 
 #[tokio::test]
