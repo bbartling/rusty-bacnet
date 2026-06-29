@@ -4,20 +4,20 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `dc4f19ae3c365e616ac05ec0f833977686e66f81`
-- Scope: Annex AB.6.3 BACnet/SC heartbeat behavior, including native and WASM construction/validation evidence, native configurable heartbeat timing validation, native timeout/send-error disconnect behavior, inbound BVLC activity reset/deferral behavior, and hub-initiated heartbeat ACK timeout enforcement.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.3 BACnet/SC heartbeat request/ack, peer liveness, configurable heartbeat timeout range, and disconnect behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.3 heartbeat request/ack, configurable heartbeat timeout range, liveness, timeout, or disconnect behavior covered by this tranche.
+- Implementation evidence SHA reviewed: `83b712871e6fec8fda8fe2529fd8d65efe2d65fb`
+- Scope: Annex AB.3.4 BACnet/SC Data Options receive-side data_attributes plumbing, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, router local-delivery preservation, and non-SC empty-attribute receive behavior.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.3 Data Options, AB.2.3.1 Secure Path, AB.3.1.4 Must Understand processing, AB.3.4 NPDU Exchange data_attributes mapping, and Clause 6.5 data_attributes forwarding/ignore behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. Addendum 135-2020cf renames the Data Options bit 6 label to Every Segment without changing this receive-side data_attributes mapping; no checked addendum or erratum changes the AB.3.4 receive-side behavior covered by this tranche.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
-| Priority | P0 | 14 |
+| Priority | P0 | 15 |
 | Priority | P1 | 10 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 8 |
+| Status | implementation-present-needs-conformance-tests | 9 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
@@ -62,6 +62,7 @@
 | `BACNET-U-IPV6-BVLL` | Annex U | P2 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-AB-SC-BVLC-RESULT` | Annex AB.2.4 | P0 | implementation-present-needs-conformance-tests | 2 |
+| `BACNET-AB-SC-DATA-ATTRIBUTES` | Annex AB.3.4 | P0 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-AB-SC-CONNECTION-STATE` | Annex AB.6.2 | P0 | implementation-present-needs-state-machine-audit | 2 |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | supported-with-clause-evidence | 2 |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
