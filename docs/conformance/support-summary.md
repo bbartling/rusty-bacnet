@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `f1e2b01755fca66ebb9f6964a1a0b008f32dc007`
-- Scope: Annex AB.7 BACnet/SC TLS 1.3 and mutual TLS validation evidence.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` and AB.7.4 addenda/errata notes were reviewed for BACnet/SC TLS 1.3 and operational-certificate validation. This tranche adds TLS 1.3-only helper configuration and generated-certificate validation evidence without changing BVLC-SC wire bytes.
+- Implementation evidence SHA reviewed: `88968d0c3ee2e55a34ba7f258ca26d7d379bc98b`
+- Scope: Annex AB.5 BACnet/SC hub connector and hub forwarding evidence.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.1, AB.5.3.1-AB.5.3.3, AB.5.4, AB.3.1.4, and AB.6.2.1 hub forwarding and connection semantics. The ASHRAE Standards Addenda page was checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs; Addendum cc changes AB.5.3.1 hub-connection/Network Port metadata but does not change the unicast/broadcast forwarding field transformations covered by this tranche.
 
 ## Counts
 
