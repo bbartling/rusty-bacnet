@@ -150,6 +150,20 @@ impl ScConnection {
         }
     }
 
+    /// Build a Heartbeat-ACK message.
+    /// AB.2.15.1: No Originating/Destination Virtual Address.
+    pub fn build_heartbeat_ack(&self, request_message_id: u16) -> ScMessage {
+        ScMessage {
+            function: ScFunction::HeartbeatAck,
+            message_id: request_message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        }
+    }
+
     /// Build an Encapsulated-NPDU message.
     pub fn build_encapsulated_npdu(&mut self, dest_vmac: Vmac, npdu: &[u8]) -> ScMessage {
         ScMessage {
@@ -553,6 +567,19 @@ mod tests {
         assert!(hb.originating_vmac.is_none());
         assert!(hb.destination_vmac.is_none());
         assert!(hb.payload.is_empty());
+    }
+
+    #[test]
+    fn heartbeat_ack() {
+        let conn = ScConnection::new([1; 6]);
+        let ack = conn.build_heartbeat_ack(42);
+        assert_eq!(ack.function, ScFunction::HeartbeatAck);
+        assert_eq!(ack.message_id, 42);
+        // AB.2.15.1: no VMACs on HeartbeatAck
+        assert!(ack.originating_vmac.is_none());
+        assert!(ack.destination_vmac.is_none());
+        assert!(ack.data_options.is_empty());
+        assert!(ack.payload.is_empty());
     }
 
     #[test]

@@ -692,12 +692,31 @@
       "priority": "P0",
       "requirement_summary": "BACnet/SC heartbeat request/ack behavior, timeout range, disconnect, and retry behavior are validated.",
       "status": "implementation-present-needs-timeout-tests",
-      "code_anchors": ["crates/bacnet-transport/src/sc/mod.rs", "crates/bacnet-transport/src/sc_frame.rs"],
-      "positive_tests": [],
-      "negative_tests": [],
+      "code_anchors": [
+        "crates/bacnet-transport/src/sc/mod.rs",
+        "crates/bacnet-transport/src/sc_frame.rs",
+        "crates/bacnet-transport/src/sc_hub.rs",
+        "crates/bacnet-wasm/src/client.rs",
+        "crates/bacnet-wasm/src/sc_connection.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-transport/src/sc/tests.rs::build_heartbeat",
+        "crates/bacnet-transport/src/sc/tests.rs::heartbeat_ack_has_no_vmacs",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_sent_periodically",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_inbound_bvlc_activity_defers_client_heartbeat",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_inbound_bvlc_activity_resets_heartbeat_timeout",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_heartbeat_send_error_transitions_to_disconnected",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_ack_rejects_vmac_fields",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_ack_requires_matching_message_id",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_timeout_disconnects"
+      ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
-      "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms"],
-      "notes": "Needs fast deterministic timeout tests."
+      "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms"],
+      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, and send-error disconnect behavior. The row remains open because hub-initiated heartbeat ACK timeout enforcement, WASM/browser keep-alive initiation, configurable timeout range validation or production-mode rejection/clamping, and fully deterministic timeout tests still need follow-up."
     }
   ]
 }

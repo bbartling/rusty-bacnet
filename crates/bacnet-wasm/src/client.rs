@@ -327,15 +327,7 @@ impl BACnetScClient {
 
                 // Handle heartbeat
                 if sc_msg.function == ScFunction::HeartbeatRequest {
-                    let ack = crate::sc_frame::ScMessage {
-                        function: ScFunction::HeartbeatAck,
-                        message_id: sc_msg.message_id,
-                        originating_vmac: sc_msg.destination_vmac,
-                        destination_vmac: sc_msg.originating_vmac,
-                        dest_options: Vec::new(),
-                        data_options: Vec::new(),
-                        payload: bytes::Bytes::new(),
-                    };
+                    let ack = connection.borrow().build_heartbeat_ack(sc_msg.message_id);
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &ack);
                     if let Some(ws) = ws.borrow().as_ref() {

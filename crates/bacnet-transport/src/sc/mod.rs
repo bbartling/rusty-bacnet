@@ -20,13 +20,11 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod heartbeat;
 mod loopback;
+mod reconnect;
 pub use loopback::LoopbackWebSocket;
-
-fn is_bvlc_result_wire(data: &[u8]) -> bool {
-    data.first()
-        .is_some_and(|function| *function == ScFunction::Result.to_raw())
-}
+pub use reconnect::ScReconnectConfig;
 
 // ---------------------------------------------------------------------------
 // WebSocket abstraction
@@ -203,7 +201,7 @@ impl ScConnection {
         }
     }
 
-    /// Build a Heartbeat-ACK message. Per spec AB.2.11, no VMACs.
+    /// Build a Heartbeat-ACK message. Per Annex AB.2.15, no VMACs.
     pub fn build_heartbeat_ack(&self, request_message_id: u16) -> ScMessage {
         ScMessage {
             function: ScFunction::HeartbeatAck,
@@ -303,31 +301,6 @@ impl ScConnection {
                 None
             }
             _ => None,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Reconnection configuration
-// ---------------------------------------------------------------------------
-
-/// Configuration for SC transport reconnection with exponential backoff.
-#[derive(Debug, Clone)]
-pub struct ScReconnectConfig {
-    /// Initial delay before first reconnect attempt (ms).
-    pub initial_delay_ms: u64,
-    /// Maximum delay between reconnect attempts (ms).
-    pub max_delay_ms: u64,
-    /// Maximum number of reconnect attempts before giving up.
-    pub max_retries: u32,
-}
-
-impl Default for ScReconnectConfig {
-    fn default() -> Self {
-        Self {
-            initial_delay_ms: 10_000,
-            max_delay_ms: 600_000,
-            max_retries: 10,
         }
     }
 }
@@ -445,7 +418,7 @@ async fn perform_handshake<W: WebSocketPort>(
             }
             let msg = match decode_sc_message(&data) {
                 Ok(msg) => msg,
-                Err(e) if is_bvlc_result_wire(&data) => {
+                Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
                     let mut c = conn.lock().await;
                     c.state = ScConnectionState::Disconnected;
                     return Err(Error::Encoding(format!(
@@ -580,7 +553,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 let mut hb_interval =
                     tokio::time::interval(Duration::from_millis(heartbeat_interval_ms));
                 hb_interval.tick().await; // consume the first immediate tick
-                let mut last_heartbeat_ack = Instant::now();
+                let mut last_bvlc_received = Instant::now();
+                let mut pending_heartbeat_id = None;
 
                 loop {
                     tokio::select! {
@@ -593,7 +567,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     }
                                     let msg = match decode_sc_message(&data) {
                                         Ok(m) => m,
-                                        Err(e) if is_bvlc_result_wire(&data) => {
+                                        Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
                                             warn!("Malformed wire-level BACnet/SC BVLC-Result: {e}");
                                             let mut c = conn.lock().await;
                                             c.state = ScConnectionState::Disconnected;
@@ -605,11 +579,18 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     };
 
-                                    // Handle HeartbeatAck — update last_heartbeat_ack timestamp
                                     if msg.function == ScFunction::HeartbeatAck {
-                                        last_heartbeat_ack = Instant::now();
+                                        if heartbeat::ack_matches_outstanding(&msg, pending_heartbeat_id) {
+                                            last_bvlc_received = Instant::now();
+                                            pending_heartbeat_id = None;
+                                        } else {
+                                            warn!("BACnet/SC ignored unexpected Heartbeat-ACK");
+                                        }
                                         continue;
                                     }
+
+                                    last_bvlc_received = Instant::now();
+                                    pending_heartbeat_id = None;
 
                                     // Handle Heartbeat-Request with Heartbeat-ACK
                                     if msg.function == ScFunction::HeartbeatRequest {
@@ -674,24 +655,26 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             }
                         }
                         _ = hb_interval.tick() => {
-                            // Send heartbeat request first
-                            let mut c = conn.lock().await;
-                            let hb_msg = c.build_heartbeat();
-                            let mut buf = BytesMut::new();
-                            encode_sc_message(&mut buf, &hb_msg);
-                            drop(c);
-                            if let Err(e) = ws_clone.send(&buf).await {
-                                warn!("BACnet/SC heartbeat send error: {}", e);
-                                let mut c = conn.lock().await;
-                                c.state = ScConnectionState::Disconnected;
-                                break;
-                            }
-                            // Check heartbeat timeout: has the hub acked within
-                            // the timeout window? Checking after send ensures the
-                            // first heartbeat gets a full timeout period for a reply.
-                            if last_heartbeat_ack.elapsed()
-                                > Duration::from_millis(heartbeat_timeout_ms)
+                            let idle_for = last_bvlc_received.elapsed();
+                            if idle_for >= Duration::from_millis(heartbeat_interval_ms)
+                                && pending_heartbeat_id.is_none()
                             {
+                                let mut c = conn.lock().await;
+                                let hb_msg = c.build_heartbeat();
+                                let mut buf = BytesMut::new();
+                                encode_sc_message(&mut buf, &hb_msg);
+                                let heartbeat_message_id = hb_msg.message_id;
+                                drop(c);
+                                if let Err(e) = ws_clone.send(&buf).await {
+                                    warn!("BACnet/SC heartbeat send error: {}", e);
+                                    let mut c = conn.lock().await;
+                                    c.state = ScConnectionState::Disconnected;
+                                    break;
+                                }
+                                pending_heartbeat_id = Some(heartbeat_message_id);
+                            }
+
+                            if idle_for > Duration::from_millis(heartbeat_timeout_ms) {
                                 warn!("BACnet/SC heartbeat timeout — disconnecting");
                                 let mut c = conn.lock().await;
                                 c.state = ScConnectionState::Disconnected;

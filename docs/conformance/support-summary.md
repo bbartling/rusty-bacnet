@@ -64,7 +64,7 @@
 | `BACNET-AB-SC-CONNECTION-STATE` | Annex AB.6.2 | P0 | implementation-present-needs-state-machine-audit | 2 |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
-| `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 1 |
+| `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 2 |
 
 ## Follow-Up Source
 

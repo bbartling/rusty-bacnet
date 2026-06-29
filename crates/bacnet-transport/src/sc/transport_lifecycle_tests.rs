@@ -25,6 +25,21 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     ws_hub.send(&buf).await.unwrap();
 }
 
+async fn wait_for_connection_state(
+    conn: &Arc<Mutex<ScConnection>>,
+    expected: ScConnectionState,
+    timeout: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if conn.lock().await.state == expected {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    false
+}
+
 #[tokio::test]
 async fn sc_connect_timeout() {
     let (ws_client, _ws_server) = LoopbackWebSocket::pair();
@@ -119,6 +134,98 @@ async fn sc_heartbeat_sent_periodically() {
     let ack = ScMessage {
         function: ScFunction::HeartbeatAck,
         message_id: msg.message_id,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &ack);
+    ws_hub.send(&buf).await.unwrap();
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_heartbeat_ack_requires_matching_message_id() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_heartbeat_interval_ms(100)
+        .with_heartbeat_timeout_ms(300);
+
+    let hub_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+
+    let data = tokio::time::timeout(Duration::from_millis(300), ws_hub.recv())
+        .await
+        .expect("timed out waiting for heartbeat")
+        .unwrap();
+    let msg = decode_sc_message(&data).unwrap();
+    assert_eq!(msg.function, ScFunction::HeartbeatRequest);
+
+    let ack = ScMessage {
+        function: ScFunction::HeartbeatAck,
+        message_id: msg.message_id.wrapping_add(1),
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &ack);
+    ws_hub.send(&buf).await.unwrap();
+
+    assert!(
+        wait_for_connection_state(
+            &conn,
+            ScConnectionState::Disconnected,
+            Duration::from_millis(500)
+        )
+        .await
+    );
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_heartbeat_ack_rejects_vmac_fields() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_heartbeat_interval_ms(100)
+        .with_heartbeat_timeout_ms(300);
+
+    let hub_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+
+    let data = tokio::time::timeout(Duration::from_millis(300), ws_hub.recv())
+        .await
+        .expect("timed out waiting for heartbeat")
+        .unwrap();
+    let msg = decode_sc_message(&data).unwrap();
+    assert_eq!(msg.function, ScFunction::HeartbeatRequest);
+
+    let ack = ScMessage {
+        function: ScFunction::HeartbeatAck,
+        message_id: msg.message_id,
         originating_vmac: Some(hub_vmac),
         destination_vmac: Some(client_vmac),
         dest_options: Vec::new(),
@@ -128,6 +235,122 @@ async fn sc_heartbeat_sent_periodically() {
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &ack);
     ws_hub.send(&buf).await.unwrap();
+
+    assert!(
+        wait_for_connection_state(
+            &conn,
+            ScConnectionState::Disconnected,
+            Duration::from_millis(500)
+        )
+        .await
+    );
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_inbound_bvlc_activity_defers_client_heartbeat() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_heartbeat_interval_ms(100)
+        .with_heartbeat_timeout_ms(1000);
+
+    let hub_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let hb = ScMessage {
+        function: ScFunction::HeartbeatRequest,
+        message_id: 0x55,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut hb_buf = BytesMut::new();
+    encode_sc_message(&mut hb_buf, &hb);
+    ws_hub.send(&hb_buf).await.unwrap();
+
+    let data = tokio::time::timeout(Duration::from_millis(100), ws_hub.recv())
+        .await
+        .expect("timed out waiting for heartbeat ack")
+        .unwrap();
+    let ack = decode_sc_message(&data).unwrap();
+    assert_eq!(ack.function, ScFunction::HeartbeatAck);
+    assert_eq!(ack.message_id, 0x55);
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(80), ws_hub.recv())
+            .await
+            .is_err(),
+        "client heartbeat was sent before the connection was idle"
+    );
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_inbound_bvlc_activity_resets_heartbeat_timeout() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_heartbeat_interval_ms(100)
+        .with_heartbeat_timeout_ms(300);
+
+    let hub_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let hb = ScMessage {
+        function: ScFunction::HeartbeatRequest,
+        message_id: 0x66,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut hb_buf = BytesMut::new();
+    encode_sc_message(&mut hb_buf, &hb);
+    ws_hub.send(&hb_buf).await.unwrap();
+
+    let mut received_ack = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let data = tokio::time::timeout(remaining, ws_hub.recv())
+            .await
+            .expect("timed out waiting for heartbeat ack")
+            .unwrap();
+        let msg = decode_sc_message(&data).unwrap();
+        if msg.function == ScFunction::HeartbeatAck && msg.message_id == 0x66 {
+            received_ack = true;
+            break;
+        }
+    }
+    assert!(
+        received_ack,
+        "transport did not acknowledge inbound heartbeat"
+    );
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(conn.lock().await.state, ScConnectionState::Connected);
 
     transport.stop().await.unwrap();
 }
