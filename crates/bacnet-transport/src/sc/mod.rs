@@ -17,10 +17,10 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, is_broadcast_vmac, ScBvlcResult,
     ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod connect_result;
 mod data_attributes;
 mod failover;
 mod handshake;
@@ -173,36 +173,6 @@ impl ScConnection {
         self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
-    }
-
-    /// Handle a BVLC-Result received while waiting for Connect-Accept.
-    ///
-    /// AB.6.2.2 requires an initiating peer that receives a
-    /// NODE_DUPLICATE_VMAC NAK for its Connect-Request to select a new
-    /// Random-48 VMAC before any subsequent connection attempt.
-    pub fn handle_connect_result(&mut self, result: &ScBvlcResult) -> Result<bool, Error> {
-        self.state = ScConnectionState::Disconnected;
-        self.pending_connect_message_id = None;
-
-        let ScBvlcResult::Nak {
-            result_for,
-            error_class,
-            error_code,
-            ..
-        } = result
-        else {
-            return Ok(false);
-        };
-
-        if *result_for == ScFunction::ConnectRequest
-            && *error_class == ErrorClass::COMMUNICATION.to_raw()
-            && *error_code == ErrorCode::NODE_DUPLICATE_VMAC.to_raw()
-        {
-            self.local_vmac = generate_random48_vmac()?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
     }
 
     /// Build a Disconnect-Request message (no VMACs).
@@ -371,9 +341,6 @@ pub(crate) fn generate_random48_vmac() -> Result<Vmac, Error> {
 // BACnet/SC Transport
 // ---------------------------------------------------------------------------
 
-const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
-const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
-
 /// BACnet/SC transport implementing [`TransportPort`].
 pub struct ScTransport<W: WebSocketPort> {
     ws: Option<W>,
@@ -402,8 +369,8 @@ impl<W: WebSocketPort> ScTransport<W> {
             connection: None,
             recv_task: None,
             connect_timeout_ms: 10_000,
-            heartbeat_interval_ms: DEFAULT_HEARTBEAT_INTERVAL_MS,
-            heartbeat_timeout_ms: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+            heartbeat_interval_ms: heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS,
+            heartbeat_timeout_ms: heartbeat::DEFAULT_HEARTBEAT_TIMEOUT_MS,
             failover_ws: None,
             reconnect_config: None,
             #[cfg(test)]
@@ -471,25 +438,6 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 }
 
-fn validate_heartbeat_timing_ms(interval_ms: u64, timeout_ms: u64) -> Result<(), Error> {
-    if !(3_000..=300_000).contains(&interval_ms) {
-        return Err(Error::OutOfRange(format!(
-            "BACnet/SC heartbeat interval must be in the configurable Annex AB.6.3 range \
-             of 3..300 seconds (3000..=300000 ms), got {interval_ms} ms"
-        )));
-    }
-
-    if timeout_ms <= interval_ms {
-        return Err(Error::OutOfRange(format!(
-            "BACnet/SC heartbeat disconnect timeout must be greater than the heartbeat \
-             interval so a Heartbeat-ACK can arrive, got interval={interval_ms} ms \
-             timeout={timeout_ms} ms"
-        )));
-    }
-
-    Ok(())
-}
-
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         /// NPDU receive channel capacity — smaller than BIP/Ethernet since SC is hub-relayed.
@@ -500,7 +448,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         #[cfg(not(test))]
         let validate_heartbeat_timing = true;
         if validate_heartbeat_timing {
-            validate_heartbeat_timing_ms(self.heartbeat_interval_ms, self.heartbeat_timeout_ms)?;
+            heartbeat::validate_heartbeat_timing_ms(
+                self.heartbeat_interval_ms,
+                self.heartbeat_timeout_ms,
+            )?;
         }
 
         let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
