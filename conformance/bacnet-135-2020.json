@@ -1,8 +1,8 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "d249bc7ae61783e96649108a440cc2e7aa51b50c",
-  "review_scope": "Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing and Annex AB.3.1.4/AB.3.4 native unsupported Must Understand Data Option receive policy, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery and router forwarding preservation, non-SC empty/ignore behavior, and native fail-closed handling for unsupported Must Understand Data Options.",
+  "repo_sha": "95f0dfd9417bcd3d04b6c87f9cf83edcbe8860c2",
+  "review_scope": "Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing and Annex AB.3.1.4/AB.3.4 unsupported Must Understand Data Option receive policy, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery and router forwarding preservation, non-SC empty/ignore behavior, native fail-closed handling, and WASM/browser raw NPDU data-attribute parity.",
   "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.3 Data Options, AB.2.3.1 Secure Path, AB.3.1.4 Must Understand processing, AB.3.4 NPDU Exchange data_attributes mapping, and Clause 6.5 data_attributes forwarding/ignore behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. Addendum 135-2020cf renames the Data Options bit 6 label to Every Segment without changing this data_attributes mapping; no checked addendum or erratum changes the AB.3.4 behavior covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
@@ -598,7 +598,12 @@
         "crates/bacnet-network/src/layer.rs",
         "crates/bacnet-network/src/router/mod.rs",
         "crates/bacnet-network/src/router/forwarding.rs",
-        "crates/bacnet-network/src/router/tests/data_attributes.rs"
+        "crates/bacnet-network/src/router/tests/data_attributes.rs",
+        "crates/bacnet-wasm/src/client.rs",
+        "crates/bacnet-wasm/src/data_attributes.rs",
+        "crates/bacnet-wasm/src/sc_connection.rs",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs",
+        "crates/bacnet-wasm/src/sc_frame.rs"
       ],
       "positive_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::transport_receive_preserves_data_options_as_attributes",
@@ -608,18 +613,36 @@
         "crates/bacnet-network/src/layer.rs::tests::send_apdu_data_attributes_reach_sc_data_options",
         "crates/bacnet-network/src/router/tests/data_attributes.rs::forward_unicast_preserves_data_attributes",
         "crates/bacnet-network/src/router/tests/data_attributes.rs::forward_broadcast_preserves_data_attributes_on_each_output_port",
-        "crates/bacnet-network/src/router/tests/data_attributes.rs::sc_to_sc_forwarding_preserves_data_attributes_as_data_options"
+        "crates/bacnet-network/src/router/tests/data_attributes.rs::sc_to_sc_forwarding_preserves_data_attributes_as_data_options",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::receive_preserves_data_options_as_attributes",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::receive_broadcast_preserves_data_options_as_attributes",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::build_encapsulated_npdu_encodes_data_attributes_as_options",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::encoded_data_options_len_counts_markers_lengths_and_payloads",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::unsupported_non_must_understand_data_option_is_preserved"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_rejects_invalid_data_attribute_type",
         "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_too_many_data_attributes_on_encode",
         "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_oversize_data_attribute_payload_on_encode",
         "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_unicast_returns_nak",
-        "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_broadcast_drops_without_nak"
+        "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_broadcast_drops_without_nak",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::build_encapsulated_npdu_rejects_invalid_data_attribute_type",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::build_encapsulated_npdu_rejects_too_many_data_attributes",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::build_encapsulated_npdu_rejects_oversize_data_attribute_payload",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::build_encapsulated_npdu_rejects_secure_path_without_must_understand",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::build_encapsulated_npdu_rejects_secure_path_with_payload",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::malformed_secure_path_data_option_unicast_returns_nak",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::malformed_secure_path_wire_unicast_returns_nak",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::malformed_secure_path_wire_header_data_returns_nak_with_marker",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::malformed_secure_path_wire_more_follows_preserves_marker",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::malformed_secure_path_wire_broadcast_drops_without_nak",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_malformed_secure_path_data_option",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::unsupported_must_understand_data_option_unicast_returns_nak",
+        "crates/bacnet-wasm/src/sc_data_attribute_tests.rs::unsupported_must_understand_data_option_broadcast_drops_without_nak"
       ],
       "benchmarks": [],
       "public_claims": [],
-      "notes": "This row now has native receive-side, outbound send, router local-delivery, router forwarding, and native unsupported Must Understand fail-closed evidence for BACnet/SC Encapsulated-NPDU Data Options. Receive paths convert supported or non-Must-Understand Data Options into generic transport DataAttribute values, preserving option type, Must Understand flag, and option data on ReceivedNpdu; NetworkLayer exposes those attributes on ReceivedApdu after NPDU decode; router local-delivery paths retain inbound attributes; router forwarding attaches inbound attributes to forwarded unicast and broadcast SendRequest values; and non-SC transports emit empty data_attributes on receive. Native SC receive currently treats Secure Path Data Option type 1 as understood, rejects other Must Understand Data Options before NPDU delivery, returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD with the offending option marker for non-broadcast traffic, drops broadcast traffic without a result, and preserves unsupported non-Must-Understand Data Options as DataAttribute values. Outbound paths add attribute-aware TransportPort and NetworkLayer send helpers, keep non-SC transports on default ignore-on-send behavior, and encode SC DataAttribute values as Data Options while validating option type 1..31, the 64-option cap, and u16 option-data lengths before writing the BVLC-SC frame. Router tests cover forwarded unicast, forwarded broadcast, and loopback SC-to-SC forwarding preserving Data Options on the outbound SC frame. Remaining AB-08 work is WASM/browser parity."
+      "notes": "This row now has native receive-side, outbound send, router local-delivery, router forwarding, unsupported Must Understand fail-closed, and WASM/browser state-machine/API parity evidence for BACnet/SC Encapsulated-NPDU Data Options. Receive paths convert supported or non-Must-Understand Data Options into generic transport or WASM DataAttribute values, preserving option type, Must Understand flag, and option data on ReceivedNpdu or ReceivedScNpdu; NetworkLayer exposes those attributes on ReceivedApdu after NPDU decode; router local-delivery paths retain inbound attributes; router forwarding attaches inbound attributes to forwarded unicast and broadcast SendRequest values; and non-SC transports emit empty data_attributes on receive. Native SC and the WASM receive loop treat valid Secure Path Data Option type 1 as understood, reject other Must Understand Data Options before NPDU delivery, return BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD with the offending option marker for non-broadcast traffic, drop broadcast traffic without a result, and preserve unsupported non-Must-Understand Data Options as DataAttribute values. The WASM codec/rejection path also rejects malformed Secure Path Data Options before NPDU delivery, and parseable raw malformed Secure Path frames route Result NAKs to the rejected frame's Originating VMAC when present. Outbound paths add attribute-aware TransportPort and NetworkLayer send helpers, keep non-SC transports on default ignore-on-send behavior, and encode SC DataAttribute values as Data Options while validating option type 1..31, the 64-option cap, u16 option-data lengths, and Secure Path type-1 marker constraints before writing the BVLC-SC frame. The WASM/browser client exposes incoming attributes through onNpdu metadata, accepts bounded raw sendNpduWithDataAttributes and sendNpduToWithDataAttributes arrays, emits hub-bound Encapsulated-NPDU frames with Destination VMAC and no Originating VMAC, uses broadcast as the default raw-send destination, supports explicit destination VMACs on raw sendNpduTo* helpers, and retains peer Max-NPDU-Length/Max-BVLC-Length send-path checks. Router tests cover forwarded unicast, forwarded broadcast, and loopback SC-to-SC forwarding preserving Data Options on the outbound SC frame. Remaining work is live browser/WebSocket smoke coverage, high-level helper address-resolution/target-VMAC behavior, and formal conformance-test evidence."
     },
     {
       "id": "BACNET-AB-SC-CONNECTION-STATE",

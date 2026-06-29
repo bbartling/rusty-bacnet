@@ -8,13 +8,18 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use bytes::BytesMut;
-use js_sys::Function;
-use wasm_bindgen::prelude::*;
+use js_sys::{Array, Function, Reflect, Uint8Array};
+use serde::Serialize;
+use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::codec;
+use crate::data_attributes::{
+    self, DataAttribute, MAX_SC_DATA_ATTRIBUTES, MAX_SC_DATA_ATTRIBUTE_PAYLOAD,
+};
+use crate::sc_connection::ReceivedScNpdu;
 use crate::sc_connection::{ScConnection, ScConnectionState};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
+use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
 use crate::ws_transport::BrowserWebSocket;
 use bacnet_encoding::apdu;
 use bacnet_encoding::npdu;
@@ -36,6 +41,13 @@ pub struct BACnetScClient {
     next_invoke_id: Rc<RefCell<u8>>,
     on_iam: Rc<RefCell<Option<Function>>>,
     on_cov: Rc<RefCell<Option<Function>>>,
+    on_npdu: Rc<RefCell<Option<Function>>>,
+}
+
+#[derive(Serialize)]
+struct ReceivedNpduMetadata {
+    source_vmac: Vec<u8>,
+    data_attributes: Vec<DataAttribute>,
 }
 
 #[wasm_bindgen]
@@ -77,6 +89,7 @@ impl BACnetScClient {
             next_invoke_id: Rc::new(RefCell::new(0)),
             on_iam: Rc::new(RefCell::new(None)),
             on_cov: Rc::new(RefCell::new(None)),
+            on_npdu: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -158,8 +171,57 @@ impl BACnetScClient {
     #[wasm_bindgen(js_name = whoIs)]
     pub fn who_is(&self, low: Option<u32>, high: Option<u32>) -> Result<(), JsError> {
         let npdu_bytes = codec::encode_who_is(low, high)?;
-        self.send_npdu(&npdu_bytes)?;
+        self.send_npdu_to(BROADCAST_VMAC, &npdu_bytes)?;
         Ok(())
+    }
+
+    /// Broadcast raw NPDU bytes through the established BACnet/SC hub connection.
+    #[wasm_bindgen(js_name = sendNpdu)]
+    pub fn send_raw_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_with_attributes_to(BROADCAST_VMAC, npdu_bytes, &[])
+    }
+
+    /// Send raw NPDU bytes to a destination VMAC through the established BACnet/SC hub connection.
+    #[wasm_bindgen(js_name = sendNpduTo)]
+    pub fn send_raw_npdu_to(
+        &self,
+        destination_vmac: &[u8],
+        npdu_bytes: &[u8],
+    ) -> Result<(), JsError> {
+        let destination_vmac = Self::parse_vmac(destination_vmac)?;
+        self.send_npdu_with_attributes_to(destination_vmac, npdu_bytes, &[])
+    }
+
+    /// Broadcast raw NPDU bytes with BACnet/SC Data Options.
+    ///
+    /// `dataAttributes` is an array of objects with `option_type`,
+    /// `must_understand`, and `data` fields. `optionType` and
+    /// `mustUnderstand` aliases are also accepted.
+    #[wasm_bindgen(js_name = sendNpduWithDataAttributes)]
+    pub fn send_raw_npdu_with_data_attributes(
+        &self,
+        npdu_bytes: &[u8],
+        data_attributes: JsValue,
+    ) -> Result<(), JsError> {
+        let data_attributes = Self::parse_data_attributes(&data_attributes)?;
+        self.send_npdu_with_attributes_to(BROADCAST_VMAC, npdu_bytes, &data_attributes)
+    }
+
+    /// Send raw NPDU bytes to a destination VMAC with BACnet/SC Data Options.
+    ///
+    /// `dataAttributes` is an array of objects with `option_type`,
+    /// `must_understand`, and `data` fields. `optionType` and
+    /// `mustUnderstand` aliases are also accepted.
+    #[wasm_bindgen(js_name = sendNpduToWithDataAttributes)]
+    pub fn send_raw_npdu_to_with_data_attributes(
+        &self,
+        destination_vmac: &[u8],
+        npdu_bytes: &[u8],
+        data_attributes: JsValue,
+    ) -> Result<(), JsError> {
+        let destination_vmac = Self::parse_vmac(destination_vmac)?;
+        let data_attributes = Self::parse_data_attributes(&data_attributes)?;
+        self.send_npdu_with_attributes_to(destination_vmac, npdu_bytes, &data_attributes)
     }
 
     /// Subscribe to COV notifications for an object.
@@ -198,6 +260,15 @@ impl BACnetScClient {
         *self.on_cov.borrow_mut() = Some(callback);
     }
 
+    /// Register a callback for every received NPDU and its BACnet/SC data attributes.
+    ///
+    /// The callback receives `(npduBytes, metadata)`, where `metadata` contains
+    /// `source_vmac` and `data_attributes`.
+    #[wasm_bindgen(js_name = onNpdu)]
+    pub fn on_npdu(&self, callback: Function) {
+        *self.on_npdu.borrow_mut() = Some(callback);
+    }
+
     /// Disconnect from the hub.
     pub async fn disconnect(&self) -> Result<(), JsError> {
         if let Ok(msg) = self.connection.borrow_mut().build_disconnect_request() {
@@ -231,6 +302,19 @@ impl BACnetScClient {
     }
 
     fn send_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_to(BROADCAST_VMAC, npdu_bytes)
+    }
+
+    fn send_npdu_to(&self, destination_vmac: Vmac, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_with_attributes_to(destination_vmac, npdu_bytes, &[])
+    }
+
+    fn send_npdu_with_attributes_to(
+        &self,
+        destination_vmac: Vmac,
+        npdu_bytes: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), JsError> {
         let mut conn = self.connection.borrow_mut();
         if conn.state != ScConnectionState::Connected {
             return Err(JsError::new("not connected"));
@@ -242,9 +326,23 @@ impl BACnetScClient {
                 conn.hub_max_apdu_length
             )));
         }
-        let hub_vmac = conn.hub_vmac.unwrap_or([0xFF; 6]);
         let hub_max_bvlc_length = conn.hub_max_bvlc_length;
-        let msg = conn.build_encapsulated_npdu(hub_vmac, npdu_bytes);
+        let data_options_len = data_attributes::encoded_data_options_len(data_attributes)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        let encoded_len = 4usize + destination_vmac.len() + data_options_len + npdu_bytes.len();
+        if encoded_len > hub_max_bvlc_length as usize {
+            return Err(JsError::new(&format!(
+                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
+                encoded_len, hub_max_bvlc_length
+            )));
+        }
+        let msg = conn
+            .build_encapsulated_npdu_with_data_attributes(
+                destination_vmac,
+                npdu_bytes,
+                data_attributes,
+            )
+            .map_err(|e| JsError::new(&e.to_string()))?;
         drop(conn);
 
         let mut buf = BytesMut::new();
@@ -261,6 +359,149 @@ impl BACnetScClient {
                 .map_err(|e| JsError::new(&format!("{:?}", e)))?;
         }
         Ok(())
+    }
+
+    fn parse_vmac(destination_vmac: &[u8]) -> Result<Vmac, JsError> {
+        if destination_vmac.len() != 6 {
+            return Err(JsError::new(&format!(
+                "BACnet/SC VMAC must be 6 bytes, got {}",
+                destination_vmac.len()
+            )));
+        }
+        let mut vmac = [0u8; 6];
+        vmac.copy_from_slice(destination_vmac);
+        Ok(vmac)
+    }
+
+    fn parse_data_attributes(value: &JsValue) -> Result<Vec<DataAttribute>, JsError> {
+        if !Array::is_array(value) {
+            return Err(JsError::new("dataAttributes must be an array"));
+        }
+        let array: Array = value
+            .clone()
+            .dyn_into()
+            .map_err(|_| JsError::new("dataAttributes must be an array"))?;
+        let len = array.length();
+        if len as usize > MAX_SC_DATA_ATTRIBUTES {
+            return Err(JsError::new(&format!(
+                "BACnet/SC Data Options exceed {MAX_SC_DATA_ATTRIBUTES} attributes"
+            )));
+        }
+
+        let mut attributes = Vec::with_capacity(len as usize);
+        for index in 0..len {
+            let item = array.get(index);
+            let option_type = Self::parse_option_type(&Self::required_alias_property(
+                &item,
+                "option_type",
+                "optionType",
+            )?)?;
+            let must_understand =
+                Self::required_alias_property(&item, "must_understand", "mustUnderstand")?
+                    .as_bool()
+                    .ok_or_else(|| {
+                        JsError::new("DataAttribute.must_understand must be a boolean")
+                    })?;
+            let data = Self::parse_attribute_data(&Self::required_property(&item, "data")?)?;
+            attributes.push(DataAttribute {
+                option_type,
+                must_understand,
+                data,
+            });
+        }
+        Ok(attributes)
+    }
+
+    fn required_alias_property(
+        object: &JsValue,
+        primary: &str,
+        alias: &str,
+    ) -> Result<JsValue, JsError> {
+        let primary_value = Self::reflect_get(object, primary)?;
+        if !primary_value.is_undefined() {
+            return Ok(primary_value);
+        }
+        let alias_value = Self::reflect_get(object, alias)?;
+        if !alias_value.is_undefined() {
+            return Ok(alias_value);
+        }
+        Err(JsError::new(&format!(
+            "DataAttribute.{primary} is required"
+        )))
+    }
+
+    fn required_property(object: &JsValue, property: &str) -> Result<JsValue, JsError> {
+        let value = Self::reflect_get(object, property)?;
+        if value.is_undefined() {
+            return Err(JsError::new(&format!(
+                "DataAttribute.{property} is required"
+            )));
+        }
+        Ok(value)
+    }
+
+    fn reflect_get(object: &JsValue, property: &str) -> Result<JsValue, JsError> {
+        Reflect::get(object, &JsValue::from_str(property))
+            .map_err(|_| JsError::new("DataAttribute entries must be objects"))
+    }
+
+    fn parse_option_type(value: &JsValue) -> Result<u8, JsError> {
+        let raw = value
+            .as_f64()
+            .ok_or_else(|| JsError::new("DataAttribute.option_type must be a number"))?;
+        if !raw.is_finite() || raw.fract() != 0.0 || !(1.0..=31.0).contains(&raw) {
+            return Err(JsError::new(&format!(
+                "BACnet/SC Data Option type must be 1..31, got {raw}"
+            )));
+        }
+        Ok(raw as u8)
+    }
+
+    fn parse_attribute_data(value: &JsValue) -> Result<Vec<u8>, JsError> {
+        if let Some(bytes) = value.dyn_ref::<Uint8Array>() {
+            let len = bytes.length() as usize;
+            if len > MAX_SC_DATA_ATTRIBUTE_PAYLOAD {
+                return Err(JsError::new(&format!(
+                    "BACnet/SC Data Option payload length {} exceeds 65535",
+                    len
+                )));
+            }
+            let mut data = vec![0u8; len];
+            bytes.copy_to(&mut data);
+            return Ok(data);
+        }
+
+        if !Array::is_array(value) {
+            return Err(JsError::new(
+                "DataAttribute.data must be a Uint8Array or byte array",
+            ));
+        }
+        let array: Array = value
+            .clone()
+            .dyn_into()
+            .map_err(|_| JsError::new("DataAttribute.data must be a byte array"))?;
+        let len = array.length() as usize;
+        if len > MAX_SC_DATA_ATTRIBUTE_PAYLOAD {
+            return Err(JsError::new(&format!(
+                "BACnet/SC Data Option payload length {} exceeds 65535",
+                len
+            )));
+        }
+
+        let mut data = Vec::with_capacity(len);
+        for index in 0..array.length() {
+            let value = array.get(index);
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| JsError::new("DataAttribute.data entries must be numbers"))?;
+            if !raw.is_finite() || raw.fract() != 0.0 || !(0.0..=255.0).contains(&raw) {
+                return Err(JsError::new(&format!(
+                    "DataAttribute.data entries must be bytes, got {raw}"
+                )));
+            }
+            data.push(raw as u8);
+        }
+        Ok(data)
     }
 
     async fn send_confirmed(&self, npdu_bytes: &[u8], invoke_id: u8) -> Result<JsValue, JsError> {
@@ -282,6 +523,7 @@ impl BACnetScClient {
         let pending = self.pending.clone();
         let on_iam = self.on_iam.clone();
         let on_cov = self.on_cov.clone();
+        let on_npdu = self.on_npdu.clone();
 
         spawn_local(async move {
             loop {
@@ -304,15 +546,46 @@ impl BACnetScClient {
                 if data.len() > max_bvlc {
                     continue;
                 }
-                let Ok(sc_msg) = decode_sc_message(&data) else {
-                    continue;
+                let sc_msg = match decode_sc_message(&data) {
+                    Ok(sc_msg) => sc_msg,
+                    Err(_) => {
+                        if let Some(result) =
+                            data_attributes::malformed_secure_path_result_from_frame(&data)
+                        {
+                            if let Some(nak) = result {
+                                let mut buf = BytesMut::new();
+                                encode_sc_message(&mut buf, &nak);
+                                if let Some(ws) = ws.borrow().as_ref() {
+                                    let _ = ws.send(&buf);
+                                }
+                            }
+                        }
+                        continue;
+                    }
                 };
+
+                let rejection = {
+                    connection
+                        .borrow()
+                        .unsupported_must_understand_result(&sc_msg)
+                };
+                if let Some(result) = rejection {
+                    if let Some(nak) = result {
+                        let mut buf = BytesMut::new();
+                        encode_sc_message(&mut buf, &nak);
+                        if let Some(ws) = ws.borrow().as_ref() {
+                            let _ = ws.send(&buf);
+                        }
+                    }
+                    continue;
+                }
 
                 // Handle SC message
                 {
                     let npdu_data = connection.borrow_mut().handle_received(&sc_msg);
-                    if let Some((npdu_bytes, _source)) = npdu_data {
-                        Self::process_npdu(&npdu_bytes, &pending, &on_iam, &on_cov);
+                    if let Some(received) = npdu_data {
+                        Self::emit_npdu(&received, &on_npdu);
+                        Self::process_npdu(&received.npdu, &pending, &on_iam, &on_cov);
                     }
                     // Send disconnect ACK if pending
                     let ack = connection.borrow_mut().disconnect_ack_to_send.take();
@@ -412,5 +685,22 @@ impl BACnetScClient {
             }
             _ => {}
         }
+    }
+
+    fn emit_npdu(received: &ReceivedScNpdu, on_npdu: &Rc<RefCell<Option<Function>>>) {
+        let Some(callback) = on_npdu.borrow().as_ref().cloned() else {
+            return;
+        };
+
+        let metadata = ReceivedNpduMetadata {
+            source_vmac: received.source_vmac.to_vec(),
+            data_attributes: received.data_attributes.clone(),
+        };
+        let metadata = serde_wasm_bindgen::to_value(&metadata).unwrap_or(JsValue::NULL);
+        let _ = callback.call2(
+            &JsValue::NULL,
+            &Uint8Array::from(received.npdu.as_ref()),
+            &metadata,
+        );
     }
 }
