@@ -641,6 +641,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 }
                                 Err(e) => {
                                     warn!("BACnet/SC recv error: {}", e);
+                                    let mut c = conn.lock().await;
+                                    c.state = ScConnectionState::Disconnected;
                                     break;
                                 }
                             }
@@ -654,6 +656,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             drop(c);
                             if let Err(e) = ws_clone.send(&buf).await {
                                 warn!("BACnet/SC heartbeat send error: {}", e);
+                                let mut c = conn.lock().await;
+                                c.state = ScConnectionState::Disconnected;
                                 break;
                             }
                             // Check heartbeat timeout: has the hub acked within
@@ -711,6 +715,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                         max_retries = config.max_retries,
                         "SC reconnection: max retries exhausted, giving up"
                     );
+                    let mut c = conn.lock().await;
+                    c.state = ScConnectionState::Disconnected;
                     break 'transport;
                 }
                 // TODO: Hub failover — if primary hub fails N times, try failover hub URL
@@ -847,7 +853,13 @@ impl WebSocketPort for LoopbackWebSocket {
 }
 
 #[cfg(test)]
+mod receive_state_tests;
+
+#[cfg(test)]
 mod result_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod transport_lifecycle_tests;

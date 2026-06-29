@@ -280,7 +280,10 @@ impl BACnetScClient {
                     };
                     match ws.recv().await {
                         Ok(data) => data,
-                        Err(_) => break,
+                        Err(_) => {
+                            connection.borrow_mut().state = ScConnectionState::Disconnected;
+                            break;
+                        }
                     }
                 };
 
