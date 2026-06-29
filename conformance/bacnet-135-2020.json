@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "63a744759a679b25b69a8a82fd37e58260e52653",
-  "review_scope": "Annex AB.5 BACnet/SC hub connector primary/failover and forwarding behavior, including established primary loss, reconnect exhaustion, failover activation, primary restoration while failover is active, larger destination/data option-chain forwarding capacity, explicit unsupported direct-connection classification at the hub boundary, and configured hub URI validation.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.2 and AB.5.4 primary/failover hub connector behavior, plus surrounding AB.5.3 hub connection, forwarding, configured hub URI, and direct-connection context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. Addendum cc changes AB.5.3.1 hub-connection metadata and Network Port properties; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.5.2/AB.5.4 primary/failover retry or restoration behavior, the AB.5.3/AB.5.4 forwarding option-preservation evidence, the configured/malformed hub URI evidence, or the direct-connection unsupported-classification evidence covered by this tranche.",
+  "repo_sha": "f5548aa1d5457e36b5f5fa1e45cadcea6d322bd4",
+  "review_scope": "Annex AB.6.3 BACnet/SC heartbeat behavior, including native and WASM construction/validation evidence, native timeout/send-error disconnect behavior, inbound BVLC activity reset/deferral behavior, and hub-initiated heartbeat ACK timeout enforcement.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.3 BACnet/SC heartbeat request/ack, peer liveness, timeout, and disconnect behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. No checked addendum or erratum changes the AB.6.3 heartbeat request/ack, liveness, timeout, or disconnect behavior covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -754,6 +754,8 @@
         "crates/bacnet-transport/src/sc/mod.rs",
         "crates/bacnet-transport/src/sc_frame.rs",
         "crates/bacnet-transport/src/sc_hub.rs",
+        "crates/bacnet-transport/src/sc_hub/connection.rs",
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs",
         "crates/bacnet-wasm/src/client.rs",
         "crates/bacnet-wasm/src/sc_connection.rs"
       ],
@@ -763,6 +765,9 @@
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_sent_periodically",
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_inbound_bvlc_activity_defers_client_heartbeat",
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_inbound_bvlc_activity_resets_heartbeat_timeout",
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_keeps_active_client_without_pending_heartbeat",
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_sends_request_to_idle_client_without_pending_heartbeat",
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_keeps_client_while_pending_heartbeat_is_within_ack_timeout",
         "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat",
         "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack"
       ],
@@ -770,11 +775,13 @@
         "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_heartbeat_send_error_transitions_to_disconnected",
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_ack_rejects_vmac_fields",
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_ack_requires_matching_message_id",
-        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_timeout_disconnects"
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_heartbeat_timeout_disconnects",
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_removes_client_when_pending_heartbeat_exceeds_ack_timeout",
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms"],
-      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, and send-error disconnect behavior. The row remains open because hub-initiated heartbeat ACK timeout enforcement, WASM/browser keep-alive initiation, configurable timeout range validation or production-mode rejection/clamping, and fully deterministic timeout tests still need follow-up."
+      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. The row remains open because WASM/browser keep-alive initiation, configurable timeout range validation or production-mode rejection/clamping, and fully deterministic end-to-end timeout tests still need follow-up."
     }
   ]
 }

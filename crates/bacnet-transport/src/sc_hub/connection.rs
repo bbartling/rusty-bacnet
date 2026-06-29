@@ -12,6 +12,7 @@ use tracing::{debug, warn};
 
 use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage, Vmac, BACNET_SC_HUB_SUBPROTOCOL};
 
+use super::heartbeat::{hub_heartbeat_sweep_decision, HubHeartbeatSweepDecision};
 use super::helpers::{
     now_secs, offers_websocket_subprotocol, websocket_subprotocol_error_response,
 };
@@ -40,6 +41,7 @@ pub(super) async fn accept_loop(
     // Per Annex AB.6.3, peers initiate heartbeats to detect idle/dead connections.
     const HEARTBEAT_CHECK_INTERVAL_SECS: u64 = 30;
     const HEARTBEAT_IDLE_THRESHOLD_SECS: u64 = 60;
+    const HEARTBEAT_ACK_TIMEOUT_SECS: u64 = 5;
     {
         let clients_for_hb = clients.clone();
         let next_msg_id = std::sync::atomic::AtomicU16::new(0x8000); // hub message IDs start high
@@ -50,17 +52,53 @@ pub(super) async fn accept_loop(
             loop {
                 interval.tick().await;
                 let now = now_secs();
-                // Snapshot idle clients
+                let mut timed_out_clients = Vec::new();
                 let idle_clients: Vec<(Vmac, Arc<Mutex<WsSink>>)> = {
                     let map = clients_for_hb.lock().await;
-                    map.iter()
-                        .filter(|(_, c)| {
-                            let last = c.last_activity.load(std::sync::atomic::Ordering::Acquire);
-                            now.saturating_sub(last) > HEARTBEAT_IDLE_THRESHOLD_SECS
-                        })
-                        .map(|(vmac, c)| (*vmac, Arc::clone(&c.sink)))
-                        .collect()
+                    map.iter().fold(Vec::new(), |mut idle, (vmac, c)| {
+                        let last = c.last_activity.load(std::sync::atomic::Ordering::Acquire);
+                        let pending = c
+                            .pending_heartbeat_id
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        let pending_since = c
+                            .pending_heartbeat_sent_at
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        match hub_heartbeat_sweep_decision(
+                            now,
+                            last,
+                            pending,
+                            pending_since,
+                            HEARTBEAT_IDLE_THRESHOLD_SECS,
+                            HEARTBEAT_ACK_TIMEOUT_SECS,
+                        ) {
+                            HubHeartbeatSweepDecision::Keep => {}
+                            HubHeartbeatSweepDecision::SendRequest => {
+                                idle.push((*vmac, Arc::clone(&c.sink)));
+                            }
+                            HubHeartbeatSweepDecision::RemoveTimedOut => {
+                                timed_out_clients.push((*vmac, Arc::clone(&c.sink)));
+                            }
+                        }
+                        idle
+                    })
                 };
+
+                for (vmac, sink) in timed_out_clients {
+                    warn!("Hub: heartbeat ACK timed out for {vmac:02x?}, removing client");
+                    let mut map = clients_for_hb.lock().await;
+                    if map
+                        .get(&vmac)
+                        .is_some_and(|client| Arc::ptr_eq(&client.sink, &sink))
+                    {
+                        if let Some(client) = map.remove(&vmac) {
+                            client
+                                .closed
+                                .store(true, std::sync::atomic::Ordering::Release);
+                            client.close_notify.notify_waiters();
+                        }
+                    }
+                }
+
                 for (vmac, sink) in idle_clients {
                     let msg_id = next_msg_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let hb = ScMessage {
@@ -87,6 +125,19 @@ pub(super) async fn accept_loop(
                             .is_some_and(|client| Arc::ptr_eq(&client.sink, &sink))
                         {
                             map.remove(&vmac);
+                        }
+                    } else {
+                        let map = clients_for_hb.lock().await;
+                        if let Some(client) = map
+                            .get(&vmac)
+                            .filter(|client| Arc::ptr_eq(&client.sink, &sink))
+                        {
+                            client
+                                .pending_heartbeat_id
+                                .store(msg_id, std::sync::atomic::Ordering::Release);
+                            client
+                                .pending_heartbeat_sent_at
+                                .store(now, std::sync::atomic::Ordering::Release);
                         }
                     }
                 }
