@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `8a7c6da04e2a4cdd01115aade6dc90e7df48e3d1`
-- Scope: Annex AB.6.2 BACnet/SC connection state cleanup for WebSocket close/error receive paths, heartbeat send failures, reconnect exhaustion, and browser close/error state reporting.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2 connection state behavior in prior AB-03 work. This tranche adds implementation evidence for transport-level WebSocket close/error cleanup without changing wire bytes.
+- Implementation evidence SHA reviewed: `f1e2b01755fca66ebb9f6964a1a0b008f32dc007`
+- Scope: Annex AB.7 BACnet/SC TLS 1.3 and mutual TLS validation evidence.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` and AB.7.4 addenda/errata notes were reviewed for BACnet/SC TLS 1.3 and operational-certificate validation. This tranche adds TLS 1.3-only helper configuration and generated-certificate validation evidence without changing BVLC-SC wire bytes.
 
 ## Counts
 

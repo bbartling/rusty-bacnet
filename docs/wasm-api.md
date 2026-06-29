@@ -1032,6 +1032,8 @@ try {
 
 - **Browser only** -- Requires browser WebSocket and `web-sys` APIs. Does not work in Node.js, Deno, or other server-side JavaScript runtimes (the `client` and `ws_transport` modules are gated with `#[cfg(target_arch = "wasm32")]`). The codec and type modules are available on native targets for testing.
 
+- **Browser TLS policy** -- The WASM client enforces `wss://` and the BACnet/SC hub WebSocket subprotocol, but TLS trust stores and client certificate selection are controlled by the browser and platform. Annex AB mTLS conformance depends on that external certificate configuration.
+
 - **Client only** -- This is a thin client. It cannot act as a BACnet server, router, or SC hub. Use the `bacnet-server` or `bacnet-transport` Rust crates for server-side functionality.
 
 - **No segmentation** -- Requests are sent as unsegmented PDUs with a max APDU length of 1476 bytes. Very large property values that would require segmented transfers are not supported.

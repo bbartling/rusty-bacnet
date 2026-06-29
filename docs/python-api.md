@@ -1317,9 +1317,14 @@ hub = ScHub(
     cert="hub-cert.pem",         # Server TLS certificate
     key="hub-key.pem",           # Server TLS private key
     vmac=b"\xff\x00\x00\x00\x00\x01",  # Hub's 6-byte VMAC
-    ca_cert="ca-cert.pem",       # Optional CA cert for mutual TLS
+    ca_cert="ca-cert.pem",       # Trusted issuer CA for mutual TLS
 )
 ```
+
+For Annex AB production deployments, pass `ca_cert` and configure each SC node
+with its own certificate/key pair. Omitting `ca_cert` leaves the hub in
+server-auth-only example mode, which is not claimed as BACnet/SC mTLS
+conformance evidence.
 
 ### Methods
 
@@ -1369,6 +1374,7 @@ async def main():
     hub = ScHub(
         listen="127.0.0.1:0",
         cert="hub-cert.pem", key="hub-key.pem",
+        ca_cert="ca-cert.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
     )
     await hub.start()
