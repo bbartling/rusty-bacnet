@@ -1,8 +1,8 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "34ebfd0b833c17272ac7e7039cbb7ea5fb5e9679",
-  "review_scope": "Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery and router forwarding preservation, and non-SC empty/ignore behavior.",
+  "repo_sha": "d249bc7ae61783e96649108a440cc2e7aa51b50c",
+  "review_scope": "Annex AB.3.4 BACnet/SC Data Options data_attributes plumbing and Annex AB.3.1.4/AB.3.4 native unsupported Must Understand Data Option receive policy, including native SC transport ReceivedNpdu preservation, NetworkLayer ReceivedApdu exposure, outbound DataAttribute-to-Data-Options send helpers at TransportPort and NetworkLayer, router local-delivery and router forwarding preservation, non-SC empty/ignore behavior, and native fail-closed handling for unsupported Must Understand Data Options.",
   "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.3 Data Options, AB.2.3.1 Secure Path, AB.3.1.4 Must Understand processing, AB.3.4 NPDU Exchange data_attributes mapping, and Clause 6.5 data_attributes forwarding/ignore behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. Addendum 135-2020cf renames the Data Options bit 6 label to Every Segment without changing this data_attributes mapping; no checked addendum or erratum changes the AB.3.4 behavior covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
@@ -592,6 +592,7 @@
         "crates/bacnet-transport/src/port.rs",
         "crates/bacnet-transport/src/any.rs",
         "crates/bacnet-transport/src/sc/data_attributes.rs",
+        "crates/bacnet-transport/src/sc/data_attribute_tests.rs",
         "crates/bacnet-transport/src/sc/mod.rs",
         "crates/bacnet-transport/src/sc/tests.rs",
         "crates/bacnet-network/src/layer.rs",
@@ -602,6 +603,7 @@
       "positive_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::transport_receive_preserves_data_options_as_attributes",
         "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_encodes_data_attributes_as_options",
+        "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_non_must_understand_data_option_is_preserved",
         "crates/bacnet-network/src/layer.rs::tests::sc_data_options_reach_received_apdu_data_attributes",
         "crates/bacnet-network/src/layer.rs::tests::send_apdu_data_attributes_reach_sc_data_options",
         "crates/bacnet-network/src/router/tests/data_attributes.rs::forward_unicast_preserves_data_attributes",
@@ -611,11 +613,13 @@
       "negative_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_rejects_invalid_data_attribute_type",
         "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_too_many_data_attributes_on_encode",
-        "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_oversize_data_attribute_payload_on_encode"
+        "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_oversize_data_attribute_payload_on_encode",
+        "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_unicast_returns_nak",
+        "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_broadcast_drops_without_nak"
       ],
       "benchmarks": [],
       "public_claims": [],
-      "notes": "This row now has native receive-side, outbound send, router local-delivery, and router forwarding evidence for BACnet/SC Encapsulated-NPDU Data Options. Receive paths convert Data Options into generic transport DataAttribute values, preserving option type, Must Understand flag, and option data on ReceivedNpdu; NetworkLayer exposes those attributes on ReceivedApdu after NPDU decode; router local-delivery paths retain inbound attributes; router forwarding attaches inbound attributes to forwarded unicast and broadcast SendRequest values; and non-SC transports emit empty data_attributes on receive. Outbound paths add attribute-aware TransportPort and NetworkLayer send helpers, keep non-SC transports on default ignore-on-send behavior, and encode SC DataAttribute values as Data Options while validating option type 1..31, the 64-option cap, and u16 option-data lengths before writing the BVLC-SC frame. New router tests cover forwarded unicast, forwarded broadcast, and loopback SC-to-SC forwarding preserving Data Options on the outbound SC frame. Remaining AB-08 work includes unsupported Must Understand data-option fail-closed policy and WASM/browser parity."
+      "notes": "This row now has native receive-side, outbound send, router local-delivery, router forwarding, and native unsupported Must Understand fail-closed evidence for BACnet/SC Encapsulated-NPDU Data Options. Receive paths convert supported or non-Must-Understand Data Options into generic transport DataAttribute values, preserving option type, Must Understand flag, and option data on ReceivedNpdu; NetworkLayer exposes those attributes on ReceivedApdu after NPDU decode; router local-delivery paths retain inbound attributes; router forwarding attaches inbound attributes to forwarded unicast and broadcast SendRequest values; and non-SC transports emit empty data_attributes on receive. Native SC receive currently treats Secure Path Data Option type 1 as understood, rejects other Must Understand Data Options before NPDU delivery, returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD with the offending option marker for non-broadcast traffic, drops broadcast traffic without a result, and preserves unsupported non-Must-Understand Data Options as DataAttribute values. Outbound paths add attribute-aware TransportPort and NetworkLayer send helpers, keep non-SC transports on default ignore-on-send behavior, and encode SC DataAttribute values as Data Options while validating option type 1..31, the 64-option cap, and u16 option-data lengths before writing the BVLC-SC frame. Router tests cover forwarded unicast, forwarded broadcast, and loopback SC-to-SC forwarding preserving Data Options on the outbound SC frame. Remaining AB-08 work is WASM/browser parity."
     },
     {
       "id": "BACNET-AB-SC-CONNECTION-STATE",
