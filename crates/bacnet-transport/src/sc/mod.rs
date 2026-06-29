@@ -20,9 +20,11 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod handshake;
 mod heartbeat;
 mod loopback;
 mod reconnect;
+use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
 pub use reconnect::ScReconnectConfig;
 
@@ -313,7 +315,7 @@ impl ScConnection {
 /// BACnet/SC transport implementing [`TransportPort`].
 pub struct ScTransport<W: WebSocketPort> {
     ws: Option<W>,
-    ws_shared: Option<Arc<W>>, // kept after start() for send methods
+    ws_shared: Option<Arc<Mutex<Arc<W>>>>, // current active WebSocket for send methods
     local_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     device_uuid: [u8; 16],
@@ -389,115 +391,6 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 }
 
-/// Perform the Connect-Request / Connect-Accept handshake on a WebSocket.
-///
-/// Used for both the initial connection and reconnection attempts.
-/// The local VMAC is preserved; connection state transitions to
-/// [`ScConnectionState::Connected`] on success.
-async fn perform_handshake<W: WebSocketPort>(
-    ws: &W,
-    conn: &Arc<Mutex<ScConnection>>,
-    timeout_ms: u64,
-) -> Result<(), Error> {
-    // Send Connect-Request
-    {
-        let mut c = conn.lock().await;
-        let msg = c.build_connect_request();
-        let mut buf = BytesMut::new();
-        encode_sc_message(&mut buf, &msg);
-        ws.send(&buf).await?;
-    }
-
-    // Wait for Connect-Accept with timeout
-    let timeout_dur = Duration::from_millis(timeout_ms);
-    let accept_result = tokio::time::timeout(timeout_dur, async {
-        loop {
-            let data = ws.recv().await?;
-            if data.len() > conn.lock().await.max_bvlc_length as usize {
-                warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping");
-                continue;
-            }
-            let msg = match decode_sc_message(&data) {
-                Ok(msg) => msg,
-                Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
-                    let mut c = conn.lock().await;
-                    c.state = ScConnectionState::Disconnected;
-                    return Err(Error::Encoding(format!(
-                        "malformed BACnet/SC BVLC-Result during connect: {e}"
-                    )));
-                }
-                Err(e) => return Err(e),
-            };
-            if msg.function == ScFunction::ConnectAccept {
-                return Ok::<_, Error>(msg);
-            }
-            if msg.function == ScFunction::Result {
-                let result = decode_sc_bvlc_result(&msg);
-                let mut c = conn.lock().await;
-                c.state = ScConnectionState::Disconnected;
-                return match result {
-                    Ok(ScBvlcResult::Nak {
-                        result_for,
-                        error_class,
-                        error_code,
-                        error_details,
-                        ..
-                    }) => Err(Error::Encoding(format!(
-                        "BACnet/SC BVLC-Result NAK during connect: function={:#x} \
-                         error_class={} error_code={} details={}",
-                        result_for.to_raw(),
-                        error_class,
-                        error_code,
-                        error_details
-                    ))),
-                    Ok(ScBvlcResult::Ack { result_for }) => Err(Error::Encoding(format!(
-                        "unexpected BACnet/SC BVLC-Result ACK during connect: function={:#x}",
-                        result_for.to_raw()
-                    ))),
-                    Err(e) => Err(Error::Encoding(format!(
-                        "malformed BACnet/SC BVLC-Result during connect: {e}"
-                    ))),
-                };
-            }
-        }
-    })
-    .await;
-
-    match accept_result {
-        Ok(Ok(msg)) => {
-            let mut c = conn.lock().await;
-            if c.handle_connect_accept(&msg) {
-                debug!("BACnet/SC connected");
-                Ok(())
-            } else {
-                c.state = ScConnectionState::Disconnected;
-                Err(Error::Encoding(
-                    "BACnet/SC Connect-Accept did not match pending Connect-Request".into(),
-                ))
-            }
-        }
-        Ok(Err(e)) => Err(e),
-        Err(_) => {
-            let mut c = conn.lock().await;
-            c.state = ScConnectionState::Disconnected;
-            Err(Error::Encoding("BACnet/SC connect timeout".into()))
-        }
-    }
-}
-
-impl<W: WebSocketPort> ScTransport<W> {
-    /// Attempt the Connect-Request / Connect-Accept handshake on the given
-    /// WebSocket.  Returns the `Arc<W>` on success or the error on failure.
-    async fn attempt_handshake(
-        ws: Arc<W>,
-        conn: &Arc<Mutex<ScConnection>>,
-        timeout_ms: u64,
-    ) -> Result<Arc<W>, Error> {
-        perform_handshake(&*ws, conn, timeout_ms).await?;
-        Ok(ws)
-    }
-}
-
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         /// NPDU receive channel capacity — smaller than BIP/Ethernet since SC is hub-relayed.
@@ -517,22 +410,23 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             .ok_or_else(|| Error::Encoding("BACnet/SC transport already started".into()))?;
 
         let ws = Arc::new(primary_ws);
+        let mut failover_ws = self.failover_ws.take().map(Arc::new);
 
         // Attempt handshake on the primary WebSocket.
-        let ws = match Self::attempt_handshake(ws, &conn, self.connect_timeout_ms).await {
-            Ok(ws) => ws,
+        let ws = match perform_handshake(&*ws, &conn, self.connect_timeout_ms).await {
+            Ok(()) => ws,
             Err(primary_err) => {
                 // Primary failed — try failover if configured.
-                if let Some(failover) = self.failover_ws.take() {
+                if let Some(failover) = failover_ws.take() {
                     debug!("BACnet/SC primary connect failed, attempting failover");
                     // Reset connection state for the retry.
                     {
                         let mut c = conn.lock().await;
                         *c = ScConnection::new(self.local_vmac, self.device_uuid);
                     }
-                    let failover_ws = Arc::new(failover);
-                    Self::attempt_handshake(failover_ws, &conn, self.connect_timeout_ms)
+                    perform_handshake(&*failover, &conn, self.connect_timeout_ms)
                         .await
+                        .map(|()| failover)
                         .map_err(|_| primary_err)?
                 } else {
                     return Err(primary_err);
@@ -540,7 +434,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             }
         };
 
-        self.ws_shared = Some(ws.clone());
+        let active_ws = Arc::new(Mutex::new(ws.clone()));
+        self.ws_shared = Some(active_ws.clone());
 
         // Receive loop (handshake already done — no ConnectAccept handling needed)
         let heartbeat_interval_ms = self.heartbeat_interval_ms;
@@ -548,7 +443,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let reconnect_config = self.reconnect_config.clone();
         let connect_timeout_ms = self.connect_timeout_ms;
 
-        let ws_clone = ws.clone();
+        let mut ws_clone = ws.clone();
         let task = tokio::spawn(async move {
             'transport: loop {
                 let mut hb_interval =
@@ -721,6 +616,34 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 }
 
                 if !reconnected {
+                    if let Some(failover) = failover_ws.take() {
+                        warn!("SC primary reconnection exhausted, attempting failover hub");
+
+                        {
+                            let mut c = conn.lock().await;
+                            let vmac = c.local_vmac;
+                            let uuid = c.device_uuid;
+                            *c = ScConnection::new(vmac, uuid);
+                        }
+
+                        match perform_handshake(&*failover, &conn, connect_timeout_ms).await {
+                            Ok(()) => {
+                                {
+                                    let mut current = active_ws.lock().await;
+                                    *current = failover.clone();
+                                }
+                                ws_clone = failover;
+                                info!("SC connected to failover hub after primary reconnect exhaustion");
+                                reconnected = true;
+                            }
+                            Err(e) => {
+                                warn!(%e, "SC failover connection failed");
+                            }
+                        }
+                    }
+                }
+
+                if !reconnected {
                     warn!(
                         max_retries = config.max_retries,
                         "SC reconnection: max retries exhausted, giving up"
@@ -729,7 +652,6 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     c.state = ScConnectionState::Disconnected;
                     break 'transport;
                 }
-                // TODO: Hub failover — if primary hub fails N times, try failover hub URL
             }
         });
 
@@ -740,6 +662,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn stop(&mut self) -> Result<(), Error> {
         // Attempt clean disconnect: send DisconnectRequest via the WebSocket
         if let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) {
+            let ws = ws.lock().await.clone();
             let disconnect_msg = {
                 let mut c = conn.lock().await;
                 c.build_disconnect_request().ok()
@@ -781,6 +704,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 "BACnet/SC transport not started",
             ))
         })?;
+        let ws = ws.lock().await.clone();
         let conn = self.connection.as_ref().ok_or_else(|| {
             Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
