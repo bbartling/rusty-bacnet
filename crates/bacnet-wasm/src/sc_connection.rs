@@ -13,6 +13,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
 const DEFAULT_MAX_BVLC_LENGTH: u16 = 1476;
+pub(crate) const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+pub(crate) const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
 
 /// BACnet/SC connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,8 @@ pub struct ScConnection {
     pub hub_max_apdu_length: u16,
     next_message_id: u16,
     pending_connect_message_id: Option<u16>,
+    last_bvlc_received_ms: Option<u64>,
+    pending_heartbeat_message_id: Option<u16>,
     pub disconnect_ack_to_send: Option<ScMessage>,
 }
 
@@ -56,6 +60,13 @@ pub struct ReceivedScNpdu {
     pub source_vmac: Vmac,
     /// BACnet/SC Data Options exposed as data attributes.
     pub data_attributes: Vec<DataAttribute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScHeartbeatAction {
+    None,
+    Send(ScMessage),
+    Disconnect,
 }
 
 impl ScConnection {
@@ -75,6 +86,8 @@ impl ScConnection {
             hub_max_apdu_length: DEFAULT_MAX_BVLC_LENGTH,
             next_message_id: 1,
             pending_connect_message_id: None,
+            last_bvlc_received_ms: None,
+            pending_heartbeat_message_id: None,
             disconnect_ack_to_send: None,
         }
     }
@@ -134,8 +147,15 @@ impl ScConnection {
     }
 
     pub fn abort_connect(&mut self) {
+        self.mark_disconnected();
+    }
+
+    pub(crate) fn mark_disconnected(&mut self) {
         self.state = ScConnectionState::Disconnected;
         self.pending_connect_message_id = None;
+        self.pending_heartbeat_message_id = None;
+        self.last_bvlc_received_ms = None;
+        self.disconnect_ack_to_send = None;
     }
 
     /// Handle a BVLC-Result received while waiting for Connect-Accept.
@@ -234,6 +254,74 @@ impl ScConnection {
         }
     }
 
+    pub(crate) fn start_heartbeat_tracking(&mut self, now_ms: u64) {
+        self.last_bvlc_received_ms = Some(now_ms);
+        self.pending_heartbeat_message_id = None;
+    }
+
+    pub(crate) fn record_heartbeat_activity(&mut self, now_ms: u64) {
+        if self.state == ScConnectionState::Connected {
+            self.last_bvlc_received_ms = Some(now_ms);
+            self.pending_heartbeat_message_id = None;
+        }
+    }
+
+    pub(crate) fn handle_heartbeat_ack(&mut self, msg: &ScMessage, now_ms: u64) -> bool {
+        if self.heartbeat_ack_matches_outstanding(msg) {
+            self.record_heartbeat_activity(now_ms);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn next_heartbeat_action(
+        &mut self,
+        now_ms: u64,
+        interval_ms: u64,
+        timeout_ms: u64,
+    ) -> ScHeartbeatAction {
+        if self.state != ScConnectionState::Connected {
+            return ScHeartbeatAction::None;
+        }
+
+        let Some(last_received) = self.last_bvlc_received_ms else {
+            self.start_heartbeat_tracking(now_ms);
+            return ScHeartbeatAction::None;
+        };
+
+        if now_ms < last_received {
+            self.mark_disconnected();
+            return ScHeartbeatAction::Disconnect;
+        }
+
+        let idle_ms = now_ms - last_received;
+        if idle_ms > timeout_ms {
+            self.mark_disconnected();
+            return ScHeartbeatAction::Disconnect;
+        }
+
+        if idle_ms >= interval_ms && self.pending_heartbeat_message_id.is_none() {
+            let heartbeat = self.build_heartbeat();
+            self.pending_heartbeat_message_id = Some(heartbeat.message_id);
+            return ScHeartbeatAction::Send(heartbeat);
+        }
+
+        ScHeartbeatAction::None
+    }
+
+    fn heartbeat_ack_matches_outstanding(&self, msg: &ScMessage) -> bool {
+        msg.function == ScFunction::HeartbeatAck
+            && self
+                .pending_heartbeat_message_id
+                .is_some_and(|message_id| msg.message_id == message_id)
+            && msg.originating_vmac.is_none()
+            && msg.destination_vmac.is_none()
+            && msg.dest_options.is_empty()
+            && msg.data_options.is_empty()
+            && msg.payload.is_empty()
+    }
+
     /// Build an Encapsulated-NPDU message.
     pub fn build_encapsulated_npdu(&mut self, dest_vmac: Vmac, npdu: &[u8]) -> ScMessage {
         self.build_encapsulated_npdu_with_data_attributes(dest_vmac, npdu, &[])
@@ -287,7 +375,7 @@ impl ScConnection {
             }
             ScFunction::HeartbeatRequest => None,
             ScFunction::DisconnectRequest => {
-                self.state = ScConnectionState::Disconnected;
+                self.mark_disconnected();
                 // AB.2.13.1: Disconnect-ACK has no VMACs
                 self.disconnect_ack_to_send = Some(ScMessage {
                     function: ScFunction::DisconnectAck,
@@ -302,7 +390,7 @@ impl ScConnection {
             }
             ScFunction::DisconnectAck => {
                 if self.state == ScConnectionState::Disconnecting {
-                    self.state = ScConnectionState::Disconnected;
+                    self.mark_disconnected();
                 }
                 None
             }
@@ -310,8 +398,7 @@ impl ScConnection {
                 match decode_sc_bvlc_result(msg) {
                     Ok(ScBvlcResult::Ack { .. }) => {}
                     Ok(ScBvlcResult::Nak { .. }) | Err(_) => {
-                        self.state = ScConnectionState::Disconnected;
-                        self.pending_connect_message_id = None;
+                        self.mark_disconnected();
                     }
                 }
                 None
@@ -322,449 +409,4 @@ impl ScConnection {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn connect_handshake() {
-        let vmac = [1, 2, 3, 4, 5, 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.max_bvlc_length = 1200;
-        conn.max_apdu_length = 900;
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-
-        let req = conn.build_connect_request();
-        assert_eq!(conn.state, ScConnectionState::Connecting);
-        assert_eq!(req.function, ScFunction::ConnectRequest);
-        // AB.2.10.1: no VMACs, 26-byte payload
-        assert!(req.originating_vmac.is_none());
-        assert_eq!(req.payload.len(), 26);
-        assert_eq!(u16::from_be_bytes([req.payload[22], req.payload[23]]), 1200);
-        assert_eq!(u16::from_be_bytes([req.payload[24], req.payload[25]]), 900);
-
-        // Simulate ConnectAccept with 26-byte payload
-        let hub_vmac = [7, 8, 9, 10, 11, 12];
-        let mut accept_payload = Vec::with_capacity(26);
-        accept_payload.extend_from_slice(&hub_vmac);
-        accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
-        accept_payload.extend_from_slice(&1100u16.to_be_bytes());
-        accept_payload.extend_from_slice(&480u16.to_be_bytes());
-        let accept = ScMessage {
-            function: ScFunction::ConnectAccept,
-            message_id: req.message_id,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from(accept_payload),
-        };
-        assert!(conn.handle_connect_accept(&accept));
-        assert_eq!(conn.state, ScConnectionState::Connected);
-        assert_eq!(conn.hub_vmac, Some(hub_vmac));
-        assert_eq!(conn.hub_max_bvlc_length, 1100);
-        assert_eq!(conn.hub_max_apdu_length, 480);
-    }
-
-    #[test]
-    fn connect_accept_wrong_state() {
-        let mut conn = ScConnection::new([1; 6]);
-        // Not in Connecting state
-        let msg = ScMessage {
-            function: ScFunction::ConnectAccept,
-            message_id: 1,
-            originating_vmac: Some([2; 6]),
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from(vec![0; 10]),
-        };
-        assert!(!conn.handle_connect_accept(&msg));
-    }
-
-    #[test]
-    fn connect_accept_rejects_wrong_message_id() {
-        let mut conn = ScConnection::new([1; 6]);
-        let req = conn.build_connect_request();
-        let hub_vmac = [2; 6];
-        let mut payload = Vec::with_capacity(26);
-        payload.extend_from_slice(&hub_vmac);
-        payload.extend_from_slice(&[0u8; 16]);
-        payload.extend_from_slice(&1476u16.to_be_bytes());
-        payload.extend_from_slice(&1476u16.to_be_bytes());
-
-        let wrong_accept = ScMessage {
-            function: ScFunction::ConnectAccept,
-            message_id: req.message_id.wrapping_add(1),
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from(payload.clone()),
-        };
-        assert!(!conn.handle_connect_accept(&wrong_accept));
-        assert_eq!(conn.state, ScConnectionState::Connecting);
-        assert_eq!(conn.hub_vmac, None);
-
-        let right_accept = ScMessage {
-            function: ScFunction::ConnectAccept,
-            message_id: req.message_id,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from(payload),
-        };
-        assert!(conn.handle_connect_accept(&right_accept));
-        assert_eq!(conn.state, ScConnectionState::Connected);
-        assert_eq!(conn.hub_vmac, Some(hub_vmac));
-    }
-
-    #[test]
-    fn connect_accept_rejects_short_payload() {
-        let mut conn = ScConnection::new([1; 6]);
-        let req = conn.build_connect_request();
-        let short_accept = ScMessage {
-            function: ScFunction::ConnectAccept,
-            message_id: req.message_id,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[2; 6]),
-        };
-
-        assert!(!conn.handle_connect_accept(&short_accept));
-        assert_eq!(conn.state, ScConnectionState::Connecting);
-        assert_eq!(conn.hub_vmac, None);
-    }
-
-    #[test]
-    fn disconnect_request_and_ack() {
-        let vmac = [1; 6];
-        let hub_vmac = [2; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-        conn.hub_vmac = Some(hub_vmac);
-
-        let req = conn.build_disconnect_request().unwrap();
-        assert_eq!(conn.state, ScConnectionState::Disconnecting);
-        assert_eq!(req.function, ScFunction::DisconnectRequest);
-        // AB.2.12.1: no VMACs
-        assert!(req.originating_vmac.is_none());
-        assert!(req.destination_vmac.is_none());
-
-        // Receive DisconnectAck
-        let ack = ScMessage {
-            function: ScFunction::DisconnectAck,
-            message_id: req.message_id,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::new(),
-        };
-        conn.handle_received(&ack);
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-    }
-
-    #[test]
-    fn disconnect_without_hub_vmac() {
-        let mut conn = ScConnection::new([1; 6]);
-        assert!(conn.build_disconnect_request().is_err());
-    }
-
-    #[test]
-    fn encapsulated_npdu_round_trip() {
-        let vmac = [1; 6];
-        let hub_vmac = [2; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-        conn.hub_vmac = Some(hub_vmac);
-
-        let npdu = vec![0x01, 0x04, 0x00];
-        let msg = conn.build_encapsulated_npdu([3; 6], &npdu);
-        assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
-        assert_eq!(msg.destination_vmac, Some([3; 6]));
-        assert_eq!(msg.payload.as_ref(), &npdu[..]);
-    }
-
-    #[test]
-    fn handle_encapsulated_npdu_hub_unicast() {
-        let vmac = [1; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: 42,
-            originating_vmac: Some([2; 6]),
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x01, 0x04]),
-        };
-        let result = conn.handle_received(&msg);
-        assert!(result.is_some());
-        let received = result.unwrap();
-        assert_eq!(received.npdu.as_ref(), &[0x01, 0x04]);
-        assert_eq!(received.source_vmac, [2; 6]);
-        assert!(received.data_attributes.is_empty());
-    }
-
-    #[test]
-    fn handle_encapsulated_npdu_rejects_oversized_local_npdu() {
-        let vmac = [1; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-        conn.max_apdu_length = 1;
-
-        let msg = ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: 42,
-            originating_vmac: Some([2; 6]),
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x01, 0x04]),
-        };
-        assert!(conn.handle_received(&msg).is_none());
-    }
-
-    #[test]
-    fn handle_encapsulated_npdu_drops_non_broadcast_destination_from_hub() {
-        let vmac = [1; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: 42,
-            originating_vmac: Some([2; 6]),
-            destination_vmac: Some(vmac),
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x01]),
-        };
-        assert!(conn.handle_received(&msg).is_none());
-    }
-
-    #[test]
-    fn handle_encapsulated_npdu_broadcast() {
-        let vmac = [1; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: 42,
-            originating_vmac: Some([2; 6]),
-            destination_vmac: Some([0xFF; 6]), // broadcast
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x01]),
-        };
-        assert!(conn.handle_received(&msg).is_some());
-    }
-
-    #[test]
-    fn handle_disconnect_request_generates_ack() {
-        let vmac = [1; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::DisconnectRequest,
-            message_id: 99,
-            originating_vmac: Some([2; 6]),
-            destination_vmac: Some(vmac),
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::new(),
-        };
-        conn.handle_received(&msg);
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-        let ack = conn.disconnect_ack_to_send.take().unwrap();
-        assert_eq!(ack.function, ScFunction::DisconnectAck);
-        assert_eq!(ack.message_id, 99);
-        // AB.2.13.1: no VMACs on DisconnectAck
-        assert!(ack.originating_vmac.is_none());
-        assert!(ack.destination_vmac.is_none());
-    }
-
-    #[test]
-    fn handle_bvlc_result_ack_keeps_connected() {
-        let mut conn = ScConnection::new([1; 6]);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::Result,
-            message_id: 1,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x0C, 0x00]),
-        };
-        conn.handle_received(&msg);
-        assert_eq!(conn.state, ScConnectionState::Connected);
-    }
-
-    #[test]
-    fn handle_bvlc_result_nak_disconnects() {
-        let mut conn = ScConnection::new([1; 6]);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::Result,
-            message_id: 1,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01]),
-        };
-        conn.handle_received(&msg);
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-    }
-
-    #[test]
-    fn handle_connect_result_duplicate_vmac_installs_replacement() {
-        let mut conn = ScConnection::new([1; 6]);
-        let req = conn.build_connect_request();
-        let replacement = [0x12, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
-        let msg = ScMessage {
-            function: ScFunction::Result,
-            message_id: req.message_id,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x97]),
-        };
-        let result = decode_sc_bvlc_result(&msg).unwrap();
-
-        assert!(conn
-            .handle_connect_result(req.message_id, &result, Some(replacement))
-            .unwrap());
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-        assert_eq!(conn.local_vmac, replacement);
-
-        let retry = conn.build_connect_request();
-        assert_eq!(&retry.payload[0..6], replacement.as_slice());
-    }
-
-    #[test]
-    fn handle_connect_result_duplicate_vmac_wrong_message_id_does_not_replace_vmac() {
-        let original = [0x22, 1, 2, 3, 4, 5];
-        let replacement = [0x12, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
-        let mut conn = ScConnection::new(original);
-        let req = conn.build_connect_request();
-        let msg = ScMessage {
-            function: ScFunction::Result,
-            message_id: req.message_id.wrapping_add(1),
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x97]),
-        };
-        let result = decode_sc_bvlc_result(&msg).unwrap();
-
-        assert!(!conn
-            .handle_connect_result(msg.message_id, &result, Some(replacement))
-            .unwrap());
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-        assert_eq!(conn.local_vmac, original);
-
-        let retry = conn.build_connect_request();
-        assert_eq!(&retry.payload[0..6], original.as_slice());
-    }
-
-    #[test]
-    fn handle_connect_result_generic_nak_does_not_replace_vmac() {
-        let original = [0x22, 1, 2, 3, 4, 5];
-        let mut conn = ScConnection::new(original);
-        let req = conn.build_connect_request();
-        let replacement = [0x12, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
-        let msg = ScMessage {
-            function: ScFunction::Result,
-            message_id: req.message_id,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x96]),
-        };
-        let result = decode_sc_bvlc_result(&msg).unwrap();
-
-        assert!(!conn
-            .handle_connect_result(req.message_id, &result, Some(replacement))
-            .unwrap());
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-        assert_eq!(conn.local_vmac, original);
-    }
-
-    #[test]
-    fn new_with_device_uuid_sends_supplied_uuid() {
-        let uuid = [0xAB; 16];
-        let mut conn = ScConnection::new_with_device_uuid([1; 6], uuid);
-        let req = conn.build_connect_request();
-
-        assert_eq!(&req.payload[6..22], uuid.as_slice());
-    }
-
-    #[test]
-    fn handle_malformed_bvlc_result_disconnects() {
-        let mut conn = ScConnection::new([1; 6]);
-        conn.state = ScConnectionState::Connected;
-
-        let msg = ScMessage {
-            function: ScFunction::Result,
-            message_id: 1,
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::new(),
-        };
-        conn.handle_received(&msg);
-        assert_eq!(conn.state, ScConnectionState::Disconnected);
-    }
-
-    #[test]
-    fn heartbeat() {
-        let vmac = [1; 6];
-        let hub_vmac = [2; 6];
-        let mut conn = ScConnection::new(vmac);
-        conn.hub_vmac = Some(hub_vmac);
-
-        let hb = conn.build_heartbeat();
-        assert_eq!(hb.function, ScFunction::HeartbeatRequest);
-        // AB.2.14.1: no VMACs on HeartbeatRequest
-        assert!(hb.originating_vmac.is_none());
-        assert!(hb.destination_vmac.is_none());
-        assert!(hb.payload.is_empty());
-    }
-
-    #[test]
-    fn heartbeat_ack() {
-        let conn = ScConnection::new([1; 6]);
-        let ack = conn.build_heartbeat_ack(42);
-        assert_eq!(ack.function, ScFunction::HeartbeatAck);
-        assert_eq!(ack.message_id, 42);
-        // AB.2.15.1: no VMACs on HeartbeatAck
-        assert!(ack.originating_vmac.is_none());
-        assert!(ack.destination_vmac.is_none());
-        assert!(ack.data_options.is_empty());
-        assert!(ack.payload.is_empty());
-    }
-
-    #[test]
-    fn message_id_wraps() {
-        let mut conn = ScConnection::new([1; 6]);
-        conn.next_message_id = u16::MAX;
-        assert_eq!(conn.next_id(), u16::MAX);
-        assert_eq!(conn.next_id(), 0);
-        assert_eq!(conn.next_id(), 1);
-    }
-}
+mod tests;

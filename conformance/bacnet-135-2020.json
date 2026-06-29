@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "6f2596465b4f21eb1f74053e3db3f0ae5fd69772",
-  "review_scope": "Annex AB.6.2 BACnet/SC initiating-peer duplicate VMAC recovery and Clause H.7.3 Random-48 VMAC generation, including native Connect-Request BVLC-Result NAK handling, initial failover retry payloads, primary-restore probe VMAC/retry-state preservation, native duplicate-VMAC reseed-failure fail-closed behavior, native connect-time/I/O cleanup, WASM/browser VMAC generation and retry state, and generic Connect-Request NAK fail-closed behavior.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.4 BVLC-Result, AB.2.10 Connect-Request, AB.6.2 initiating and accepting peer duplicate VMAC behavior, Clause H.7.3 Random-48 VMAC format, and Clause 18/21 communication error values. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.2 duplicate VMAC recovery or H.7.3 Random-48 VMAC behavior covered by this tranche.",
+  "repo_sha": "a889b76331bfcb4e2dd998b8a78e544ad37397b2",
+  "review_scope": "Annex AB.6.3 BACnet/SC heartbeat initiation and liveness behavior for browser/WASM clients, covering post-Connect-Accept heartbeat tracking, monotonic Performance-clock scheduling, no-VMAC Heartbeat-ACK correlation, timeout/send-failure fail-closed disconnect, receive-loop/timer cleanup, and pending confirmed-service Promise rejection on terminal disconnect paths.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.14 Heartbeat-Request, AB.2.15 Heartbeat-ACK, Annex AB.6.3 heartbeat interval/timeout behavior, and Table AB-1 BVLC-SC function constraints. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.3 browser heartbeat behavior covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -565,7 +565,7 @@
         "crates/bacnet-wasm/src/sc_frame/result.rs::tests::bvlc_result_nak_decode_without_details",
         "crates/bacnet-transport/src/sc/result_tests.rs::bvlc_result_success_no_disconnect",
         "crates/bacnet-transport/src/sc/result_tests.rs::bvlc_result_ack_with_payload_no_disconnect",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_bvlc_result_ack_keeps_connected"
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_bvlc_result_ack_keeps_connected"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/sc_frame/result.rs::tests::bvlc_result_rejects_malformed_payloads",
@@ -575,8 +575,8 @@
         "crates/bacnet-transport/src/sc/result_tests.rs::sc_connect_result_nak_fails_without_timeout",
         "crates/bacnet-transport/src/sc/result_tests.rs::sc_result_nak_closes_receive_loop_before_heartbeat",
         "crates/bacnet-transport/src/sc/result_tests.rs::malformed_wire_bvlc_result_closes_receive_loop",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_bvlc_result_nak_disconnects",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_malformed_bvlc_result_disconnects"
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_bvlc_result_nak_disconnects",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_malformed_bvlc_result_disconnects"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
@@ -600,6 +600,7 @@
         "crates/bacnet-network/src/router/forwarding.rs",
         "crates/bacnet-network/src/router/tests/data_attributes.rs",
         "crates/bacnet-wasm/src/client.rs",
+        "crates/bacnet-wasm/src/client/lifecycle.rs",
         "crates/bacnet-wasm/src/data_attributes.rs",
         "crates/bacnet-wasm/src/sc_connection.rs",
         "crates/bacnet-wasm/src/sc_data_attribute_tests.rs",
@@ -663,6 +664,7 @@
         "crates/bacnet-transport/src/sc_hub.rs",
         "crates/bacnet-transport/src/sc_hub/tests.rs",
         "crates/bacnet-wasm/src/client.rs",
+        "crates/bacnet-wasm/src/client/lifecycle.rs",
         "crates/bacnet-wasm/src/sc_connection.rs",
         "crates/bacnet-types/src/enums/protocol.rs"
       ],
@@ -678,8 +680,8 @@
         "crates/bacnet-transport/src/sc_hub/tests.rs::hub_registration_replaces_known_device_uuid_with_same_vmac",
         "crates/bacnet-transport/src/sc_hub/tests.rs::known_unhandled_function_is_not_classified_as_unknown",
         "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_replaces_known_device_uuid_connection",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_handshake",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::new_with_device_uuid_sends_supplied_uuid"
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::connect_handshake",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::new_with_device_uuid_sends_supplied_uuid"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_wrong_message_id",
@@ -711,12 +713,12 @@
         "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_rejects_vmac_collisions_with_result_nak",
         "crates/bacnet-transport/src/sc_hub/tests.rs::relay_limit_decision_rejects_oversized_npdu_first",
         "crates/bacnet-transport/src/sc_hub/tests.rs::relay_limit_decision_rejects_oversized_encoded_bvlc",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_wrong_message_id",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_short_payload",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_connect_result_duplicate_vmac_installs_replacement",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_connect_result_duplicate_vmac_wrong_message_id_does_not_replace_vmac",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_connect_result_generic_nak_does_not_replace_vmac",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_encapsulated_npdu_rejects_oversized_local_npdu"
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::connect_accept_rejects_wrong_message_id",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::connect_accept_rejects_short_payload",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_connect_result_duplicate_vmac_installs_replacement",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_connect_result_duplicate_vmac_wrong_message_id_does_not_replace_vmac",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_connect_result_generic_nak_does_not_replace_vmac",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::handle_encapsulated_npdu_rejects_oversized_local_npdu"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs", "benchmarks/benches/sc_throughput.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
@@ -840,7 +842,9 @@
         "crates/bacnet-transport/src/sc_hub/connection.rs",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs",
         "crates/bacnet-wasm/src/client.rs",
-        "crates/bacnet-wasm/src/sc_connection.rs"
+        "crates/bacnet-wasm/src/client/lifecycle.rs",
+        "crates/bacnet-wasm/src/sc_connection.rs",
+        "crates/bacnet-wasm/src/ws_transport.rs"
       ],
       "positive_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::build_heartbeat",
@@ -851,8 +855,11 @@
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_keeps_active_client_without_pending_heartbeat",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_sends_request_to_idle_client_without_pending_heartbeat",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_keeps_client_while_pending_heartbeat_is_within_ack_timeout",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack"
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_ack",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_scheduler_sends_after_idle_interval",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_ack_clears_only_matching_outstanding_request",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::inbound_bvlc_activity_defers_browser_heartbeat_and_timeout"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_heartbeat_send_error_transitions_to_disconnected",
@@ -862,11 +869,15 @@
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_start_rejects_heartbeat_disconnect_timeout_at_interval",
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_start_rejects_heartbeat_interval_below_annex_ab_range",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_removes_client_when_pending_heartbeat_exceeds_ack_timeout",
-        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id"
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_ack_rejects_vmac_fields_until_timeout",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_ack_rejects_destination_options_until_timeout",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_scheduler_fails_closed_on_non_monotonic_time",
+        "crates/bacnet-wasm/src/sc_connection/tests.rs::heartbeat_scheduler_times_out_on_large_forward_elapsed_time"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
-      "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms"],
-      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. Accelerated heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because WASM/browser keep-alive initiation and fully deterministic end-to-end timeout tests still need follow-up."
+      "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms", "docs/wasm-api.md Heartbeat-Request/Heartbeat-ACK keep-alive handling", "crates/bacnet-wasm/README.md Heartbeat-Request/Heartbeat-ACK keep-alive handling"],
+      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. WASM/browser evidence now validates the Performance monotonic clock before accepting the Connected state, starts a browser `Window` heartbeat timer after Connect-Accept, schedules with the browser Performance clock, sends Heartbeat-Requests after idle BVLC activity, accepts only matching no-VMAC/no-Destination-Options Heartbeat-ACKs as liveness, clears the timer on disconnect or receive-loop exit, closes on heartbeat send failure or scheduler timeout, fail-closes on non-monotonic clock samples, defers dropping the retained interval `Closure` until after heartbeat callback terminal cleanup returns, clones the WebSocket receive handle before awaiting to avoid terminal cleanup borrow conflicts, and rejects pending confirmed-service Promises on terminal disconnect paths. Deterministic scheduler tests cover initiation, ACK correlation, invalid ACK VMAC/Destination Options timeout, inbound activity deferral, non-monotonic samples, and timeout disconnect. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because live browser/WebSocket heartbeat, timeout, and pending-Promise smoke coverage still needs follow-up."
     }
   ]
 }

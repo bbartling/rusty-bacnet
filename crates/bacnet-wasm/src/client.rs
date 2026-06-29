@@ -3,6 +3,8 @@
 //! This is the main entry point for JS code. It wraps the SC connection state
 //! machine, browser WebSocket, and service codecs into a high-level async API.
 
+mod lifecycle;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -10,22 +12,17 @@ use std::rc::Rc;
 use bytes::BytesMut;
 use js_sys::{Array, Function, Reflect, Uint8Array};
 use serde::Serialize;
-use wasm_bindgen::{prelude::*, JsCast};
-use wasm_bindgen_futures::spawn_local;
+use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 
 use crate::codec;
 use crate::data_attributes::{
     self, DataAttribute, MAX_SC_DATA_ATTRIBUTES, MAX_SC_DATA_ATTRIBUTE_PAYLOAD,
 };
-use crate::sc_connection::ReceivedScNpdu;
 use crate::sc_connection::{ScConnection, ScConnectionState};
 use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC,
 };
 use crate::ws_transport::BrowserWebSocket;
-use bacnet_encoding::apdu;
-use bacnet_encoding::npdu;
-use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 
 /// BACnet/SC thin client for browser environments.
 ///
@@ -44,6 +41,8 @@ pub struct BACnetScClient {
     on_iam: Rc<RefCell<Option<Function>>>,
     on_cov: Rc<RefCell<Option<Function>>>,
     on_npdu: Rc<RefCell<Option<Function>>>,
+    heartbeat_interval_id: Rc<RefCell<Option<i32>>>,
+    heartbeat_interval_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
 }
 
 #[derive(Serialize)]
@@ -135,15 +134,37 @@ impl BACnetScClient {
                 "BACnet/SC ConnectRequest rejected by BVLC-Result"
             }));
         }
+        // Validate the monotonic clock before accepting the connection state.
+        let heartbeat_start_ms = match Self::monotonic_now_ms() {
+            Ok(now_ms) => now_ms,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(e);
+            }
+        };
         if !self.connection.borrow_mut().handle_connect_accept(&msg) {
             self.connection.borrow_mut().abort_connect();
             ws.close();
             return Err(JsError::new("ConnectAccept not received or invalid"));
         }
+        self.connection
+            .borrow_mut()
+            .start_heartbeat_tracking(heartbeat_start_ms);
 
         *self.ws.borrow_mut() = Some(ws);
 
-        // Start receive loop
+        if let Err(e) = self.start_heartbeat_loop() {
+            Self::terminate_connection(
+                &self.ws,
+                &self.connection,
+                &self.pending,
+                &self.heartbeat_interval_id,
+                &self.heartbeat_interval_closure,
+                "BACnet/SC heartbeat timer startup failed",
+            );
+            return Err(e);
+        }
         self.start_recv_loop();
 
         Ok(())
@@ -306,10 +327,14 @@ impl BACnetScClient {
                 let _ = ws.send(&buf);
             }
         }
-        if let Some(ws) = self.ws.borrow().as_ref() {
-            ws.close();
-        }
-        self.connection.borrow_mut().state = ScConnectionState::Disconnected;
+        Self::terminate_connection(
+            &self.ws,
+            &self.connection,
+            &self.pending,
+            &self.heartbeat_interval_id,
+            &self.heartbeat_interval_closure,
+            "BACnet/SC client disconnected",
+        );
         Ok(())
     }
 
@@ -342,6 +367,8 @@ impl BACnetScClient {
             on_iam: Rc::new(RefCell::new(None)),
             on_cov: Rc::new(RefCell::new(None)),
             on_npdu: Rc::new(RefCell::new(None)),
+            heartbeat_interval_id: Rc::new(RefCell::new(None)),
+            heartbeat_interval_closure: Rc::new(RefCell::new(None)),
         })
     }
 
@@ -614,192 +641,5 @@ impl BACnetScClient {
         wasm_bindgen_futures::JsFuture::from(promise)
             .await
             .map_err(|e| JsError::new(&format!("{:?}", e)))
-    }
-
-    fn start_recv_loop(&self) {
-        let ws = self.ws.clone();
-        let connection = self.connection.clone();
-        let pending = self.pending.clone();
-        let on_iam = self.on_iam.clone();
-        let on_cov = self.on_cov.clone();
-        let on_npdu = self.on_npdu.clone();
-
-        spawn_local(async move {
-            loop {
-                let data = {
-                    let ws_ref = ws.borrow();
-                    let Some(ws) = ws_ref.as_ref() else {
-                        break;
-                    };
-                    match ws.recv().await {
-                        Ok(data) => data,
-                        Err(_) => {
-                            connection.borrow_mut().state = ScConnectionState::Disconnected;
-                            break;
-                        }
-                    }
-                };
-
-                // Decode SC frame
-                let max_bvlc = connection.borrow().max_bvlc_length as usize;
-                if data.len() > max_bvlc {
-                    continue;
-                }
-                let sc_msg = match decode_sc_message(&data) {
-                    Ok(sc_msg) => sc_msg,
-                    Err(_) => {
-                        if let Some(result) =
-                            data_attributes::malformed_secure_path_result_from_frame(&data)
-                        {
-                            if let Some(nak) = result {
-                                let mut buf = BytesMut::new();
-                                encode_sc_message(&mut buf, &nak);
-                                if let Some(ws) = ws.borrow().as_ref() {
-                                    let _ = ws.send(&buf);
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                };
-
-                let rejection = {
-                    connection
-                        .borrow()
-                        .unsupported_must_understand_result(&sc_msg)
-                };
-                if let Some(result) = rejection {
-                    if let Some(nak) = result {
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &nak);
-                        if let Some(ws) = ws.borrow().as_ref() {
-                            let _ = ws.send(&buf);
-                        }
-                    }
-                    continue;
-                }
-
-                // Handle SC message
-                {
-                    let npdu_data = connection.borrow_mut().handle_received(&sc_msg);
-                    if let Some(received) = npdu_data {
-                        Self::emit_npdu(&received, &on_npdu);
-                        Self::process_npdu(&received.npdu, &pending, &on_iam, &on_cov);
-                    }
-                    // Send disconnect ACK if pending
-                    let ack = connection.borrow_mut().disconnect_ack_to_send.take();
-                    if let Some(ack) = ack {
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &ack);
-                        if let Some(ws) = ws.borrow().as_ref() {
-                            let _ = ws.send(&buf);
-                        }
-                    }
-                }
-
-                // Handle heartbeat
-                if sc_msg.function == ScFunction::HeartbeatRequest {
-                    let ack = connection.borrow().build_heartbeat_ack(sc_msg.message_id);
-                    let mut buf = BytesMut::new();
-                    encode_sc_message(&mut buf, &ack);
-                    if let Some(ws) = ws.borrow().as_ref() {
-                        let _ = ws.send(&buf);
-                    }
-                }
-            }
-        });
-    }
-
-    fn process_npdu(
-        npdu_bytes: &[u8],
-        pending: &Rc<RefCell<HashMap<u8, (Function, Function)>>>,
-        on_iam: &Rc<RefCell<Option<Function>>>,
-        on_cov: &Rc<RefCell<Option<Function>>>,
-    ) {
-        // Decode NPDU to get APDU
-        let Ok(npdu) = npdu::decode_npdu(bytes::Bytes::copy_from_slice(npdu_bytes)) else {
-            return;
-        };
-        let Ok(apdu_result) = apdu::decode_apdu(npdu.payload.clone()) else {
-            return;
-        };
-
-        match apdu_result {
-            apdu::Apdu::ComplexAck(ack) => {
-                if let Some((resolve, _reject)) = pending.borrow_mut().remove(&ack.invoke_id) {
-                    // Decode based on service choice
-                    let result = if ack.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
-                        codec::decode_read_property_ack(&ack.service_ack).unwrap_or(JsValue::NULL)
-                    } else {
-                        JsValue::TRUE
-                    };
-                    let _ = resolve.call1(&JsValue::NULL, &result);
-                }
-            }
-            apdu::Apdu::SimpleAck(ack) => {
-                if let Some((resolve, _reject)) = pending.borrow_mut().remove(&ack.invoke_id) {
-                    let _ = resolve.call1(&JsValue::NULL, &JsValue::TRUE);
-                }
-            }
-            apdu::Apdu::Error(err) => {
-                if let Some((_resolve, reject)) = pending.borrow_mut().remove(&err.invoke_id) {
-                    let msg = format!(
-                        "BACnet error: class={} code={}",
-                        err.error_class.to_raw(),
-                        err.error_code.to_raw()
-                    );
-                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                }
-            }
-            apdu::Apdu::Reject(rej) => {
-                if let Some((_resolve, reject)) = pending.borrow_mut().remove(&rej.invoke_id) {
-                    let msg = format!("BACnet reject: reason={}", rej.reject_reason.to_raw());
-                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                }
-            }
-            apdu::Apdu::Abort(abt) => {
-                if let Some((_resolve, reject)) = pending.borrow_mut().remove(&abt.invoke_id) {
-                    let msg = format!("BACnet abort: reason={}", abt.abort_reason.to_raw());
-                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                }
-            }
-            apdu::Apdu::UnconfirmedRequest(req) => {
-                if req.service_choice == UnconfirmedServiceChoice::I_AM {
-                    if let Some(cb) = on_iam.borrow().as_ref() {
-                        let _ = cb.call1(
-                            &JsValue::NULL,
-                            &js_sys::Uint8Array::from(req.service_request.as_ref()),
-                        );
-                    }
-                } else if req.service_choice
-                    == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION
-                {
-                    if let Some(cb) = on_cov.borrow().as_ref() {
-                        let _ = cb.call1(
-                            &JsValue::NULL,
-                            &js_sys::Uint8Array::from(req.service_request.as_ref()),
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn emit_npdu(received: &ReceivedScNpdu, on_npdu: &Rc<RefCell<Option<Function>>>) {
-        let Some(callback) = on_npdu.borrow().as_ref().cloned() else {
-            return;
-        };
-
-        let metadata = ReceivedNpduMetadata {
-            source_vmac: received.source_vmac.to_vec(),
-            data_attributes: received.data_attributes.clone(),
-        };
-        let metadata = serde_wasm_bindgen::to_value(&metadata).unwrap_or(JsValue::NULL);
-        let _ = callback.call2(
-            &JsValue::NULL,
-            &Uint8Array::from(received.npdu.as_ref()),
-            &metadata,
-        );
     }
 }
