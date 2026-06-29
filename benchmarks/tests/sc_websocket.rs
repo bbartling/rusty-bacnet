@@ -215,6 +215,41 @@ async fn sc_websocket_hub_preserves_large_minimum_size_option_chains() {
 }
 
 #[tokio::test]
+async fn sc_websocket_hub_naks_direct_address_resolution_as_unsupported() {
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+
+    let mut ws = connect_sc_client(&url, &certs, [0xAD; 6]).await;
+    let address_resolution = ScMessage {
+        function: ScFunction::AddressResolution,
+        message_id: 0x2501,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    send_sc_message(&mut ws, &address_resolution).await;
+
+    let nak = recv_sc_message(&mut ws).await;
+    assert_eq!(nak.function, ScFunction::Result);
+    assert_eq!(nak.message_id, address_resolution.message_id);
+    assert_eq!(
+        decode_sc_bvlc_result(&nak).unwrap(),
+        ScBvlcResult::Nak {
+            result_for: ScFunction::AddressResolution,
+            error_header_marker: 0,
+            error_class: 7,
+            error_code: 150,
+            error_details: String::new(),
+        }
+    );
+    assert_no_sc_message(&mut ws).await;
+
+    hub.stop().await;
+}
+
+#[tokio::test]
 async fn sc_websocket_hub_replaces_known_device_uuid_connection() {
     let certs = generate_test_certs();
     let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
