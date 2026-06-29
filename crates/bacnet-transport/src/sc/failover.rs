@@ -25,7 +25,10 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     connect_timeout_ms: u64,
 ) -> Result<(), Error> {
     let probe_conn = Arc::new(Mutex::new(primary_probe_connection(conn).await));
-    perform_handshake(&**primary_ws, &probe_conn, connect_timeout_ms).await?;
+    if let Err(e) = perform_handshake(&**primary_ws, &probe_conn, connect_timeout_ms).await {
+        absorb_failed_probe(conn, &probe_conn).await;
+        return Err(e);
+    }
 
     send_disconnect_request(&**current_ws, conn).await;
 
@@ -43,6 +46,18 @@ async fn primary_probe_connection(conn: &Arc<Mutex<ScConnection>>) -> ScConnecti
     probe.max_bvlc_length = c.max_bvlc_length;
     probe.max_apdu_length = c.max_apdu_length;
     probe
+}
+
+async fn absorb_failed_probe(
+    conn: &Arc<Mutex<ScConnection>>,
+    probe_conn: &Arc<Mutex<ScConnection>>,
+) {
+    let probe = probe_conn.lock().await;
+    let mut c = conn.lock().await;
+    c.local_vmac = probe.local_vmac;
+    if !probe.connect_retry_allowed {
+        c.connect_retry_allowed = false;
+    }
 }
 
 async fn send_disconnect_request<W: WebSocketPort>(ws: &W, conn: &Arc<Mutex<ScConnection>>) {

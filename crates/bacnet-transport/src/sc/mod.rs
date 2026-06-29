@@ -20,16 +20,21 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod connect_result;
 mod data_attributes;
 mod failover;
 mod handshake;
 mod heartbeat;
 mod loopback;
+mod random48;
 mod reconnect;
 mod send;
 use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
+pub(crate) use random48::generate_random48_vmac;
+#[cfg(test)]
+pub(crate) use random48::set_test_random48_vmac_generator;
 pub use reconnect::ScReconnectConfig;
 
 // ---------------------------------------------------------------------------
@@ -87,6 +92,8 @@ pub struct ScConnection {
     pending_connect_message_id: Option<u16>,
     /// Device UUID of the connected hub.
     pub hub_device_uuid: Option<[u8; 16]>,
+    /// Whether the last connect failure permits another connection attempt.
+    connect_retry_allowed: bool,
 }
 
 impl ScConnection {
@@ -104,6 +111,7 @@ impl ScConnection {
             disconnect_ack_to_send: None,
             pending_connect_message_id: None,
             hub_device_uuid: None,
+            connect_retry_allowed: true,
         }
     }
 
@@ -328,9 +336,6 @@ impl ScConnection {
 // BACnet/SC Transport
 // ---------------------------------------------------------------------------
 
-const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
-const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
-
 /// BACnet/SC transport implementing [`TransportPort`].
 pub struct ScTransport<W: WebSocketPort> {
     ws: Option<W>,
@@ -359,8 +364,8 @@ impl<W: WebSocketPort> ScTransport<W> {
             connection: None,
             recv_task: None,
             connect_timeout_ms: 10_000,
-            heartbeat_interval_ms: DEFAULT_HEARTBEAT_INTERVAL_MS,
-            heartbeat_timeout_ms: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+            heartbeat_interval_ms: heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS,
+            heartbeat_timeout_ms: heartbeat::DEFAULT_HEARTBEAT_TIMEOUT_MS,
             failover_ws: None,
             reconnect_config: None,
             #[cfg(test)]
@@ -428,25 +433,6 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 }
 
-fn validate_heartbeat_timing_ms(interval_ms: u64, timeout_ms: u64) -> Result<(), Error> {
-    if !(3_000..=300_000).contains(&interval_ms) {
-        return Err(Error::OutOfRange(format!(
-            "BACnet/SC heartbeat interval must be in the configurable Annex AB.6.3 range \
-             of 3..300 seconds (3000..=300000 ms), got {interval_ms} ms"
-        )));
-    }
-
-    if timeout_ms <= interval_ms {
-        return Err(Error::OutOfRange(format!(
-            "BACnet/SC heartbeat disconnect timeout must be greater than the heartbeat \
-             interval so a Heartbeat-ACK can arrive, got interval={interval_ms} ms \
-             timeout={timeout_ms} ms"
-        )));
-    }
-
-    Ok(())
-}
-
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         /// NPDU receive channel capacity — smaller than BIP/Ethernet since SC is hub-relayed.
@@ -457,7 +443,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         #[cfg(not(test))]
         let validate_heartbeat_timing = true;
         if validate_heartbeat_timing {
-            validate_heartbeat_timing_ms(self.heartbeat_interval_ms, self.heartbeat_timeout_ms)?;
+            heartbeat::validate_heartbeat_timing_ms(
+                self.heartbeat_interval_ms,
+                self.heartbeat_timeout_ms,
+            )?;
         }
 
         let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
@@ -482,22 +471,28 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 Ok(()) => (primary_ws.clone(), ActiveHub::Primary),
                 Err(primary_err) => {
                     // Primary failed — try failover if configured.
-                    if let Some(failover) = failover_ws.take() {
+                    if !conn.lock().await.connect_retry_allowed {
+                        self.local_vmac = conn.lock().await.local_vmac;
+                        return Err(primary_err);
+                    } else if let Some(failover) = failover_ws.take() {
                         debug!("BACnet/SC primary connect failed, attempting failover");
                         // Reset connection state for the retry.
                         {
                             let mut c = conn.lock().await;
-                            *c = ScConnection::new(self.local_vmac, self.device_uuid);
+                            c.reset_for_connect_retry();
                         }
                         perform_handshake(&*failover, &conn, self.connect_timeout_ms)
                             .await
                             .map(|()| (failover, ActiveHub::Failover))
                             .map_err(|_| primary_err)?
                     } else {
+                        self.local_vmac = conn.lock().await.local_vmac;
                         return Err(primary_err);
                     }
                 }
             };
+
+        self.local_vmac = conn.lock().await.local_vmac;
 
         let active_ws = Arc::new(Mutex::new(ws.clone()));
         self.ws_shared = Some(active_ws.clone());
@@ -638,6 +633,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             }
                         }
                         _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ActiveHub::Failover => {
+                            if !conn.lock().await.connect_retry_allowed {
+                                debug!("SC primary restore skipped without retry eligibility");
+                                continue;
+                            }
                             match attempt_primary_restore(
                                 &primary_ws,
                                 &ws_clone,
@@ -703,12 +702,15 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 for attempt in 1..=config.max_retries {
                     tokio::time::sleep(backoff).await;
 
+                    if !conn.lock().await.connect_retry_allowed {
+                        warn!(attempt, "SC reconnection skipped without retry eligibility");
+                        break;
+                    }
+
                     // Reset connection state, preserving VMAC and UUID
                     {
                         let mut c = conn.lock().await;
-                        let vmac = c.local_vmac;
-                        let uuid = c.device_uuid;
-                        *c = ScConnection::new(vmac, uuid);
+                        c.reset_for_connect_retry();
                     }
 
                     match perform_handshake(&*ws_clone, &conn, connect_timeout_ms).await {
@@ -718,21 +720,27 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             break;
                         }
                         Err(e) => {
+                            if !conn.lock().await.connect_retry_allowed {
+                                warn!(
+                                    %e,
+                                    attempt,
+                                    "SC reconnection failed without retry eligibility"
+                                );
+                                break;
+                            }
                             warn!(%e, attempt, "SC reconnection failed, retrying in {:?}", backoff);
                             backoff = (backoff * 2).min(max_backoff);
                         }
                     }
                 }
 
-                if !reconnected {
+                if !reconnected && conn.lock().await.connect_retry_allowed {
                     if let Some(failover) = failover_ws.take() {
                         warn!("SC primary reconnection exhausted, attempting failover hub");
 
                         {
                             let mut c = conn.lock().await;
-                            let vmac = c.local_vmac;
-                            let uuid = c.device_uuid;
-                            *c = ScConnection::new(vmac, uuid);
+                            c.reset_for_connect_retry();
                         }
 
                         match perform_handshake(&*failover, &conn, connect_timeout_ms).await {
@@ -844,6 +852,9 @@ mod receive_state_tests;
 
 #[cfg(test)]
 mod result_tests;
+
+#[cfg(test)]
+mod primary_restore_tests;
 
 #[cfg(test)]
 mod tests;

@@ -63,7 +63,8 @@ await client.disconnect();
 
 | Method | Description |
 |--------|-------------|
-| `new()` | Create a new client (random VMAC) |
+| `new()` | Create a new client with secure random VMAC and generated Device UUID |
+| `withDeviceUuid(deviceUuid)` | Create a new client with secure random VMAC and a supplied persistent Device UUID |
 | `connect(url)` | Connect to SC hub via WebSocket |
 | `readProperty(objectType, instance, propertyId, arrayIndex?)` | Read a property |
 | `writeProperty(objectType, instance, propertyId, valueBytes, priority?)` | Write a property |
@@ -73,6 +74,7 @@ await client.disconnect();
 | `onCovNotification(callback)` | Register COV notification callback |
 | `disconnect()` | Disconnect from hub |
 | `connected` | Property: connection status |
+| `localDeviceUuid` | Property: local 16-byte Device UUID |
 
 ### Value Encoding Helpers
 

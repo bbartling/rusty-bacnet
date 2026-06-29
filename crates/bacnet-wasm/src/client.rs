@@ -19,7 +19,9 @@ use crate::data_attributes::{
 };
 use crate::sc_connection::ReceivedScNpdu;
 use crate::sc_connection::{ScConnection, ScConnectionState};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
+use crate::sc_frame::{
+    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC,
+};
 use crate::ws_transport::BrowserWebSocket;
 use bacnet_encoding::apdu;
 use bacnet_encoding::npdu;
@@ -52,45 +54,18 @@ struct ReceivedNpduMetadata {
 
 #[wasm_bindgen]
 impl BACnetScClient {
-    /// Create a new BACnet/SC client with a random VMAC.
+    /// Create a new BACnet/SC client with a random VMAC and Device UUID.
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        // Generate random 6-byte VMAC
-        let mut vmac = [0u8; 6];
-        let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
-            .ok()
-            .and_then(|c| js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues")).ok());
-        if crypto.is_some() {
-            let array = js_sys::Uint8Array::new_with_length(6);
-            let _ = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto")).and_then(
-                |c| {
-                    js_sys::Reflect::apply(
-                        &js_sys::Function::from(
-                            js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues"))
-                                .unwrap(),
-                        ),
-                        &c,
-                        &js_sys::Array::of1(&array),
-                    )
-                },
-            );
-            array.copy_to(&mut vmac);
-        } else {
-            // Fallback: use js_sys::Math::random
-            for byte in &mut vmac {
-                *byte = (js_sys::Math::random() * 256.0) as u8;
-            }
-        }
+    pub fn new() -> Result<Self, JsError> {
+        let device_uuid = Self::generate_device_uuid()?;
+        Self::with_validated_device_uuid(device_uuid)
+    }
 
-        Self {
-            ws: Rc::new(RefCell::new(None)),
-            connection: Rc::new(RefCell::new(ScConnection::new(vmac))),
-            pending: Rc::new(RefCell::new(HashMap::new())),
-            next_invoke_id: Rc::new(RefCell::new(0)),
-            on_iam: Rc::new(RefCell::new(None)),
-            on_cov: Rc::new(RefCell::new(None)),
-            on_npdu: Rc::new(RefCell::new(None)),
-        }
+    /// Create a new BACnet/SC client with a caller-supplied persistent Device UUID.
+    #[wasm_bindgen(js_name = withDeviceUuid)]
+    pub fn with_device_uuid(device_uuid: &[u8]) -> Result<Self, JsError> {
+        let device_uuid = Self::parse_device_uuid(device_uuid)?;
+        Self::with_validated_device_uuid(device_uuid)
     }
 
     /// Connect to a BACnet/SC hub via WebSocket.
@@ -107,9 +82,62 @@ impl BACnetScClient {
             .map_err(|e| JsError::new(&format!("{:?}", e)))?;
 
         // Wait for ConnectAccept
-        let response = ws.recv().await.map_err(|e| JsError::new(&e))?;
-        let msg = decode_sc_message(&response).map_err(|e| JsError::new(&e.to_string()))?;
+        let response = match ws.recv().await {
+            Ok(response) => response,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(JsError::new(&e));
+            }
+        };
+        let msg = match decode_sc_message(&response) {
+            Ok(msg) => msg,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(JsError::new(&e.to_string()));
+            }
+        };
+        if msg.function == ScFunction::Result {
+            let result = match decode_sc_bvlc_result(&msg) {
+                Ok(result) => result,
+                Err(e) => {
+                    self.connection.borrow_mut().abort_connect();
+                    ws.close();
+                    return Err(JsError::new(&e.to_string()));
+                }
+            };
+            let needs_replacement = self
+                .connection
+                .borrow()
+                .connect_result_requires_random48_vmac(msg.message_id, &result);
+            let replacement_vmac = if needs_replacement {
+                match Self::generate_random48_vmac() {
+                    Ok(vmac) => Some(vmac),
+                    Err(e) => {
+                        self.connection.borrow_mut().abort_connect();
+                        ws.close();
+                        return Err(e);
+                    }
+                }
+            } else {
+                None
+            };
+            let duplicate_vmac = self
+                .connection
+                .borrow_mut()
+                .handle_connect_result(msg.message_id, &result, replacement_vmac)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            ws.close();
+            return Err(JsError::new(if duplicate_vmac {
+                "BACnet/SC ConnectRequest rejected with duplicate VMAC; selected new Random-48 VMAC"
+            } else {
+                "BACnet/SC ConnectRequest rejected by BVLC-Result"
+            }));
+        }
         if !self.connection.borrow_mut().handle_connect_accept(&msg) {
+            self.connection.borrow_mut().abort_connect();
+            ws.close();
             return Err(JsError::new("ConnectAccept not received or invalid"));
         }
 
@@ -290,10 +318,81 @@ impl BACnetScClient {
     pub fn is_connected(&self) -> bool {
         self.connection.borrow().state == ScConnectionState::Connected
     }
+
+    /// Return the local Device UUID used in Connect-Request payloads.
+    #[wasm_bindgen(getter, js_name = localDeviceUuid)]
+    pub fn local_device_uuid(&self) -> Vec<u8> {
+        self.connection.borrow().device_uuid.to_vec()
+    }
 }
 
 // Private methods
 impl BACnetScClient {
+    fn with_validated_device_uuid(device_uuid: [u8; 16]) -> Result<Self, JsError> {
+        let vmac = Self::generate_random48_vmac()?;
+
+        Ok(Self {
+            ws: Rc::new(RefCell::new(None)),
+            connection: Rc::new(RefCell::new(ScConnection::new_with_device_uuid(
+                vmac,
+                device_uuid,
+            ))),
+            pending: Rc::new(RefCell::new(HashMap::new())),
+            next_invoke_id: Rc::new(RefCell::new(0)),
+            on_iam: Rc::new(RefCell::new(None)),
+            on_cov: Rc::new(RefCell::new(None)),
+            on_npdu: Rc::new(RefCell::new(None)),
+        })
+    }
+
+    fn generate_random48_vmac() -> Result<Vmac, JsError> {
+        let mut vmac = [0u8; 6];
+        Self::fill_secure_random_bytes(&mut vmac)?;
+        vmac[0] = (vmac[0] & 0xF0) | 0x02;
+        Ok(vmac)
+    }
+
+    fn generate_device_uuid() -> Result<[u8; 16], JsError> {
+        let mut uuid = [0u8; 16];
+        Self::fill_secure_random_bytes(&mut uuid)?;
+        uuid[6] = (uuid[6] & 0x0F) | 0x40;
+        uuid[8] = (uuid[8] & 0x3F) | 0x80;
+        Ok(uuid)
+    }
+
+    fn fill_secure_random_bytes(bytes: &mut [u8]) -> Result<(), JsError> {
+        let crypto = Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
+            .map_err(|_| JsError::new("WebCrypto crypto is required for BACnet/SC randomness"))?;
+        if crypto.is_undefined() || crypto.is_null() {
+            return Err(JsError::new(
+                "WebCrypto crypto is required for BACnet/SC randomness",
+            ));
+        }
+
+        let get_random_values = Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
+            .map_err(|_| JsError::new("crypto.getRandomValues is required"))?;
+        let get_random_values: Function = get_random_values
+            .dyn_into()
+            .map_err(|_| JsError::new("crypto.getRandomValues is required"))?;
+        let array = Uint8Array::new_with_length(bytes.len() as u32);
+        Reflect::apply(&get_random_values, &crypto, &Array::of1(&array))
+            .map_err(|_| JsError::new("crypto.getRandomValues failed"))?;
+        array.copy_to(bytes);
+        Ok(())
+    }
+
+    fn parse_device_uuid(device_uuid: &[u8]) -> Result<[u8; 16], JsError> {
+        if device_uuid.len() != 16 {
+            return Err(JsError::new("Device UUID must be exactly 16 bytes"));
+        }
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(device_uuid);
+        if uuid.iter().all(|byte| *byte == 0) {
+            return Err(JsError::new("Device UUID must not be all zero"));
+        }
+        Ok(uuid)
+    }
+
     fn next_invoke_id(&self) -> u8 {
         let mut id = self.next_invoke_id.borrow_mut();
         let current = *id;

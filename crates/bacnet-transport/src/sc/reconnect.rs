@@ -18,3 +18,9 @@ impl Default for ScReconnectConfig {
         }
     }
 }
+
+impl super::ScConnection {
+    pub(super) fn reset_for_connect_retry(&mut self) {
+        *self = Self::new(self.local_vmac, self.device_uuid);
+    }
+}
