@@ -209,6 +209,8 @@ fn build_disconnect_before_connect_returns_error() {
 #[test]
 fn connect_request_has_payload() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.max_bvlc_length = 1200;
+    conn.max_apdu_length = 900;
     let req = conn.build_connect_request();
 
     assert_eq!(req.payload.len(), 26);
@@ -219,21 +221,21 @@ fn connect_request_has_payload() {
     assert_eq!(&req.payload[6..22], &[0u8; 16]); // Device UUID
 
     let max_bvlc = u16::from_be_bytes([req.payload[22], req.payload[23]]);
-    assert_eq!(max_bvlc, 1476);
+    assert_eq!(max_bvlc, 1200);
 
     let max_npdu = u16::from_be_bytes([req.payload[24], req.payload[25]]);
-    assert_eq!(max_npdu, 1476);
+    assert_eq!(max_npdu, 900);
 }
 
 #[test]
-fn connect_accept_with_payload_sets_hub_max_apdu() {
+fn connect_accept_with_payload_sets_hub_max_bvlc_and_apdu() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let _req = conn.build_connect_request();
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
     accept_payload.extend_from_slice(&[0u8; 16]); // hub Device UUID
-    accept_payload.extend_from_slice(&1476u16.to_be_bytes()); // Max-BVLC-Length
+    accept_payload.extend_from_slice(&1200u16.to_be_bytes()); // Max-BVLC-Length
     accept_payload.extend_from_slice(&480u16.to_be_bytes()); // Max-NPDU-Length
 
     let accept = ScMessage {
@@ -248,7 +250,27 @@ fn connect_accept_with_payload_sets_hub_max_apdu() {
     assert!(conn.handle_connect_accept(&accept));
     assert_eq!(conn.state, ScConnectionState::Connected);
     assert_eq!(conn.hub_vmac, Some([0x10; 6]));
+    assert_eq!(conn.hub_max_bvlc_length, 1200);
     assert_eq!(conn.hub_max_apdu_length, 480);
+}
+
+#[test]
+fn handle_received_rejects_npdu_above_local_max_npdu() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    conn.max_apdu_length = 2;
+
+    let msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 1,
+        originating_vmac: Some([0x02; 6]),
+        destination_vmac: Some([0x01; 6]),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x02, 0x03]),
+    };
+
+    assert!(conn.handle_received(&msg).is_none());
 }
 
 #[test]
@@ -311,6 +333,15 @@ async fn transport_local_mac() {
 /// Helper: act as a hub — receive ConnectRequest, send ConnectAccept,
 /// then return the "hub" side websocket for further interaction.
 async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
+    hub_accept_with_limits(ws_hub, hub_vmac, 1476, 1476).await;
+}
+
+async fn hub_accept_with_limits(
+    ws_hub: &LoopbackWebSocket,
+    hub_vmac: Vmac,
+    max_bvlc: u16,
+    max_npdu: u16,
+) {
     // Receive Connect-Request from the transport
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();
@@ -319,8 +350,8 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
     accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
-    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
-    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+    accept_payload.extend_from_slice(&max_bvlc.to_be_bytes());
+    accept_payload.extend_from_slice(&max_npdu.to_be_bytes());
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -369,6 +400,58 @@ async fn transport_send_unicast_delivers_message() {
     assert_eq!(msg.destination_vmac, Some(dest_vmac));
     assert_eq!(msg.payload, npdu_payload);
 
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn transport_send_unicast_rejects_peer_max_npdu() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+
+    let hub_accept_task = tokio::spawn(async move {
+        hub_accept_with_limits(&ws_hub, [0x10; 6], 1476, 2).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_accept_task.await.unwrap();
+    let err = transport
+        .send_unicast(&[0x01, 0x02, 0x03], &[0x02; 6])
+        .await
+        .unwrap_err();
+
+    assert!(format!("{err}").contains("Max-NPDU-Length"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err()
+    );
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn transport_send_unicast_rejects_peer_max_bvlc() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+
+    let hub_accept_task = tokio::spawn(async move {
+        hub_accept_with_limits(&ws_hub, [0x10; 6], 19, 1476).await;
+        ws_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let ws_hub = hub_accept_task.await.unwrap();
+    let err = transport
+        .send_unicast(&[0x01, 0x02, 0x03, 0x04], &[0x02; 6])
+        .await
+        .unwrap_err();
+
+    assert!(format!("{err}").contains("Max-BVLC-Length"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err()
+    );
     transport.stop().await.unwrap();
 }
 

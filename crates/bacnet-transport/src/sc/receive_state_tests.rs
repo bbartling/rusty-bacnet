@@ -139,6 +139,42 @@ async fn sc_heartbeat_send_error_transitions_to_disconnected() {
 }
 
 #[tokio::test]
+async fn sc_receive_loop_discards_frame_above_local_max_bvlc() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_heartbeat_interval_ms(500)
+        .with_heartbeat_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let mut rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+    let oversized = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 7,
+        originating_vmac: Some(hub_vmac),
+        destination_vmac: Some(client_vmac),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from(vec![0x42; 1461]),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &oversized);
+    assert!(buf.len() > 1476);
+
+    ws_hub.send(&buf).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_millis(50), rx.recv())
+        .await
+        .is_err());
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn sc_reconnect_exhaustion_leaves_connection_disconnected() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];

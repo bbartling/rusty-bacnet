@@ -580,7 +580,7 @@
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
-      "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport and WASM. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, and malformed wire-level Result decode failures closing without a Result response. Transport and WASM connection handling now keeps ACK benign, disconnects on NAK, and disconnects on malformed Result without generating a Result response. Remaining work includes request correlation, negotiated Max-BVLC-Length/Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, destination-option Must Understand NAK behavior, and hub/direct response-routing behavior."
+      "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport and WASM. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, and malformed wire-level Result decode failures closing without a Result response. Transport and WASM connection handling now keeps ACK benign, disconnects on NAK, and disconnects on malformed Result without generating a Result response. Negotiated Max-BVLC-Length resource-limit evidence is tracked under BACNET-AB-SC-CONNECTION-STATE. Remaining work includes request correlation, Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, destination-option Must Understand NAK behavior, and hub/direct response-routing behavior."
     },
     {
       "id": "BACNET-AB-SC-CONNECTION-STATE",
@@ -590,8 +590,10 @@
       "status": "implementation-present-needs-state-machine-audit",
       "code_anchors": [
         "crates/bacnet-transport/src/sc/mod.rs",
+        "crates/bacnet-transport/src/sc/receive_state_tests.rs",
         "crates/bacnet-transport/src/sc/tests.rs",
         "crates/bacnet-transport/src/sc_hub.rs",
+        "crates/bacnet-transport/src/sc_hub/tests.rs",
         "crates/bacnet-wasm/src/client.rs",
         "crates/bacnet-wasm/src/sc_connection.rs",
         "crates/bacnet-types/src/enums/protocol.rs"
@@ -600,9 +602,10 @@
         "crates/bacnet-types/src/enums/tests.rs::bacnet_sc_error_code_values",
         "crates/bacnet-transport/src/sc/tests.rs::connect_accept_validates_message_id",
         "crates/bacnet-transport/src/sc/tests.rs::connect_accept_parses_device_uuid",
+        "crates/bacnet-transport/src/sc/tests.rs::connect_accept_with_payload_sets_hub_max_bvlc_and_apdu",
         "crates/bacnet-transport/src/sc/tests.rs::build_disconnect",
         "crates/bacnet-transport/src/sc/tests.rs::disconnect_ack_transitions_from_disconnecting",
-        "crates/bacnet-transport/src/sc_hub.rs::tests::known_unhandled_function_is_not_classified_as_unknown",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::known_unhandled_function_is_not_classified_as_unknown",
         "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_handshake"
       ],
       "negative_tests": [
@@ -612,16 +615,23 @@
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_connect_timeout",
         "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_recv_error_transitions_to_disconnected_without_reconnect",
         "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_heartbeat_send_error_transitions_to_disconnected",
+        "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_receive_loop_discards_frame_above_local_max_bvlc",
         "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_reconnect_exhaustion_leaves_connection_disconnected",
         "crates/bacnet-transport/src/sc/tests.rs::build_disconnect_before_connect_returns_error",
-        "crates/bacnet-transport/src/sc_hub.rs::tests::bvlc_result_nak_uses_standard_error_values",
-        "crates/bacnet-transport/src/sc_hub.rs::tests::connect_request_rejects_hub_vmac_as_duplicate",
+        "crates/bacnet-transport/src/sc/tests.rs::handle_received_rejects_npdu_above_local_max_npdu",
+        "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_rejects_peer_max_npdu",
+        "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_rejects_peer_max_bvlc",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::bvlc_result_nak_uses_standard_error_values",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::connect_request_rejects_hub_vmac_as_duplicate",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::relay_limit_decision_rejects_oversized_npdu_first",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::relay_limit_decision_rejects_oversized_encoded_bvlc",
         "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_wrong_message_id",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_short_payload"
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_short_payload",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::handle_encapsulated_npdu_rejects_oversized_local_npdu"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs", "benchmarks/benches/sc_throughput.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
-      "notes": "AB-03 adds native and WASM Connect-Accept message-id matching evidence, preserves the Connecting state when a pure state-machine response does not match the pending Connect-Request, and makes the async native handshake fail/disconnect on a mismatched response. Native and WASM Connect-Accept handling now require the fixed AB.2.11.1 26-byte payload before entering Connected. The hub BVLC-Result NAK builder now takes typed BACnet ErrorClass/ErrorCode values; duplicate client or hub VMAC collisions are encoded as COMMUNICATION/NODE_DUPLICATE_VMAC (7/151) instead of raw 1/1, and known-but-invalid functions are no longer classified as BVLC_FUNCTION_UNKNOWN. Transport receive-loop evidence now covers WebSocket close/error receive paths transitioning the native connection to Disconnected before exit, heartbeat send failures disconnecting before retry/exit, reconnect exhaustion leaving Disconnected, and browser close/error receive failures clearing the WASM connected state. Existing transport tests also cover connect timeout to Disconnected, Disconnect-Request construction, Disconnect-ACK transition from Disconnecting, and hub Device UUID payload parsing. Remaining AB.6.2 gaps include explicit AWAITING_WEBSOCKET modeling at the WebSocket adapter boundary, accepting-peer connect-wait timeout, Disconnect wait behavior in ScTransport::stop, duplicate Device UUID replacement of an existing hub connection, reserved VMAC error signaling, and initiating-peer Random-48 VMAC reselection after receiving NODE_DUPLICATE_VMAC."
+      "notes": "AB-03 adds native and WASM Connect-Accept message-id matching evidence, preserves the Connecting state when a pure state-machine response does not match the pending Connect-Request, and makes the async native handshake fail/disconnect on a mismatched response. Native and WASM Connect-Accept handling now require the fixed AB.2.11.1 26-byte payload before entering Connected, store peer Max-BVLC-Length and Max-NPDU-Length, advertise local Max-BVLC-Length, reject outbound NPDUs or encoded BVLC frames that exceed peer limits, and discard oversized inbound WebSocket payloads before BVLC processing. The hub stores client Max-BVLC-Length and Max-NPDU-Length from Connect-Request, advertises its own limits in Connect-Accept, rejects non-26-byte Connect-Request payloads, drops inbound frames above the hub limit before decode, and filters unicast/broadcast relay targets by each recipient's negotiated NPDU and encoded BVLC limits. The hub BVLC-Result NAK builder now takes typed BACnet ErrorClass/ErrorCode values; duplicate client or hub VMAC collisions are encoded as COMMUNICATION/NODE_DUPLICATE_VMAC (7/151) instead of raw 1/1, and known-but-invalid functions are no longer classified as BVLC_FUNCTION_UNKNOWN. Transport receive-loop evidence now covers WebSocket close/error receive paths transitioning the native connection to Disconnected before exit, heartbeat send failures disconnecting before retry/exit, reconnect exhaustion leaving Disconnected, browser close/error receive failures clearing the WASM connected state, and oversized frame discard. Existing transport tests also cover connect timeout to Disconnected, Disconnect-Request construction, Disconnect-ACK transition from Disconnecting, and hub Device UUID payload parsing. Remaining AB.6.2 gaps include explicit AWAITING_WEBSOCKET modeling at the WebSocket adapter boundary, accepting-peer connect-wait timeout, Disconnect wait behavior in ScTransport::stop, duplicate Device UUID replacement of an existing hub connection, reserved VMAC error signaling, and initiating-peer Random-48 VMAC reselection after receiving NODE_DUPLICATE_VMAC."
     },
     {
       "id": "BACNET-AB-SC-HUB-CONNECTOR",
@@ -653,7 +663,7 @@
       "positive_tests": [
         "benchmarks/tests/sc_mtls.rs",
         "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_subprotocol_handshake_succeeds",
-        "crates/bacnet-transport/src/sc_hub.rs::tests::websocket_subprotocol_offer_accepts_hub_protocol_in_list",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_offer_accepts_hub_protocol_in_list",
         "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_accepts_secure_websocket_scheme",
         "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_accepts_selected_hub_protocol",
         "crates/bacnet-wasm/src/sc_websocket.rs::tests::require_hub_subprotocol_accepts_hub_protocol",
@@ -662,8 +672,8 @@
       "negative_tests": [
         "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_rejects_missing_or_wrong_subprotocol",
         "benchmarks/tests/sc_websocket.rs::sc_websocket_text_frame_closes_with_unsupported_data",
-        "crates/bacnet-transport/src/sc_hub.rs::tests::websocket_subprotocol_error_response_is_bad_request",
-        "crates/bacnet-transport/src/sc_hub.rs::tests::websocket_subprotocol_offer_rejects_missing_hub_protocol",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_error_response_is_bad_request",
+        "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_offer_rejects_missing_hub_protocol",
         "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_rejects_non_websocket_scheme",
         "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_rejects_plain_websocket_scheme",
         "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_rejects_missing_or_wrong_protocol",

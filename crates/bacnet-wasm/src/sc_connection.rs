@@ -10,6 +10,8 @@ use crate::sc_frame::{
 };
 use bacnet_types::error::Error;
 
+const DEFAULT_MAX_BVLC_LENGTH: u16 = 1476;
+
 /// BACnet/SC connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScConnectionState {
@@ -30,7 +32,13 @@ pub struct ScConnection {
     /// Device UUID (16 bytes, RFC 4122) per AB.1.5.3.
     pub device_uuid: [u8; 16],
     pub hub_vmac: Option<Vmac>,
+    /// Maximum encoded BACnet/SC BVLC message length this node can accept.
+    pub max_bvlc_length: u16,
+    /// Maximum NPDU length this node can accept.
     pub max_apdu_length: u16,
+    /// Maximum encoded BACnet/SC BVLC message length the hub can accept.
+    pub hub_max_bvlc_length: u16,
+    /// Maximum NPDU length the hub can accept.
     pub hub_max_apdu_length: u16,
     next_message_id: u16,
     pending_connect_message_id: Option<u16>,
@@ -44,8 +52,10 @@ impl ScConnection {
             local_vmac,
             device_uuid: [0u8; 16],
             hub_vmac: None,
-            max_apdu_length: 1476,
-            hub_max_apdu_length: 1476,
+            max_bvlc_length: DEFAULT_MAX_BVLC_LENGTH,
+            max_apdu_length: DEFAULT_MAX_BVLC_LENGTH,
+            hub_max_bvlc_length: DEFAULT_MAX_BVLC_LENGTH,
+            hub_max_apdu_length: DEFAULT_MAX_BVLC_LENGTH,
             next_message_id: 1,
             pending_connect_message_id: None,
             disconnect_ack_to_send: None,
@@ -69,7 +79,7 @@ impl ScConnection {
         let mut payload_buf = Vec::with_capacity(26);
         payload_buf.extend_from_slice(&self.local_vmac);
         payload_buf.extend_from_slice(&self.device_uuid);
-        payload_buf.extend_from_slice(&1476u16.to_be_bytes());
+        payload_buf.extend_from_slice(&self.max_bvlc_length.to_be_bytes());
         payload_buf.extend_from_slice(&self.max_apdu_length.to_be_bytes());
         ScMessage {
             function: ScFunction::ConnectRequest,
@@ -100,6 +110,7 @@ impl ScConnection {
         let mut hub_vmac = [0u8; 6];
         hub_vmac.copy_from_slice(&msg.payload[0..6]);
         self.hub_vmac = Some(hub_vmac);
+        self.hub_max_bvlc_length = u16::from_be_bytes([msg.payload[22], msg.payload[23]]);
         self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
@@ -164,6 +175,9 @@ impl ScConnection {
                         return None;
                     }
                 }
+                if msg.payload.len() > self.max_apdu_length as usize {
+                    return None;
+                }
                 let source = msg.originating_vmac.unwrap_or([0; 6]);
                 Some((msg.payload.clone(), source))
             }
@@ -211,6 +225,8 @@ mod tests {
     fn connect_handshake() {
         let vmac = [1, 2, 3, 4, 5, 6];
         let mut conn = ScConnection::new(vmac);
+        conn.max_bvlc_length = 1200;
+        conn.max_apdu_length = 900;
         assert_eq!(conn.state, ScConnectionState::Disconnected);
 
         let req = conn.build_connect_request();
@@ -219,14 +235,16 @@ mod tests {
         // AB.2.10.1: no VMACs, 26-byte payload
         assert!(req.originating_vmac.is_none());
         assert_eq!(req.payload.len(), 26);
+        assert_eq!(u16::from_be_bytes([req.payload[22], req.payload[23]]), 1200);
+        assert_eq!(u16::from_be_bytes([req.payload[24], req.payload[25]]), 900);
 
         // Simulate ConnectAccept with 26-byte payload
         let hub_vmac = [7, 8, 9, 10, 11, 12];
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&hub_vmac);
         accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
-        accept_payload.extend_from_slice(&1476u16.to_be_bytes());
-        accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+        accept_payload.extend_from_slice(&1100u16.to_be_bytes());
+        accept_payload.extend_from_slice(&480u16.to_be_bytes());
         let accept = ScMessage {
             function: ScFunction::ConnectAccept,
             message_id: req.message_id,
@@ -239,7 +257,8 @@ mod tests {
         assert!(conn.handle_connect_accept(&accept));
         assert_eq!(conn.state, ScConnectionState::Connected);
         assert_eq!(conn.hub_vmac, Some(hub_vmac));
-        assert_eq!(conn.hub_max_apdu_length, 1476);
+        assert_eq!(conn.hub_max_bvlc_length, 1100);
+        assert_eq!(conn.hub_max_apdu_length, 480);
     }
 
     #[test]
@@ -385,6 +404,25 @@ mod tests {
         let (data, source) = result.unwrap();
         assert_eq!(data.as_ref(), &[0x01, 0x04]);
         assert_eq!(source, [2; 6]);
+    }
+
+    #[test]
+    fn handle_encapsulated_npdu_rejects_oversized_local_npdu() {
+        let vmac = [1; 6];
+        let mut conn = ScConnection::new(vmac);
+        conn.state = ScConnectionState::Connected;
+        conn.max_apdu_length = 1;
+
+        let msg = ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id: 42,
+            originating_vmac: Some([2; 6]),
+            destination_vmac: Some(vmac),
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x01, 0x04]),
+        };
+        assert!(conn.handle_received(&msg).is_none());
     }
 
     #[test]

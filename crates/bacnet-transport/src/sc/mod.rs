@@ -20,6 +20,9 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod loopback;
+pub use loopback::LoopbackWebSocket;
+
 fn is_bvlc_result_wire(data: &[u8]) -> bool {
     data.first()
         .is_some_and(|function| *function == ScFunction::Result.to_raw())
@@ -64,9 +67,13 @@ pub struct ScConnection {
     /// Device UUID (16 bytes, RFC 4122).
     pub device_uuid: [u8; 16],
     pub hub_vmac: Option<Vmac>,
-    /// Maximum APDU length this node can accept (sent in ConnectRequest).
+    /// Maximum encoded BACnet/SC BVLC message length this node can accept.
+    pub max_bvlc_length: u16,
+    /// Maximum NPDU length this node can accept (sent in ConnectRequest).
     pub max_apdu_length: u16,
-    /// Maximum APDU length the hub can accept (learned from ConnectAccept).
+    /// Maximum encoded BACnet/SC BVLC message length the hub can accept.
+    pub hub_max_bvlc_length: u16,
+    /// Maximum NPDU length the hub can accept (learned from ConnectAccept).
     pub hub_max_apdu_length: u16,
     next_message_id: u16,
     /// Pending Disconnect-ACK to send after receiving a Disconnect-Request.
@@ -84,7 +91,9 @@ impl ScConnection {
             local_vmac,
             device_uuid,
             hub_vmac: None,
+            max_bvlc_length: 1476,
             max_apdu_length: 1476,
+            hub_max_bvlc_length: 1476,
             hub_max_apdu_length: 1476,
             next_message_id: 1,
             disconnect_ack_to_send: None,
@@ -106,7 +115,7 @@ impl ScConnection {
         let mut payload_buf = Vec::with_capacity(26);
         payload_buf.extend_from_slice(&self.local_vmac);
         payload_buf.extend_from_slice(&self.device_uuid);
-        payload_buf.extend_from_slice(&1476u16.to_be_bytes()); // Max-BVLC-Length
+        payload_buf.extend_from_slice(&self.max_bvlc_length.to_be_bytes());
         payload_buf.extend_from_slice(&self.max_apdu_length.to_be_bytes()); // Max-NPDU-Length
         let msg_id = self.next_id();
         self.pending_connect_message_id = Some(msg_id);
@@ -154,6 +163,7 @@ impl ScConnection {
         let mut uuid = [0u8; 16];
         uuid.copy_from_slice(&msg.payload[6..22]);
         self.hub_device_uuid = Some(uuid);
+        self.hub_max_bvlc_length = u16::from_be_bytes([msg.payload[22], msg.payload[23]]);
         self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
@@ -232,6 +242,14 @@ impl ScConnection {
                     if dest != self.local_vmac && !is_broadcast_vmac(&dest) {
                         return None;
                     }
+                }
+                if msg.payload.len() > self.max_apdu_length as usize {
+                    warn!(
+                        "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping",
+                        msg.payload.len(),
+                        self.max_apdu_length
+                    );
+                    return None;
                 }
                 let source = msg.originating_vmac.unwrap_or([0; 6]);
                 Some((msg.payload.clone(), source))
@@ -421,6 +439,10 @@ async fn perform_handshake<W: WebSocketPort>(
     let accept_result = tokio::time::timeout(timeout_dur, async {
         loop {
             let data = ws.recv().await?;
+            if data.len() > conn.lock().await.max_bvlc_length as usize {
+                warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping");
+                continue;
+            }
             let msg = match decode_sc_message(&data) {
                 Ok(msg) => msg,
                 Err(e) if is_bvlc_result_wire(&data) => {
@@ -565,6 +587,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                         data = ws_clone.recv() => {
                             match data {
                                 Ok(data) => {
+                                    if data.len() > conn.lock().await.max_bvlc_length as usize {
+                                        warn!("BACnet/SC frame exceeds local Max-BVLC-Length, dropping");
+                                        continue;
+                                    }
                                     let msg = match decode_sc_message(&data) {
                                         Ok(m) => m,
                                         Err(e) if is_bvlc_result_wire(&data) => {
@@ -787,11 +813,26 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 "BACnet/SC transport not in Connected state".into(),
             ));
         }
+        if npdu.len() > c.hub_max_apdu_length as usize {
+            return Err(Error::Encoding(format!(
+                "BACnet/SC NPDU length {} exceeds peer Max-NPDU-Length {}",
+                npdu.len(),
+                c.hub_max_apdu_length
+            )));
+        }
+        let hub_max_bvlc_length = c.hub_max_bvlc_length;
         let msg = c.build_encapsulated_npdu(dest_vmac, npdu);
         drop(c);
 
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
+        if buf.len() > hub_max_bvlc_length as usize {
+            return Err(Error::Encoding(format!(
+                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
+                buf.len(),
+                hub_max_bvlc_length
+            )));
+        }
         ws.send(&buf).await
     }
 
@@ -805,50 +846,6 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         // But local_mac returns &[u8] — we need the slice to outlive `self`.
         // Use a trick: reference the stored array.
         &self.local_vmac
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Loopback WebSocket for testing
-// ---------------------------------------------------------------------------
-
-/// In-memory loopback WebSocket for unit testing.
-pub struct LoopbackWebSocket {
-    rx: Mutex<mpsc::Receiver<Vec<u8>>>,
-    tx: mpsc::Sender<Vec<u8>>,
-}
-
-impl LoopbackWebSocket {
-    /// Create a pair of connected loopback WebSockets.
-    pub fn pair() -> (Self, Self) {
-        let (tx_a, rx_b) = mpsc::channel(64);
-        let (tx_b, rx_a) = mpsc::channel(64);
-        (
-            Self {
-                rx: Mutex::new(rx_a),
-                tx: tx_a,
-            },
-            Self {
-                rx: Mutex::new(rx_b),
-                tx: tx_b,
-            },
-        )
-    }
-}
-
-impl WebSocketPort for LoopbackWebSocket {
-    async fn send(&self, data: &[u8]) -> Result<(), Error> {
-        self.tx
-            .send(data.to_vec())
-            .await
-            .map_err(|_| Error::Encoding("loopback ws send failed".into()))
-    }
-
-    async fn recv(&self) -> Result<Vec<u8>, Error> {
-        let mut rx = self.rx.lock().await;
-        rx.recv()
-            .await
-            .ok_or_else(|| Error::Encoding("loopback ws channel closed".into()))
     }
 }
 
