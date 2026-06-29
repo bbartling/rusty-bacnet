@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `63a744759a679b25b69a8a82fd37e58260e52653`
-- Scope: Annex AB.5 BACnet/SC hub connector primary/failover and forwarding behavior, including established primary loss, reconnect exhaustion, failover activation, primary restoration while failover is active, larger destination/data option-chain forwarding capacity, explicit unsupported direct-connection classification at the hub boundary, and configured hub URI validation.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.2 and AB.5.4 primary/failover hub connector behavior, plus surrounding AB.5.3 hub connection, forwarding, configured hub URI, and direct-connection context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. Addendum cc changes AB.5.3.1 hub-connection metadata and Network Port properties; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.5.2/AB.5.4 primary/failover retry or restoration behavior, the AB.5.3/AB.5.4 forwarding option-preservation evidence, the configured/malformed hub URI evidence, or the direct-connection unsupported-classification evidence covered by this tranche.
+- Implementation evidence SHA reviewed: `f5548aa1d5457e36b5f5fa1e45cadcea6d322bd4`
+- Scope: Annex AB.6.3 BACnet/SC heartbeat behavior, including native and WASM construction/validation evidence, native timeout/send-error disconnect behavior, inbound BVLC activity reset/deferral behavior, and hub-initiated heartbeat ACK timeout enforcement.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.3 BACnet/SC heartbeat request/ack, peer liveness, timeout, and disconnect behavior. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. No checked addendum or erratum changes the AB.6.3 heartbeat request/ack, liveness, timeout, or disconnect behavior covered by this tranche.
 
 ## Counts
 
