@@ -1,5 +1,7 @@
 use super::*;
-use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
+use crate::sc_frame::{
+    decode_sc_bvlc_result, ScBvlcResult, ScOption, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
+};
 
 #[test]
 fn bvlc_result_nak_uses_standard_error_values() {
