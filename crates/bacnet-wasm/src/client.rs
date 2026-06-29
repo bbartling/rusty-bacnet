@@ -8,11 +8,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use bytes::BytesMut;
-use js_sys::Function;
+use js_sys::{Function, Uint8Array};
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::codec;
+use crate::data_attributes::DataAttribute;
+use crate::sc_connection::ReceivedScNpdu;
 use crate::sc_connection::{ScConnection, ScConnectionState};
 use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
 use crate::ws_transport::BrowserWebSocket;
@@ -36,6 +39,13 @@ pub struct BACnetScClient {
     next_invoke_id: Rc<RefCell<u8>>,
     on_iam: Rc<RefCell<Option<Function>>>,
     on_cov: Rc<RefCell<Option<Function>>>,
+    on_npdu: Rc<RefCell<Option<Function>>>,
+}
+
+#[derive(Serialize)]
+struct ReceivedNpduMetadata {
+    source_vmac: Vec<u8>,
+    data_attributes: Vec<DataAttribute>,
 }
 
 #[wasm_bindgen]
@@ -77,6 +87,7 @@ impl BACnetScClient {
             next_invoke_id: Rc::new(RefCell::new(0)),
             on_iam: Rc::new(RefCell::new(None)),
             on_cov: Rc::new(RefCell::new(None)),
+            on_npdu: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -162,6 +173,28 @@ impl BACnetScClient {
         Ok(())
     }
 
+    /// Send raw NPDU bytes through the established BACnet/SC hub connection.
+    #[wasm_bindgen(js_name = sendNpdu)]
+    pub fn send_raw_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_with_attributes(npdu_bytes, &[])
+    }
+
+    /// Send raw NPDU bytes with BACnet/SC Data Options.
+    ///
+    /// `dataAttributes` is an array of objects with `option_type`,
+    /// `must_understand`, and `data` fields. `optionType` and
+    /// `mustUnderstand` aliases are also accepted.
+    #[wasm_bindgen(js_name = sendNpduWithDataAttributes)]
+    pub fn send_raw_npdu_with_data_attributes(
+        &self,
+        npdu_bytes: &[u8],
+        data_attributes: JsValue,
+    ) -> Result<(), JsError> {
+        let data_attributes: Vec<DataAttribute> = serde_wasm_bindgen::from_value(data_attributes)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        self.send_npdu_with_attributes(npdu_bytes, &data_attributes)
+    }
+
     /// Subscribe to COV notifications for an object.
     #[wasm_bindgen(js_name = subscribeCov)]
     pub async fn subscribe_cov(
@@ -198,6 +231,15 @@ impl BACnetScClient {
         *self.on_cov.borrow_mut() = Some(callback);
     }
 
+    /// Register a callback for every received NPDU and its BACnet/SC data attributes.
+    ///
+    /// The callback receives `(npduBytes, metadata)`, where `metadata` contains
+    /// `source_vmac` and `data_attributes`.
+    #[wasm_bindgen(js_name = onNpdu)]
+    pub fn on_npdu(&self, callback: Function) {
+        *self.on_npdu.borrow_mut() = Some(callback);
+    }
+
     /// Disconnect from the hub.
     pub async fn disconnect(&self) -> Result<(), JsError> {
         if let Ok(msg) = self.connection.borrow_mut().build_disconnect_request() {
@@ -231,6 +273,14 @@ impl BACnetScClient {
     }
 
     fn send_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_with_attributes(npdu_bytes, &[])
+    }
+
+    fn send_npdu_with_attributes(
+        &self,
+        npdu_bytes: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), JsError> {
         let mut conn = self.connection.borrow_mut();
         if conn.state != ScConnectionState::Connected {
             return Err(JsError::new("not connected"));
@@ -244,7 +294,9 @@ impl BACnetScClient {
         }
         let hub_vmac = conn.hub_vmac.unwrap_or([0xFF; 6]);
         let hub_max_bvlc_length = conn.hub_max_bvlc_length;
-        let msg = conn.build_encapsulated_npdu(hub_vmac, npdu_bytes);
+        let msg = conn
+            .build_encapsulated_npdu_with_data_attributes(hub_vmac, npdu_bytes, data_attributes)
+            .map_err(|e| JsError::new(&e.to_string()))?;
         drop(conn);
 
         let mut buf = BytesMut::new();
@@ -282,6 +334,7 @@ impl BACnetScClient {
         let pending = self.pending.clone();
         let on_iam = self.on_iam.clone();
         let on_cov = self.on_cov.clone();
+        let on_npdu = self.on_npdu.clone();
 
         spawn_local(async move {
             loop {
@@ -308,11 +361,28 @@ impl BACnetScClient {
                     continue;
                 };
 
+                let rejection = {
+                    connection
+                        .borrow()
+                        .unsupported_must_understand_result(&sc_msg)
+                };
+                if let Some(result) = rejection {
+                    if let Some(nak) = result {
+                        let mut buf = BytesMut::new();
+                        encode_sc_message(&mut buf, &nak);
+                        if let Some(ws) = ws.borrow().as_ref() {
+                            let _ = ws.send(&buf);
+                        }
+                    }
+                    continue;
+                }
+
                 // Handle SC message
                 {
                     let npdu_data = connection.borrow_mut().handle_received(&sc_msg);
-                    if let Some((npdu_bytes, _source)) = npdu_data {
-                        Self::process_npdu(&npdu_bytes, &pending, &on_iam, &on_cov);
+                    if let Some(received) = npdu_data {
+                        Self::emit_npdu(&received, &on_npdu);
+                        Self::process_npdu(&received.npdu, &pending, &on_iam, &on_cov);
                     }
                     // Send disconnect ACK if pending
                     let ack = connection.borrow_mut().disconnect_ack_to_send.take();
@@ -412,5 +482,22 @@ impl BACnetScClient {
             }
             _ => {}
         }
+    }
+
+    fn emit_npdu(received: &ReceivedScNpdu, on_npdu: &Rc<RefCell<Option<Function>>>) {
+        let Some(callback) = on_npdu.borrow().as_ref().cloned() else {
+            return;
+        };
+
+        let metadata = ReceivedNpduMetadata {
+            source_vmac: received.source_vmac.to_vec(),
+            data_attributes: received.data_attributes.clone(),
+        };
+        let metadata = serde_wasm_bindgen::to_value(&metadata).unwrap_or(JsValue::NULL);
+        let _ = callback.call2(
+            &JsValue::NULL,
+            &Uint8Array::from(received.npdu.as_ref()),
+            &metadata,
+        );
     }
 }

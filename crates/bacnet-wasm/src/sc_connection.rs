@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 
+use crate::data_attributes::{self, DataAttribute};
 use crate::sc_frame::{
     decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
 };
@@ -43,6 +44,17 @@ pub struct ScConnection {
     next_message_id: u16,
     pending_connect_message_id: Option<u16>,
     pub disconnect_ack_to_send: Option<ScMessage>,
+}
+
+/// BACnet/SC NPDU received by a WASM/browser client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedScNpdu {
+    /// Raw NPDU bytes.
+    pub npdu: Bytes,
+    /// Source VMAC, or the unknown VMAC when absent.
+    pub source_vmac: Vmac,
+    /// BACnet/SC Data Options exposed as data attributes.
+    pub data_attributes: Vec<DataAttribute>,
 }
 
 impl ScConnection {
@@ -166,19 +178,35 @@ impl ScConnection {
 
     /// Build an Encapsulated-NPDU message.
     pub fn build_encapsulated_npdu(&mut self, dest_vmac: Vmac, npdu: &[u8]) -> ScMessage {
-        ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: self.next_id(),
-            originating_vmac: Some(self.local_vmac),
-            destination_vmac: Some(dest_vmac),
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::copy_from_slice(npdu),
-        }
+        self.build_encapsulated_npdu_with_data_attributes(dest_vmac, npdu, &[])
+            .expect("empty data attributes are valid")
     }
 
-    /// Handle a received message. Returns NPDU data + source VMAC if it's an Encapsulated-NPDU.
-    pub fn handle_received(&mut self, msg: &ScMessage) -> Option<(Bytes, Vmac)> {
+    /// Build an Encapsulated-NPDU message with BACnet/SC Data Options.
+    pub fn build_encapsulated_npdu_with_data_attributes(
+        &mut self,
+        dest_vmac: Vmac,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<ScMessage, Error> {
+        Ok(ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac: Some(dest_vmac),
+            dest_options: Vec::new(),
+            data_options: data_attributes::to_data_options(data_attributes)?,
+            payload: Bytes::copy_from_slice(npdu),
+        })
+    }
+
+    /// Return the fail-closed Result response for an unsupported Must Understand Data Option.
+    pub fn unsupported_must_understand_result(&self, msg: &ScMessage) -> Option<Option<ScMessage>> {
+        data_attributes::unsupported_must_understand_result(msg)
+    }
+
+    /// Handle a received message. Returns NPDU data when it's an Encapsulated-NPDU for us.
+    pub fn handle_received(&mut self, msg: &ScMessage) -> Option<ReceivedScNpdu> {
         match msg.function {
             ScFunction::EncapsulatedNpdu => {
                 if self.state != ScConnectionState::Connected {
@@ -193,7 +221,11 @@ impl ScConnection {
                     return None;
                 }
                 let source = msg.originating_vmac.unwrap_or([0; 6]);
-                Some((msg.payload.clone(), source))
+                Some(ReceivedScNpdu {
+                    npdu: msg.payload.clone(),
+                    source_vmac: source,
+                    data_attributes: data_attributes::from_data_options(msg),
+                })
             }
             ScFunction::HeartbeatRequest => None,
             ScFunction::DisconnectRequest => {
@@ -415,9 +447,10 @@ mod tests {
         };
         let result = conn.handle_received(&msg);
         assert!(result.is_some());
-        let (data, source) = result.unwrap();
-        assert_eq!(data.as_ref(), &[0x01, 0x04]);
-        assert_eq!(source, [2; 6]);
+        let received = result.unwrap();
+        assert_eq!(received.npdu.as_ref(), &[0x01, 0x04]);
+        assert_eq!(received.source_vmac, [2; 6]);
+        assert!(received.data_attributes.is_empty());
     }
 
     #[test]
