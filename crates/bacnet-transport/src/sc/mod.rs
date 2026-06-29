@@ -846,4 +846,7 @@ impl WebSocketPort for LoopbackWebSocket {
 }
 
 #[cfg(test)]
+mod result_tests;
+
+#[cfg(test)]
 mod tests;
