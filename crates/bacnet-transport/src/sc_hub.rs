@@ -164,7 +164,7 @@ async fn accept_loop(
     const MAX_ACTIVE_CONNECTIONS: usize = 512;
 
     // Heartbeat sweep: periodically check for idle clients and send HeartbeatRequest.
-    // Per spec AB.6.2, the hub shall initiate heartbeats to detect dead connections.
+    // Per Annex AB.6.3, peers initiate heartbeats to detect idle/dead connections.
     const HEARTBEAT_CHECK_INTERVAL_SECS: u64 = 30;
     const HEARTBEAT_IDLE_THRESHOLD_SECS: u64 = 60;
     {
