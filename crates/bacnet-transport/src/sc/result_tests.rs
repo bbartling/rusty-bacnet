@@ -164,13 +164,35 @@ fn connect_result_duplicate_vmac_reseeds_local_vmac() {
     ))
     .unwrap();
 
-    assert!(conn.handle_connect_result(&result).unwrap());
+    assert!(conn.handle_connect_result(req.message_id, &result).unwrap());
     assert_eq!(conn.state, ScConnectionState::Disconnected);
     assert_ne!(conn.local_vmac, [0x01; 6]);
     assert_eq!(conn.local_vmac[0] & 0x0F, 0x02);
 
     let retry = conn.build_connect_request();
     assert_eq!(&retry.payload[0..6], conn.local_vmac.as_slice());
+}
+
+#[test]
+fn connect_result_duplicate_vmac_wrong_message_id_does_not_reseed() {
+    let original_vmac = [0x22, 0x01, 0x02, 0x03, 0x04, 0x05];
+    let mut conn = ScConnection::new(original_vmac, [0u8; 16]);
+    let req = conn.build_connect_request();
+    let wrong_message_id = req.message_id.wrapping_add(1);
+    let result = decode_sc_bvlc_result(&connect_result_nak(
+        wrong_message_id,
+        ErrorCode::NODE_DUPLICATE_VMAC.to_raw(),
+    ))
+    .unwrap();
+
+    assert!(!conn
+        .handle_connect_result(wrong_message_id, &result)
+        .unwrap());
+    assert_eq!(conn.state, ScConnectionState::Disconnected);
+    assert_eq!(conn.local_vmac, original_vmac);
+
+    let retry = conn.build_connect_request();
+    assert_eq!(&retry.payload[0..6], original_vmac.as_slice());
 }
 
 #[test]
@@ -184,7 +206,7 @@ fn connect_result_generic_nak_does_not_reseed_local_vmac() {
     ))
     .unwrap();
 
-    assert!(!conn.handle_connect_result(&result).unwrap());
+    assert!(!conn.handle_connect_result(req.message_id, &result).unwrap());
     assert_eq!(conn.state, ScConnectionState::Disconnected);
     assert_eq!(conn.local_vmac, original_vmac);
 }

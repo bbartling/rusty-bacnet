@@ -42,8 +42,7 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                 Ok(msg) => msg,
                 Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
                     let mut c = conn.lock().await;
-                    c.state = ScConnectionState::Disconnected;
-                    c.pending_connect_message_id = None;
+                    c.abort_connect();
                     return Err(Error::Encoding(format!(
                         "malformed BACnet/SC BVLC-Result during connect: {e}"
                     )));
@@ -65,7 +64,8 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                             error_details,
                             ..
                         } => {
-                            let duplicate_vmac = c.handle_connect_result(&result)?;
+                            let duplicate_vmac =
+                                c.handle_connect_result(msg.message_id, &result)?;
                             let duplicate_note = if duplicate_vmac {
                                 "; selected new Random-48 local VMAC"
                             } else {
@@ -82,7 +82,7 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                             )))
                         }
                         ScBvlcResult::Ack { result_for } => {
-                            let _ = c.handle_connect_result(&result);
+                            let _ = c.handle_connect_result(msg.message_id, &result);
                             Err(Error::Encoding(format!(
                                 "unexpected BACnet/SC BVLC-Result ACK during connect: function={:#x}",
                                 result_for.to_raw()
@@ -90,8 +90,7 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                         }
                     },
                     Err(e) => {
-                        c.state = ScConnectionState::Disconnected;
-                        c.pending_connect_message_id = None;
+                        c.abort_connect();
                         Err(Error::Encoding(format!(
                             "malformed BACnet/SC BVLC-Result during connect: {e}"
                         )))

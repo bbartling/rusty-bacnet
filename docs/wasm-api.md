@@ -143,12 +143,32 @@ The main client class for BACnet/SC communication. Uses browser WebSocket to con
 new BACnetScClient(): BACnetScClient
 ```
 
-Creates a new BACnet/SC client with an Annex H Random-48 VMAC (Virtual MAC address). Uses `crypto.getRandomValues()` when available, falling back to `Math.random()`, and sets the Random-48 marker nibble required by Standard 135.
+Creates a new BACnet/SC client with an Annex H Random-48 VMAC (Virtual MAC address) and a generated RFC 4122 version 4 Device UUID. The constructor requires `crypto.getRandomValues()` and throws if secure browser randomness is unavailable. It sets the Random-48 marker nibble required by Standard 135.
 
 **Example:**
 
 ```javascript
 const client = new BACnetScClient();
+```
+
+---
+
+### withDeviceUuid
+
+```typescript
+BACnetScClient.withDeviceUuid(deviceUuid: Uint8Array): BACnetScClient
+```
+
+Creates a BACnet/SC client using a caller-supplied persistent 16-byte Device UUID and a new secure Random-48 VMAC. The UUID must be exactly 16 bytes and must not be all zero.
+
+**Example:**
+
+```javascript
+const deviceUuid = new Uint8Array([
+  0x6f, 0x8c, 0x4b, 0x8a, 0x4b, 0x31, 0x48, 0xa5,
+  0x9b, 0x4c, 0x8f, 0x79, 0x6a, 0x91, 0x2d, 0x11,
+]);
+const client = BACnetScClient.withDeviceUuid(deviceUuid);
 ```
 
 ---
@@ -161,7 +181,7 @@ connect(url: string): Promise<void>
 
 Connect to a BACnet/SC hub via WebSocket.
 
-Opens a WebSocket connection to the specified URL using the `hub.bsc.bacnet.org` subprotocol, sends a ConnectRequest with the client's VMAC and device UUID, and waits for a ConnectAccept response from the hub. If the hub rejects the ConnectRequest with NODE_DUPLICATE_VMAC, the client closes the WebSocket and selects a new Random-48 VMAC for a later retry. Once connected, starts a background receive loop that dispatches incoming messages to pending request promises and event callbacks.
+Opens a WebSocket connection to the specified URL using the `hub.bsc.bacnet.org` subprotocol, sends a ConnectRequest with the client's VMAC and Device UUID, and waits for a ConnectAccept response from the hub. If the matching ConnectRequest is rejected with NODE_DUPLICATE_VMAC, the client closes the WebSocket and selects a new secure Random-48 VMAC for a later retry. Malformed connect-time responses close the WebSocket and clear the pending connect state. Once connected, starts a background receive loop that dispatches incoming messages to pending request promises and event callbacks.
 
 **Parameters:**
 
@@ -619,6 +639,22 @@ Returns `true` when the SC connection state is `Connected` (after a successful `
 if (client.connected) {
   const value = await client.readProperty(0, 1, 85);
 }
+```
+
+---
+
+### localDeviceUuid (getter)
+
+```typescript
+readonly localDeviceUuid: Uint8Array
+```
+
+Returns the 16-byte local Device UUID included in BACnet/SC ConnectRequest payloads.
+
+**Example:**
+
+```javascript
+const uuid = client.localDeviceUuid;
 ```
 
 ## Codec Functions

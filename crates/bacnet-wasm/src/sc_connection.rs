@@ -60,10 +60,14 @@ pub struct ReceivedScNpdu {
 
 impl ScConnection {
     pub fn new(local_vmac: Vmac) -> Self {
+        Self::new_with_device_uuid(local_vmac, [0u8; 16])
+    }
+
+    pub fn new_with_device_uuid(local_vmac: Vmac, device_uuid: [u8; 16]) -> Self {
         Self {
             state: ScConnectionState::Disconnected,
             local_vmac,
-            device_uuid: [0u8; 16],
+            device_uuid,
             hub_vmac: None,
             max_bvlc_length: DEFAULT_MAX_BVLC_LENGTH,
             max_apdu_length: DEFAULT_MAX_BVLC_LENGTH,
@@ -129,13 +133,43 @@ impl ScConnection {
         true
     }
 
+    pub fn abort_connect(&mut self) {
+        self.state = ScConnectionState::Disconnected;
+        self.pending_connect_message_id = None;
+    }
+
     /// Handle a BVLC-Result received while waiting for Connect-Accept.
     ///
     /// Returns true when AB.6.2.2 duplicate-VMAC recovery installed the
     /// supplied replacement Random-48 VMAC.
-    pub fn handle_connect_result(&mut self, result: &ScBvlcResult, replacement_vmac: Vmac) -> bool {
-        self.state = ScConnectionState::Disconnected;
-        self.pending_connect_message_id = None;
+    pub fn handle_connect_result(
+        &mut self,
+        result_message_id: u16,
+        result: &ScBvlcResult,
+        replacement_vmac: Option<Vmac>,
+    ) -> Result<bool, Error> {
+        let duplicate_vmac = self.connect_result_requires_random48_vmac(result_message_id, result);
+        self.abort_connect();
+
+        if duplicate_vmac {
+            let replacement_vmac = replacement_vmac.ok_or_else(|| {
+                Error::Encoding("duplicate VMAC recovery requires a replacement VMAC".into())
+            })?;
+            self.local_vmac = replacement_vmac;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn connect_result_requires_random48_vmac(
+        &self,
+        result_message_id: u16,
+        result: &ScBvlcResult,
+    ) -> bool {
+        if self.pending_connect_message_id != Some(result_message_id) {
+            return false;
+        }
 
         let ScBvlcResult::Nak {
             result_for,
@@ -147,15 +181,9 @@ impl ScConnection {
             return false;
         };
 
-        if *result_for == ScFunction::ConnectRequest
+        *result_for == ScFunction::ConnectRequest
             && *error_class == ErrorClass::COMMUNICATION.to_raw()
             && *error_code == ErrorCode::NODE_DUPLICATE_VMAC.to_raw()
-        {
-            self.local_vmac = replacement_vmac;
-            true
-        } else {
-            false
-        }
     }
 
     /// Build a Disconnect-Request message.
@@ -615,12 +643,41 @@ mod tests {
         };
         let result = decode_sc_bvlc_result(&msg).unwrap();
 
-        assert!(conn.handle_connect_result(&result, replacement));
+        assert!(conn
+            .handle_connect_result(req.message_id, &result, Some(replacement))
+            .unwrap());
         assert_eq!(conn.state, ScConnectionState::Disconnected);
         assert_eq!(conn.local_vmac, replacement);
 
         let retry = conn.build_connect_request();
         assert_eq!(&retry.payload[0..6], replacement.as_slice());
+    }
+
+    #[test]
+    fn handle_connect_result_duplicate_vmac_wrong_message_id_does_not_replace_vmac() {
+        let original = [0x22, 1, 2, 3, 4, 5];
+        let replacement = [0x12, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let mut conn = ScConnection::new(original);
+        let req = conn.build_connect_request();
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: req.message_id.wrapping_add(1),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x97]),
+        };
+        let result = decode_sc_bvlc_result(&msg).unwrap();
+
+        assert!(!conn
+            .handle_connect_result(msg.message_id, &result, Some(replacement))
+            .unwrap());
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
+        assert_eq!(conn.local_vmac, original);
+
+        let retry = conn.build_connect_request();
+        assert_eq!(&retry.payload[0..6], original.as_slice());
     }
 
     #[test]
@@ -640,9 +697,20 @@ mod tests {
         };
         let result = decode_sc_bvlc_result(&msg).unwrap();
 
-        assert!(!conn.handle_connect_result(&result, replacement));
+        assert!(!conn
+            .handle_connect_result(req.message_id, &result, Some(replacement))
+            .unwrap());
         assert_eq!(conn.state, ScConnectionState::Disconnected);
         assert_eq!(conn.local_vmac, original);
+    }
+
+    #[test]
+    fn new_with_device_uuid_sends_supplied_uuid() {
+        let uuid = [0xAB; 16];
+        let mut conn = ScConnection::new_with_device_uuid([1; 6], uuid);
+        let req = conn.build_connect_request();
+
+        assert_eq!(&req.payload[6..22], uuid.as_slice());
     }
 
     #[test]
