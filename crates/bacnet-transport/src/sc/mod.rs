@@ -115,16 +115,6 @@ impl ScConnection {
         }
     }
 
-    fn reset_for_connect_retry(&mut self) {
-        let vmac = self.local_vmac;
-        let uuid = self.device_uuid;
-        *self = Self::new(vmac, uuid);
-    }
-
-    fn connect_retry_allowed(&self) -> bool {
-        self.connect_retry_allowed
-    }
-
     /// Generate the next message ID.
     pub fn next_id(&mut self) -> u16 {
         let id = self.next_message_id;
@@ -481,7 +471,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 Ok(()) => (primary_ws.clone(), ActiveHub::Primary),
                 Err(primary_err) => {
                     // Primary failed — try failover if configured.
-                    if !conn.lock().await.connect_retry_allowed() {
+                    if !conn.lock().await.connect_retry_allowed {
                         self.local_vmac = conn.lock().await.local_vmac;
                         return Err(primary_err);
                     } else if let Some(failover) = failover_ws.take() {
@@ -643,6 +633,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             }
                         }
                         _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ActiveHub::Failover => {
+                            if !conn.lock().await.connect_retry_allowed {
+                                debug!("SC primary restore skipped without retry eligibility");
+                                continue;
+                            }
                             match attempt_primary_restore(
                                 &primary_ws,
                                 &ws_clone,
@@ -708,6 +702,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 for attempt in 1..=config.max_retries {
                     tokio::time::sleep(backoff).await;
 
+                    if !conn.lock().await.connect_retry_allowed {
+                        warn!(attempt, "SC reconnection skipped without retry eligibility");
+                        break;
+                    }
+
                     // Reset connection state, preserving VMAC and UUID
                     {
                         let mut c = conn.lock().await;
@@ -721,7 +720,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             break;
                         }
                         Err(e) => {
-                            if !conn.lock().await.connect_retry_allowed() {
+                            if !conn.lock().await.connect_retry_allowed {
                                 warn!(
                                     %e,
                                     attempt,
@@ -735,7 +734,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     }
                 }
 
-                if !reconnected && conn.lock().await.connect_retry_allowed() {
+                if !reconnected && conn.lock().await.connect_retry_allowed {
                     if let Some(failover) = failover_ws.take() {
                         warn!("SC primary reconnection exhausted, attempting failover hub");
 
@@ -853,6 +852,9 @@ mod receive_state_tests;
 
 #[cfg(test)]
 mod result_tests;
+
+#[cfg(test)]
+mod primary_restore_tests;
 
 #[cfg(test)]
 mod tests;
