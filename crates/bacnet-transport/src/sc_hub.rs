@@ -23,9 +23,16 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, warn};
 
+mod relay;
+
+use relay::{
+    build_hub_relay_message, hub_relay_recipient_vmacs, hub_relay_target, HubRelayReject,
+    HubRelayTarget,
+};
+
 use crate::sc_frame::{
-    decode_sc_message, encode_sc_message, is_broadcast_vmac, ScFunction, ScMessage, Vmac,
-    BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
+    decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac, BACNET_SC_HUB_SUBPROTOCOL,
+    BROADCAST_VMAC,
 };
 
 type TlsStream = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
@@ -539,51 +546,50 @@ async fn handle_client(
                     continue;
                 };
 
-                let sender_vmac = sc_msg.originating_vmac.unwrap_or([0; 6]);
-                if sender_vmac != registered_vmac {
-                    warn!(
-                        "originating VMAC {:?} does not match registered {:?} — dropping",
-                        sender_vmac, registered_vmac
-                    );
-                    continue;
-                }
-
-                let dest = sc_msg.destination_vmac.unwrap_or(BROADCAST_VMAC);
+                let relay_target = match hub_relay_target(&sc_msg) {
+                    Ok(target) => target,
+                    Err(HubRelayReject::OriginatingVmacPresent) => {
+                        warn!(
+                            "Hub: EncapsulatedNpdu from {peer_addr} had Originating VMAC, dropping"
+                        );
+                        continue;
+                    }
+                    Err(HubRelayReject::MissingDestinationVmac) => {
+                        warn!(
+                            "Hub: EncapsulatedNpdu from {peer_addr} missing Destination VMAC, dropping"
+                        );
+                        continue;
+                    }
+                };
 
                 let npdu_len = sc_msg.payload.len();
 
-                // Hub adds Originating Virtual Address; strips Destination for unicast.
-                let relay_msg = if is_broadcast_vmac(&dest) {
-                    ScMessage {
-                        originating_vmac: Some(sender_vmac),
-                        ..sc_msg
-                    }
-                } else {
-                    ScMessage {
-                        originating_vmac: Some(sender_vmac),
-                        destination_vmac: None, // strip for unicast
-                        ..sc_msg
-                    }
-                };
+                let relay_msg = build_hub_relay_message(&sc_msg, registered_vmac, relay_target);
                 let mut relay_buf = BytesMut::new();
                 encode_sc_message(&mut relay_buf, &relay_msg);
                 let relay_bytes: Vec<u8> = relay_buf.to_vec();
                 let relay_len = relay_bytes.len();
 
-                if is_broadcast_vmac(&dest) {
+                if relay_target == HubRelayTarget::Broadcast {
                     // Parallel broadcast relay with per-client timeout
                     let sinks: Vec<(Vmac, Arc<Mutex<WsSink>>)> = {
                         let map = clients.lock().await;
-                        map.iter()
-                            .filter(|(vmac, _)| **vmac != sender_vmac)
-                            .filter_map(|(vmac, c)| {
+                        let recipients = hub_relay_recipient_vmacs(
+                            relay_target,
+                            registered_vmac,
+                            map.keys().copied(),
+                        );
+                        recipients
+                            .into_iter()
+                            .filter_map(|vmac| {
+                                let c = map.get(&vmac)?;
                                 match relay_limit_decision(
                                     npdu_len,
                                     relay_len,
                                     c.max_npdu,
                                     c.max_bvlc,
                                 ) {
-                                    RelayLimitDecision::Send => Some((*vmac, Arc::clone(&c.sink))),
+                                    RelayLimitDecision::Send => Some((vmac, Arc::clone(&c.sink))),
                                     RelayLimitDecision::DropMaxNpdu => {
                                         warn!(
                                             "Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({}) for {vmac:02x?}, dropping for target",
@@ -623,11 +629,18 @@ async fn handle_client(
                         })
                         .collect();
                     futures_util::future::join_all(futs).await;
-                } else {
+                } else if let HubRelayTarget::Unicast(dest) = relay_target {
                     let target = {
                         let map = clients.lock().await;
-                        map.get(&dest)
-                            .map(|c| (Arc::clone(&c.sink), c.max_npdu, c.max_bvlc))
+                        let recipients = hub_relay_recipient_vmacs(
+                            relay_target,
+                            registered_vmac,
+                            map.keys().copied(),
+                        );
+                        recipients.into_iter().next().and_then(|vmac| {
+                            map.get(&vmac)
+                                .map(|c| (Arc::clone(&c.sink), c.max_npdu, c.max_bvlc))
+                        })
                     };
                     if let Some((sink, max_npdu, max_bvlc)) = target {
                         match relay_limit_decision(npdu_len, relay_len, max_npdu, max_bvlc) {
