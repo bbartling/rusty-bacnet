@@ -19,6 +19,7 @@ use crate::sc_websocket::{
 };
 
 /// Wraps a browser WebSocket for BACnet/SC binary framing.
+#[derive(Clone)]
 pub struct BrowserWebSocket {
     ws: WebSocket,
     recv_queue: Rc<RefCell<VecDeque<Vec<u8>>>>,

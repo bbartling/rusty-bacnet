@@ -147,9 +147,15 @@ impl ScConnection {
     }
 
     pub fn abort_connect(&mut self) {
+        self.mark_disconnected();
+    }
+
+    pub(crate) fn mark_disconnected(&mut self) {
         self.state = ScConnectionState::Disconnected;
         self.pending_connect_message_id = None;
         self.pending_heartbeat_message_id = None;
+        self.last_bvlc_received_ms = None;
+        self.disconnect_ack_to_send = None;
     }
 
     /// Handle a BVLC-Result received while waiting for Connect-Accept.
@@ -284,10 +290,14 @@ impl ScConnection {
             return ScHeartbeatAction::None;
         };
 
-        let idle_ms = now_ms.saturating_sub(last_received);
+        if now_ms < last_received {
+            self.mark_disconnected();
+            return ScHeartbeatAction::Disconnect;
+        }
+
+        let idle_ms = now_ms - last_received;
         if idle_ms > timeout_ms {
-            self.state = ScConnectionState::Disconnected;
-            self.pending_heartbeat_message_id = None;
+            self.mark_disconnected();
             return ScHeartbeatAction::Disconnect;
         }
 
@@ -307,6 +317,7 @@ impl ScConnection {
                 .is_some_and(|message_id| msg.message_id == message_id)
             && msg.originating_vmac.is_none()
             && msg.destination_vmac.is_none()
+            && msg.dest_options.is_empty()
             && msg.data_options.is_empty()
             && msg.payload.is_empty()
     }
@@ -364,8 +375,7 @@ impl ScConnection {
             }
             ScFunction::HeartbeatRequest => None,
             ScFunction::DisconnectRequest => {
-                self.state = ScConnectionState::Disconnected;
-                self.pending_heartbeat_message_id = None;
+                self.mark_disconnected();
                 // AB.2.13.1: Disconnect-ACK has no VMACs
                 self.disconnect_ack_to_send = Some(ScMessage {
                     function: ScFunction::DisconnectAck,
@@ -380,8 +390,7 @@ impl ScConnection {
             }
             ScFunction::DisconnectAck => {
                 if self.state == ScConnectionState::Disconnecting {
-                    self.state = ScConnectionState::Disconnected;
-                    self.pending_heartbeat_message_id = None;
+                    self.mark_disconnected();
                 }
                 None
             }
@@ -389,9 +398,7 @@ impl ScConnection {
                 match decode_sc_bvlc_result(msg) {
                     Ok(ScBvlcResult::Ack { .. }) => {}
                     Ok(ScBvlcResult::Nak { .. }) | Err(_) => {
-                        self.state = ScConnectionState::Disconnected;
-                        self.pending_connect_message_id = None;
-                        self.pending_heartbeat_message_id = None;
+                        self.mark_disconnected();
                     }
                 }
                 None
@@ -846,11 +853,19 @@ mod tests {
         conn.start_heartbeat_tracking(1_000);
 
         assert_eq!(
-            conn.next_heartbeat_action(30_999, DEFAULT_HEARTBEAT_INTERVAL_MS, 60_000),
+            conn.next_heartbeat_action(
+                30_999,
+                DEFAULT_HEARTBEAT_INTERVAL_MS,
+                DEFAULT_HEARTBEAT_TIMEOUT_MS
+            ),
             ScHeartbeatAction::None
         );
 
-        let action = conn.next_heartbeat_action(31_000, DEFAULT_HEARTBEAT_INTERVAL_MS, 60_000);
+        let action = conn.next_heartbeat_action(
+            31_000,
+            DEFAULT_HEARTBEAT_INTERVAL_MS,
+            DEFAULT_HEARTBEAT_TIMEOUT_MS,
+        );
         let ScHeartbeatAction::Send(heartbeat) = action else {
             panic!("expected heartbeat request after idle interval");
         };
@@ -864,7 +879,11 @@ mod tests {
         );
 
         assert_eq!(
-            conn.next_heartbeat_action(61_000, DEFAULT_HEARTBEAT_INTERVAL_MS, 60_000),
+            conn.next_heartbeat_action(
+                61_000,
+                DEFAULT_HEARTBEAT_INTERVAL_MS,
+                DEFAULT_HEARTBEAT_TIMEOUT_MS
+            ),
             ScHeartbeatAction::None
         );
     }
@@ -952,6 +971,67 @@ mod tests {
         );
         assert_eq!(conn.state, ScConnectionState::Disconnected);
         assert_eq!(conn.pending_heartbeat_message_id, None);
+    }
+
+    #[test]
+    fn heartbeat_ack_rejects_destination_options_until_timeout() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(0);
+
+        let ScHeartbeatAction::Send(heartbeat) = conn.next_heartbeat_action(100, 100, 300) else {
+            panic!("expected heartbeat request");
+        };
+
+        let bad_ack = ScMessage {
+            function: ScFunction::HeartbeatAck,
+            message_id: heartbeat.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: vec![crate::sc_frame::ScOption {
+                option_type: 2,
+                must_understand: true,
+                data: Vec::new(),
+            }],
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        assert!(!conn.handle_heartbeat_ack(&bad_ack, 150));
+        assert_eq!(
+            conn.pending_heartbeat_message_id,
+            Some(heartbeat.message_id)
+        );
+
+        assert_eq!(
+            conn.next_heartbeat_action(301, 100, 300),
+            ScHeartbeatAction::Disconnect
+        );
+    }
+
+    #[test]
+    fn heartbeat_scheduler_fails_closed_on_non_monotonic_time() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(1_000);
+
+        assert_eq!(
+            conn.next_heartbeat_action(999, 100, 300),
+            ScHeartbeatAction::Disconnect
+        );
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
+    }
+
+    #[test]
+    fn heartbeat_scheduler_times_out_on_large_forward_elapsed_time() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(1_000);
+
+        assert_eq!(
+            conn.next_heartbeat_action(1_301, 100, 300),
+            ScHeartbeatAction::Disconnect
+        );
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
     }
 
     #[test]

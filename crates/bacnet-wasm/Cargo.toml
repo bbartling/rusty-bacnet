@@ -32,6 +32,7 @@ features = [
     "CloseEvent",
     "Blob",
     "Window",
+    "Performance",
 ]
 
 [dev-dependencies]
