@@ -69,6 +69,10 @@ async fn sc_connect_timeout() {
         "Expected timeout error, got: {}",
         err_msg
     );
+    let conn = transport.connection().unwrap();
+    let c = conn.lock().await;
+    assert_eq!(c.state, ScConnectionState::Disconnected);
+    assert_eq!(c.pending_connect_message_id, None);
 }
 
 #[tokio::test]
@@ -110,7 +114,40 @@ async fn sc_connect_rejects_mismatched_accept_message_id() {
         err_msg
     );
     let conn = transport.connection().unwrap();
-    assert_eq!(conn.lock().await.state, ScConnectionState::Disconnected);
+    let c = conn.lock().await;
+    assert_eq!(c.state, ScConnectionState::Disconnected);
+    assert_eq!(c.pending_connect_message_id, None);
+    hub_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_connect_decode_error_clears_pending_request() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    let vmac = [0x01; 6];
+    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        let data = ws_server.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+
+        ws_server
+            .send(&[ScFunction::ConnectAccept.to_raw(), 0xff, 0x00, 0x01])
+            .await
+            .unwrap();
+    });
+
+    let result = transport.start().await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("reserved BACnet/SC control bits"),
+        "Expected decode error, got: {err_msg}"
+    );
+    let conn = transport.connection().unwrap();
+    let c = conn.lock().await;
+    assert_eq!(c.state, ScConnectionState::Disconnected);
+    assert_eq!(c.pending_connect_message_id, None);
     hub_task.await.unwrap();
 }
 

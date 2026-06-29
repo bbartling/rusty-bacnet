@@ -12,7 +12,7 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
 };
 
-use super::{heartbeat, ScConnection, ScConnectionState, WebSocketPort};
+use super::{heartbeat, ScConnection, WebSocketPort};
 
 /// Perform the Connect-Request / Connect-Accept handshake on a WebSocket.
 ///
@@ -47,7 +47,11 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                         "malformed BACnet/SC BVLC-Result during connect: {e}"
                     )));
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    let mut c = conn.lock().await;
+                    c.abort_connect();
+                    return Err(e);
+                }
             };
             if msg.function == ScFunction::ConnectAccept {
                 return Ok::<_, Error>(msg);
@@ -108,7 +112,7 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                 debug!("BACnet/SC connected");
                 Ok(())
             } else {
-                c.state = ScConnectionState::Disconnected;
+                c.abort_connect();
                 Err(Error::Encoding(
                     "BACnet/SC Connect-Accept did not match pending Connect-Request".into(),
                 ))
@@ -117,7 +121,7 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
         Ok(Err(e)) => Err(e),
         Err(_) => {
             let mut c = conn.lock().await;
-            c.state = ScConnectionState::Disconnected;
+            c.abort_connect();
             Err(Error::Encoding("BACnet/SC connect timeout".into()))
         }
     }
