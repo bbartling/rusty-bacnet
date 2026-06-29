@@ -4,20 +4,20 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `3c609ebef3f2f166ff73f36d9b3d76ffd0ff27c6`
-- Scope: Annex AB.2 BACnet/SC BVLC-SC frame and header-option codec evidence.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2 BACnet/SC frame/header-option impacts. Addendum 135-2020cf changes AB.2.3 Data Options bit 6 naming from Must Understand to Every Segment while leaving Destination Options Must Understand unchanged; addendum 135-2020cp adds standard header option types 2..5. No addendum reviewed changes AB.2 control reserved bits, header option type range 1..31, option length/data framing, VMAC field ordering, or payload ordering covered by this tranche.
+- Implementation evidence SHA reviewed: `a2bee8bda604e50a501b81dcb4de392b16b8c4a9`
+- Scope: Annex AB.2.4 BACnet/SC BVLC-Result parser and connection handling evidence.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2.4 BACnet/SC BVLC-Result impacts. Addendum 135-2020ci clarifies that BVLC-Result NAK is used for standard BVLC message failures while ACK may be used for proprietary BVLC messages, and it expands AB.3.1.5 common error situations. Addenda 135-2020cf/cp/cc/cm were also searched for AB.2.4/BVLC-Result impacts; no additional BVLC-Result payload grammar changes were found.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
-| Priority | P0 | 12 |
+| Priority | P0 | 13 |
 | Priority | P1 | 10 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 8 |
+| Status | implementation-present-needs-conformance-tests | 9 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
@@ -60,6 +60,7 @@
 | `BACNET-O-ZIGBEE` | Annex O | P3 | unknown-pending-source-review | 0 |
 | `BACNET-U-IPV6-BVLL` | Annex U | P2 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | implementation-present-needs-negative-tests | 2 |
+| `BACNET-AB-SC-BVLC-RESULT` | Annex AB.2.4 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 1 |

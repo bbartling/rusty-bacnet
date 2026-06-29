@@ -445,62 +445,6 @@ async fn transport_send_broadcast_delivers_message() {
 }
 
 #[test]
-fn bvlc_result_nak_disconnects() {
-    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
-    conn.state = ScConnectionState::Connected;
-    // result_for(1) + result_code(1, 0x01=NAK) + error_marker(1) + error_class(2,BE) + error_code(2,BE)
-    let msg = ScMessage {
-        function: ScFunction::Result,
-        message_id: 1,
-        originating_vmac: Some([0x10; 6]),
-        destination_vmac: Some([0x01; 6]),
-        dest_options: Vec::new(),
-        data_options: Vec::new(),
-        payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01]),
-    };
-    let result = conn.handle_received(&msg);
-    assert!(result.is_none());
-    assert_eq!(conn.state, ScConnectionState::Disconnected);
-}
-
-#[test]
-fn bvlc_result_success_no_disconnect() {
-    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
-    conn.state = ScConnectionState::Connected;
-    let msg = ScMessage {
-        function: ScFunction::Result,
-        message_id: 1,
-        originating_vmac: Some([0x10; 6]),
-        destination_vmac: Some([0x01; 6]),
-        dest_options: Vec::new(),
-        data_options: Vec::new(),
-        payload: Bytes::new(), // success = empty
-    };
-    let result = conn.handle_received(&msg);
-    assert!(result.is_none());
-    assert_eq!(conn.state, ScConnectionState::Connected);
-}
-
-#[test]
-fn bvlc_result_ack_with_payload_no_disconnect() {
-    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
-    conn.state = ScConnectionState::Connected;
-    // result_for(1) + result_code(1, 0x00=ACK)
-    let msg = ScMessage {
-        function: ScFunction::Result,
-        message_id: 1,
-        originating_vmac: None,
-        destination_vmac: None,
-        dest_options: Vec::new(),
-        data_options: Vec::new(),
-        payload: Bytes::from_static(&[0x06, 0x00]),
-    };
-    let result = conn.handle_received(&msg);
-    assert!(result.is_none());
-    assert_eq!(conn.state, ScConnectionState::Connected);
-}
-
-#[test]
 fn heartbeat_ack_has_no_vmacs() {
     let conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let ack = conn.build_heartbeat_ack(42);

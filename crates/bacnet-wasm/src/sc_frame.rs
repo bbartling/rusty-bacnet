@@ -12,6 +12,10 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod result;
+
+pub use result::{decode_sc_bvlc_result, ScBvlcResult};
+
 /// BACnet/SC BVLC function codes (Annex AB.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

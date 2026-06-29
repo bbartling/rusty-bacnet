@@ -5,7 +5,9 @@
 
 use bytes::Bytes;
 
-use crate::sc_frame::{is_broadcast_vmac, ScFunction, ScMessage, Vmac};
+use crate::sc_frame::{
+    decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
+};
 use bacnet_types::error::Error;
 
 /// BACnet/SC connection state.
@@ -183,9 +185,11 @@ impl ScConnection {
                 None
             }
             ScFunction::Result => {
-                let is_error = !msg.payload.is_empty();
-                if is_error {
-                    self.state = ScConnectionState::Disconnected;
+                match decode_sc_bvlc_result(msg) {
+                    Ok(ScBvlcResult::Ack { .. }) => {}
+                    Ok(ScBvlcResult::Nak { .. }) | Err(_) => {
+                        self.state = ScConnectionState::Disconnected;
+                    }
                 }
                 None
             }
@@ -383,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_error_result_disconnects() {
+    fn handle_bvlc_result_ack_keeps_connected() {
         let mut conn = ScConnection::new([1; 6]);
         conn.state = ScConnectionState::Connected;
 
@@ -394,7 +398,43 @@ mod tests {
             destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x06, 0x00, 0x01, 0x00, 0x01]), // error payload
+            payload: Bytes::from_static(&[0x0C, 0x00]),
+        };
+        conn.handle_received(&msg);
+        assert_eq!(conn.state, ScConnectionState::Connected);
+    }
+
+    #[test]
+    fn handle_bvlc_result_nak_disconnects() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: 1,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01]),
+        };
+        conn.handle_received(&msg);
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
+    }
+
+    #[test]
+    fn handle_malformed_bvlc_result_disconnects() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: 1,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
         };
         conn.handle_received(&msg);
         assert_eq!(conn.state, ScConnectionState::Disconnected);

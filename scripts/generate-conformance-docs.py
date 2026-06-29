@@ -80,7 +80,7 @@ def support_summary(data: dict) -> str:
 
 def pics_draft(data: dict) -> str:
     rows = data["rows"]
-    data_links = [r for r in rows if r["standard_anchor"] in {"Annex J.2", "Annex J", "Annex J.4/J.5", "Annex J.5", "Annex J.7.5", "Annex J.8", "Annex U", "Clause 7", "Clause 9.3", "Annex AB.2", "Annex AB.5", "Annex AB.7", "Annex AB.6.3"}]
+    data_links = [r for r in rows if r["standard_anchor"] in {"Annex J.2", "Annex J", "Annex J.4/J.5", "Annex J.5", "Annex J.7.5", "Annex J.8", "Annex U", "Clause 7", "Clause 9.3", "Annex AB.2", "Annex AB.2.4", "Annex AB.5", "Annex AB.7", "Annex AB.6.3"}]
     lines = header("Draft BACnet PICS Support Evidence")
     lines += [
         "This draft summarizes implementation evidence that may feed a future formal Protocol Implementation Conformance Statement. It intentionally stays below a certification claim.",

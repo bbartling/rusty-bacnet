@@ -6,10 +6,10 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-06-29.
-- Implementation evidence SHA reviewed: `3c609ebef3f2f166ff73f36d9b3d76ffd0ff27c6`.
+- Implementation evidence SHA reviewed: `a2bee8bda604e50a501b81dcb4de392b16b8c4a9`.
 - Machine-readable source: `conformance/bacnet-135-2020.json`.
-- Current scope: Annex AB.2 BACnet/SC BVLC-SC frame and header-option codec evidence.
-- Addenda/errata status: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2 BACnet/SC frame/header-option impacts. Addendum 135-2020cf changes AB.2.3 Data Options bit 6 naming from Must Understand to Every Segment while leaving Destination Options Must Understand unchanged; addendum 135-2020cp adds standard header option types 2..5. No addendum reviewed changes AB.2 control reserved bits, header option type range 1..31, option length/data framing, VMAC field ordering, or payload ordering covered by this tranche.
+- Current scope: Annex AB.2.4 BACnet/SC BVLC-Result parser and connection handling evidence.
+- Addenda/errata status: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2.4 BACnet/SC BVLC-Result impacts. Addendum 135-2020ci clarifies that BVLC-Result NAK is used for standard BVLC message failures while ACK may be used for proprietary BVLC messages, and it expands AB.3.1.5 common error situations. Addenda 135-2020cf/cp/cc/cm were also searched for AB.2.4/BVLC-Result impacts; no additional BVLC-Result payload grammar changes were found.
 
 ## Status Taxonomy
 
@@ -114,7 +114,8 @@
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | `implementation-present-needs-negative-tests` | AB-01 adds transport and WASM codec evidence for reserved control bit rejection, Header Option Type `1..31` enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length/data truncation rejection, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 accepted by the generic `1..31` parser. Function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain open. |
+| `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | `implementation-present-needs-negative-tests` | AB-01 adds transport and WASM codec evidence for reserved control bit rejection, Header Option Type `1..31` enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length/data truncation rejection, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 accepted by the generic `1..31` parser. Non-Result function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain open. |
+| `BACNET-AB-SC-BVLC-RESULT` | Annex AB.2.4 | P0 | `implementation-present-needs-conformance-tests` | AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport and WASM. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci; NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Connection handling keeps ACK benign, disconnects on NAK, closes on handshake/receive-loop fatal Results, and disconnects on malformed Result without generating a Result response. Request correlation, negotiated Max-BVLC-Length/Error Details resource limits, standard-function ACK diagnostics, and full AB.3.1.5 Result generation remain open. |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | `implementation-present-needs-conformance-tests` | SC transport and hub paths exist. |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | `implementation-present-needs-security-tests` | WebSocket/TLS paths exist; mTLS/security tests remain open. |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | `implementation-present-needs-timeout-tests` | SC heartbeat code exists; deterministic timeout tests remain open. |
