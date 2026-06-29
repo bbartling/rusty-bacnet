@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -29,6 +30,13 @@ use crate::sc_frame::{
 
 type TlsStream = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
 type WsSink = SplitSink<WebSocketStream<TlsStream>, Message>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectRequestVmacDisposition {
+    Accept,
+    CloseReserved,
+    Nak(ErrorClass, ErrorCode),
+}
 
 /// Per-client state tracked by the hub.
 struct HubClient {
@@ -341,10 +349,8 @@ async fn handle_client(
                     let nak = build_bvlc_result_nak(
                         sc_msg.message_id,
                         ScFunction::ConnectRequest,
-                        0x00,
-                        0x01, // communication
-                        0x00,
-                        0x40, // message-incomplete
+                        ErrorClass::COMMUNICATION,
+                        ErrorCode::MESSAGE_INCOMPLETE,
                     );
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &nak);
@@ -361,10 +367,26 @@ async fn handle_client(
                 let client_max_npdu = u16::from_be_bytes([sc_msg.payload[24], sc_msg.payload[25]]);
                 debug!("Hub: ConnectRequest from {peer_addr} vmac={vmac:02x?} max_npdu={client_max_npdu}");
 
-                // Reject reserved VMACs (unknown=0x000000000000, broadcast=0xFFFFFFFFFFFF)
-                if vmac == crate::sc_frame::UNKNOWN_VMAC || vmac == BROADCAST_VMAC {
-                    warn!("Hub: rejecting reserved VMAC {vmac:02x?} from {peer_addr}");
-                    break;
+                match connect_request_vmac_disposition(vmac, hub_vmac) {
+                    ConnectRequestVmacDisposition::Accept => {}
+                    ConnectRequestVmacDisposition::CloseReserved => {
+                        warn!("Hub: rejecting reserved VMAC {vmac:02x?} from {peer_addr}");
+                        break;
+                    }
+                    ConnectRequestVmacDisposition::Nak(error_class, error_code) => {
+                        warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
+                        let error_result = build_bvlc_result_nak(
+                            sc_msg.message_id,
+                            ScFunction::ConnectRequest,
+                            error_class,
+                            error_code,
+                        );
+                        let mut buf = BytesMut::new();
+                        encode_sc_message(&mut buf, &error_result);
+                        let mut w = write.lock().await;
+                        let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                        break;
+                    }
                 }
 
                 // Check for VMAC collision and register atomically under a
@@ -375,23 +397,12 @@ async fn handle_client(
                     if map.contains_key(&vmac) {
                         warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
                         drop(map); // release lock before sending
-                        let error_result = ScMessage {
-                            function: ScFunction::Result,
-                            message_id: sc_msg.message_id,
-                            originating_vmac: None,
-                            destination_vmac: None,
-                            dest_options: Vec::new(),
-                            data_options: Vec::new(),
-                            payload: Bytes::from(vec![
-                                ScFunction::ConnectRequest.to_raw(), // result-for function
-                                0x01,                                // result code = NAK
-                                0x00, // error header marker (no data, type=0)
-                                0x00,
-                                0x01, // error_class = 1 (communication)
-                                0x00,
-                                0x01, // error_code = 1 (duplicate vmac)
-                            ]),
-                        };
+                        let error_result = build_bvlc_result_nak(
+                            sc_msg.message_id,
+                            ScFunction::ConnectRequest,
+                            ErrorClass::COMMUNICATION,
+                            ErrorCode::NODE_DUPLICATE_VMAC,
+                        );
                         let mut buf = BytesMut::new();
                         encode_sc_message(&mut buf, &error_result);
                         let mut w = write.lock().await;
@@ -401,23 +412,12 @@ async fn handle_client(
                     if map.len() >= MAX_SC_CLIENTS {
                         warn!("SC Hub: max clients reached, rejecting connection");
                         drop(map);
-                        let error_result = ScMessage {
-                            function: ScFunction::Result,
-                            message_id: sc_msg.message_id,
-                            originating_vmac: None,
-                            destination_vmac: None,
-                            dest_options: Vec::new(),
-                            data_options: Vec::new(),
-                            payload: Bytes::from(vec![
-                                ScFunction::ConnectRequest.to_raw(),
-                                0x01, // NAK
-                                0x00, // error header marker
-                                0x00,
-                                0x01, // error_class = 1 (communication)
-                                0x00,
-                                0x02, // error_code = 2 (other)
-                            ]),
-                        };
+                        let error_result = build_bvlc_result_nak(
+                            sc_msg.message_id,
+                            ScFunction::ConnectRequest,
+                            ErrorClass::RESOURCES,
+                            ErrorCode::OTHER,
+                        );
                         let mut buf = BytesMut::new();
                         encode_sc_message(&mut buf, &error_result);
                         let mut w = write.lock().await;
@@ -504,10 +504,8 @@ async fn handle_client(
                     let nak = build_bvlc_result_nak(
                         sc_msg.message_id,
                         ScFunction::EncapsulatedNpdu,
-                        0x00,
-                        0x01, // communication
-                        0x00,
-                        0x01, // other
+                        ErrorClass::COMMUNICATION,
+                        ErrorCode::OTHER,
                     );
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &nak);
@@ -603,10 +601,8 @@ async fn handle_client(
                 let nak = build_bvlc_result_nak(
                     sc_msg.message_id,
                     other,
-                    0x00,
-                    0x01, // communication
-                    0x00,
-                    0x01, // other
+                    ErrorClass::COMMUNICATION,
+                    unexpected_bvlc_function_error_code(other),
                 );
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &nak);
@@ -623,15 +619,35 @@ async fn handle_client(
     }
 }
 
+fn unexpected_bvlc_function_error_code(function: ScFunction) -> ErrorCode {
+    match function {
+        ScFunction::Unknown(_) => ErrorCode::BVLC_FUNCTION_UNKNOWN,
+        _ => ErrorCode::UNEXPECTED_DATA,
+    }
+}
+
+fn connect_request_vmac_disposition(vmac: Vmac, hub_vmac: Vmac) -> ConnectRequestVmacDisposition {
+    if vmac == crate::sc_frame::UNKNOWN_VMAC || vmac == BROADCAST_VMAC {
+        ConnectRequestVmacDisposition::CloseReserved
+    } else if vmac == hub_vmac {
+        ConnectRequestVmacDisposition::Nak(
+            ErrorClass::COMMUNICATION,
+            ErrorCode::NODE_DUPLICATE_VMAC,
+        )
+    } else {
+        ConnectRequestVmacDisposition::Accept
+    }
+}
+
 /// Build a BVLC-Result NAK message.
 fn build_bvlc_result_nak(
     message_id: u16,
     result_for: ScFunction,
-    error_class_hi: u8,
-    error_class_lo: u8,
-    error_code_hi: u8,
-    error_code_lo: u8,
+    error_class: ErrorClass,
+    error_code: ErrorCode,
 ) -> ScMessage {
+    let error_class = error_class.to_raw().to_be_bytes();
+    let error_code = error_code.to_raw().to_be_bytes();
     ScMessage {
         function: ScFunction::Result,
         message_id,
@@ -643,10 +659,10 @@ fn build_bvlc_result_nak(
             result_for.to_raw(),
             0x01, // NAK
             0x00, // error header marker
-            error_class_hi,
-            error_class_lo,
-            error_code_hi,
-            error_code_lo,
+            error_class[0],
+            error_class[1],
+            error_code[0],
+            error_code[1],
         ]),
     }
 }
@@ -657,4 +673,75 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult};
+
+    #[test]
+    fn bvlc_result_nak_uses_standard_error_values() {
+        let nak = build_bvlc_result_nak(
+            0x1234,
+            ScFunction::ConnectRequest,
+            ErrorClass::COMMUNICATION,
+            ErrorCode::NODE_DUPLICATE_VMAC,
+        );
+
+        assert_eq!(
+            decode_sc_bvlc_result(&nak).unwrap(),
+            ScBvlcResult::Nak {
+                result_for: ScFunction::ConnectRequest,
+                error_header_marker: 0,
+                error_class: 7,
+                error_code: 151,
+                error_details: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn connect_request_rejects_hub_vmac_as_duplicate() {
+        assert_eq!(
+            connect_request_vmac_disposition([0x10; 6], [0x10; 6]),
+            ConnectRequestVmacDisposition::Nak(
+                ErrorClass::COMMUNICATION,
+                ErrorCode::NODE_DUPLICATE_VMAC
+            )
+        );
+        assert_eq!(
+            connect_request_vmac_disposition([0x00; 6], [0x10; 6]),
+            ConnectRequestVmacDisposition::CloseReserved
+        );
+        assert_eq!(
+            connect_request_vmac_disposition([0x01; 6], [0x10; 6]),
+            ConnectRequestVmacDisposition::Accept
+        );
+    }
+
+    #[test]
+    fn known_unhandled_function_is_not_classified_as_unknown() {
+        let nak = build_bvlc_result_nak(
+            0x1234,
+            ScFunction::ConnectAccept,
+            ErrorClass::COMMUNICATION,
+            unexpected_bvlc_function_error_code(ScFunction::ConnectAccept),
+        );
+
+        assert_eq!(
+            decode_sc_bvlc_result(&nak).unwrap(),
+            ScBvlcResult::Nak {
+                result_for: ScFunction::ConnectAccept,
+                error_header_marker: 0,
+                error_class: 7,
+                error_code: 150,
+                error_details: String::new(),
+            }
+        );
+        assert_eq!(
+            unexpected_bvlc_function_error_code(ScFunction::Unknown(0x42)),
+            ErrorCode::BVLC_FUNCTION_UNKNOWN
+        );
+    }
 }

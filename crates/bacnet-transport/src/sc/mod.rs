@@ -140,25 +140,21 @@ impl ScConnection {
                 return false;
             }
         }
-        self.pending_connect_message_id = None;
-        // Parse hub VMAC from first 6 bytes of payload
-        if msg.payload.len() >= 26 {
-            let mut hub_vmac = [0u8; 6];
-            hub_vmac.copy_from_slice(&msg.payload[0..6]);
-            self.hub_vmac = Some(hub_vmac);
-            // Parse Device UUID (bytes 6..22)
-            let mut uuid = [0u8; 16];
-            uuid.copy_from_slice(&msg.payload[6..22]);
-            self.hub_device_uuid = Some(uuid);
-            // bytes [22..24] = Max-BVLC-Length
-            // bytes [24..26] = Max-NPDU-Length
-            self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
-        } else if msg.payload.len() >= 6 {
-            // Tolerate short payloads from non-2020 implementations
-            let mut hub_vmac = [0u8; 6];
-            hub_vmac.copy_from_slice(&msg.payload[0..6]);
-            self.hub_vmac = Some(hub_vmac);
+        if msg.payload.len() != 26 {
+            tracing::warn!(
+                "ConnectAccept payload has {} bytes, expected 26",
+                msg.payload.len()
+            );
+            return false;
         }
+        self.pending_connect_message_id = None;
+        let mut hub_vmac = [0u8; 6];
+        hub_vmac.copy_from_slice(&msg.payload[0..6]);
+        self.hub_vmac = Some(hub_vmac);
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&msg.payload[6..22]);
+        self.hub_device_uuid = Some(uuid);
+        self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
     }
@@ -476,8 +472,13 @@ async fn perform_handshake<W: WebSocketPort>(
             let mut c = conn.lock().await;
             if c.handle_connect_accept(&msg) {
                 debug!("BACnet/SC connected");
+                Ok(())
+            } else {
+                c.state = ScConnectionState::Disconnected;
+                Err(Error::Encoding(
+                    "BACnet/SC Connect-Accept did not match pending Connect-Request".into(),
+                ))
             }
-            Ok(())
         }
         Ok(Err(e)) => Err(e),
         Err(_) => {

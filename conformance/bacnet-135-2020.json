@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "a2bee8bda604e50a501b81dcb4de392b16b8c4a9",
-  "review_scope": "Annex AB.2.4 BACnet/SC BVLC-Result parser and connection handling evidence.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2.4 BACnet/SC BVLC-Result impacts. Addendum 135-2020ci clarifies that BVLC-Result NAK is used for standard BVLC message failures while ACK may be used for proprietary BVLC messages, and it expands AB.3.1.5 common error situations. Addenda 135-2020cf/cp/cc/cm were also searched for AB.2.4/BVLC-Result impacts; no additional BVLC-Result payload grammar changes were found.",
+  "repo_sha": "50976210ceaca4393d6056a8a904fe85b65edb8f",
+  "review_scope": "Annex AB.6.2 BACnet/SC connection state-machine evidence and Annex AB BVLC-Result error-code use.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda set checked on 2026-06-29 were reviewed for Annex AB.6.2 connection-state impacts. The Standard ASN.1 lists BACnet Error Class COMMUNICATION as 7 and Error Code node-duplicate-vmac as 151; no reviewed addendum changes the AB.6.2 Connect-Accept message-id matching or duplicate-VMAC BVLC-Result NAK behavior covered by this tranche.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -583,6 +583,43 @@
       "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport and WASM. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, and malformed wire-level Result decode failures closing without a Result response. Transport and WASM connection handling now keeps ACK benign, disconnects on NAK, and disconnects on malformed Result without generating a Result response. Remaining work includes request correlation, negotiated Max-BVLC-Length/Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, destination-option Must Understand NAK behavior, and hub/direct response-routing behavior."
     },
     {
+      "id": "BACNET-AB-SC-CONNECTION-STATE",
+      "standard_anchor": "Annex AB.6.2",
+      "priority": "P0",
+      "requirement_summary": "BACnet/SC initiating and accepting peers enforce connection-state transitions, Connect-Accept response correlation, disconnect final-message behavior, and duplicate-VMAC collision signaling.",
+      "status": "implementation-present-needs-state-machine-audit",
+      "code_anchors": [
+        "crates/bacnet-transport/src/sc/mod.rs",
+        "crates/bacnet-transport/src/sc/tests.rs",
+        "crates/bacnet-transport/src/sc_hub.rs",
+        "crates/bacnet-wasm/src/sc_connection.rs",
+        "crates/bacnet-types/src/enums/protocol.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-types/src/enums/tests.rs::bacnet_sc_error_code_values",
+        "crates/bacnet-transport/src/sc/tests.rs::connect_accept_validates_message_id",
+        "crates/bacnet-transport/src/sc/tests.rs::connect_accept_parses_device_uuid",
+        "crates/bacnet-transport/src/sc/tests.rs::build_disconnect",
+        "crates/bacnet-transport/src/sc/tests.rs::disconnect_ack_transitions_from_disconnecting",
+        "crates/bacnet-transport/src/sc_hub.rs::tests::known_unhandled_function_is_not_classified_as_unknown",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_handshake"
+      ],
+      "negative_tests": [
+        "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_wrong_message_id",
+        "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_short_payload",
+        "crates/bacnet-transport/src/sc/tests.rs::sc_connect_rejects_mismatched_accept_message_id",
+        "crates/bacnet-transport/src/sc/tests.rs::sc_connect_timeout",
+        "crates/bacnet-transport/src/sc/tests.rs::build_disconnect_before_connect_returns_error",
+        "crates/bacnet-transport/src/sc_hub.rs::tests::bvlc_result_nak_uses_standard_error_values",
+        "crates/bacnet-transport/src/sc_hub.rs::tests::connect_request_rejects_hub_vmac_as_duplicate",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_wrong_message_id",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::connect_accept_rejects_short_payload"
+      ],
+      "benchmarks": ["benchmarks/benches/sc_latency.rs", "benchmarks/benches/sc_throughput.rs"],
+      "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
+      "notes": "AB-03 adds native and WASM Connect-Accept message-id matching evidence, preserves the Connecting state when a pure state-machine response does not match the pending Connect-Request, and makes the async native handshake fail/disconnect on a mismatched response. Native and WASM Connect-Accept handling now require the fixed AB.2.11.1 26-byte payload before entering Connected. The hub BVLC-Result NAK builder now takes typed BACnet ErrorClass/ErrorCode values; duplicate client or hub VMAC collisions are encoded as COMMUNICATION/NODE_DUPLICATE_VMAC (7/151) instead of raw 1/1, and known-but-invalid functions are no longer classified as BVLC_FUNCTION_UNKNOWN. Existing transport tests also cover connect timeout to Disconnected, Disconnect-Request construction, Disconnect-ACK transition from Disconnecting, and hub Device UUID payload parsing. Remaining AB.6.2 gaps include explicit AWAITING_WEBSOCKET modeling at the WebSocket adapter boundary, accepting-peer connect-wait timeout, Disconnect wait behavior in ScTransport::stop, duplicate Device UUID replacement of an existing hub connection, reserved VMAC error signaling, and initiating-peer Random-48 VMAC reselection after receiving NODE_DUPLICATE_VMAC."
+    },
+    {
       "id": "BACNET-AB-SC-HUB-CONNECTOR",
       "standard_anchor": "Annex AB.5",
       "priority": "P0",
@@ -593,7 +630,7 @@
       "negative_tests": [],
       "benchmarks": ["benchmarks/benches/sc_throughput.rs"],
       "public_claims": ["README BACnet/SC Hub", "docs/python-api.md ScHub"],
-      "notes": "Needs duplicate VMAC, forwarding, direct-connection, and failover matrix."
+      "notes": "Connection-state row BACNET-AB-SC-CONNECTION-STATE now covers duplicate-VMAC BVLC-Result NAK encoding. Full hub connector evidence still needs duplicate Device UUID replacement, forwarding, direct-connection, and failover matrix coverage."
     },
     {
       "id": "BACNET-AB-SC-WEBSOCKET-TLS",
