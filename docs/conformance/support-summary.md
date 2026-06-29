@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `682b6776e2397bc4a90f90541a41b9ba44395b99`
-- Scope: Annex AB.5 BACnet/SC hub connector primary/failover behavior, including established primary loss, reconnect exhaustion, failover activation, and primary restoration while failover is active.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.2 and AB.5.4 primary/failover hub connector behavior, plus surrounding AB.5.3 hub connection and forwarding context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. Addendum cc changes AB.5.3.1 hub-connection metadata and Network Port properties; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.5.2/AB.5.4 primary/failover retry or restoration behavior covered by this tranche.
+- Implementation evidence SHA reviewed: `4d6a27c85a4f2b2a2851c68ccdd6c59400c9f998`
+- Scope: Annex AB.5 BACnet/SC hub connector primary/failover and forwarding behavior, including established primary loss, reconnect exhaustion, failover activation, primary restoration while failover is active, and larger destination/data option-chain forwarding capacity.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.5.2 and AB.5.4 primary/failover hub connector behavior, plus surrounding AB.5.3 hub connection and forwarding context. The ASHRAE Standards Addenda and Errata pages were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata. Addendum cc changes AB.5.3.1 hub-connection metadata and Network Port properties; Addendum cp adds the Hello destination option to Connect-Request/Connect-Accept. None changes the AB.5.2/AB.5.4 primary/failover retry or restoration behavior or the AB.5.3/AB.5.4 forwarding option-preservation evidence covered by this tranche.
 
 ## Counts
 

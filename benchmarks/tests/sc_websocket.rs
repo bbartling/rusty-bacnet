@@ -180,6 +180,41 @@ async fn sc_websocket_hub_relays_unicast_unknown_and_broadcast_with_vmac_rules()
 }
 
 #[tokio::test]
+async fn sc_websocket_hub_preserves_large_minimum_size_option_chains() {
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+
+    let vmac_a = [0xA9; 6];
+    let vmac_b = [0xB9; 6];
+
+    let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
+    let mut ws_b = connect_sc_client(&url, &certs, vmac_b).await;
+
+    let msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x2401,
+        originating_vmac: None,
+        destination_vmac: Some(vmac_b),
+        dest_options: minimum_size_options(31),
+        data_options: minimum_size_options(31),
+        payload: Bytes::from_static(&[0x01, 0x20, 0x31]),
+    };
+    send_sc_message(&mut ws_a, &msg).await;
+
+    let relayed = recv_sc_message(&mut ws_b).await;
+    assert_eq!(relayed.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(relayed.message_id, msg.message_id);
+    assert_eq!(relayed.originating_vmac, Some(vmac_a));
+    assert_eq!(relayed.destination_vmac, None);
+    assert_eq!(relayed.dest_options, msg.dest_options);
+    assert_eq!(relayed.data_options, msg.data_options);
+    assert_eq!(relayed.payload, msg.payload);
+    assert_no_sc_message(&mut ws_a).await;
+
+    hub.stop().await;
+}
+
+#[tokio::test]
 async fn sc_websocket_hub_replaces_known_device_uuid_connection() {
     let certs = generate_test_certs();
     let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
@@ -470,4 +505,14 @@ async fn expect_websocket_closed_or_terminated(ws: &mut ClientWs) {
 async fn assert_no_sc_message(ws: &mut ClientWs) {
     let result = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
     assert!(result.is_err(), "unexpected WebSocket message: {result:?}");
+}
+
+fn minimum_size_options(count: usize) -> Vec<ScOption> {
+    (0..count)
+        .map(|i| ScOption {
+            option_type: (i % 31 + 1) as u8,
+            must_understand: i % 2 == 0,
+            data: Vec::new(),
+        })
+        .collect()
 }

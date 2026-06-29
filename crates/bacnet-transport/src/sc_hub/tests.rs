@@ -197,6 +197,41 @@ fn hub_relay_unicast_adds_originating_vmac_and_strips_destination_vmac() {
 }
 
 #[test]
+fn hub_relay_preserves_large_minimum_size_option_chains() {
+    let inbound = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x2345,
+        originating_vmac: None,
+        destination_vmac: Some([0x02; 6]),
+        dest_options: minimum_size_options(31),
+        data_options: minimum_size_options(31),
+        payload: Bytes::from_static(&[0x01, 0x20, 0x99]),
+    };
+
+    let relay = build_hub_relay_message(&inbound, [0x01; 6], HubRelayTarget::Unicast([0x02; 6]));
+    assert_eq!(relay.originating_vmac, Some([0x01; 6]));
+    assert_eq!(relay.destination_vmac, None);
+    assert_eq!(relay.dest_options, inbound.dest_options);
+    assert_eq!(relay.data_options, inbound.data_options);
+
+    let mut encoded = BytesMut::new();
+    encode_sc_message(&mut encoded, &relay);
+    assert!(encoded.len() <= 1476);
+
+    let decoded = decode_sc_message(&encoded).unwrap();
+    assert_eq!(decoded.originating_vmac, Some([0x01; 6]));
+    assert_eq!(decoded.destination_vmac, None);
+    assert_eq!(decoded.dest_options, inbound.dest_options);
+    assert_eq!(decoded.data_options, inbound.data_options);
+    assert_eq!(decoded.payload, inbound.payload);
+
+    let broadcast = build_hub_relay_message(&inbound, [0x01; 6], HubRelayTarget::Broadcast);
+    assert_eq!(broadcast.destination_vmac, Some(BROADCAST_VMAC));
+    assert_eq!(broadcast.dest_options, inbound.dest_options);
+    assert_eq!(broadcast.data_options, inbound.data_options);
+}
+
+#[test]
 fn hub_relay_broadcast_adds_originating_vmac_and_preserves_broadcast_destination() {
     let inbound = ScMessage {
         function: ScFunction::EncapsulatedNpdu,
@@ -320,4 +355,14 @@ fn websocket_subprotocol_error_response_is_bad_request() {
         .as_ref()
         .unwrap()
         .contains(BACNET_SC_HUB_SUBPROTOCOL));
+}
+
+fn minimum_size_options(count: usize) -> Vec<ScOption> {
+    (0..count)
+        .map(|i| ScOption {
+            option_type: (i % 31 + 1) as u8,
+            must_understand: i % 2 == 0,
+            data: Vec::new(),
+        })
+        .collect()
 }
