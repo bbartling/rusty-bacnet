@@ -4,7 +4,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `9b884e9fef0fcb8b407dc121adcecbc75ee2de5b`
+- Implementation evidence SHA reviewed: `44e90c6e73d3537553432f5027adab1b23afc2b1`
 - Scope: Annex AB.2.4 BACnet/SC BVLC-Result parser and connection handling evidence.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` plus the official BACnet Committee addenda page were checked on 2026-06-29 for Annex AB.2.4 BACnet/SC BVLC-Result impacts. Addendum 135-2020ci clarifies that BVLC-Result NAK is used for standard BVLC message failures while ACK may be used for proprietary BVLC messages, and it expands AB.3.1.5 common error situations. Addenda 135-2020cf/cp/cc/cm were also searched for AB.2.4/BVLC-Result impacts; no additional BVLC-Result payload grammar changes were found.
 
