@@ -1,5 +1,7 @@
 use super::*;
-use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
+use crate::sc_frame::{
+    decode_sc_bvlc_result, ScBvlcResult, ScOption, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
+};
 
 #[test]
 fn bvlc_result_nak_uses_standard_error_values() {
@@ -38,6 +40,50 @@ fn connect_request_rejects_hub_vmac_as_duplicate() {
     assert_eq!(
         connect_request_vmac_disposition([0x01; 6], [0x10; 6]),
         ConnectRequestVmacDisposition::Accept
+    );
+}
+
+#[test]
+fn hub_registration_accepts_new_vmac_and_uuid() {
+    assert_eq!(
+        hub_client_registration_decision([0x02; 6], [0x22; 16], [([0x01; 6], [0x11; 16])], 2),
+        HubClientRegistrationDecision::Accept
+    );
+}
+
+#[test]
+fn hub_registration_replaces_known_device_uuid() {
+    assert_eq!(
+        hub_client_registration_decision([0x02; 6], [0x11; 16], [([0x01; 6], [0x11; 16])], 1),
+        HubClientRegistrationDecision::Replace {
+            old_vmac: [0x01; 6]
+        }
+    );
+}
+
+#[test]
+fn hub_registration_replaces_known_device_uuid_with_same_vmac() {
+    assert_eq!(
+        hub_client_registration_decision([0x01; 6], [0x11; 16], [([0x01; 6], [0x11; 16])], 1),
+        HubClientRegistrationDecision::Replace {
+            old_vmac: [0x01; 6]
+        }
+    );
+}
+
+#[test]
+fn hub_registration_rejects_duplicate_vmac_for_different_uuid() {
+    assert_eq!(
+        hub_client_registration_decision([0x01; 6], [0x22; 16], [([0x01; 6], [0x11; 16])], 2),
+        HubClientRegistrationDecision::NakDuplicateVmac
+    );
+}
+
+#[test]
+fn hub_registration_rejects_new_connection_at_capacity() {
+    assert_eq!(
+        hub_client_registration_decision([0x03; 6], [0x33; 16], [([0x01; 6], [0x11; 16])], 1),
+        HubClientRegistrationDecision::NakMaxClients
     );
 }
 
