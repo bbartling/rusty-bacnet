@@ -740,6 +740,34 @@ mod tests {
     }
 
     #[test]
+    fn sc_options_reject_option_count_exhaustion() {
+        let option = ScOption {
+            option_type: 1,
+            must_understand: false,
+            data: Vec::new(),
+        };
+        let msg = ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id: 1,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: vec![option.clone(); 64],
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &msg);
+        let decoded = decode_sc_message(&buf).unwrap();
+        assert_eq!(decoded.dest_options.len(), 64);
+
+        let mut too_many = msg;
+        too_many.dest_options.push(option);
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &too_many);
+        assert!(decode_sc_message(&buf).is_err());
+    }
+
+    #[test]
     fn sc_options_reject_truncated_length_and_data() {
         let length_missing = [0x01, 0x02, 0x00, 0x01, 0x21, 0x00];
         assert!(decode_sc_message(&length_missing).is_err());

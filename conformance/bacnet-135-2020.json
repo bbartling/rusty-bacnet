@@ -530,6 +530,8 @@
         "crates/bacnet-wasm/src/sc_frame.rs::tests::decode_rejects_reserved_control_bits",
         "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_option_type_zero",
         "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_option_type_zero",
+        "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_option_count_exhaustion",
+        "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_option_count_exhaustion",
         "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_truncated_length_and_data",
         "crates/bacnet-wasm/src/sc_frame.rs::tests::sc_options_reject_truncated_length_and_data",
         "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_unterminated_chain",
@@ -537,7 +539,7 @@
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
-      "notes": "AB-01 adds transport and WASM codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option length truncation, option data truncation, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader BVLC-SC function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
+      "notes": "AB-01 adds transport and WASM codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader BVLC-SC function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
     },
     {
       "id": "BACNET-AB-SC-HUB-CONNECTOR",
