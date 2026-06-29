@@ -231,19 +231,31 @@ impl BACnetScClient {
     }
 
     fn send_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
-        let conn = self.connection.borrow_mut();
+        let mut conn = self.connection.borrow_mut();
         if conn.state != ScConnectionState::Connected {
             return Err(JsError::new("not connected"));
         }
+        if npdu_bytes.len() > conn.hub_max_apdu_length as usize {
+            return Err(JsError::new(&format!(
+                "BACnet/SC NPDU length {} exceeds peer Max-NPDU-Length {}",
+                npdu_bytes.len(),
+                conn.hub_max_apdu_length
+            )));
+        }
         let hub_vmac = conn.hub_vmac.unwrap_or([0xFF; 6]);
+        let hub_max_bvlc_length = conn.hub_max_bvlc_length;
+        let msg = conn.build_encapsulated_npdu(hub_vmac, npdu_bytes);
         drop(conn);
 
-        let msg = self
-            .connection
-            .borrow_mut()
-            .build_encapsulated_npdu(hub_vmac, npdu_bytes);
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
+        if buf.len() > hub_max_bvlc_length as usize {
+            return Err(JsError::new(&format!(
+                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
+                buf.len(),
+                hub_max_bvlc_length
+            )));
+        }
         if let Some(ws) = self.ws.borrow().as_ref() {
             ws.send(&buf)
                 .map_err(|e| JsError::new(&format!("{:?}", e)))?;
@@ -288,6 +300,10 @@ impl BACnetScClient {
                 };
 
                 // Decode SC frame
+                let max_bvlc = connection.borrow().max_bvlc_length as usize;
+                if data.len() > max_bvlc {
+                    continue;
+                }
                 let Ok(sc_msg) = decode_sc_message(&data) else {
                     continue;
                 };

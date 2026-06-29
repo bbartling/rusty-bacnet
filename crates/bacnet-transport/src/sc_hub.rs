@@ -31,6 +31,9 @@ use crate::sc_frame::{
 type TlsStream = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
 type WsSink = SplitSink<WebSocketStream<TlsStream>, Message>;
 
+const HUB_MAX_BVLC_LENGTH: u16 = 1476;
+const HUB_MAX_NPDU_LENGTH: u16 = 1476;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectRequestVmacDisposition {
     Accept,
@@ -38,9 +41,18 @@ enum ConnectRequestVmacDisposition {
     Nak(ErrorClass, ErrorCode),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayLimitDecision {
+    Send,
+    DropMaxNpdu,
+    DropMaxBvlc,
+}
+
 /// Per-client state tracked by the hub.
 struct HubClient {
     sink: Arc<Mutex<WsSink>>,
+    /// Maximum encoded BACnet/SC BVLC message length this client can accept.
+    max_bvlc: u16,
     /// Maximum NPDU length this client can accept (from ConnectRequest).
     max_npdu: u16,
     /// Last activity time (epoch seconds) — updated on every received message.
@@ -328,6 +340,15 @@ async fn handle_client(
             }
         };
 
+        if data.len() > HUB_MAX_BVLC_LENGTH as usize {
+            warn!(
+                "Hub: frame from {peer_addr} is {} bytes, exceeds hub Max-BVLC-Length {}, dropping",
+                data.len(),
+                HUB_MAX_BVLC_LENGTH
+            );
+            continue;
+        }
+
         let sc_msg = match decode_sc_message(&data) {
             Ok(m) => m,
             Err(e) => {
@@ -338,14 +359,22 @@ async fn handle_client(
 
         match sc_msg.function {
             ScFunction::ConnectRequest => {
-                // Validate ConnectRequest payload is at least 26 bytes per spec AB.2.9
-                if sc_msg.payload.len() < 26 {
-                    warn!("Hub: ConnectRequest from {peer_addr} has short payload ({} bytes, need 26)", sc_msg.payload.len());
+                // AB.2.10.1 defines a fixed 26-byte Connect-Request payload.
+                if sc_msg.payload.len() != 26 {
+                    warn!(
+                        "Hub: ConnectRequest from {peer_addr} has {} payload bytes, expected 26",
+                        sc_msg.payload.len()
+                    );
+                    let error_code = if sc_msg.payload.len() < 26 {
+                        ErrorCode::MESSAGE_INCOMPLETE
+                    } else {
+                        ErrorCode::UNEXPECTED_DATA
+                    };
                     let nak = build_bvlc_result_nak(
                         sc_msg.message_id,
                         ScFunction::ConnectRequest,
                         ErrorClass::COMMUNICATION,
-                        ErrorCode::MESSAGE_INCOMPLETE,
+                        error_code,
                     );
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &nak);
@@ -358,9 +387,9 @@ async fn handle_client(
                 // Parse Device UUID (bytes 6..22) and max lengths (bytes 22..26)
                 let mut _client_uuid = [0u8; 16];
                 _client_uuid.copy_from_slice(&sc_msg.payload[6..22]);
-                let _client_max_bvlc = u16::from_be_bytes([sc_msg.payload[22], sc_msg.payload[23]]);
+                let client_max_bvlc = u16::from_be_bytes([sc_msg.payload[22], sc_msg.payload[23]]);
                 let client_max_npdu = u16::from_be_bytes([sc_msg.payload[24], sc_msg.payload[25]]);
-                debug!("Hub: ConnectRequest from {peer_addr} vmac={vmac:02x?} max_npdu={client_max_npdu}");
+                debug!("Hub: ConnectRequest from {peer_addr} vmac={vmac:02x?} max_bvlc={client_max_bvlc} max_npdu={client_max_npdu}");
 
                 match connect_request_vmac_disposition(vmac, hub_vmac) {
                     ConnectRequestVmacDisposition::Accept => {}
@@ -423,6 +452,7 @@ async fn handle_client(
                         vmac,
                         HubClient {
                             sink: write.clone(),
+                            max_bvlc: client_max_bvlc,
                             max_npdu: client_max_npdu,
                             last_activity: client_activity.clone(),
                         },
@@ -433,8 +463,8 @@ async fn handle_client(
                 let mut accept_payload = Vec::with_capacity(26);
                 accept_payload.extend_from_slice(&hub_vmac);
                 accept_payload.extend_from_slice(&hub_uuid);
-                accept_payload.extend_from_slice(&1476u16.to_be_bytes());
-                accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+                accept_payload.extend_from_slice(&HUB_MAX_BVLC_LENGTH.to_be_bytes());
+                accept_payload.extend_from_slice(&HUB_MAX_NPDU_LENGTH.to_be_bytes());
                 let accept = ScMessage {
                     function: ScFunction::ConnectAccept,
                     message_id: sc_msg.message_id,
@@ -538,6 +568,7 @@ async fn handle_client(
                 let mut relay_buf = BytesMut::new();
                 encode_sc_message(&mut relay_buf, &relay_msg);
                 let relay_bytes: Vec<u8> = relay_buf.to_vec();
+                let relay_len = relay_bytes.len();
 
                 if is_broadcast_vmac(&dest) {
                     // Parallel broadcast relay with per-client timeout
@@ -545,7 +576,30 @@ async fn handle_client(
                         let map = clients.lock().await;
                         map.iter()
                             .filter(|(vmac, _)| **vmac != sender_vmac)
-                            .map(|(vmac, c)| (*vmac, Arc::clone(&c.sink)))
+                            .filter_map(|(vmac, c)| {
+                                match relay_limit_decision(
+                                    npdu_len,
+                                    relay_len,
+                                    c.max_npdu,
+                                    c.max_bvlc,
+                                ) {
+                                    RelayLimitDecision::Send => Some((*vmac, Arc::clone(&c.sink))),
+                                    RelayLimitDecision::DropMaxNpdu => {
+                                        warn!(
+                                            "Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({}) for {vmac:02x?}, dropping for target",
+                                            c.max_npdu
+                                        );
+                                        None
+                                    }
+                                    RelayLimitDecision::DropMaxBvlc => {
+                                        warn!(
+                                            "Hub: broadcast BVLC ({relay_len} bytes) exceeds target max_bvlc ({}) for {vmac:02x?}, dropping for target",
+                                            c.max_bvlc
+                                        );
+                                        None
+                                    }
+                                }
+                            })
                             .collect()
                     };
                     let relay_shared = Bytes::from(relay_bytes);
@@ -572,18 +626,23 @@ async fn handle_client(
                 } else {
                     let target = {
                         let map = clients.lock().await;
-                        map.get(&dest).map(|c| (Arc::clone(&c.sink), c.max_npdu))
+                        map.get(&dest)
+                            .map(|c| (Arc::clone(&c.sink), c.max_npdu, c.max_bvlc))
                     };
-                    if let Some((sink, max_npdu)) = target {
-                        if npdu_len > max_npdu as usize {
-                            warn!(
-                                "Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping"
-                            );
-                        } else {
-                            let mut w = sink.lock().await;
-                            if let Err(e) = w.send(Message::Binary(relay_bytes.into())).await {
-                                warn!("Hub: unicast relay error to {dest:02x?}: {e}");
+                    if let Some((sink, max_npdu, max_bvlc)) = target {
+                        match relay_limit_decision(npdu_len, relay_len, max_npdu, max_bvlc) {
+                            RelayLimitDecision::Send => {
+                                let mut w = sink.lock().await;
+                                if let Err(e) = w.send(Message::Binary(relay_bytes.into())).await {
+                                    warn!("Hub: unicast relay error to {dest:02x?}: {e}");
+                                }
                             }
+                            RelayLimitDecision::DropMaxNpdu => warn!(
+                                "Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping"
+                            ),
+                            RelayLimitDecision::DropMaxBvlc => warn!(
+                                "Hub: BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {dest:02x?}, dropping"
+                            ),
                         }
                     } else {
                         debug!("Hub: no client with vmac {dest:02x?} for unicast relay");
@@ -656,6 +715,21 @@ fn connect_request_vmac_disposition(vmac: Vmac, hub_vmac: Vmac) -> ConnectReques
     }
 }
 
+fn relay_limit_decision(
+    npdu_len: usize,
+    encoded_bvlc_len: usize,
+    max_npdu: u16,
+    max_bvlc: u16,
+) -> RelayLimitDecision {
+    if npdu_len > max_npdu as usize {
+        RelayLimitDecision::DropMaxNpdu
+    } else if encoded_bvlc_len > max_bvlc as usize {
+        RelayLimitDecision::DropMaxBvlc
+    } else {
+        RelayLimitDecision::Send
+    }
+}
+
 /// Build a BVLC-Result NAK message.
 fn build_bvlc_result_nak(
     message_id: u16,
@@ -693,125 +767,4 @@ fn now_secs() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult};
-
-    #[test]
-    fn bvlc_result_nak_uses_standard_error_values() {
-        let nak = build_bvlc_result_nak(
-            0x1234,
-            ScFunction::ConnectRequest,
-            ErrorClass::COMMUNICATION,
-            ErrorCode::NODE_DUPLICATE_VMAC,
-        );
-
-        assert_eq!(
-            decode_sc_bvlc_result(&nak).unwrap(),
-            ScBvlcResult::Nak {
-                result_for: ScFunction::ConnectRequest,
-                error_header_marker: 0,
-                error_class: 7,
-                error_code: 151,
-                error_details: String::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn connect_request_rejects_hub_vmac_as_duplicate() {
-        assert_eq!(
-            connect_request_vmac_disposition([0x10; 6], [0x10; 6]),
-            ConnectRequestVmacDisposition::Nak(
-                ErrorClass::COMMUNICATION,
-                ErrorCode::NODE_DUPLICATE_VMAC
-            )
-        );
-        assert_eq!(
-            connect_request_vmac_disposition([0x00; 6], [0x10; 6]),
-            ConnectRequestVmacDisposition::CloseReserved
-        );
-        assert_eq!(
-            connect_request_vmac_disposition([0x01; 6], [0x10; 6]),
-            ConnectRequestVmacDisposition::Accept
-        );
-    }
-
-    #[test]
-    fn known_unhandled_function_is_not_classified_as_unknown() {
-        let nak = build_bvlc_result_nak(
-            0x1234,
-            ScFunction::ConnectAccept,
-            ErrorClass::COMMUNICATION,
-            unexpected_bvlc_function_error_code(ScFunction::ConnectAccept),
-        );
-
-        assert_eq!(
-            decode_sc_bvlc_result(&nak).unwrap(),
-            ScBvlcResult::Nak {
-                result_for: ScFunction::ConnectAccept,
-                error_header_marker: 0,
-                error_class: 7,
-                error_code: 150,
-                error_details: String::new(),
-            }
-        );
-        assert_eq!(
-            unexpected_bvlc_function_error_code(ScFunction::Unknown(0x42)),
-            ErrorCode::BVLC_FUNCTION_UNKNOWN
-        );
-    }
-
-    #[test]
-    fn websocket_subprotocol_offer_accepts_hub_protocol_in_list() {
-        let request = tokio_tungstenite::tungstenite::handshake::server::Request::builder()
-            .header(
-                "Sec-WebSocket-Protocol",
-                format!("chat, {BACNET_SC_HUB_SUBPROTOCOL}, other"),
-            )
-            .body(())
-            .unwrap();
-
-        assert!(offers_websocket_subprotocol(
-            &request,
-            BACNET_SC_HUB_SUBPROTOCOL
-        ));
-    }
-
-    #[test]
-    fn websocket_subprotocol_offer_rejects_missing_hub_protocol() {
-        let request = tokio_tungstenite::tungstenite::handshake::server::Request::builder()
-            .header("Sec-WebSocket-Protocol", "dc.bsc.bacnet.org")
-            .body(())
-            .unwrap();
-
-        assert!(!offers_websocket_subprotocol(
-            &request,
-            BACNET_SC_HUB_SUBPROTOCOL
-        ));
-
-        let request_without_header =
-            tokio_tungstenite::tungstenite::handshake::server::Request::builder()
-                .body(())
-                .unwrap();
-        assert!(!offers_websocket_subprotocol(
-            &request_without_header,
-            BACNET_SC_HUB_SUBPROTOCOL
-        ));
-    }
-
-    #[test]
-    fn websocket_subprotocol_error_response_is_bad_request() {
-        let response = websocket_subprotocol_error_response();
-
-        assert_eq!(
-            response.status(),
-            tokio_tungstenite::tungstenite::http::StatusCode::BAD_REQUEST
-        );
-        assert!(response
-            .body()
-            .as_ref()
-            .unwrap()
-            .contains(BACNET_SC_HUB_SUBPROTOCOL));
-    }
-}
+mod tests;
