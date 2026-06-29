@@ -13,6 +13,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
 const DEFAULT_MAX_BVLC_LENGTH: u16 = 1476;
+pub(crate) const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+pub(crate) const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
 
 /// BACnet/SC connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,8 @@ pub struct ScConnection {
     pub hub_max_apdu_length: u16,
     next_message_id: u16,
     pending_connect_message_id: Option<u16>,
+    last_bvlc_received_ms: Option<u64>,
+    pending_heartbeat_message_id: Option<u16>,
     pub disconnect_ack_to_send: Option<ScMessage>,
 }
 
@@ -56,6 +60,13 @@ pub struct ReceivedScNpdu {
     pub source_vmac: Vmac,
     /// BACnet/SC Data Options exposed as data attributes.
     pub data_attributes: Vec<DataAttribute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScHeartbeatAction {
+    None,
+    Send(ScMessage),
+    Disconnect,
 }
 
 impl ScConnection {
@@ -75,6 +86,8 @@ impl ScConnection {
             hub_max_apdu_length: DEFAULT_MAX_BVLC_LENGTH,
             next_message_id: 1,
             pending_connect_message_id: None,
+            last_bvlc_received_ms: None,
+            pending_heartbeat_message_id: None,
             disconnect_ack_to_send: None,
         }
     }
@@ -136,6 +149,7 @@ impl ScConnection {
     pub fn abort_connect(&mut self) {
         self.state = ScConnectionState::Disconnected;
         self.pending_connect_message_id = None;
+        self.pending_heartbeat_message_id = None;
     }
 
     /// Handle a BVLC-Result received while waiting for Connect-Accept.
@@ -234,6 +248,69 @@ impl ScConnection {
         }
     }
 
+    pub(crate) fn start_heartbeat_tracking(&mut self, now_ms: u64) {
+        self.last_bvlc_received_ms = Some(now_ms);
+        self.pending_heartbeat_message_id = None;
+    }
+
+    pub(crate) fn record_heartbeat_activity(&mut self, now_ms: u64) {
+        if self.state == ScConnectionState::Connected {
+            self.last_bvlc_received_ms = Some(now_ms);
+            self.pending_heartbeat_message_id = None;
+        }
+    }
+
+    pub(crate) fn handle_heartbeat_ack(&mut self, msg: &ScMessage, now_ms: u64) -> bool {
+        if self.heartbeat_ack_matches_outstanding(msg) {
+            self.record_heartbeat_activity(now_ms);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn next_heartbeat_action(
+        &mut self,
+        now_ms: u64,
+        interval_ms: u64,
+        timeout_ms: u64,
+    ) -> ScHeartbeatAction {
+        if self.state != ScConnectionState::Connected {
+            return ScHeartbeatAction::None;
+        }
+
+        let Some(last_received) = self.last_bvlc_received_ms else {
+            self.start_heartbeat_tracking(now_ms);
+            return ScHeartbeatAction::None;
+        };
+
+        let idle_ms = now_ms.saturating_sub(last_received);
+        if idle_ms > timeout_ms {
+            self.state = ScConnectionState::Disconnected;
+            self.pending_heartbeat_message_id = None;
+            return ScHeartbeatAction::Disconnect;
+        }
+
+        if idle_ms >= interval_ms && self.pending_heartbeat_message_id.is_none() {
+            let heartbeat = self.build_heartbeat();
+            self.pending_heartbeat_message_id = Some(heartbeat.message_id);
+            return ScHeartbeatAction::Send(heartbeat);
+        }
+
+        ScHeartbeatAction::None
+    }
+
+    fn heartbeat_ack_matches_outstanding(&self, msg: &ScMessage) -> bool {
+        msg.function == ScFunction::HeartbeatAck
+            && self
+                .pending_heartbeat_message_id
+                .is_some_and(|message_id| msg.message_id == message_id)
+            && msg.originating_vmac.is_none()
+            && msg.destination_vmac.is_none()
+            && msg.data_options.is_empty()
+            && msg.payload.is_empty()
+    }
+
     /// Build an Encapsulated-NPDU message.
     pub fn build_encapsulated_npdu(&mut self, dest_vmac: Vmac, npdu: &[u8]) -> ScMessage {
         self.build_encapsulated_npdu_with_data_attributes(dest_vmac, npdu, &[])
@@ -288,6 +365,7 @@ impl ScConnection {
             ScFunction::HeartbeatRequest => None,
             ScFunction::DisconnectRequest => {
                 self.state = ScConnectionState::Disconnected;
+                self.pending_heartbeat_message_id = None;
                 // AB.2.13.1: Disconnect-ACK has no VMACs
                 self.disconnect_ack_to_send = Some(ScMessage {
                     function: ScFunction::DisconnectAck,
@@ -303,6 +381,7 @@ impl ScConnection {
             ScFunction::DisconnectAck => {
                 if self.state == ScConnectionState::Disconnecting {
                     self.state = ScConnectionState::Disconnected;
+                    self.pending_heartbeat_message_id = None;
                 }
                 None
             }
@@ -312,6 +391,7 @@ impl ScConnection {
                     Ok(ScBvlcResult::Nak { .. }) | Err(_) => {
                         self.state = ScConnectionState::Disconnected;
                         self.pending_connect_message_id = None;
+                        self.pending_heartbeat_message_id = None;
                     }
                 }
                 None
@@ -757,6 +837,143 @@ mod tests {
         assert!(ack.destination_vmac.is_none());
         assert!(ack.data_options.is_empty());
         assert!(ack.payload.is_empty());
+    }
+
+    #[test]
+    fn heartbeat_scheduler_sends_after_idle_interval() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(1_000);
+
+        assert_eq!(
+            conn.next_heartbeat_action(30_999, DEFAULT_HEARTBEAT_INTERVAL_MS, 60_000),
+            ScHeartbeatAction::None
+        );
+
+        let action = conn.next_heartbeat_action(31_000, DEFAULT_HEARTBEAT_INTERVAL_MS, 60_000);
+        let ScHeartbeatAction::Send(heartbeat) = action else {
+            panic!("expected heartbeat request after idle interval");
+        };
+        assert_eq!(heartbeat.function, ScFunction::HeartbeatRequest);
+        assert!(heartbeat.originating_vmac.is_none());
+        assert!(heartbeat.destination_vmac.is_none());
+        assert!(heartbeat.payload.is_empty());
+        assert_eq!(
+            conn.pending_heartbeat_message_id,
+            Some(heartbeat.message_id)
+        );
+
+        assert_eq!(
+            conn.next_heartbeat_action(61_000, DEFAULT_HEARTBEAT_INTERVAL_MS, 60_000),
+            ScHeartbeatAction::None
+        );
+    }
+
+    #[test]
+    fn heartbeat_ack_clears_only_matching_outstanding_request() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(0);
+
+        let ScHeartbeatAction::Send(heartbeat) = conn.next_heartbeat_action(30_000, 30_000, 60_000)
+        else {
+            panic!("expected heartbeat request");
+        };
+
+        let wrong_ack = ScMessage {
+            function: ScFunction::HeartbeatAck,
+            message_id: heartbeat.message_id.wrapping_add(1),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        assert!(!conn.handle_heartbeat_ack(&wrong_ack, 31_000));
+        assert_eq!(
+            conn.pending_heartbeat_message_id,
+            Some(heartbeat.message_id)
+        );
+
+        let ack = ScMessage {
+            function: ScFunction::HeartbeatAck,
+            message_id: heartbeat.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        assert!(conn.handle_heartbeat_ack(&ack, 31_000));
+        assert_eq!(conn.pending_heartbeat_message_id, None);
+
+        assert_eq!(
+            conn.next_heartbeat_action(60_999, 30_000, 60_000),
+            ScHeartbeatAction::None
+        );
+        assert!(matches!(
+            conn.next_heartbeat_action(61_000, 30_000, 60_000),
+            ScHeartbeatAction::Send(_)
+        ));
+    }
+
+    #[test]
+    fn heartbeat_ack_rejects_vmac_fields_until_timeout() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(0);
+
+        let ScHeartbeatAction::Send(heartbeat) = conn.next_heartbeat_action(100, 100, 300) else {
+            panic!("expected heartbeat request");
+        };
+
+        let bad_ack = ScMessage {
+            function: ScFunction::HeartbeatAck,
+            message_id: heartbeat.message_id,
+            originating_vmac: Some([2; 6]),
+            destination_vmac: Some([1; 6]),
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        assert!(!conn.handle_heartbeat_ack(&bad_ack, 150));
+        assert_eq!(
+            conn.pending_heartbeat_message_id,
+            Some(heartbeat.message_id)
+        );
+
+        assert_eq!(
+            conn.next_heartbeat_action(300, 100, 300),
+            ScHeartbeatAction::None
+        );
+        assert_eq!(
+            conn.next_heartbeat_action(301, 100, 300),
+            ScHeartbeatAction::Disconnect
+        );
+        assert_eq!(conn.state, ScConnectionState::Disconnected);
+        assert_eq!(conn.pending_heartbeat_message_id, None);
+    }
+
+    #[test]
+    fn inbound_bvlc_activity_defers_browser_heartbeat_and_timeout() {
+        let mut conn = ScConnection::new([1; 6]);
+        conn.state = ScConnectionState::Connected;
+        conn.start_heartbeat_tracking(0);
+
+        conn.record_heartbeat_activity(250);
+        assert_eq!(
+            conn.next_heartbeat_action(299, 100, 300),
+            ScHeartbeatAction::None
+        );
+        assert_eq!(
+            conn.next_heartbeat_action(349, 100, 300),
+            ScHeartbeatAction::None
+        );
+        assert!(matches!(
+            conn.next_heartbeat_action(350, 100, 300),
+            ScHeartbeatAction::Send(_)
+        ));
+        assert_eq!(conn.state, ScConnectionState::Connected);
     }
 
     #[test]

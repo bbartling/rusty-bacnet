@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use bytes::BytesMut;
-use js_sys::{Array, Function, Reflect, Uint8Array};
+use js_sys::{Array, Date, Function, Reflect, Uint8Array};
 use serde::Serialize;
-use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::codec;
@@ -18,7 +18,10 @@ use crate::data_attributes::{
     self, DataAttribute, MAX_SC_DATA_ATTRIBUTES, MAX_SC_DATA_ATTRIBUTE_PAYLOAD,
 };
 use crate::sc_connection::ReceivedScNpdu;
-use crate::sc_connection::{ScConnection, ScConnectionState};
+use crate::sc_connection::{
+    ScConnection, ScConnectionState, ScHeartbeatAction, DEFAULT_HEARTBEAT_INTERVAL_MS,
+    DEFAULT_HEARTBEAT_TIMEOUT_MS,
+};
 use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC,
 };
@@ -44,6 +47,8 @@ pub struct BACnetScClient {
     on_iam: Rc<RefCell<Option<Function>>>,
     on_cov: Rc<RefCell<Option<Function>>>,
     on_npdu: Rc<RefCell<Option<Function>>>,
+    heartbeat_interval_id: Rc<RefCell<Option<i32>>>,
+    heartbeat_interval_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
 }
 
 #[derive(Serialize)]
@@ -140,10 +145,19 @@ impl BACnetScClient {
             ws.close();
             return Err(JsError::new("ConnectAccept not received or invalid"));
         }
+        self.connection
+            .borrow_mut()
+            .start_heartbeat_tracking(Date::now() as u64);
 
         *self.ws.borrow_mut() = Some(ws);
 
-        // Start receive loop
+        if let Err(e) = self.start_heartbeat_loop() {
+            if let Some(ws) = self.ws.borrow().as_ref() {
+                ws.close();
+            }
+            self.connection.borrow_mut().state = ScConnectionState::Disconnected;
+            return Err(e);
+        }
         self.start_recv_loop();
 
         Ok(())
@@ -299,6 +313,7 @@ impl BACnetScClient {
 
     /// Disconnect from the hub.
     pub async fn disconnect(&self) -> Result<(), JsError> {
+        self.stop_heartbeat_loop();
         if let Ok(msg) = self.connection.borrow_mut().build_disconnect_request() {
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &msg);
@@ -342,6 +357,8 @@ impl BACnetScClient {
             on_iam: Rc::new(RefCell::new(None)),
             on_cov: Rc::new(RefCell::new(None)),
             on_npdu: Rc::new(RefCell::new(None)),
+            heartbeat_interval_id: Rc::new(RefCell::new(None)),
+            heartbeat_interval_closure: Rc::new(RefCell::new(None)),
         })
     }
 
@@ -623,6 +640,7 @@ impl BACnetScClient {
         let on_iam = self.on_iam.clone();
         let on_cov = self.on_cov.clone();
         let on_npdu = self.on_npdu.clone();
+        let heartbeat_interval_id = self.heartbeat_interval_id.clone();
 
         spawn_local(async move {
             loop {
@@ -635,6 +653,7 @@ impl BACnetScClient {
                         Ok(data) => data,
                         Err(_) => {
                             connection.borrow_mut().state = ScConnectionState::Disconnected;
+                            Self::clear_heartbeat_interval_id(&heartbeat_interval_id);
                             break;
                         }
                     }
@@ -662,6 +681,15 @@ impl BACnetScClient {
                         continue;
                     }
                 };
+
+                let now_ms = Date::now() as u64;
+                if sc_msg.function == ScFunction::HeartbeatAck {
+                    connection
+                        .borrow_mut()
+                        .handle_heartbeat_ack(&sc_msg, now_ms);
+                    continue;
+                }
+                connection.borrow_mut().record_heartbeat_activity(now_ms);
 
                 let rejection = {
                     connection
@@ -695,6 +723,13 @@ impl BACnetScClient {
                             let _ = ws.send(&buf);
                         }
                     }
+                    if connection.borrow().state == ScConnectionState::Disconnected {
+                        if let Some(ws) = ws.borrow().as_ref() {
+                            ws.close();
+                        }
+                        Self::clear_heartbeat_interval_id(&heartbeat_interval_id);
+                        break;
+                    }
                 }
 
                 // Handle heartbeat
@@ -708,6 +743,67 @@ impl BACnetScClient {
                 }
             }
         });
+    }
+
+    fn start_heartbeat_loop(&self) -> Result<(), JsError> {
+        self.stop_heartbeat_loop();
+
+        let window = web_sys::window().ok_or_else(|| JsError::new("browser Window is required"))?;
+        let ws = self.ws.clone();
+        let connection = self.connection.clone();
+        let heartbeat_interval_id = self.heartbeat_interval_id.clone();
+
+        let closure = Closure::<dyn FnMut()>::new(move || {
+            let action = connection.borrow_mut().next_heartbeat_action(
+                Date::now() as u64,
+                DEFAULT_HEARTBEAT_INTERVAL_MS,
+                DEFAULT_HEARTBEAT_TIMEOUT_MS,
+            );
+
+            if let ScHeartbeatAction::Send(message) = action {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &message);
+                let sent = ws
+                    .borrow()
+                    .as_ref()
+                    .map(|ws| ws.send(&buf).is_ok())
+                    .unwrap_or(false);
+                if !sent {
+                    connection.borrow_mut().state = ScConnectionState::Disconnected;
+                }
+            }
+
+            if connection.borrow().state == ScConnectionState::Disconnected {
+                if let Some(ws) = ws.borrow().as_ref() {
+                    ws.close();
+                }
+                Self::clear_heartbeat_interval_id(&heartbeat_interval_id);
+            }
+        });
+
+        let interval_id = window
+            .set_interval_with_callback_and_timeout_and_arguments_0(
+                closure.as_ref().unchecked_ref(),
+                DEFAULT_HEARTBEAT_INTERVAL_MS as i32,
+            )
+            .map_err(|_| JsError::new("failed to start BACnet/SC heartbeat timer"))?;
+
+        *self.heartbeat_interval_id.borrow_mut() = Some(interval_id);
+        *self.heartbeat_interval_closure.borrow_mut() = Some(closure);
+        Ok(())
+    }
+
+    fn stop_heartbeat_loop(&self) {
+        Self::clear_heartbeat_interval_id(&self.heartbeat_interval_id);
+        self.heartbeat_interval_closure.borrow_mut().take();
+    }
+
+    fn clear_heartbeat_interval_id(interval_id: &Rc<RefCell<Option<i32>>>) {
+        if let Some(id) = interval_id.borrow_mut().take() {
+            if let Some(window) = web_sys::window() {
+                window.clear_interval_with_handle(id);
+            }
+        }
     }
 
     fn process_npdu(
