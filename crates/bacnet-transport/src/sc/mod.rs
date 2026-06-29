@@ -14,8 +14,8 @@ use tracing::{debug, info, warn};
 
 use crate::port::{ReceivedNpdu, TransportPort};
 use crate::sc_frame::{
-    decode_sc_message, encode_sc_message, is_broadcast_vmac, ScFunction, ScMessage, Vmac,
-    BROADCAST_VMAC,
+    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, is_broadcast_vmac, ScBvlcResult,
+    ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
 };
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -259,19 +259,27 @@ impl ScConnection {
                 None
             }
             ScFunction::Result => {
-                // Parse Result Code: byte 1 of payload (0x00=ACK, 0x01=NAK)
-                let is_nak = msg.payload.len() >= 2 && msg.payload[1] == 0x01;
-                if is_nak {
-                    if msg.payload.len() >= 7 {
-                        let result_for = msg.payload[0];
-                        let error_class = u16::from_be_bytes([msg.payload[3], msg.payload[4]]);
-                        let error_code = u16::from_be_bytes([msg.payload[5], msg.payload[6]]);
-                        tracing::warn!(
-                            "BACnet/SC BVLC-Result NAK: function={result_for:#x} \
-                             error_class={error_class} error_code={error_code}"
+                match decode_sc_bvlc_result(msg) {
+                    Ok(ScBvlcResult::Ack { .. }) => {}
+                    Ok(ScBvlcResult::Nak {
+                        result_for,
+                        error_class,
+                        error_code,
+                        ..
+                    }) => {
+                        warn!(
+                            "BACnet/SC BVLC-Result NAK: function={:#x} \
+                             error_class={} error_code={}",
+                            result_for.to_raw(),
+                            error_class,
+                            error_code
                         );
+                        self.state = ScConnectionState::Disconnected;
                     }
-                    self.state = ScConnectionState::Disconnected;
+                    Err(e) => {
+                        warn!("Malformed BACnet/SC BVLC-Result: {e}");
+                        self.state = ScConnectionState::Disconnected;
+                    }
                 }
                 None
             }

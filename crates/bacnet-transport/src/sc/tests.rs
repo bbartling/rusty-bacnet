@@ -474,7 +474,7 @@ fn bvlc_result_success_no_disconnect() {
         destination_vmac: Some([0x01; 6]),
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::new(), // success = empty
+        payload: Bytes::from_static(&[0x0C, 0x00]), // result-for Proprietary-Message, ACK
     };
     let result = conn.handle_received(&msg);
     assert!(result.is_none());
@@ -493,11 +493,29 @@ fn bvlc_result_ack_with_payload_no_disconnect() {
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::from_static(&[0x06, 0x00]),
+        payload: Bytes::from_static(&[0x0C, 0x00]),
     };
     let result = conn.handle_received(&msg);
     assert!(result.is_none());
     assert_eq!(conn.state, ScConnectionState::Connected);
+}
+
+#[test]
+fn malformed_bvlc_result_disconnects() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    let msg = ScMessage {
+        function: ScFunction::Result,
+        message_id: 1,
+        originating_vmac: Some([0x10; 6]),
+        destination_vmac: Some([0x01; 6]),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let result = conn.handle_received(&msg);
+    assert!(result.is_none());
+    assert_eq!(conn.state, ScConnectionState::Disconnected);
 }
 
 #[test]
