@@ -27,13 +27,23 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
         let msg = c.build_connect_request();
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
-        ws.send(&buf).await?;
+        if let Err(e) = ws.send(&buf).await {
+            c.abort_connect();
+            return Err(e);
+        }
     }
 
     let timeout_dur = Duration::from_millis(timeout_ms);
     let accept_result = tokio::time::timeout(timeout_dur, async {
         loop {
-            let data = ws.recv().await?;
+            let data = match ws.recv().await {
+                Ok(data) => data,
+                Err(e) => {
+                    let mut c = conn.lock().await;
+                    c.abort_connect();
+                    return Err(e);
+                }
+            };
             if data.len() > conn.lock().await.max_bvlc_length as usize {
                 warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping");
                 continue;
@@ -118,7 +128,11 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                 ))
             }
         }
-        Ok(Err(e)) => Err(e),
+        Ok(Err(e)) => {
+            let mut c = conn.lock().await;
+            c.abort_connect();
+            Err(e)
+        }
         Err(_) => {
             let mut c = conn.lock().await;
             c.abort_connect();

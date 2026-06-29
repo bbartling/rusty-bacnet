@@ -152,6 +152,52 @@ async fn sc_connect_decode_error_clears_pending_request() {
 }
 
 #[tokio::test]
+async fn sc_connect_send_error_clears_pending_request() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    drop(ws_server);
+    let vmac = [0x01; 6];
+    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+
+    let result = transport.start().await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("loopback ws send failed"),
+        "Expected send error, got: {err_msg}"
+    );
+    let conn = transport.connection().unwrap();
+    let c = conn.lock().await;
+    assert_eq!(c.state, ScConnectionState::Disconnected);
+    assert_eq!(c.pending_connect_message_id, None);
+}
+
+#[tokio::test]
+async fn sc_connect_recv_error_clears_pending_request() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    let vmac = [0x01; 6];
+    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        let data = ws_server.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+    });
+
+    let result = transport.start().await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("loopback ws channel closed"),
+        "Expected recv error, got: {err_msg}"
+    );
+    let conn = transport.connection().unwrap();
+    let c = conn.lock().await;
+    assert_eq!(c.state, ScConnectionState::Disconnected);
+    assert_eq!(c.pending_connect_message_id, None);
+    hub_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn sc_heartbeat_sent_periodically() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
