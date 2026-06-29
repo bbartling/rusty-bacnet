@@ -852,7 +852,10 @@
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_sends_request_to_idle_client_without_pending_heartbeat",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_keeps_client_while_pending_heartbeat_is_within_ack_timeout",
         "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat",
-        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack"
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_scheduler_sends_after_idle_interval",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack_clears_only_matching_outstanding_request",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::inbound_bvlc_activity_defers_browser_heartbeat_and_timeout"
       ],
       "negative_tests": [
         "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_heartbeat_send_error_transitions_to_disconnected",
@@ -862,11 +865,12 @@
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_start_rejects_heartbeat_disconnect_timeout_at_interval",
         "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_start_rejects_heartbeat_interval_below_annex_ab_range",
         "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_removes_client_when_pending_heartbeat_exceeds_ack_timeout",
-        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id"
+        "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id",
+        "crates/bacnet-wasm/src/sc_connection.rs::tests::heartbeat_ack_rejects_vmac_fields_until_timeout"
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs"],
       "public_claims": ["docs/python-api.md sc_heartbeat_interval_ms", "docs/rust-api.md with_heartbeat_interval_ms"],
-      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. Accelerated heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because WASM/browser keep-alive initiation and fully deterministic end-to-end timeout tests still need follow-up."
+      "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. WASM/browser evidence now starts a browser `Window` heartbeat timer after Connect-Accept, sends Heartbeat-Requests after idle BVLC activity, accepts only matching no-VMAC Heartbeat-ACKs as liveness, clears the timer on disconnect/receive-loop exit, closes on heartbeat send failure or scheduler timeout, and includes deterministic scheduler tests for initiation, ACK correlation, invalid-ACK timeout, and inbound activity deferral. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because live browser/WebSocket heartbeat and timeout smoke coverage still needs follow-up."
     }
   ]
 }

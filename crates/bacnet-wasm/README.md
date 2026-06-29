@@ -4,6 +4,8 @@ BACnet/SC thin client for JavaScript/TypeScript via WebAssembly.
 
 Provides a browser-compatible BACnet/SC (Secure Connect) client that connects to BACnet/SC hubs over WebSocket. Built on the [rusty-bacnet](https://github.com/jscott3201/rusty-bacnet) protocol stack.
 
+The client starts BACnet/SC Heartbeat-Request/Heartbeat-ACK keep-alive handling after the Connect-Accept handshake.
+
 The client enforces `wss://` and BACnet/SC hub WebSocket framing, but browser
 trust stores and client certificate selection are controlled by the browser and
 platform. Annex AB mTLS conformance depends on that external certificate

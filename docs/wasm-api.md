@@ -16,7 +16,7 @@ The `bacnet-wasm` crate provides a BACnet/SC (Secure Connect) client for browser
 - Who-Is discovery with I-Am callback handling
 - COV (Change of Value) subscriptions and notification callbacks
 - BACnet APDU encoding/decoding for common data types
-- Automatic heartbeat response to keep connections alive
+- Automatic Heartbeat-Request/Heartbeat-ACK keep-alive handling
 
 The client connects to a BACnet/SC hub over `wss://` WebSocket, performs the SC Connect handshake, and then sends/receives BACnet service requests encapsulated in SC frames.
 
