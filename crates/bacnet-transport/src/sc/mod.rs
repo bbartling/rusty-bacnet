@@ -20,6 +20,11 @@ use crate::sc_frame::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+fn is_bvlc_result_wire(data: &[u8]) -> bool {
+    data.first()
+        .is_some_and(|function| *function == ScFunction::Result.to_raw())
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket abstraction
 // ---------------------------------------------------------------------------
@@ -420,9 +425,47 @@ async fn perform_handshake<W: WebSocketPort>(
     let accept_result = tokio::time::timeout(timeout_dur, async {
         loop {
             let data = ws.recv().await?;
-            let msg = decode_sc_message(&data)?;
+            let msg = match decode_sc_message(&data) {
+                Ok(msg) => msg,
+                Err(e) if is_bvlc_result_wire(&data) => {
+                    let mut c = conn.lock().await;
+                    c.state = ScConnectionState::Disconnected;
+                    return Err(Error::Encoding(format!(
+                        "malformed BACnet/SC BVLC-Result during connect: {e}"
+                    )));
+                }
+                Err(e) => return Err(e),
+            };
             if msg.function == ScFunction::ConnectAccept {
                 return Ok::<_, Error>(msg);
+            }
+            if msg.function == ScFunction::Result {
+                let result = decode_sc_bvlc_result(&msg);
+                let mut c = conn.lock().await;
+                c.state = ScConnectionState::Disconnected;
+                return match result {
+                    Ok(ScBvlcResult::Nak {
+                        result_for,
+                        error_class,
+                        error_code,
+                        error_details,
+                        ..
+                    }) => Err(Error::Encoding(format!(
+                        "BACnet/SC BVLC-Result NAK during connect: function={:#x} \
+                         error_class={} error_code={} details={}",
+                        result_for.to_raw(),
+                        error_class,
+                        error_code,
+                        error_details
+                    ))),
+                    Ok(ScBvlcResult::Ack { result_for }) => Err(Error::Encoding(format!(
+                        "unexpected BACnet/SC BVLC-Result ACK during connect: function={:#x}",
+                        result_for.to_raw()
+                    ))),
+                    Err(e) => Err(Error::Encoding(format!(
+                        "malformed BACnet/SC BVLC-Result during connect: {e}"
+                    ))),
+                };
             }
         }
     })
@@ -523,6 +566,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 Ok(data) => {
                                     let msg = match decode_sc_message(&data) {
                                         Ok(m) => m,
+                                        Err(e) if is_bvlc_result_wire(&data) => {
+                                            warn!("Malformed wire-level BACnet/SC BVLC-Result: {e}");
+                                            let mut c = conn.lock().await;
+                                            c.state = ScConnectionState::Disconnected;
+                                            break;
+                                        }
                                         Err(e) => {
                                             warn!("BACnet/SC decode error: {}", e);
                                             continue;
@@ -556,6 +605,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         let ack = c.disconnect_ack_to_send.take();
                                         (npdu, ack)
                                     };
+                                    let fatal_result = {
+                                        let c = conn.lock().await;
+                                        msg.function == ScFunction::Result
+                                            && c.state == ScConnectionState::Disconnected
+                                    };
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
                                         if npdu_tx
@@ -577,6 +631,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         if let Err(e) = ws_clone.send(&ack_buf).await {
                                             warn!("BACnet/SC disconnect ack send error: {}", e);
                                         }
+                                    }
+
+                                    if fatal_result {
+                                        warn!("BACnet/SC fatal BVLC-Result received; closing transport loop");
+                                        break;
                                     }
                                 }
                                 Err(e) => {

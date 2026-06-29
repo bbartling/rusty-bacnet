@@ -644,7 +644,11 @@ mod tests {
             0x00, 0x07, // error class COMMUNICATION
             0x01, 0x11, // proprietary error code 273
         ]);
-        data.extend_from_slice(b"Impossible Code!");
+        let details = [
+            0x55, 0x6E, 0x6D, 0xC3, 0xB6, 0x67, 0x6C, 0x69, 0x63, 0x68, 0x65, 0x72, 0x20, 0x43,
+            0x6F, 0x64, 0x65, 0x21,
+        ];
+        data.extend_from_slice(&details);
 
         let msg = decode_sc_message(&data).unwrap();
         assert_eq!(
@@ -654,7 +658,7 @@ mod tests {
                 error_header_marker: 0xBF,
                 error_class: 7,
                 error_code: 273,
-                error_details: "Impossible Code!".to_string(),
+                error_details: String::from_utf8(details.to_vec()).unwrap(),
             }
         );
     }
