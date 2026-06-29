@@ -4,9 +4,9 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `b74c574bd5b13278bb65f8116605a9b2cb5b9ecd`
-- Scope: Annex AB.7 BACnet/SC WebSocket layer evidence for wss peer URIs, hub subprotocol negotiation, binary-frame enforcement, unsupported-data close behavior, and scoped direct-connection deferral.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.7 WebSocket layer requirements. No repo-local AB.7-specific addenda note was found for this tranche; direct WebSocket connection behavior using `dc.bsc.bacnet.org` remains deferred because direct connections are not implemented or publicly claimed.
+- Implementation evidence SHA reviewed: `8a7c6da04e2a4cdd01115aade6dc90e7df48e3d1`
+- Scope: Annex AB.6.2 BACnet/SC connection state cleanup for WebSocket close/error receive paths, heartbeat send failures, reconnect exhaustion, and browser close/error state reporting.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2 connection state behavior in prior AB-03 work. This tranche adds implementation evidence for transport-level WebSocket close/error cleanup without changing wire bytes.
 
 ## Counts
 
