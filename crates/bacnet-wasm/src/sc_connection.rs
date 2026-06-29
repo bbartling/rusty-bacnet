@@ -213,7 +213,7 @@ impl ScConnection {
                     return None;
                 }
                 if let Some(dest) = msg.destination_vmac {
-                    if dest != self.local_vmac && !is_broadcast_vmac(&dest) {
+                    if !is_broadcast_vmac(&dest) {
                         return None;
                     }
                 }
@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_encapsulated_npdu_for_us() {
+    fn handle_encapsulated_npdu_hub_unicast() {
         let vmac = [1; 6];
         let mut conn = ScConnection::new(vmac);
         conn.state = ScConnectionState::Connected;
@@ -440,7 +440,7 @@ mod tests {
             function: ScFunction::EncapsulatedNpdu,
             message_id: 42,
             originating_vmac: Some([2; 6]),
-            destination_vmac: Some(vmac),
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::from_static(&[0x01, 0x04]),
@@ -464,7 +464,7 @@ mod tests {
             function: ScFunction::EncapsulatedNpdu,
             message_id: 42,
             originating_vmac: Some([2; 6]),
-            destination_vmac: Some(vmac),
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::from_static(&[0x01, 0x04]),
@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_encapsulated_npdu_not_for_us() {
+    fn handle_encapsulated_npdu_drops_non_broadcast_destination_from_hub() {
         let vmac = [1; 6];
         let mut conn = ScConnection::new(vmac);
         conn.state = ScConnectionState::Connected;
@@ -482,7 +482,7 @@ mod tests {
             function: ScFunction::EncapsulatedNpdu,
             message_id: 42,
             originating_vmac: Some([2; 6]),
-            destination_vmac: Some([3; 6]), // not for us
+            destination_vmac: Some(vmac),
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::from_static(&[0x01]),

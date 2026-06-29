@@ -328,7 +328,7 @@ client.whoIs(1234, 1234);
 sendNpdu(npduBytes: Uint8Array): void
 ```
 
-Send raw NPDU bytes through the established BACnet/SC hub connection without Data Options.
+Broadcast raw NPDU bytes through the established BACnet/SC hub connection without Data Options. The outbound Encapsulated-NPDU carries the broadcast Destination VMAC and no Originating VMAC.
 
 **Parameters:**
 
@@ -338,6 +338,28 @@ Send raw NPDU bytes through the established BACnet/SC hub connection without Dat
 
 **Throws:**
 - `"not connected"` -- Client is not connected to a hub.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds the peer limits learned from ConnectAccept.
+
+---
+
+### sendNpduTo
+
+```typescript
+sendNpduTo(destinationVmac: Uint8Array, npduBytes: Uint8Array): void
+```
+
+Send raw NPDU bytes to a 6-byte destination VMAC through the established BACnet/SC hub connection without Data Options. The outbound Encapsulated-NPDU carries the supplied Destination VMAC and no Originating VMAC.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `destinationVmac` | `Uint8Array` | Six-byte destination VMAC. Use `[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]` for broadcast. |
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- VMAC length errors when `destinationVmac` is not exactly 6 bytes.
 - Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds the peer limits learned from ConnectAccept.
 
 ---
@@ -353,11 +375,11 @@ sendNpduWithDataAttributes(
 type DataAttribute = {
   option_type: number;
   must_understand: boolean;
-  data: number[];
+  data: number[] | Uint8Array;
 };
 ```
 
-Send raw NPDU bytes with BACnet/SC Data Options. Each data attribute maps to one BACnet/SC Data Option. The aliases `optionType` and `mustUnderstand` are also accepted on input.
+Broadcast raw NPDU bytes with BACnet/SC Data Options. Each data attribute maps to one BACnet/SC Data Option. The aliases `optionType` and `mustUnderstand` are also accepted on input.
 
 **Parameters:**
 
@@ -369,6 +391,7 @@ Send raw NPDU bytes with BACnet/SC Data Options. Each data attribute maps to one
 **Throws:**
 - `"not connected"` -- Client is not connected to a hub.
 - Data Option validation errors for option types outside `1..31`, more than 64 attributes, or payloads larger than 65535 bytes.
+- Secure Path validation errors when option type `1` is sent without `must_understand: true` or with any data.
 - Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds peer limits.
 
 **Example:**
@@ -377,6 +400,45 @@ Send raw NPDU bytes with BACnet/SC Data Options. Each data attribute maps to one
 client.sendNpduWithDataAttributes(rawNpdu, [
   { optionType: 1, mustUnderstand: true, data: [] },
   { optionType: 31, mustUnderstand: false, data: [0x12, 0x34, 0x56] },
+]);
+```
+
+---
+
+### sendNpduToWithDataAttributes
+
+```typescript
+sendNpduToWithDataAttributes(
+  destinationVmac: Uint8Array,
+  npduBytes: Uint8Array,
+  dataAttributes: DataAttribute[]
+): void
+```
+
+Send raw NPDU bytes to a 6-byte destination VMAC with BACnet/SC Data Options.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `destinationVmac` | `Uint8Array` | Six-byte destination VMAC. Use `[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]` for broadcast. |
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+| `dataAttributes` | `DataAttribute[]` | Data Options to attach to the Encapsulated-NPDU. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- VMAC length errors when `destinationVmac` is not exactly 6 bytes.
+- Data Option validation errors for option types outside `1..31`, more than 64 attributes, or payloads larger than 65535 bytes.
+- Secure Path validation errors when option type `1` is sent without `must_understand: true` or with any data.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds peer limits.
+
+**Example:**
+
+```javascript
+const deviceVmac = new Uint8Array([0x02, 0, 0, 0, 0, 0x42]);
+client.sendNpduToWithDataAttributes(deviceVmac, rawNpdu, [
+  { optionType: 1, mustUnderstand: true, data: [] },
+  { optionType: 31, mustUnderstand: false, data: new Uint8Array([0x12, 0x34, 0x56]) },
 ]);
 ```
 
@@ -500,7 +562,7 @@ type ReceivedNpduMetadata = {
 
 Register a callback for every received NPDU that is delivered to the browser client. The callback receives the full NPDU bytes plus BACnet/SC metadata, including Data Options converted to data attributes.
 
-Unsupported Must Understand Data Options are handled before this callback runs. Non-broadcast traffic receives a BVLC-Result NAK with `COMMUNICATION/HEADER_NOT_UNDERSTOOD`, broadcast traffic is dropped without a result, and unsupported non-Must-Understand Data Options are preserved in `metadata.data_attributes`.
+Unsupported Must Understand Data Options and malformed Secure Path Data Options are handled before this callback runs. Non-broadcast traffic with a parseable SC header and rejected option receives a BVLC-Result NAK with `COMMUNICATION/HEADER_NOT_UNDERSTOOD`, broadcast traffic is dropped without a result, and unsupported non-Must-Understand Data Options are preserved in `metadata.data_attributes`.
 
 **Parameters:**
 
@@ -1025,11 +1087,17 @@ await client.subscribeCov(1, 0, 1, false, 300);
 Register `onNpdu()` when an application needs the full NPDU or BACnet/SC Data Options:
 
 ```javascript
+const broadcastVmac = new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+
 client.onNpdu((npduBytes, metadata) => {
   console.log("NPDU:", npduBytes);
   console.log("Source VMAC:", metadata.source_vmac);
   console.log("Data attributes:", metadata.data_attributes);
 });
+
+client.sendNpduToWithDataAttributes(broadcastVmac, rawNpdu, [
+  { optionType: 1, mustUnderstand: true, data: [] },
+]);
 ```
 
 ### Callback Notes
@@ -1148,7 +1216,9 @@ try {
 
 - **Raw value bytes** -- ReadProperty responses return raw application-tagged bytes in `value_bytes`. Higher-level value decoding (e.g., parsing a Real from 4 bytes, extracting strings) must be done in JavaScript.
 
-- **Data attributes are raw NPDU metadata** -- BACnet/SC Data Options are exposed through `onNpdu()` metadata and `sendNpduWithDataAttributes()`. High-level helpers such as `readProperty()`, `writeProperty()`, `whoIs()`, and `subscribeCov()` send without Data Options and do not include Data Option metadata in decoded results.
+- **Data attributes are raw NPDU metadata** -- BACnet/SC Data Options are exposed through `onNpdu()` metadata, `sendNpduWithDataAttributes()`, and `sendNpduToWithDataAttributes()`. High-level helpers such as `readProperty()`, `writeProperty()`, `whoIs()`, and `subscribeCov()` send without Data Options and do not include Data Option metadata in decoded results.
+
+- **Target VMAC selection is raw-send only** -- `sendNpduTo()` and `sendNpduToWithDataAttributes()` accept an explicit destination VMAC. High-level confirmed-service helpers do not perform BACnet/SC address resolution or expose destination VMAC selection.
 
 - **Single callback per event** -- Only one `onIAm`, one `onCovNotification`, and one `onNpdu` callback can be active at a time. Setting a new callback replaces the previous one.
 

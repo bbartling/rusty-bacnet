@@ -302,12 +302,12 @@ pub fn decode_sc_message(data: &[u8]) -> Result<ScMessage, Error> {
 
     // Decode destination options and data options (TLV-encoded, variable length)
     let dest_options = if control.has_dest_options {
-        decode_sc_options(data, &mut offset)?
+        decode_sc_options(data, &mut offset, ScOptionList::Destination)?
     } else {
         Vec::new()
     };
     let data_options = if control.has_data_options {
-        decode_sc_options(data, &mut offset)?
+        decode_sc_options(data, &mut offset, ScOptionList::Data)?
     } else {
         Vec::new()
     };
@@ -326,8 +326,18 @@ pub fn decode_sc_message(data: &[u8]) -> Result<ScMessage, Error> {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScOptionList {
+    Destination,
+    Data,
+}
+
 /// Decode SC header options per Annex AB.2.3.
-fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, Error> {
+fn decode_sc_options(
+    data: &[u8],
+    offset: &mut usize,
+    list: ScOptionList,
+) -> Result<Vec<ScOption>, Error> {
     const MAX_SC_OPTIONS: usize = 64;
     let mut options = Vec::new();
     loop {
@@ -343,6 +353,12 @@ fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, E
 
         if !is_valid_sc_option_type(option_type) {
             return Err(Error::decoding(*offset - 1, "invalid SC option type 0"));
+        }
+        if list == ScOptionList::Data && option_type == 1 && (!must_understand || has_data) {
+            return Err(Error::decoding(
+                *offset - 1,
+                "malformed Secure Path Data Option",
+            ));
         }
 
         let option_data = if has_data {
@@ -708,7 +724,7 @@ mod tests {
             0x02, 0x2B, 0xBA, 0xC5, 0xEC, 0xC0, 0x99,
             0x3F, // last + data + proprietary option 31
             0x00, 0x03, // destination option length
-            0x03, 0x09, 0x39, 0x01, // last data option, secure path, no data
+            0x03, 0x09, 0x39, 0x41, // last data option, secure path, MU, no data
             0x01, 0x04, 0x00, // payload
         ]);
 
@@ -732,8 +748,19 @@ mod tests {
         assert_eq!(decoded.dest_options[1].data, vec![0x03, 0x09, 0x39]);
         assert_eq!(decoded.data_options.len(), 1);
         assert_eq!(decoded.data_options[0].option_type, 1);
+        assert!(decoded.data_options[0].must_understand);
         assert!(decoded.data_options[0].data.is_empty());
         assert_eq!(decoded.payload, Bytes::from_static(&[0x01, 0x04, 0x00]));
+    }
+
+    #[test]
+    fn sc_options_reject_malformed_secure_path_data_option() {
+        // Secure Path is Data Option type 1 with Must Understand set and no Header Data field.
+        let missing_must_understand = [0x01, 0x01, 0x00, 0x01, 0x01, 0x01, 0x00];
+        assert!(decode_sc_message(&missing_must_understand).is_err());
+
+        let has_header_data = [0x01, 0x01, 0x00, 0x01, 0x61, 0x00, 0x00, 0x01, 0x00];
+        assert!(decode_sc_message(&has_header_data).is_err());
     }
 
     #[test]
