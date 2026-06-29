@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-06-29",
-  "repo_sha": "b74c574bd5b13278bb65f8116605a9b2cb5b9ecd",
-  "review_scope": "Annex AB.7 BACnet/SC WebSocket layer evidence for wss peer URIs, hub subprotocol negotiation, binary-frame enforcement, unsupported-data close behavior, and scoped direct-connection deferral.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.7 WebSocket layer requirements. No repo-local AB.7-specific addenda note was found for this tranche; direct WebSocket connection behavior using `dc.bsc.bacnet.org` remains deferred because direct connections are not implemented or publicly claimed.",
+  "repo_sha": "8a7c6da04e2a4cdd01115aade6dc90e7df48e3d1",
+  "review_scope": "Annex AB.6.2 BACnet/SC connection state cleanup for WebSocket close/error receive paths, heartbeat send failures, reconnect exhaustion, and browser close/error state reporting.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.6.2 connection state behavior in prior AB-03 work. This tranche adds implementation evidence for transport-level WebSocket close/error cleanup without changing wire bytes.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -592,6 +592,7 @@
         "crates/bacnet-transport/src/sc/mod.rs",
         "crates/bacnet-transport/src/sc/tests.rs",
         "crates/bacnet-transport/src/sc_hub.rs",
+        "crates/bacnet-wasm/src/client.rs",
         "crates/bacnet-wasm/src/sc_connection.rs",
         "crates/bacnet-types/src/enums/protocol.rs"
       ],
@@ -607,8 +608,11 @@
       "negative_tests": [
         "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_wrong_message_id",
         "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_short_payload",
-        "crates/bacnet-transport/src/sc/tests.rs::sc_connect_rejects_mismatched_accept_message_id",
-        "crates/bacnet-transport/src/sc/tests.rs::sc_connect_timeout",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_connect_rejects_mismatched_accept_message_id",
+        "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_connect_timeout",
+        "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_recv_error_transitions_to_disconnected_without_reconnect",
+        "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_heartbeat_send_error_transitions_to_disconnected",
+        "crates/bacnet-transport/src/sc/receive_state_tests.rs::sc_reconnect_exhaustion_leaves_connection_disconnected",
         "crates/bacnet-transport/src/sc/tests.rs::build_disconnect_before_connect_returns_error",
         "crates/bacnet-transport/src/sc_hub.rs::tests::bvlc_result_nak_uses_standard_error_values",
         "crates/bacnet-transport/src/sc_hub.rs::tests::connect_request_rejects_hub_vmac_as_duplicate",
@@ -617,7 +621,7 @@
       ],
       "benchmarks": ["benchmarks/benches/sc_latency.rs", "benchmarks/benches/sc_throughput.rs"],
       "public_claims": ["README BACnet/SC transport", "docs/wasm-api.md BACnet/SC"],
-      "notes": "AB-03 adds native and WASM Connect-Accept message-id matching evidence, preserves the Connecting state when a pure state-machine response does not match the pending Connect-Request, and makes the async native handshake fail/disconnect on a mismatched response. Native and WASM Connect-Accept handling now require the fixed AB.2.11.1 26-byte payload before entering Connected. The hub BVLC-Result NAK builder now takes typed BACnet ErrorClass/ErrorCode values; duplicate client or hub VMAC collisions are encoded as COMMUNICATION/NODE_DUPLICATE_VMAC (7/151) instead of raw 1/1, and known-but-invalid functions are no longer classified as BVLC_FUNCTION_UNKNOWN. Existing transport tests also cover connect timeout to Disconnected, Disconnect-Request construction, Disconnect-ACK transition from Disconnecting, and hub Device UUID payload parsing. Remaining AB.6.2 gaps include explicit AWAITING_WEBSOCKET modeling at the WebSocket adapter boundary, accepting-peer connect-wait timeout, Disconnect wait behavior in ScTransport::stop, duplicate Device UUID replacement of an existing hub connection, reserved VMAC error signaling, and initiating-peer Random-48 VMAC reselection after receiving NODE_DUPLICATE_VMAC."
+      "notes": "AB-03 adds native and WASM Connect-Accept message-id matching evidence, preserves the Connecting state when a pure state-machine response does not match the pending Connect-Request, and makes the async native handshake fail/disconnect on a mismatched response. Native and WASM Connect-Accept handling now require the fixed AB.2.11.1 26-byte payload before entering Connected. The hub BVLC-Result NAK builder now takes typed BACnet ErrorClass/ErrorCode values; duplicate client or hub VMAC collisions are encoded as COMMUNICATION/NODE_DUPLICATE_VMAC (7/151) instead of raw 1/1, and known-but-invalid functions are no longer classified as BVLC_FUNCTION_UNKNOWN. Transport receive-loop evidence now covers WebSocket close/error receive paths transitioning the native connection to Disconnected before exit, heartbeat send failures disconnecting before retry/exit, reconnect exhaustion leaving Disconnected, and browser close/error receive failures clearing the WASM connected state. Existing transport tests also cover connect timeout to Disconnected, Disconnect-Request construction, Disconnect-ACK transition from Disconnecting, and hub Device UUID payload parsing. Remaining AB.6.2 gaps include explicit AWAITING_WEBSOCKET modeling at the WebSocket adapter boundary, accepting-peer connect-wait timeout, Disconnect wait behavior in ScTransport::stop, duplicate Device UUID replacement of an existing hub connection, reserved VMAC error signaling, and initiating-peer Random-48 VMAC reselection after receiving NODE_DUPLICATE_VMAC."
     },
     {
       "id": "BACNET-AB-SC-HUB-CONNECTOR",
