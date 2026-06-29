@@ -565,6 +565,15 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     last_bvlc_received = Instant::now();
                                     pending_heartbeat_id = None;
 
+                                    if data_attributes::reject_unsupported_must_understand_data_option(
+                                        &msg,
+                                        &*ws_clone,
+                                    )
+                                    .await
+                                    {
+                                        continue;
+                                    }
+
                                     // Handle Heartbeat-Request with Heartbeat-ACK
                                     if msg.function == ScFunction::HeartbeatRequest {
                                         let ack = {
@@ -826,6 +835,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         &self.local_vmac
     }
 }
+
+#[cfg(test)]
+mod data_attribute_tests;
 
 #[cfg(test)]
 mod receive_state_tests;
