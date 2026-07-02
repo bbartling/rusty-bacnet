@@ -46,6 +46,83 @@ async fn client_start_stop() {
 }
 
 #[tokio::test]
+async fn client_stop_releases_bip_socket_before_drop() {
+    let mut client = make_client().await;
+    let local_mac = client.local_mac().to_vec();
+    let port = u16::from_be_bytes([local_mac[4], local_mac[5]]);
+
+    client.stop().await.unwrap();
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            match BACnetClient::builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(port)
+                .build()
+                .await
+            {
+                Ok(mut replacement) => {
+                    replacement.stop().await.unwrap();
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("stopping BACnetClient releases the B/IP socket");
+}
+
+#[tokio::test]
+async fn client_drop_aborts_dispatch_task() {
+    let client = make_client().await;
+    let abort_handle = client
+        .dispatch_task
+        .as_ref()
+        .expect("client starts a dispatch task")
+        .abort_handle();
+
+    assert!(!abort_handle.is_finished());
+    drop(client);
+
+    timeout(Duration::from_secs(1), async {
+        while !abort_handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropping BACnetClient aborts the dispatch task");
+}
+
+#[tokio::test]
+async fn client_drop_releases_bip_socket() {
+    let client = make_client().await;
+    let local_mac = client.local_mac().to_vec();
+    let port = u16::from_be_bytes([local_mac[4], local_mac[5]]);
+
+    drop(client);
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            match BACnetClient::builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(port)
+                .build()
+                .await
+            {
+                Ok(mut replacement) => {
+                    replacement.stop().await.unwrap();
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("dropping BACnetClient releases the B/IP socket");
+}
+
+#[tokio::test]
 async fn client_rejects_invalid_max_apdu_length() {
     let result = BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)

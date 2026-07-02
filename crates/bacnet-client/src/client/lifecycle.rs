@@ -1,5 +1,13 @@
 use super::*;
 
+impl<T: TransportPort> BACnetClient<T> {
+    fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
+        let task = self.dispatch_task.take()?;
+        task.abort();
+        Some(task)
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Start the client: bind transport, start network layer, spawn dispatch.
     pub async fn start(mut config: ClientConfig, transport: T) -> Result<Self, Error> {
@@ -119,10 +127,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
     /// Stop the client, aborting the dispatch task.
     pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.dispatch_task.take() {
-            task.abort();
+        if let Some(task) = self.abort_dispatch_task() {
             let _ = task.await;
         }
+        let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
+            Error::Encoding("cannot stop BACnetClient while network references remain".into())
+        })?;
+        network.stop().await?;
         Ok(())
+    }
+}
+
+impl<T: TransportPort> Drop for BACnetClient<T> {
+    fn drop(&mut self) {
+        let _ = self.abort_dispatch_task();
     }
 }

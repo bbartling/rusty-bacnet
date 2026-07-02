@@ -233,6 +233,24 @@ impl BipTransport {
         })
     }
 
+    fn abort_background_tasks(&mut self) -> Vec<JoinHandle<()>> {
+        let mut tasks = Vec::new();
+        if let Some(task) = self.registration_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        if let Some(task) = self.bbmd_fdt_purge_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        if let Some(task) = self.recv_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        self.socket = None;
+        tasks
+    }
+
     /// Send a raw BVLC management request and await the response.
     async fn bvlc_request(
         &self,
@@ -540,19 +558,9 @@ impl TransportPort for BipTransport {
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.registration_task.take() {
-            task.abort();
+        for task in self.abort_background_tasks() {
             let _ = task.await;
         }
-        if let Some(task) = self.bbmd_fdt_purge_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.recv_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        self.socket = None;
         Ok(())
     }
 
@@ -600,6 +608,12 @@ impl TransportPort for BipTransport {
 
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
+    }
+}
+
+impl Drop for BipTransport {
+    fn drop(&mut self) {
+        let _ = self.abort_background_tasks();
     }
 }
 
