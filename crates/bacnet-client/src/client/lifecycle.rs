@@ -46,65 +46,70 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
-            let mut last_device_purge = Instant::now();
             const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
             const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
+            let mut device_purge_interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
 
-            while let Some(received) = apdu_rx.recv().await {
-                let now = Instant::now();
+            loop {
+                tokio::select! {
+                    _ = device_purge_interval.tick() => {
+                        device_table_dispatch
+                            .lock()
+                            .await
+                            .purge_stale(DEVICE_MAX_AGE);
+                    }
+                    received = apdu_rx.recv() => {
+                        let Some(received) = received else {
+                            break;
+                        };
+                        let now = Instant::now();
 
-                // Periodically purge stale device table entries
-                if now.duration_since(last_device_purge) >= DEVICE_PURGE_INTERVAL {
-                    device_table_dispatch
-                        .lock()
-                        .await
-                        .purge_stale(DEVICE_MAX_AGE);
-                    last_device_purge = now;
-                }
-                // Reap stale segmented sessions and send Abort to the server
-                let stale_keys: Vec<SegKey> = seg_state
-                    .iter()
-                    .filter(|(_, state)| {
-                        now.duration_since(state.last_activity) >= SEG_RECEIVER_TIMEOUT
-                    })
-                    .map(|(key, _)| key.clone())
-                    .collect();
-                for key in &stale_keys {
-                    if let Some(state) = seg_state.remove(key) {
-                        let abort = Apdu::Abort(AbortPdu {
-                            sent_by_server: false,
-                            invoke_id: key.1,
-                            abort_reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
-                        });
-                        let mut buf = BytesMut::with_capacity(4);
-                        if let Err(e) = encode_apdu(&mut buf, &abort) {
-                            warn!(error = %e, "Failed to encode segmented receive timeout Abort");
-                            continue;
+                        // Reap stale segmented sessions and send Abort to the server
+                        let stale_keys: Vec<SegKey> = seg_state
+                            .iter()
+                            .filter(|(_, state)| {
+                                now.duration_since(state.last_activity) >= SEG_RECEIVER_TIMEOUT
+                            })
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        for key in &stale_keys {
+                            if let Some(state) = seg_state.remove(key) {
+                                let abort = Apdu::Abort(AbortPdu {
+                                    sent_by_server: false,
+                                    invoke_id: key.1,
+                                    abort_reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
+                                });
+                                let mut buf = BytesMut::with_capacity(4);
+                                if let Err(e) = encode_apdu(&mut buf, &abort) {
+                                    warn!(error = %e, "Failed to encode segmented receive timeout Abort");
+                                    continue;
+                                }
+                                let _ = network_dispatch
+                                    .send_apdu(&buf, &state.reply_mac, false, NetworkPriority::NORMAL)
+                                    .await;
+                            }
                         }
-                        let _ = network_dispatch
-                            .send_apdu(&buf, &state.reply_mac, false, NetworkPriority::NORMAL)
-                            .await;
-                    }
-                }
 
-                match apdu::decode_apdu(received.apdu.clone()) {
-                    Ok(decoded) => {
-                        Self::dispatch_apdu(
-                            &tsm_dispatch,
-                            &device_table_dispatch,
-                            &network_dispatch,
-                            &cov_tx_dispatch,
-                            &mut seg_state,
-                            &seg_ack_senders_dispatch,
-                            &received.source_mac,
-                            &received.source_network,
-                            decoded,
-                            segmented_response_accepted,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to decode received APDU");
+                        match apdu::decode_apdu(received.apdu.clone()) {
+                            Ok(decoded) => {
+                                Self::dispatch_apdu(
+                                    &tsm_dispatch,
+                                    &device_table_dispatch,
+                                    &network_dispatch,
+                                    &cov_tx_dispatch,
+                                    &mut seg_state,
+                                    &seg_ack_senders_dispatch,
+                                    &received.source_mac,
+                                    &received.source_network,
+                                    decoded,
+                                    segmented_response_accepted,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "Failed to decode received APDU");
+                            }
+                        }
                     }
                 }
             }

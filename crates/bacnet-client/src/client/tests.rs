@@ -3,7 +3,10 @@ use bacnet_encoding::apdu::{ComplexAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::enums::{ObjectType, Segmentation};
+use bacnet_types::primitives::ObjectIdentifier;
 use std::net::Ipv4Addr;
+use std::time::Instant;
 use tokio::time::Duration;
 
 async fn make_client() -> BACnetClient<BipTransport> {
@@ -120,6 +123,34 @@ async fn client_drop_releases_bip_socket() {
     })
     .await
     .expect("dropping BACnetClient releases the B/IP socket");
+}
+
+#[tokio::test(start_paused = true)]
+async fn device_table_purge_runs_without_inbound_apdu() {
+    let mut client = make_client().await;
+
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    client.device_table.lock().await.upsert(DiscoveredDevice {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2001).unwrap(),
+        mac_address: MacAddr::from_slice(&[192, 168, 1, 42, 0xBA, 0xC0]),
+        max_apdu_length: 1476,
+        segmentation_supported: Segmentation::NONE,
+        max_segments_accepted: None,
+        vendor_id: 42,
+        last_seen: Instant::now() - Duration::from_secs(601),
+        source_network: None,
+        source_address: None,
+    });
+    assert_eq!(client.discovered_devices().await.len(), 1);
+
+    tokio::time::advance(Duration::from_secs(300)).await;
+    tokio::task::yield_now().await;
+
+    assert!(client.discovered_devices().await.is_empty());
+
+    client.stop().await.unwrap();
 }
 
 #[tokio::test]
