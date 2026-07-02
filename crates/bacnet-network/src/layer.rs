@@ -381,11 +381,24 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
     /// Stop the network layer and underlying transport.
     pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.dispatch_task.take() {
-            task.abort();
+        if let Some(task) = self.abort_dispatch_task() {
             let _ = task.await;
         }
         self.transport.stop().await
+    }
+}
+
+impl<T: TransportPort> NetworkLayer<T> {
+    fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
+        let task = self.dispatch_task.take()?;
+        task.abort();
+        Some(task)
+    }
+}
+
+impl<T: TransportPort> Drop for NetworkLayer<T> {
+    fn drop(&mut self) {
+        let _ = self.abort_dispatch_task();
     }
 }
 
