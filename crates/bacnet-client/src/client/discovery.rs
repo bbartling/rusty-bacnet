@@ -146,4 +146,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.device_table.lock().await.upsert(device);
         Ok(())
     }
+
+    /// Manually register a device behind a BACnet router (no Who-Is / I-Am required).
+    ///
+    /// `router_mac` is the BIP address of the router (IPv4:port encoded as 6 bytes).
+    /// `dest_network` / `dest_mac` identify the device on the remote MS/TP (or other) network.
+    pub async fn add_routed_device(
+        &self,
+        instance: u32,
+        router_mac: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+    ) -> Result<(), Error> {
+        let oid = bacnet_types::primitives::ObjectIdentifier::new(
+            bacnet_types::enums::ObjectType::DEVICE,
+            instance,
+        )?;
+        let device = DiscoveredDevice {
+            object_identifier: oid,
+            mac_address: MacAddr::from_slice(router_mac),
+            max_apdu_length: 1476,
+            segmentation_supported: bacnet_types::enums::Segmentation::NONE,
+            max_segments_accepted: None,
+            vendor_id: 0,
+            last_seen: std::time::Instant::now(),
+            source_network: Some(dest_network),
+            source_address: Some(MacAddr::from_slice(dest_mac)),
+        };
+        self.device_table.lock().await.upsert(device);
+        Ok(())
+    }
 }
