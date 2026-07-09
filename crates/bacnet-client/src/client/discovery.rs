@@ -106,6 +106,37 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
+    /// Send Who-Is-Router-To-Network on the local BACnet/IP segment.
+    ///
+    /// Pass `None` to ask all routers which networks they reach, or `Some(net)`
+    /// to query a path to a specific remote network. Collect responses with
+    /// [`discovered_routers`](Self::discovered_routers) after a short wait.
+    pub async fn who_is_router_to_network(&self, network: Option<u16>) -> Result<(), Error> {
+        use bacnet_types::enums::NetworkMessageType;
+
+        let payload = match network {
+            Some(net) => net.to_be_bytes().to_vec(),
+            None => Vec::new(),
+        };
+        self.network
+            .broadcast_network_message(
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw(),
+                &payload,
+                NetworkPriority::NORMAL,
+            )
+            .await
+    }
+
+    /// Snapshot of routers learned from I-Am-Router-To-Network responses.
+    pub async fn discovered_routers(&self) -> Vec<DiscoveredRouter> {
+        self.router_table.lock().await.all()
+    }
+
+    /// Clear the learned router table (e.g. before a fresh Who-Is-Router scan).
+    pub async fn clear_routers(&self) {
+        self.router_table.lock().await.clear();
+    }
+
     /// Subscribe to COV notifications for an object on a remote device.
     /// Get a snapshot of all discovered devices.
     pub async fn discovered_devices(&self) -> Vec<DiscoveredDevice> {

@@ -21,7 +21,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         let mut network = NetworkLayer::new(transport);
-        let apdu_rx = network.start().await?;
+        let receivers = network.start().await?;
+        let apdu_rx = receivers.apdu;
+        tokio::spawn(async move {
+            let mut network_rx = receivers.network;
+            while network_rx.recv().await.is_some() {}
+        });
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);

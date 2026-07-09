@@ -1,6 +1,7 @@
 //! Router and BBMD commands.
 
 use std::net::Ipv4Addr;
+use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::bip::BipTransport;
@@ -21,12 +22,63 @@ pub async fn devices_cmd<T: TransportPort + 'static>(
 
 /// Send Who-Is-Router-To-Network.
 pub async fn whois_router_cmd<T: TransportPort + 'static>(
-    _client: &BACnetClient<T>,
+    client: &BACnetClient<T>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Send Who-Is-Router-To-Network (network layer message, not APDU).
-    output::print_success("Who-Is-Router-To-Network not yet implemented", format);
+    client.clear_routers().await;
+    client.who_is_router_to_network(None).await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let routers = client.discovered_routers().await;
+
+    match format {
+        OutputFormat::Table => {
+            if routers.is_empty() {
+                println!("No routers discovered.");
+            } else {
+                let mut table = comfy_table::Table::new();
+                table.set_header(vec!["Router", "Networks"]);
+                for r in &routers {
+                    let addr = bip_mac_display(r.router_mac.as_slice());
+                    table.add_row(vec![
+                        addr,
+                        r.networks
+                            .iter()
+                            .map(|n| n.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]);
+                }
+                println!("{table}");
+            }
+        }
+        OutputFormat::Json => {
+            let json_routers: Vec<_> = routers
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "source": bip_mac_display(r.router_mac.as_slice()),
+                        "networks": r.networks,
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_routers).unwrap_or_default()
+            );
+        }
+    }
     Ok(())
+}
+
+fn bip_mac_display(mac: &[u8]) -> String {
+    if mac.len() == 6 {
+        format!(
+            "{}.{}.{}.{}:{:04x}",
+            mac[0], mac[1], mac[2], mac[3], u16::from_be_bytes([mac[4], mac[5]])
+        )
+    } else {
+        mac.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    }
 }
 
 /// Read the Broadcast Distribution Table from a BBMD.

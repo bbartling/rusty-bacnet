@@ -30,6 +30,79 @@ pub struct DiscoveredDevice {
     pub source_address: Option<MacAddr>,
 }
 
+/// Parse network numbers from an I-Am-Router-To-Network payload.
+pub fn parse_router_network_list(payload: &[u8]) -> Vec<u16> {
+    let mut networks = Vec::new();
+    let mut offset = 0;
+    while offset + 2 <= payload.len() {
+        networks.push(u16::from_be_bytes([payload[offset], payload[offset + 1]]));
+        offset += 2;
+    }
+    networks
+}
+
+/// Information about a BACnet router discovered via I-Am-Router-To-Network.
+#[derive(Debug, Clone)]
+pub struct DiscoveredRouter {
+    /// Router MAC address on the local network (BIP-encoded IPv4:port).
+    pub router_mac: MacAddr,
+    /// Remote BACnet networks reachable through this router.
+    pub networks: Vec<u16>,
+    /// When this entry was last updated.
+    pub last_seen: Instant,
+}
+
+/// Table of routers learned from I-Am-Router-To-Network responses.
+#[derive(Debug, Default)]
+pub struct RouterTable {
+    routers: HashMap<Vec<u8>, DiscoveredRouter>,
+}
+
+impl RouterTable {
+    pub fn new() -> Self {
+        Self {
+            routers: HashMap::new(),
+        }
+    }
+
+    /// Record or update a router from an I-Am-Router-To-Network message.
+    pub fn upsert_i_am_router(&mut self, router_mac: &[u8], payload: &[u8]) {
+        let mut networks = parse_router_network_list(payload);
+        if networks.is_empty() {
+            return;
+        }
+        networks.sort_unstable();
+        networks.dedup();
+        let key = router_mac.to_vec();
+        if let Some(existing) = self.routers.get_mut(&key) {
+            for net in networks {
+                if !existing.networks.contains(&net) {
+                    existing.networks.push(net);
+                }
+            }
+            existing.networks.sort_unstable();
+            existing.last_seen = Instant::now();
+        } else {
+            self.routers.insert(
+                key,
+                DiscoveredRouter {
+                    router_mac: MacAddr::from_slice(router_mac),
+                    networks,
+                    last_seen: Instant::now(),
+                },
+            );
+        }
+    }
+
+    pub fn all(&self) -> Vec<DiscoveredRouter> {
+        self.routers.values().cloned().collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.routers.clear();
+    }
+}
+
 /// Thread-safe device discovery table.
 ///
 /// Keyed by device instance number (the instance part of the DEVICE object
@@ -218,5 +291,26 @@ mod tests {
         table.purge_stale(Duration::from_secs(60));
         assert_eq!(table.len(), 1);
         assert!(table.get(1).is_some());
+    }
+
+    #[test]
+    fn router_table_parses_i_am_router() {
+        let mut table = RouterTable::new();
+        let mac = [192, 168, 204, 200, 0xBA, 0xC0];
+        table.upsert_i_am_router(&mac, &[0x07, 0xD0]); // network 2000
+        let routers = table.all();
+        assert_eq!(routers.len(), 1);
+        assert_eq!(routers[0].networks, vec![2000]);
+    }
+
+    #[test]
+    fn router_table_merges_networks() {
+        let mut table = RouterTable::new();
+        let mac = [192, 168, 204, 200, 0xBA, 0xC0];
+        table.upsert_i_am_router(&mac, &[0x07, 0xD0]);
+        table.upsert_i_am_router(&mac, &[0x07, 0xD1]); // 2001
+        let routers = table.all();
+        assert_eq!(routers.len(), 1);
+        assert_eq!(routers[0].networks, vec![2000, 2001]);
     }
 }

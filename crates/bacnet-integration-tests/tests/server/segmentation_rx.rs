@@ -71,7 +71,8 @@ async fn server_handles_segmented_request() {
     // 2. Build a raw NetworkLayer to act as a "manual client".
     let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let mut raw_network = NetworkLayer::new(raw_transport);
-    let mut raw_rx = raw_network.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut raw_rx, network: _ } =
+        raw_network.start().await.unwrap();
     let raw_network = std::sync::Arc::new(raw_network);
 
     // 3. Encode a ReadProperty service request for AI:1 Present_Value.
@@ -224,7 +225,8 @@ async fn server_aborts_segmented_request_with_invalid_window_size() {
 
     let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let mut raw_network = NetworkLayer::new(raw_transport);
-    let mut raw_rx = raw_network.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut raw_rx, network: _ } =
+        raw_network.start().await.unwrap();
     let raw_network = Arc::new(raw_network);
 
     let payload = read_property_service_payload();
@@ -268,7 +270,8 @@ async fn server_naks_segmented_request_gap_with_last_good_sequence() {
 
     let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let mut raw_network = NetworkLayer::new(raw_transport);
-    let mut raw_rx = raw_network.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut raw_rx, network: _ } =
+        raw_network.start().await.unwrap();
     let raw_network = Arc::new(raw_network);
 
     let payload = read_property_service_payload();
@@ -325,7 +328,8 @@ async fn server_acks_segmented_request_at_window_boundary() {
 
     let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let mut raw_network = NetworkLayer::new(raw_transport);
-    let mut raw_rx = raw_network.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut raw_rx, network: _ } =
+        raw_network.start().await.unwrap();
     let raw_network = Arc::new(raw_network);
 
     let payload = read_property_service_payload();

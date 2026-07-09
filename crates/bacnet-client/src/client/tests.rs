@@ -63,7 +63,8 @@ async fn confirmed_request_simple_ack() {
 
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    let mut rx_b = net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut rx_b, network: _ } =
+        net_b.start().await.unwrap();
     let b_mac = net_b.local_mac().to_vec();
 
     let b_handle = tokio::spawn(async move {
@@ -110,7 +111,8 @@ async fn confirmed_request_complex_ack() {
 
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    let mut rx_b = net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut rx_b, network: _ } =
+        net_b.start().await.unwrap();
     let b_mac = net_b.local_mac().to_vec();
 
     let b_handle = tokio::spawn(async move {
@@ -168,7 +170,8 @@ async fn segmented_complex_ack_reassembly() {
 
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    let mut rx_b = net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut rx_b, network: _ } =
+        net_b.start().await.unwrap();
     let b_mac = net_b.local_mac().to_vec();
 
     let b_handle = tokio::spawn(async move {
@@ -252,7 +255,8 @@ async fn segmented_confirmed_request_sends_segments() {
 
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    let mut rx_b = net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut rx_b, network: _ } =
+        net_b.start().await.unwrap();
     let b_mac = net_b.local_mac().to_vec();
 
     let service_data: Vec<u8> = (0u8..100).collect();
@@ -344,7 +348,8 @@ async fn segmented_request_with_complex_ack_response() {
 
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    let mut rx_b = net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers { apdu: mut rx_b, network: _ } =
+        net_b.start().await.unwrap();
     let b_mac = net_b.local_mac().to_vec();
 
     let service_data: Vec<u8> = (0u8..60).collect();
