@@ -31,7 +31,7 @@ use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedSe
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
-use crate::discovery::{DeviceTable, DiscoveredDevice};
+use crate::discovery::{DeviceTable, DiscoveredDevice, DiscoveredRouter, RouterTable};
 use crate::segmentation::{max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType};
 use crate::tsm::{Tsm, TsmConfig, TsmResponse};
 
@@ -255,8 +255,10 @@ pub struct BACnetClient<T: TransportPort> {
     network: Arc<NetworkLayer<T>>,
     tsm: Arc<Mutex<Tsm>>,
     device_table: Arc<Mutex<DeviceTable>>,
+    router_table: Arc<Mutex<RouterTable>>,
     cov_tx: broadcast::Sender<COVNotificationRequest>,
     dispatch_task: Option<JoinHandle<()>>,
+    network_dispatch_task: Option<JoinHandle<()>>,
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
     local_mac: MacAddr,
 }

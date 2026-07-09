@@ -50,6 +50,25 @@ impl std::fmt::Debug for ReceivedApdu {
     }
 }
 
+/// A received network-layer control message (Who-Is-Router, I-Am-Router, etc.).
+#[derive(Debug, Clone)]
+pub struct ReceivedNetworkMessage {
+    /// Source MAC address in transport-native format.
+    pub source_mac: MacAddr,
+    /// Network message type (Clause 6.2.4).
+    pub message_type: u8,
+    /// Network message payload.
+    pub payload: Bytes,
+}
+
+/// Receivers returned when [`NetworkLayer::start`] is called.
+pub struct NetworkLayerReceivers {
+    /// Incoming application-layer APDUs.
+    pub apdu: mpsc::Receiver<ReceivedApdu>,
+    /// Incoming network-layer control messages.
+    pub network: mpsc::Receiver<ReceivedNetworkMessage>,
+}
+
 /// Non-router BACnet network layer.
 ///
 /// Wraps a [`TransportPort`] and provides APDU-level send/receive by handling
@@ -70,24 +89,31 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         }
     }
 
-    /// Start the network layer. Returns a receiver for incoming APDUs.
+    /// Start the network layer. Returns receivers for incoming APDUs and network messages.
     ///
     /// This starts the underlying transport and spawns a dispatch task that
-    /// decodes incoming NPDUs and extracts APDUs.
-    pub async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedApdu>, Error> {
+    /// decodes incoming NPDUs and extracts APDUs or network-layer messages.
+    pub async fn start(&mut self) -> Result<NetworkLayerReceivers, Error> {
         let mut npdu_rx = self.transport.start().await?;
 
         let (apdu_tx, apdu_rx) = mpsc::channel(256);
+        let (network_tx, network_rx) = mpsc::channel(256);
 
         let dispatch_task = tokio::spawn(async move {
             while let Some(received) = npdu_rx.recv().await {
                 match decode_npdu(received.npdu.clone()) {
                     Ok(npdu) => {
                         if npdu.is_network_message {
-                            debug!(
-                                message_type = npdu.message_type,
-                                "Ignoring network layer message (non-router mode)"
-                            );
+                            let msg_type = match npdu.message_type {
+                                Some(t) => t,
+                                None => continue,
+                            };
+                            let msg = ReceivedNetworkMessage {
+                                source_mac: received.source_mac,
+                                message_type: msg_type,
+                                payload: npdu.payload,
+                            };
+                            let _ = network_tx.try_send(msg);
                             continue;
                         }
 
@@ -124,7 +150,53 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
         self.dispatch_task = Some(dispatch_task);
 
-        Ok(apdu_rx)
+        Ok(NetworkLayerReceivers {
+            apdu: apdu_rx,
+            network: network_rx,
+        })
+    }
+
+    /// Broadcast a network-layer control message on the local BACnet network.
+    pub async fn broadcast_network_message(
+        &self,
+        message_type: u8,
+        payload: &[u8],
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        let npdu = Npdu {
+            is_network_message: true,
+            priority,
+            message_type: Some(message_type),
+            payload: Bytes::copy_from_slice(payload),
+            ..Npdu::default()
+        };
+
+        let mut buf = BytesMut::with_capacity(4 + payload.len());
+        encode_npdu(&mut buf, &npdu)?;
+
+        self.transport.send_broadcast(&buf).await
+    }
+
+    /// Send a network-layer control message to a specific local destination.
+    pub async fn send_network_message(
+        &self,
+        destination_mac: &[u8],
+        message_type: u8,
+        payload: &[u8],
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        let npdu = Npdu {
+            is_network_message: true,
+            priority,
+            message_type: Some(message_type),
+            payload: Bytes::copy_from_slice(payload),
+            ..Npdu::default()
+        };
+
+        let mut buf = BytesMut::with_capacity(4 + payload.len());
+        encode_npdu(&mut buf, &npdu)?;
+
+        self.transport.send_unicast(&buf, destination_mac).await
     }
 
     /// Send an APDU to a specific local destination by MAC address.
@@ -310,8 +382,14 @@ mod tests {
         let mut net_a = NetworkLayer::new(transport_a);
         let mut net_b = NetworkLayer::new(transport_b);
 
-        let _rx_a = net_a.start().await.unwrap();
-        let mut rx_b = net_b.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _rx_a,
+            network: _net_a,
+        } = net_a.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: mut rx_b,
+            network: _net_b,
+        } = net_b.start().await.unwrap();
 
         let test_apdu = vec![0x10, 0x08];
 
@@ -349,8 +427,14 @@ mod tests {
         let mut net_a = NetworkLayer::new(transport_a);
         let mut net_b = NetworkLayer::new(transport_b);
 
-        let _rx_a = net_a.start().await.unwrap();
-        let mut rx_b = net_b.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _rx_a,
+            network: _net_a,
+        } = net_a.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: mut rx_b,
+            network: _net_b,
+        } = net_b.start().await.unwrap();
 
         let who_is_apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
@@ -408,6 +492,50 @@ mod tests {
         assert_eq!(dest.network, 0xFFFF);
         assert!(dest.mac_address.is_empty());
         assert_eq!(decoded.hop_count, 255);
+    }
+
+    #[tokio::test]
+    async fn network_message_broadcast_and_receive() {
+        use bacnet_types::enums::NetworkMessageType;
+
+        let transport_a = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+
+        let mut net_a = NetworkLayer::new(transport_a);
+        let mut net_b = NetworkLayer::new(transport_b);
+
+        let NetworkLayerReceivers {
+            apdu: _rx_a,
+            network: mut net_rx_b,
+        } = net_b.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _apdu_a,
+            network: _net_a,
+        } = net_a.start().await.unwrap();
+
+        net_a
+            .send_network_message(
+                net_b.local_mac(),
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw(),
+                &[],
+                NetworkPriority::NORMAL,
+            )
+            .await
+            .unwrap();
+
+        let received = timeout(Duration::from_secs(2), net_rx_b.recv())
+            .await
+            .expect("Timed out waiting for network message")
+            .expect("Channel closed");
+
+        assert_eq!(
+            received.message_type,
+            NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw()
+        );
+        assert_eq!(received.source_mac.as_slice(), net_a.local_mac());
+
+        net_a.stop().await.unwrap();
+        net_b.stop().await.unwrap();
     }
 
     #[test]

@@ -14,7 +14,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
 
         let mut network = NetworkLayer::new(transport);
-        let mut apdu_rx = network.start().await?;
+        let receivers = network.start().await?;
+        let mut apdu_rx = receivers.apdu;
+        let mut network_rx = receivers.network;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -28,6 +30,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let tsm_dispatch = Arc::clone(&tsm);
         let device_table = Arc::new(Mutex::new(DeviceTable::new()));
         let device_table_dispatch = Arc::clone(&device_table);
+        let router_table = Arc::new(Mutex::new(RouterTable::new()));
+        let router_table_dispatch = Arc::clone(&router_table);
         let network_dispatch = Arc::clone(&network);
         let (cov_tx, _) = broadcast::channel::<COVNotificationRequest>(64);
         let cov_tx_dispatch = cov_tx.clone();
@@ -102,13 +106,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         });
 
+        use bacnet_types::enums::NetworkMessageType;
+
+        let network_dispatch_task = tokio::spawn(async move {
+            while let Some(received) = network_rx.recv().await {
+                if received.message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw() {
+                    router_table_dispatch
+                        .lock()
+                        .await
+                        .upsert_i_am_router(received.source_mac.as_slice(), &received.payload);
+                }
+            }
+        });
+
         Ok(Self {
             config,
             network,
             tsm,
             device_table,
+            router_table,
             cov_tx,
             dispatch_task: Some(dispatch_task),
+            network_dispatch_task: Some(network_dispatch_task),
             seg_ack_senders,
             local_mac,
         })
@@ -120,6 +139,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Stop the client, aborting the dispatch task.
     pub async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.dispatch_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.network_dispatch_task.take() {
             task.abort();
             let _ = task.await;
         }

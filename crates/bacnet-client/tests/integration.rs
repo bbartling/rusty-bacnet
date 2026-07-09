@@ -35,7 +35,10 @@ async fn full_read_property_round_trip() {
     // Start a fake server on a separate transport
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    let mut rx_b = net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers {
+        apdu: mut rx_b,
+        network: _,
+    } = net_b.start().await.unwrap();
     let b_mac = net_b.local_mac().to_vec();
 
     // Spawn the fake server: receives ReadProperty, responds with ReadPropertyACK
@@ -151,7 +154,10 @@ async fn device_discovery_via_iam() {
     // "Server B" that will send an IAm to the client
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(transport_b);
-    net_b.start().await.unwrap();
+    let bacnet_network::layer::NetworkLayerReceivers {
+        apdu: _,
+        network: _,
+    } = net_b.start().await.unwrap();
 
     // Build and send an IAm directly to the client
     let i_am = IAmRequest {
