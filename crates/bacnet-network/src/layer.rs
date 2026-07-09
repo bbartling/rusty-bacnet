@@ -382,8 +382,14 @@ mod tests {
         let mut net_a = NetworkLayer::new(transport_a);
         let mut net_b = NetworkLayer::new(transport_b);
 
-        let NetworkLayerReceivers { apdu: _rx_a, network: _net_a } = net_a.start().await.unwrap();
-        let NetworkLayerReceivers { apdu: mut rx_b, network: _net_b } = net_b.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _rx_a,
+            network: _net_a,
+        } = net_a.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: mut rx_b,
+            network: _net_b,
+        } = net_b.start().await.unwrap();
 
         let test_apdu = vec![0x10, 0x08];
 
@@ -421,8 +427,14 @@ mod tests {
         let mut net_a = NetworkLayer::new(transport_a);
         let mut net_b = NetworkLayer::new(transport_b);
 
-        let NetworkLayerReceivers { apdu: _rx_a, network: _net_a } = net_a.start().await.unwrap();
-        let NetworkLayerReceivers { apdu: mut rx_b, network: _net_b } = net_b.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _rx_a,
+            network: _net_a,
+        } = net_a.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: mut rx_b,
+            network: _net_b,
+        } = net_b.start().await.unwrap();
 
         let who_is_apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
@@ -492,9 +504,14 @@ mod tests {
         let mut net_a = NetworkLayer::new(transport_a);
         let mut net_b = NetworkLayer::new(transport_b);
 
-        let NetworkLayerReceivers { apdu: _rx_a, network: mut net_rx_b } =
-            net_b.start().await.unwrap();
-        let NetworkLayerReceivers { apdu: _apdu_a, network: _net_a } = net_a.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _rx_a,
+            network: mut net_rx_b,
+        } = net_b.start().await.unwrap();
+        let NetworkLayerReceivers {
+            apdu: _apdu_a,
+            network: _net_a,
+        } = net_a.start().await.unwrap();
 
         net_a
             .send_network_message(

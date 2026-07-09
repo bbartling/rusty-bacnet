@@ -74,7 +74,11 @@ fn bip_mac_display(mac: &[u8]) -> String {
     if mac.len() == 6 {
         format!(
             "{}.{}.{}.{}:{:04x}",
-            mac[0], mac[1], mac[2], mac[3], u16::from_be_bytes([mac[4], mac[5]])
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            u16::from_be_bytes([mac[4], mac[5]])
         )
     } else {
         mac.iter().map(|b| format!("{b:02x}")).collect::<String>()
