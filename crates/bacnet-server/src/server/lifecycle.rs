@@ -464,6 +464,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // this task is the sole confirmer, so repeated writes cannot shorten
         // the delay (ASHRAE 135-2020 §13.2.4). Runs unconditionally like the
         // trend-log task — a no-pending tick is a cheap empty iteration.
+        //
+        // It is also what carries Reliability into event-state-detection. Per
+        // Clause 13.2.2 the FAULT determination is a standing condition, so each
+        // tick re-derives it from the object's current `Reliability` rather than
+        // reacting to a change event. That is why the fault detector below can
+        // keep merely *logging* its `ReliabilityChange` records: whoever writes
+        // Reliability — that detector, a local write, or a network write —
+        // reaches detection through this tick, and no route needs to notify
+        // anything. `enable_fault_detection` therefore governs only whether
+        // Reliability is *derived* from limits, never whether a Reliability that
+        // exists is honored.
+        //
+        // Two caveats, both pre-existing and tracked rather than fixed here. The
+        // loop below bails while DeviceCommunicationControl is active, so
+        // detection is suspended for the duration even though confirmed writes
+        // still execute (#220). And six of the nine wired object types have no
+        // route that can set Reliability at all, so the fault path is correct but
+        // inert on them (#218).
         let db_intrinsic = Arc::clone(&db);
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
