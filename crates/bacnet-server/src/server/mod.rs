@@ -196,7 +196,50 @@ pub struct ServerConfig {
     /// Enable periodic fault detection / reliability evaluation.
     /// When true, the server evaluates analog objects every 10 s for
     /// OVER_RANGE / UNDER_RANGE faults.
+    ///
+    /// This governs reliability evaluation only. Event Enrollment evaluation
+    /// is configured separately via [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub enable_fault_detection: bool,
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    ///
+    /// When true, the server re-reads the property each Event Enrollment object
+    /// names in its `Object_Property_Reference` and applies the configured event
+    /// algorithm. Startup: the task is spawned by [`start`](BACnetServer::start)
+    /// and its first pass runs immediately, then once per interval. Shutdown:
+    /// [`stop`](BACnetServer::stop) aborts it and awaits the abort.
+    ///
+    /// This switch governs the evaluation task; it is not the per-object
+    /// `Event_Detection_Enable` property of ASHRAE 135-2020 Clause 13.2.2.1.
+    /// Setting it false stops evaluation without performing the reset that
+    /// clause requires of a disabled detector (`Event_State` to NORMAL, with the
+    /// corresponding timestamp and acknowledgment state), so a device carrying
+    /// active enrollments will hold whatever state it last detected.
+    ///
+    /// Evaluation is a no-op on databases holding no Event Enrollment objects,
+    /// so the default is on.
+    ///
+    /// What a detected transition currently does is limited: it updates
+    /// `Event_State` and is logged. Routing it into the notification pipeline is
+    /// not implemented yet (see issue #127), nor are the `Acked_Transitions` and
+    /// `Event_Time_Stamps` updates a transition is supposed to carry (#123). A
+    /// device holding active enrollments will therefore change `Event_State`
+    /// without emitting an EventNotification, so a client learns of the alarm
+    /// only by polling. Enabling this by default makes that the standing
+    /// behavior rather than an opt-in one.
+    pub enable_event_enrollment: bool,
+    /// Interval in seconds between Event Enrollment evaluation passes (default 10).
+    ///
+    /// This is a sampling cadence with no basis in ASHRAE 135-2020, which
+    /// prescribes no evaluation frequency and leaves acquisition of a monitored
+    /// value a local matter (Clause 12.12). It is not the `Time_Delay` of an
+    /// event algorithm, which is how long a condition must persist before a
+    /// transition is indicated (Clause 13.3) — a coarse interval delays
+    /// detection and can miss a condition that both appears and clears between
+    /// two passes.
+    ///
+    /// A value of `0` is clamped to one second. Ignored when
+    /// [`enable_event_enrollment`](Self::enable_event_enrollment) is false.
+    pub event_enrollment_interval_secs: u64,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -219,6 +262,11 @@ impl std::fmt::Debug for ServerConfig {
                 &self.reinit_password.as_ref().map(|_| "***"),
             )
             .field("enable_fault_detection", &self.enable_fault_detection)
+            .field("enable_event_enrollment", &self.enable_event_enrollment)
+            .field(
+                "event_enrollment_interval_secs",
+                &self.event_enrollment_interval_secs,
+            )
             .finish()
     }
 }
@@ -237,6 +285,8 @@ impl Default for ServerConfig {
             dcc_password: None,
             reinit_password: None,
             enable_fault_detection: false,
+            enable_event_enrollment: true,
+            event_enrollment_interval_secs: 10,
         }
     }
 }
@@ -274,8 +324,24 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// Reliability evaluation only; Event Enrollment evaluation is configured
+    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
+        self
+    }
+
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
+        self.config.enable_event_enrollment = enabled;
+        self
+    }
+
+    /// Set the interval in seconds between Event Enrollment evaluation passes
+    /// (default 10).
+    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
+        self.config.event_enrollment_interval_secs = secs;
         self
     }
 
@@ -338,8 +404,24 @@ impl BipServerBuilder {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// Reliability evaluation only; Event Enrollment evaluation is configured
+    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
+        self
+    }
+
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
+        self.config.enable_event_enrollment = enabled;
+        self
+    }
+
+    /// Set the interval in seconds between Event Enrollment evaluation passes
+    /// (default 10).
+    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
+        self.config.event_enrollment_interval_secs = secs;
         self
     }
 
@@ -623,8 +705,24 @@ impl ScServerBuilder {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// Reliability evaluation only; Event Enrollment evaluation is configured
+    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
+        self
+    }
+
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
+        self.config.enable_event_enrollment = enabled;
+        self
+    }
+
+    /// Set the interval in seconds between Event Enrollment evaluation passes
+    /// (default 10).
+    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
+        self.config.event_enrollment_interval_secs = secs;
         self
     }
 

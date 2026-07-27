@@ -12,6 +12,197 @@ fn server_config_time_sync_callback_default_is_none() {
     assert!(config.on_time_sync.is_none());
 }
 
+// -----------------------------------------------------------------------
+// Event Enrollment lifecycle configuration (issue #133)
+// -----------------------------------------------------------------------
+
+#[test]
+fn server_config_event_enrollment_defaults() {
+    let config = ServerConfig::default();
+    assert!(config.enable_event_enrollment);
+    assert_eq!(config.event_enrollment_interval_secs, 10);
+    // Enrollment evaluation defaults on while fault detection defaults off;
+    // the two settings are unrelated.
+    assert!(!config.enable_fault_detection);
+}
+
+#[test]
+fn event_enrollment_period_clamps_zero_to_one_second() {
+    // tokio::time::interval panics on a zero period, and that panic would land
+    // inside a spawned task where it cannot be observed by the caller.
+    assert_eq!(
+        super::lifecycle::event_enrollment_period(0),
+        Duration::from_secs(1)
+    );
+}
+
+#[test]
+fn event_enrollment_period_passes_through_nonzero() {
+    assert_eq!(
+        super::lifecycle::event_enrollment_period(30),
+        Duration::from_secs(30)
+    );
+}
+
+#[test]
+fn all_builders_assign_event_enrollment_config() {
+    // Six near-identical assignments across three builders. Every neighbouring
+    // ServerConfig field is a bool or u64, so a copy-paste targeting the wrong one
+    // compiles and stays silent under clippy — hence the neighbour assertions.
+    let generic = BACnetServer::<BipTransport>::generic_builder()
+        .enable_event_enrollment(false)
+        .event_enrollment_interval_secs(7);
+    assert!(!generic.config.enable_event_enrollment);
+    assert_eq!(generic.config.event_enrollment_interval_secs, 7);
+    assert_eq!(generic.config.cov_retry_timeout_ms, 3000);
+    assert!(!generic.config.enable_fault_detection);
+
+    let bip = BACnetServer::<BipTransport>::bip_builder()
+        .enable_event_enrollment(false)
+        .event_enrollment_interval_secs(11);
+    assert!(!bip.config.enable_event_enrollment);
+    assert_eq!(bip.config.event_enrollment_interval_secs, 11);
+    assert_eq!(bip.config.cov_retry_timeout_ms, 3000);
+    assert!(!bip.config.enable_fault_detection);
+
+    #[cfg(feature = "sc-tls")]
+    {
+        let sc = BACnetServer::sc_builder()
+            .enable_event_enrollment(false)
+            .event_enrollment_interval_secs(13);
+        assert!(!sc.config.enable_event_enrollment);
+        assert_eq!(sc.config.event_enrollment_interval_secs, 13);
+        assert_eq!(sc.config.cov_retry_timeout_ms, 3000);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval() {
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_objects::event_enrollment::EventEnrollmentObject;
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+    use bacnet_types::enums::{EventState, EventType, PropertyIdentifier};
+
+    // Exercises the spawned task, not `tokio::time::interval` in isolation. Two
+    // regressions only this can reach: switching to `interval_at` (first pass one
+    // interval late, contradicting the documented startup behavior) and hardcoding
+    // the period so the config field is silently ignored.
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    ai.set_present_value(150.0); // above high_limit
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 0.0,
+        high_limit: 100.0,
+        deadband: 1.0,
+    });
+    ee.set_event_enable(0x07);
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    // An hour, so a first pass deferred by one interval could never be observed.
+    let config = ServerConfig {
+        event_enrollment_interval_secs: 3600,
+        ..ServerConfig::default()
+    };
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let mut server = BACnetServer::start(config, db, transport)
+        .await
+        .expect("server should start");
+
+    // The first pass runs at spawn, well inside the configured hour.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    {
+        let guard = server.db.read().await;
+        let state = guard
+            .get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap();
+        assert_eq!(
+            state,
+            PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+        );
+    }
+
+    // Force it back, then advance far past a hardcoded 10s default but nowhere near
+    // the configured hour. A second pass would re-detect the (still out-of-range)
+    // value and revert this.
+    {
+        let mut guard = server.db.write().await;
+        guard
+            .get_mut(&ee_oid)
+            .unwrap()
+            .set_event_state_internal(EventState::NORMAL)
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    {
+        let guard = server.db.read().await;
+        let state = guard
+            .get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap();
+        assert_eq!(
+            state,
+            PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
+            "a pass ran within 60s, so the configured interval was not honored"
+        );
+    }
+
+    server.stop().await.expect("server should stop");
+}
+
+#[tokio::test]
+async fn server_spawns_enrollment_task_without_fault_detection() {
+    // Regression for #133: enrollment evaluation used to be gated on
+    // enable_fault_detection, so this configuration silently skipped it.
+    let config = ServerConfig {
+        enable_fault_detection: false,
+        enable_event_enrollment: true,
+        ..ServerConfig::default()
+    };
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let mut server = BACnetServer::start(config, ObjectDatabase::new(), transport)
+        .await
+        .expect("server should start");
+
+    assert!(server.event_enrollment_task.is_some());
+    assert!(server.fault_detection_task.is_none());
+
+    server.stop().await.expect("server should stop");
+}
+
+#[tokio::test]
+async fn server_runs_fault_detection_without_enrollment() {
+    // The inverse pairing must also hold, or the two settings are still coupled.
+    let config = ServerConfig {
+        enable_fault_detection: true,
+        enable_event_enrollment: false,
+        ..ServerConfig::default()
+    };
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let mut server = BACnetServer::start(config, ObjectDatabase::new(), transport)
+        .await
+        .expect("server should start");
+
+    assert!(server.fault_detection_task.is_some());
+    assert!(server.event_enrollment_task.is_none());
+
+    server.stop().await.expect("server should stop");
+}
+
 #[tokio::test]
 async fn server_rejects_invalid_max_apdu_length() {
     let config = ServerConfig {
