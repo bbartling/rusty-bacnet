@@ -22,7 +22,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let change = {
+        let outcome = {
             let mut db = db.write().await;
             match db.get_mut(oid) {
                 Some(object) => object.evaluate_intrinsic_reporting(),
@@ -30,17 +30,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
 
-        if let Some(change) = change {
-            Self::build_and_send_event_notification(
-                db,
-                network,
-                comm_state,
-                server_tsm,
-                oid,
-                change,
-                retry_timeout_ms,
-            )
-            .await;
+        // The transition is already stored in Event_State by the detector,
+        // whatever Event_Enable says. Only external distribution is gated here:
+        // Clause 12.12 defines Event_Enable as enabling and disabling the
+        // distribution of notifications, and Clause 13.2.5 places that gate
+        // inside the notification-distribution process — downstream of the
+        // transition actions, none of which it governs.
+        //
+        // Three of Clause 13.2.2.1.4's transition actions are still missing and
+        // hook this same point, ahead of the `distribute` check: the
+        // Event_Time_Stamps write, the Event_Message_Texts write (only "if
+        // present"), and the indication to the alarm-acknowledgment process.
+        // The first two are independent actions, not consequences of the third;
+        // the third is what maintains Acked_Transitions, and Clause 13.2.3 gates
+        // that on Ack_Required, never on Event_Enable. All tracked as #123.
+        if let Some(outcome) = outcome {
+            if outcome.distribute {
+                Self::build_and_send_event_notification(
+                    db,
+                    network,
+                    comm_state,
+                    server_tsm,
+                    oid,
+                    outcome.change,
+                    retry_timeout_ms,
+                )
+                .await;
+            }
         }
     }
 
