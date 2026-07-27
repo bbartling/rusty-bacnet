@@ -345,33 +345,14 @@ pub(crate) fn current_command_priority<T>(
     bacnet_types::primitives::PropertyValue::Null
 }
 
-/// Common intrinsic-reporting read_property arms for objects with an
-/// `OutOfRangeDetector` event_detector field.
-///
-/// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE, EVENT_ENABLE,
-///          NOTIFY_TYPE, NOTIFICATION_CLASS, TIME_DELAY, EVENT_STATE.
-macro_rules! read_event_properties {
+/// Generic intrinsic-reporting read properties shared by every event detector.
+macro_rules! read_generic_event_properties {
     ($self:expr, $property:expr) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_STATE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::Enumerated(
                     $self.event_detector.event_state.to_raw(),
                 )))
-            }
-            p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.high_limit),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::LOW_LIMIT => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.low_limit),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::DEADBAND => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.deadband),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
-                    unused_bits: 6,
-                    data: vec![$self.event_detector.limit_enable.to_bits()],
-                }))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
@@ -398,6 +379,34 @@ macro_rules! read_event_properties {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
                     data: vec![$self.event_detector.acked_transitions << 5],
+                }))
+            }
+            _ => None,
+        }
+    };
+}
+pub(crate) use read_generic_event_properties;
+
+/// Analog-only intrinsic-reporting read properties for `OutOfRangeDetector`.
+///
+/// The timestamp and message-text arms remain here because the analog objects
+/// expose their storage directly rather than through the detector.
+macro_rules! read_analog_event_properties {
+    ($self:expr, $property:expr) => {
+        match $property {
+            p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Real($self.event_detector.high_limit),
+            )),
+            p if p == bacnet_types::enums::PropertyIdentifier::LOW_LIMIT => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Real($self.event_detector.low_limit),
+            )),
+            p if p == bacnet_types::enums::PropertyIdentifier::DEADBAND => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Real($self.event_detector.deadband),
+            )),
+            p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
+                Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
+                    unused_bits: 6,
+                    data: vec![$self.event_detector.limit_enable.to_bits()],
                 }))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_TIME_STAMPS => {
@@ -445,18 +454,22 @@ macro_rules! read_event_properties {
         }
     };
 }
-pub(crate) use read_event_properties;
+pub(crate) use read_analog_event_properties;
 
-/// Common intrinsic-reporting write_property arms for objects with an
-/// `OutOfRangeDetector` event_detector field.
+/// Analog-only intrinsic-reporting write_property arms, for objects whose event_detector is
+/// an `OutOfRangeDetector`.
 ///
-/// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE,
-///          NOTIFICATION_CLASS, NOTIFY_TYPE.
+/// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE.
+///
+/// This is the analog half of the split. The properties every detector carries —
+/// EVENT_ENABLE, NOTIFICATION_CLASS, NOTIFY_TYPE, TIME_DELAY and the ACKED_TRANSITIONS
+/// denial — live in [`write_generic_event_properties!`], and a call site that needs both
+/// must invoke both.
 ///
 /// Returns `Some(Ok(()))` if the property was handled,
 /// `Some(Err(...))` for type/validation errors,
 /// or `None` if the property is not an event property.
-macro_rules! write_event_properties {
+macro_rules! write_analog_event_properties {
     ($self:expr, $property:expr, $value:expr) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => {
@@ -508,6 +521,16 @@ macro_rules! write_event_properties {
                     Some(Err($crate::common::invalid_data_type_error()))
                 }
             }
+            _ => None,
+        }
+    };
+}
+pub(crate) use write_analog_event_properties;
+
+/// Generic intrinsic-reporting write properties shared by every event detector.
+macro_rules! write_generic_event_properties {
+    ($self:expr, $property:expr, $value:expr) => {
+        match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
                     if let Some(&byte) = data.first() {
@@ -555,14 +578,27 @@ macro_rules! write_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
-                // Read-only: modified only by AcknowledgeAlarm service
+                // Read-only: modified only by the AcknowledgeAlarm service.
+                //
+                // This denial predates the generic/analog split and must survive it. The
+                // service path (`BACnetObject::acknowledge_alarm`) deliberately ORs the
+                // acknowledged bit in; a property write would assign, so it could both
+                // fabricate an acknowledgment and erase one. GetAlarmSummary and
+                // GetEventInformation read this field straight off the object, so an
+                // assignable arm would let a client mark an unacknowledged alarm
+                // acknowledged with a plain WriteProperty.
+                //
+                // It also carries the Clause 12.7 / 12.19 invariant that while
+                // Event_Detection_Enable is FALSE, Acked_Transitions "shall be equal to
+                // [its] initial condition" — an ungated write arm is the one route that
+                // could break that between detection-enable writes.
                 Some(Err($crate::common::write_access_denied_error()))
             }
             _ => None,
         }
     };
 }
-pub(crate) use write_event_properties;
+pub(crate) use write_generic_event_properties;
 
 /// Read a priority array property (handles array_index=None, Some(0), Some(1..=16)).
 ///
@@ -692,33 +728,41 @@ pub(crate) fn write_cov_increment(
 //
 // Shared property-set predicates used by the `is_writable_property` overrides
 // on the core object types. Each predicate mirrors the arms of the matching
-// `write_property` implementation (via the `write_event_properties!` macro and
+// `write_property` implementation (via the `write_generic_event_properties!` and
+// `write_analog_event_properties!` macros and
 // the `write_priority_array!` / `write_priority_array_direct!` macros) so PICS
 // and runtime dispatch share one truth source. Keep these in lock-step with
 // the macros below.
 
-/// Writable event-detection properties exposed by objects that use the
-/// `write_event_properties!` macro (AnalogInput/Output/Value).
-///
-/// Mirrors the macro arms at `common.rs:459-565`: HIGH_LIMIT, LOW_LIMIT,
-/// DEADBAND, LIMIT_ENABLE, EVENT_ENABLE, NOTIFICATION_CLASS, NOTIFY_TYPE,
-/// TIME_DELAY. ACKED_TRANSITIONS is read-only (write-access-denied) and is
-/// intentionally excluded.
+/// Generic writable event-detection properties shared by every detector.
 #[inline]
-pub(crate) fn is_event_property_writable(
+pub(crate) fn is_generic_event_property_writable(
     property: bacnet_types::enums::PropertyIdentifier,
 ) -> bool {
     matches!(
         property,
-        bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT
-            | bacnet_types::enums::PropertyIdentifier::LOW_LIMIT
-            | bacnet_types::enums::PropertyIdentifier::DEADBAND
-            | bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE
-            | bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE
+        bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE
             | bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS
             | bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE
             | bacnet_types::enums::PropertyIdentifier::TIME_DELAY
     )
+    // ACKED_TRANSITIONS is deliberately absent: the generic write arm denies it, and this
+    // predicate is what PICS reports, so listing it would advertise a write dispatch rejects.
+}
+
+/// Writable generic and analog event properties exposed by analog objects.
+#[inline]
+pub(crate) fn is_event_property_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    is_generic_event_property_writable(property)
+        || matches!(
+            property,
+            bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT
+                | bacnet_types::enums::PropertyIdentifier::LOW_LIMIT
+                | bacnet_types::enums::PropertyIdentifier::DEADBAND
+                | bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE
+        )
 }
 
 /// Writable commandable-object properties shared by all commandable types

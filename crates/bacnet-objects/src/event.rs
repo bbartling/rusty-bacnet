@@ -786,8 +786,8 @@ impl CommandFailureDetector {
 }
 
 /// Implement the `BACnetObject` intrinsic-reporting trait methods for an
-/// object whose detector is exposed as `self.event_detector`, whose present
-/// value is `self.present_value`, and whose reliability is `self.reliability`.
+/// object whose detector is exposed as a field, with object fields supplying
+/// the detector inputs.
 ///
 /// This wires both the per-write [`evaluate_intrinsic_reporting`](crate::traits::BACnetObject::evaluate_intrinsic_reporting)
 /// probe and the periodic [`tick_intrinsic_reporting`](crate::traits::BACnetObject::tick_intrinsic_reporting)
@@ -802,6 +802,42 @@ impl CommandFailureDetector {
 /// needing to notify it.
 #[macro_export]
 macro_rules! impl_intrinsic_reporting {
+    (
+        $detector_field:ident,
+        $present_value_field:ident,
+        $feedback_value_field:ident,
+        $reliability_field:ident,
+        $event_detection_enable_field:ident
+    ) => {
+        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
+            self.$detector_field.probe(
+                self.$present_value_field,
+                self.$feedback_value_field,
+                self.$reliability_field,
+            )
+        }
+
+        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
+            self.$detector_field.tick(
+                self.$present_value_field,
+                self.$feedback_value_field,
+                self.$reliability_field,
+            )
+        }
+    };
+    // There is deliberately no four-field arm — no feedback-driven detector without an
+    // Event_Detection_Enable gate. One existed briefly during this change and became unused
+    // once Binary Output and Multi-state Output moved to the gated form. Leaving it exported
+    // would have offered downstream implementors a supported way to wire a three-input
+    // detector with detection permanently on, which is the exact defect this gate was added
+    // to fix: Clauses 12.7 and 12.19 make intrinsic reporting optional ("required if the
+    // object supports intrinsic reporting"), and an ungated detector makes it mandatory.
     ($detector_field:ident, $present_value_field:ident, $reliability_field:ident) => {
         fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
             self.$detector_field
