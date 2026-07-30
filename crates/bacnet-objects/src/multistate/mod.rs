@@ -1,12 +1,15 @@
 //! Multi-State Input (type 13), Multi-State Output (type 14), and
-//! Multi-State Value (type 19) objects per ASHRAE 135-2020 Clauses 12.20-12.22.
+//! Multi-State Value (type 19) objects per ASHRAE 135-2020 Clauses 12.18,
+//! 12.19, and 12.20.
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
-use crate::common::{self, read_common_properties};
+use crate::common::{
+    self, read_common_properties, read_generic_event_properties, write_generic_event_properties,
+};
 use crate::event::ChangeOfStateDetector;
 use crate::traits::BACnetObject;
 
