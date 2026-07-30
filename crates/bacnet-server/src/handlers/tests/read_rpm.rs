@@ -27,6 +27,80 @@ fn read_property_handler_success() {
 }
 
 #[test]
+fn read_property_handler_serves_multistate_event_time_stamps() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    let request = ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::EVENT_TIME_STAMPS,
+        property_array_index: None,
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let mut ack_buf = BytesMut::new();
+    handle_read_property(&db, &buf, &mut ack_buf).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    assert_eq!(
+        ack.property_identifier,
+        PropertyIdentifier::EVENT_TIME_STAMPS
+    );
+    let mut offset = 0;
+    for _ in 0..3 {
+        let (value, next) =
+            bacnet_encoding::primitives::decode_application_value(&ack.property_value, offset)
+                .unwrap();
+        assert_eq!(value, bacnet_types::primitives::PropertyValue::Unsigned(0));
+        offset = next;
+    }
+    assert_eq!(offset, ack.property_value.len());
+}
+
+#[test]
+fn read_property_handler_serves_multistate_event_time_stamps_count() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    let request = ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::EVENT_TIME_STAMPS,
+        property_array_index: Some(0),
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let mut ack_buf = BytesMut::new();
+    handle_read_property(&db, &buf, &mut ack_buf).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    assert_eq!(ack.property_array_index, Some(0));
+    let (value, end) =
+        bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
+    assert_eq!(value, bacnet_types::primitives::PropertyValue::Unsigned(3));
+    assert_eq!(end, ack.property_value.len());
+}
+
+#[test]
+fn read_property_handler_rejects_multistate_event_time_stamps_out_of_bounds_index() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    let request = ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::EVENT_TIME_STAMPS,
+        property_array_index: Some(4),
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let mut ack_buf = BytesMut::new();
+    match handle_read_property(&db, &buf, &mut ack_buf).unwrap_err() {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32);
+        }
+        other => panic!("expected Protocol error, got: {other:?}"),
+    }
+}
+
+#[test]
 fn read_property_unknown_object() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
@@ -258,6 +332,101 @@ fn rpm_handler_all_properties_expanded() {
         .find(|e| e.property_identifier == PropertyIdentifier::PRESENT_VALUE)
         .expect("PRESENT_VALUE should be in ALL results");
     assert!(pv_elem.property_value.is_some());
+}
+
+#[test]
+fn rpm_all_includes_multistate_event_history() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::rpm::ReadAccessSpecification;
+
+    let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: PropertyIdentifier::ALL,
+                property_array_index: None,
+            }],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+    let mut ack_buf = BytesMut::new();
+    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+
+    let timestamps = results
+        .iter()
+        .find(|result| result.property_identifier == PropertyIdentifier::EVENT_TIME_STAMPS)
+        .expect("EVENT_TIME_STAMPS missing from RPM ALL")
+        .property_value
+        .as_ref()
+        .expect("EVENT_TIME_STAMPS must succeed");
+    let mut offset = 0;
+    for _ in 0..3 {
+        let (value, next) =
+            bacnet_encoding::primitives::decode_application_value(timestamps, offset).unwrap();
+        assert_eq!(value, bacnet_types::primitives::PropertyValue::Unsigned(0));
+        offset = next;
+    }
+    assert_eq!(offset, timestamps.len());
+
+    let messages = results
+        .iter()
+        .find(|result| result.property_identifier == PropertyIdentifier::EVENT_MESSAGE_TEXTS)
+        .expect("EVENT_MESSAGE_TEXTS missing from RPM ALL")
+        .property_value
+        .as_ref()
+        .expect("EVENT_MESSAGE_TEXTS must succeed");
+    let mut offset = 0;
+    for _ in 0..3 {
+        let (value, next) =
+            bacnet_encoding::primitives::decode_application_value(messages, offset).unwrap();
+        assert_eq!(
+            value,
+            bacnet_types::primitives::PropertyValue::CharacterString(String::new())
+        );
+        offset = next;
+    }
+    assert_eq!(offset, messages.len());
+}
+
+#[test]
+fn rpm_explicit_index_returns_one_multistate_event_message() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::rpm::ReadAccessSpecification;
+
+    let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+                property_array_index: Some(2),
+            }],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+    let mut ack_buf = BytesMut::new();
+    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let result = &ack.list_of_read_access_results[0].list_of_results[0];
+
+    assert_eq!(result.property_array_index, Some(2));
+    let value = result
+        .property_value
+        .as_ref()
+        .expect("indexed EVENT_MESSAGE_TEXTS must succeed");
+    let (decoded, end) = bacnet_encoding::primitives::decode_application_value(value, 0).unwrap();
+    assert_eq!(
+        decoded,
+        bacnet_types::primitives::PropertyValue::CharacterString(String::new())
+    );
+    assert_eq!(end, value.len());
 }
 
 #[test]
