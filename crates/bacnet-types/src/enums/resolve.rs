@@ -11,8 +11,9 @@
 // promoted from a bare number to its named variant.
 //
 // Properties whose ENUMERATED type depends on the *object type* rather than the
-// property alone (e.g. `present-value`, `alarm-values`, `fault-values`, whose
-// type varies between Binary/Multi-state/Life-Safety objects) are intentionally
+// property alone (e.g. `present-value`, plural `alarm-values`, and
+// `fault-values`, whose type varies between Binary/Multi-state/Life-Safety
+// objects) are intentionally
 // left unmapped: the property identifier alone is insufficient to name them
 // correctly, so they resolve to `Unknown`.
 //
@@ -69,6 +70,7 @@ resolved_enum! {
     Segmentation(Segmentation),
     EngineeringUnits(EngineeringUnits),
     Polarity(Polarity),
+    BinaryPV(BinaryPV),
     ProgramState(ProgramState),
     ProgramChange(ProgramChange),
     NodeType(NodeType),
@@ -136,10 +138,12 @@ impl ResolvedEnum {
             }
 
             84 => Self::Polarity(Polarity::from_raw(value)), // polarity
+            // alarm-value is BACnetBinaryPV on both object types that define it.
+            6 => Self::BinaryPV(BinaryPV::from_raw(value)),
             92 => Self::ProgramState(ProgramState::from_raw(value)), // program-state
             90 => Self::ProgramChange(ProgramChange::from_raw(value)), // program-change
-            208 => Self::NodeType(NodeType::from_raw(value)), // node-type
-            197 => Self::LoggingType(LoggingType::from_raw(value)), // logging-type
+            208 => Self::NodeType(NodeType::from_raw(value)),        // node-type
+            197 => Self::LoggingType(LoggingType::from_raw(value)),  // logging-type
             41 => Self::FileAccessMethod(FileAccessMethod::from_raw(value)), // file-access-method
             338 => Self::BackupAndRestoreState(BackupAndRestoreState::from_raw(value)), // backup-and-restore-state
 
@@ -443,6 +447,26 @@ mod tests {
         let r = ResolvedEnum::from_property(PropertyIdentifier::PRESENT_VALUE, 7);
         assert_eq!(r, ResolvedEnum::Unknown(7));
         assert_eq!(r.to_string(), "7");
+    }
+
+    #[test]
+    fn alarm_value_resolves_to_binary_pv() {
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::ALARM_VALUE, 1),
+            ResolvedEnum::BinaryPV(BinaryPV::ACTIVE),
+        );
+    }
+
+    #[test]
+    fn plural_alarm_and_fault_values_remain_unknown() {
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::ALARM_VALUES, 1),
+            ResolvedEnum::Unknown(1)
+        );
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::FAULT_VALUES, 1),
+            ResolvedEnum::Unknown(1)
+        );
     }
 
     #[test]

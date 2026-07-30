@@ -22,8 +22,6 @@ pub struct MultiStateValueObject {
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
     state_text: Vec<String>,
-    alarm_values: Vec<u32>,
-    fault_values: Vec<u32>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
     /// Event_Detection_Enable (Clause 12.20). Clause 13.2.2.1: "If the
@@ -61,8 +59,6 @@ impl MultiStateValueObject {
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
                 .collect(),
-            alarm_values: Vec::new(),
-            fault_values: Vec::new(),
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
             value_source: common::ValueSourceTracking::default(),
@@ -166,13 +162,8 @@ impl BACnetObject for MultiStateValueObject {
                 _ => Err(common::invalid_array_index_error()),
             },
             p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
-                self.alarm_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
-            p if p == PropertyIdentifier::FAULT_VALUES => Ok(PropertyValue::List(
-                self.fault_values
+                self.event_detector
+                    .alarm_values
                     .iter()
                     .map(|v| PropertyValue::Unsigned(*v as u64))
                     .collect(),
@@ -228,6 +219,11 @@ impl BACnetObject for MultiStateValueObject {
                 None => return Err(common::write_access_denied_error()),
                 _ => return Err(common::invalid_array_index_error()),
             }
+        }
+        if property == PropertyIdentifier::ALARM_VALUES {
+            let values = decode_alarm_values_write(array_index, value)?;
+            self.event_detector.alarm_values = values;
+            return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
@@ -303,6 +299,7 @@ impl BACnetObject for MultiStateValueObject {
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::STATE_TEXT,
+            PropertyIdentifier::ALARM_VALUES,
         ];
         Cow::Borrowed(PROPS)
     }
@@ -330,6 +327,7 @@ impl BACnetObject for MultiStateValueObject {
             || common::is_generic_event_property_writable(property)
             || property == PropertyIdentifier::RELIABILITY
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
+            || property == PropertyIdentifier::ALARM_VALUES
     }
 }
 

@@ -25,8 +25,6 @@ pub struct MultiStateOutputObject {
     reliability_before_out_of_service: Option<u32>,
     event_detection_enable: bool,
     state_text: Vec<String>,
-    alarm_values: Vec<u32>,
-    fault_values: Vec<u32>,
     /// COMMAND_FAILURE event detector.
     event_detector: CommandFailureDetector,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
@@ -58,8 +56,6 @@ impl MultiStateOutputObject {
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
                 .collect(),
-            alarm_values: Vec::new(),
-            fault_values: Vec::new(),
             event_detector: CommandFailureDetector::default(),
             value_source: common::ValueSourceTracking::default(),
         })
@@ -165,18 +161,6 @@ impl BACnetObject for MultiStateOutputObject {
                 ),
                 _ => Err(common::invalid_array_index_error()),
             },
-            p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
-                self.alarm_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
-            p if p == PropertyIdentifier::FAULT_VALUES => Ok(PropertyValue::List(
-                self.fault_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -327,8 +311,6 @@ impl BACnetObject for MultiStateOutputObject {
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::STATE_TEXT,
-            PropertyIdentifier::ALARM_VALUES,
-            PropertyIdentifier::FAULT_VALUES,
         ];
         Cow::Borrowed(PROPS)
     }
@@ -483,28 +465,20 @@ mod command_failure_tests {
     }
 
     #[test]
-    fn command_failure_uses_present_and_feedback_not_alarm_values() {
-        let mut disagreeing = MultiStateOutputObject::new(1, "MSO-disagree", 3).unwrap();
-        set_detection_enabled(&mut disagreeing, true);
-        write_unsigned(&mut disagreeing, PropertyIdentifier::PRESENT_VALUE, 2);
+    fn command_failure_uses_present_and_feedback() {
+        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+        set_detection_enabled(&mut mso, true);
+        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-        let outcome = disagreeing.evaluate_intrinsic_reporting().unwrap();
+        let outcome = mso.evaluate_intrinsic_reporting().unwrap();
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
         assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 
-        let mut agreeing = MultiStateOutputObject::new(2, "MSO-agree", 3).unwrap();
-        set_detection_enabled(&mut agreeing, true);
-        agreeing.alarm_values = vec![2];
-        write_unsigned(&mut agreeing, PropertyIdentifier::FEEDBACK_VALUE, 2);
-        write_unsigned(&mut agreeing, PropertyIdentifier::PRESENT_VALUE, 2);
-
-        assert_eq!(agreeing.evaluate_intrinsic_reporting(), None);
-        assert_eq!(
-            agreeing
-                .read_property(PropertyIdentifier::EVENT_STATE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(EventState::NORMAL.to_raw())
-        );
+        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 2);
+        let returned = mso.evaluate_intrinsic_reporting().unwrap();
+        assert_eq!(returned.change.from, EventState::OFFNORMAL);
+        assert_eq!(returned.change.to, EventState::NORMAL);
+        assert_eq!(returned.event_type, EventType::COMMAND_FAILURE);
     }
 
     #[test]

@@ -123,6 +123,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Make CHANGE_OF_STATE alarm parameters reachable over BACnet: Binary Input
+  now exposes singular `Alarm_Value` as `BACnetBinaryPV` per Table 12-6
+  (dropping the invented plural `Alarm_Values` arm, which read as an empty
+  list and now returns UNKNOWN_PROPERTY), and Binary Value gains the same
+  property; both default to ACTIVE(1) with the detector armed — an owner
+  ruling, since the standard defines no default — so `Event_State` reacts to
+  `Present_Value` out of the box while distribution still waits on
+  `Event_Enable`. Multi-state Input and Value's `Alarm_Values` is now
+  configurable over the network via AddListElement/RemoveListElement, with
+  readback served from the detector-owned list — the disconnected mirror
+  fields are gone, so what a client reads is what the event algorithm
+  compares. A whole-list WriteProperty still fails with INVALID_DATA_TYPE:
+  the write decoder handles a single application-tagged primitive (#182),
+  so the dispatch-layer LIST arm added here becomes network-reachable for
+  direct writes only when that lands. List writes reject an array index
+  (the property is a BACnetLIST) and cap at 1,024 elements, the same
+  resource-cap convention as COV subscriptions. `Property_List` changes:
+  Binary Input/Value gain `Alarm_Value`, Multi-state Value gains
+  `Alarm_Values`, Multi-state Input loses `Fault_Values`, and Multi-state
+  Output loses both removed properties. `resolve_value` now names property
+  6 (alarm-value) as `BinaryPV` — a new `ResolvedEnum` variant, which is a
+  compile-time break for downstream exhaustive matches on that enum. (#228)
 - Wire the generic event-configuration properties into Binary Input, Binary
   Value, Multi-state Input and Multi-state Value: `Event_Enable`,
   `Notification_Class`, `Notify_Type` and `Time_Delay` are now writable over
@@ -261,6 +283,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Remove the non-standard `Alarm_Values`/`Fault_Values` surface from
+  Multi-state Output and the unimplemented `Fault_Values` surface from
+  Multi-state Input/Value, including the public
+  `MultiStateInputObject::set_fault_values` method (**breaking**: public API
+  removal). Multi-state Output's property table (Table 12-22) defines
+  neither property — its COMMAND_FAILURE algorithm compares Present_Value
+  against Feedback_Value — so both arms were invented surface. On
+  Multi-state Input/Value, `Fault_Values` is optional (its only conformance
+  footnote requires `Reliability` be present alongside it), and it
+  parameterizes the Clause 13.4 FAULT_STATE fault algorithm this codebase
+  does not implement; omitting an optional property whose parameter nothing
+  consumes keeps the advertised surface honest. This deliberately reverses
+  the #222-era decision to keep Multi-state Output's inert readback. (#228)
 - Remove `bacnet_types::enums::LiftCarDoorStatus`. **This is a breaking removal
   of a public type** — it was glob-exported from `enums`, though nothing in the
   workspace referenced it. ASHRAE 135-2020 defines no lift-car-door-status

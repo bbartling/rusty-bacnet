@@ -32,9 +32,8 @@ fn write_event_enable(object: &mut dyn BACnetObject, bits: EventTransitionBits) 
 /// at a time: TO_OFFNORMAL distributes, and TO_FAULT — a bit that exists but
 /// names a different transition — does not.
 ///
-/// Multi-state Input is the vehicle because it is the only one of the four types
-/// wired by #229 whose detector can be given an alarm value through a public API
-/// (`set_alarm_values`); the other three have no such path until #228 lands.
+/// Multi-state Input remains the compact object-level vehicle; these detector
+/// semantics are independent of the network decoder (#182).
 #[test]
 fn msi_event_enable_bit_selects_which_transition_distributes() {
     for (bits, distributes) in [
@@ -236,4 +235,199 @@ fn msi_event_properties_round_trip_and_match_pics() {
 fn msv_event_properties_round_trip_and_match_pics() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
     assert_event_properties_round_trip(&mut msv, "MSV");
+}
+
+fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
+    // Thin adapter keeps write assertions on the shared protocol-error helper.
+    assert_property_read_error(result.map(|_| PropertyValue::Null), code);
+}
+
+fn assert_property_read_error(result: Result<PropertyValue, Error>, code: ErrorCode) {
+    match result.unwrap_err() {
+        Error::Protocol {
+            class,
+            code: actual,
+        } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(actual, code.to_raw() as u32);
+        }
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+#[test]
+fn multistate_alarm_values_round_trip_and_match_pics() {
+    for object in [
+        &mut MultiStateInputObject::new(1, "MSI-1", 3).unwrap() as &mut dyn BACnetObject,
+        &mut MultiStateValueObject::new(1, "MSV-1", 3).unwrap() as &mut dyn BACnetObject,
+    ] {
+        let value = PropertyValue::List(vec![
+            PropertyValue::Unsigned(2),
+            PropertyValue::Unsigned(99),
+        ]);
+        object
+            .write_property(PropertyIdentifier::ALARM_VALUES, None, value.clone(), None)
+            .unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            value
+        );
+        assert!(object
+            .property_list()
+            .contains(&PropertyIdentifier::ALARM_VALUES));
+        assert!(object.is_writable_property(PropertyIdentifier::ALARM_VALUES));
+        assert_property_error(
+            object.write_property(
+                PropertyIdentifier::ALARM_VALUES,
+                None,
+                PropertyValue::Unsigned(2),
+                None,
+            ),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+        assert_property_error(
+            object.write_property(
+                PropertyIdentifier::ALARM_VALUES,
+                None,
+                PropertyValue::List(vec![PropertyValue::Enumerated(2)]),
+                None,
+            ),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            value,
+            "a rejected wrong-element write must preserve the prior list"
+        );
+        assert_property_error(
+            object.write_property(
+                PropertyIdentifier::ALARM_VALUES,
+                None,
+                PropertyValue::List(vec![PropertyValue::Unsigned(u32::MAX as u64 + 1)]),
+                None,
+            ),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            value,
+            "an overflowing element must leave the prior list intact"
+        );
+        let boundary = PropertyValue::List(
+            (0..MAX_ALARM_VALUES)
+                .map(|value| PropertyValue::Unsigned(value as u64))
+                .collect(),
+        );
+        object
+            .write_property(
+                PropertyIdentifier::ALARM_VALUES,
+                None,
+                boundary.clone(),
+                None,
+            )
+            .unwrap();
+        let overlong = PropertyValue::List(
+            (0..=MAX_ALARM_VALUES)
+                .map(|value| PropertyValue::Unsigned(value as u64))
+                .collect(),
+        );
+        match object
+            .write_property(PropertyIdentifier::ALARM_VALUES, None, overlong, None)
+            .unwrap_err()
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
+                assert_eq!(code, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32);
+            }
+            other => panic!("expected resource-cap error, got {other:?}"),
+        }
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            boundary,
+            "an overlong list must leave the accepted boundary list intact"
+        );
+        assert_property_error(
+            object.write_property(
+                PropertyIdentifier::ALARM_VALUES,
+                Some(1),
+                PropertyValue::List(vec![PropertyValue::Unsigned(2)]),
+                None,
+            ),
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            boundary,
+            "an indexed LIST write must leave the prior list intact"
+        );
+        object
+            .write_property(
+                PropertyIdentifier::ALARM_VALUES,
+                None,
+                PropertyValue::List(vec![]),
+                None,
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
+    let objects: [&dyn BACnetObject; 3] = [
+        &MultiStateInputObject::new(1, "MSI-1", 3).unwrap(),
+        &MultiStateValueObject::new(1, "MSV-1", 3).unwrap(),
+        &MultiStateOutputObject::new(1, "MSO-1", 3).unwrap(),
+    ];
+    for object in objects {
+        assert_property_read_error(
+            object.read_property(PropertyIdentifier::FAULT_VALUES, None),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
+        assert!(!object
+            .property_list()
+            .contains(&PropertyIdentifier::FAULT_VALUES));
+        assert!(!object.is_writable_property(PropertyIdentifier::FAULT_VALUES));
+    }
+    let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    assert_property_read_error(
+        mso.read_property(PropertyIdentifier::ALARM_VALUES, None),
+        ErrorCode::UNKNOWN_PROPERTY,
+    );
+    assert!(!mso
+        .property_list()
+        .contains(&PropertyIdentifier::ALARM_VALUES));
+    assert!(!mso
+        .property_list()
+        .contains(&PropertyIdentifier::FAULT_VALUES));
+}
+
+#[test]
+fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
+    let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+    msi.set_alarm_values(vec![2]);
+    msi.set_present_value(2);
+    assert_eq!(
+        msi.evaluate_intrinsic_reporting().unwrap().change.to,
+        EventState::OFFNORMAL
+    );
+    msi.write_property(
+        PropertyIdentifier::ALARM_VALUES,
+        None,
+        PropertyValue::List(vec![PropertyValue::Unsigned(3)]),
+        None,
+    )
+    .unwrap();
+    let returned = msi.evaluate_intrinsic_reporting().unwrap();
+    assert_eq!(returned.change.from, EventState::OFFNORMAL);
+    assert_eq!(returned.change.to, EventState::NORMAL);
 }
