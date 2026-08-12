@@ -75,6 +75,21 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet restart reason for a Device's Last_Restart_Reason (Clause 12.11).
+    pub struct RestartReason(u32);
+
+    const UNKNOWN = 0;
+    const COLDSTART = 1;
+    const WARMSTART = 2;
+    const DETECTED_POWER_LOST = 3;
+    const DETECTED_POWERED_OFF = 4;
+    const HARDWARE_WATCHDOG = 5;
+    const SOFTWARE_WATCHDOG = 6;
+    const SUSPENDED = 7;
+    const ACTIVATE_CHANGES = 8;
+}
+
+bacnet_enum! {
     /// BACnet enable/disable (Clause 16.4).
     pub struct EnableDisable(u32);
 
@@ -131,6 +146,17 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet program error for Reason_For_Halt (Clause 12.22).
+    pub struct ProgramError(u32);
+
+    const NORMAL = 0;
+    const LOAD_FAILED = 1;
+    const INTERNAL = 2;
+    const PROGRAM = 3;
+    const OTHER = 4;
+}
+
+bacnet_enum! {
     /// BACnet action (Clause 12.17).
     pub struct Action(u32);
 
@@ -148,7 +174,10 @@ bacnet_enum! {
     const COMMAND_FAILURE = 3;
     const FLOATING_LIMIT = 4;
     const OUT_OF_RANGE = 5;
-    // 6-7: reserved
+    // 6: kept clear for proprietary event types — the parameters ride the
+    //    complex-event-type CHOICE [6] of BACnetNotificationParameters, so
+    //    the enumeration itself assigns no tag-6 enumerand (Clause 21).
+    // 7: context tag 7 is deprecated (Clause 21 production comment).
     const CHANGE_OF_LIFE_SAFETY = 8;
     const EXTENDED = 9;
     const BUFFER_READY = 10;
