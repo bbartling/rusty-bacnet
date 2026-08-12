@@ -12,7 +12,7 @@ bacnet_enum! {
     const FORCED_OPEN = 3;
     const TAMPER = 4;
     const DOOR_FAULT = 5;
-    const LOCK_FAULT = 6;
+    const LOCK_DOWN = 6;
     const FREE_ACCESS = 7;
     const EGRESS_OPEN = 8;
 }
@@ -151,7 +151,8 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet authentication status for Credential Data Input (Clause 21).
+    /// BACnet authentication status: the Access Point object's
+    /// Authentication_Status property (Table 12-36; Clause 21 production).
     pub struct AuthenticationStatus(u32);
 
     const NOT_READY = 0;

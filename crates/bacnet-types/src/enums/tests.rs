@@ -163,6 +163,71 @@ macro_rules! assert_production_values {
     };
 }
 
+/// Standard 135-2020 Clause 21 (`BACnetFileAccessMethod ::= ENUMERATED`)
+/// assigns `record-access (0)` and `stream-access (1)`. Guard against a swap
+/// regression: the constants were previously reversed (`STREAM_ACCESS = 0`,
+/// `RECORD_ACCESS = 1`), which reported the wrong access method for every
+/// File object on the wire (#273).
+#[test]
+fn file_access_method_values_match_clause_21() {
+    assert_production_values!(
+        FileAccessMethod,
+        [("RECORD_ACCESS", 0), ("STREAM_ACCESS", 1)]
+    );
+
+    // file-access-method (41) resolves by name with the corrected values.
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::FILE_ACCESS_METHOD, 0),
+        ResolvedEnum::FileAccessMethod(FileAccessMethod::RECORD_ACCESS)
+    );
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::FILE_ACCESS_METHOD, 1),
+        ResolvedEnum::FileAccessMethod(FileAccessMethod::STREAM_ACCESS)
+    );
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::FILE_ACCESS_METHOD, 1).to_string(),
+        "STREAM_ACCESS"
+    );
+}
+
+/// Standard 135-2020 Clause 21 (`BACnetDoorAlarmState ::= ENUMERATED`):
+/// value 6 is `lock-down`, not a "lock fault" — no such member exists in the
+/// production. `LockStatus::LOCK_FAULT` (value 2 of a different production)
+/// is correct and must not be conflated with it (#274).
+#[test]
+fn door_alarm_state_values_match_clause_21() {
+    assert_production_values!(
+        DoorAlarmState,
+        [
+            ("NORMAL", 0),
+            ("ALARM", 1),
+            ("DOOR_OPEN_TOO_LONG", 2),
+            ("FORCED_OPEN", 3),
+            ("TAMPER", 4),
+            ("DOOR_FAULT", 5),
+            ("LOCK_DOWN", 6),
+            ("FREE_ACCESS", 7),
+            ("EGRESS_OPEN", 8),
+        ],
+    );
+
+    // door-alarm-state (226) resolves by name; 6 displays as LOCK_DOWN.
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::DOOR_ALARM_STATE, 6),
+        ResolvedEnum::DoorAlarmState(DoorAlarmState::LOCK_DOWN)
+    );
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::DOOR_ALARM_STATE, 6).to_string(),
+        "LOCK_DOWN"
+    );
+
+    // The conflation guard: lock-fault belongs to LockStatus, at value 2.
+    assert_eq!(LockStatus::LOCK_FAULT.to_raw(), 2);
+    assert!(DoorAlarmState::ALL_NAMED
+        .iter()
+        .all(|(name, _)| *name != "LOCK_FAULT"));
+}
+
 /// 135-2020 Clause 21 (`BACnetLifeSafetyState ::= ENUMERATED`) runs through
 /// test-oeo-unaffected (34): the eleven values past test-supervisory (23)
 /// must exist without renumbering anything below them.
