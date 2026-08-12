@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- WriteProperty and WritePropertyMultiple now decode the ENTIRE
+  `propertyValue` payload instead of exactly one application-tagged
+  element: the decoder loops until the input is exhausted — the mirror of
+  `encode_property_value`'s `List` flattening — so one element yields the
+  scalar `PropertyValue` as before and more than one yields
+  `PropertyValue::List`. Full consumption is required: a partial or
+  undecodable trailing element, and an empty payload, fail the write with
+  PROPERTY / INVALID_DATA_ENCODING (Clause 15.9.1.3; malformed payloads
+  previously surfaced as SERVICES/OTHER from a propagated raw decoding
+  error) instead of being silently dropped, and a well-formed extra
+  element reaches a scalar arm to be refused as INVALID_DATA_TYPE — in
+  every refusal the stored value is untouched. Context-tagged behavior is
+  unchanged: framed CHOICE properties (`Event_Parameters`,
+  `Fault_Parameters`) still arrive as one `ApplicationData`, and
+  context-tagged member productions (the Loop/Accumulator reference
+  properties) arrive as one `ApplicationData` element per member for the
+  object arm to reassemble. (#182)
+
+- Pulse Converter and Averaging PICS writability advertising now mirrors
+  their `write_property` arms exactly (the truth invariant the other
+  overrides follow): Pulse Converter advertises PRESENT_VALUE /
+  SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE plus DESCRIPTION /
+  OUT_OF_SERVICE / COV_INCREMENT (INPUT_REFERENCE was previously
+  advertised read-only while the arm accepted it), and Averaging
+  advertises OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE
+  (its arm was likewise unadvertised). Both also stop advertising
+  OBJECT_NAME, which no arm routes — a write was and is refused — so
+  this is a truth-toward-arms correction, flagged for visibility like
+  the Loop/Schedule corrections in #276. (panel round on #182)
+
 - Derive the Reliability write-validation set from `Reliability::ALL_NAMED`
   instead of a restated literal: the named range was copied into
   `is_reliability_value_valid` as `0..=10 | 12..=25 | 64..=65535` from the
@@ -62,6 +92,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Structured property values are writable over WriteProperty /
+  WritePropertyMultiple: MSI `Alarm_Values` whole-list writes (consecutive
+  application-tagged BACnetLIST elements now reach the arm as
+  `PropertyValue::List` with per-element validation; the tranche pin test
+  flips from pinned-failure to success), DateTime Value `Present_Value`
+  and `Priority_Array` entry writes from an application-tagged Date+Time
+  pair, and `Relinquish_Default` on DateTime Value and DateTime Pattern
+  Value (Clause 12.38 / 12.46) — the last two tranche-L1 exclusions,
+  completing #270's permitted writability across all twelve commandable
+  value types. (#182)
+
+- Network-writable structured reference properties: Loop
+  `Controlled_Variable_Reference` / `Manipulated_Variable_Reference` /
+  `Setpoint_Reference` (Clause 12.17) and Pulse Converter `Input_Reference`
+  (Clause 12.23) accept their Clause 21 wire forms through a new strict
+  `BACnetObjectPropertyReference` codec in bacnet-encoding
+  (`constructed::object_property_reference`: bare `[0]`/`[1]`/`[2]`
+  context-tagged members with full consumption, device-qualifying member
+  `[3]` rejected — these references are local-device only) and its
+  `BACnetSetpointReference` `[0]`-frame companion. The four arms share an
+  objects-layer decode helper (`bacnet-objects::reference`) that keeps the
+  legacy local `List([ObjectIdentifier, Enumerated, Unsigned?])` form, and
+  the read arms now carry the reference's optional array index as a third
+  list element. Malformed framed writes refuse PROPERTY /
+  INVALID_DATA_ENCODING, wrong-datatype writes INVALID_DATA_TYPE, and
+  WritePropertyMultiple in-order commit / rollback is proven on a failing
+  reference request. (#182)
+
+- The empty `BACnetSetpointReference` frame (`0x0E 0x0F`) is accepted on
+  Loop `Setpoint_Reference`: the production's member is OPTIONAL and its
+  absence is the Clause 12.17 "fixed setpoint" state, so a conformant
+  peer writing the absent member now clears the reference exactly like a
+  `Null` write (previously refused PROPERTY / INVALID_DATA_ENCODING).
+  The framed codec's `decode_setpoint_reference` accordingly returns
+  `Option<BACnetObjectPropertyReference>`. (panel round on #182)
+
 - Make `Relinquish_Default` writable over the network and add a validated
   local `set_relinquish_default` on the commandable object types: Analog
   Output, Analog Value, Binary Output, Binary Value, Multi-state Output,
@@ -79,10 +145,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tables 12-3, 12-8, 12-22, 12-64, 12-69, 12-30) permit rather than require
   the writability, so this documents permitted-writability implemented, not
   a conformance upgrade. The datetime-paired value types (DateTime Value,
-  DateTime Pattern Value) keep the local setter but stay network-read-only
-  until the write decoder generalizes to multi-element application values
-  (#182). These writes were previously refused; `Property_List` is unchanged.
-  (#270)
+  DateTime Pattern Value) shipped with the local setter only; #182 below
+  now makes them network-writable too. These writes were previously
+  refused; `Property_List` is unchanged. (#270)
 
 - Model `Event_Time_Stamps` and optional `Event_Message_Texts` on Binary
   Input/Output/Value and Multi-state Input/Output/Value objects. Both appear in
@@ -172,6 +237,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add gated arms to `impl_intrinsic_reporting!`: a five-ident form for feedback-driven detectors and a four-ident form for detectors without feedback, both taking an `Event_Detection_Enable` field. Binary Output and Multi-state Output use the five-ident arm; the other seven intrinsic-reporting types use the four-ident arm. There is deliberately no ungated form: the former three-ident arm was removed later in this same unreleased block, and no feedback-without-gate arm is provided, because either would offer downstream implementors a supported way to wire detection permanently on — the exact defect the gate was added to fix.
 
 ### Fixed
+
+- Harden the Averaging `Object_Property_Reference` write arm, reachable
+  over the network for the first time via the #182 multi-element decode:
+  its `items.len() >= 2` acceptance silently dropped fourth-and-later
+  members, retyped a non-Unsigned third member to no-index, and truncated
+  64-bit property/index numerics with `as u32`. The arm now routes through
+  the shared reference-arm decode used by Loop/Pulse Converter: exact
+  two-or-three member shape, `u32::try_from` bounds (an oversized member
+  refused instead of truncated), framed-form full consumption, and a
+  device-qualifying member `[3]` refused PROPERTY / INVALID_DATA_ENCODING —
+  Clause 12.5 leaves referencing another device's object OPTIONAL
+  ("Optionally, the object property to be sampled may exist in a different
+  BACnet device") and this object samples local objects only. The flat
+  local form accepts its property-id member as Unsigned OR Enumerated (the
+  Averaging convention carries Unsigned, kept on reads; the framed form
+  stays the Clause 21 encoding). (adversary panel blocker on #182)
 
 - Gate in-service `Reliability` writes on the remaining Out_Of_Service
   carriers: Loop accepted any Enumerated unconditionally and Schedule stored
