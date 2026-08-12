@@ -95,9 +95,10 @@ fn recipient_address_preserves_network_number_all_forms() {
 fn recipient_list_indexed_write_rejected_list_unchanged() {
     // Regression (review blocker): an indexed Recipient_List write silently
     // replaced the whole list with the written destination after the framing
-    // migration. Dev @ 6b9ac4f rejects such writes with
-    // PROPERTY/INVALID_DATA_TYPE; Recipient_List is a BACnetLIST, not an
-    // array (Clause 15.5) — restore the rejection.
+    // migration. Recipient_List is a BACnetLIST, not an array (Table 12-24,
+    // Clause 12.1.5.2) — indexed access is rejected with
+    // PROPERTY/PROPERTY_IS_NOT_AN_ARRAY, the same classification the service
+    // handlers' is_array_property gate produces (Clause 15.5.1.3/15.9.1.3).
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     nc.add_destination(make_dest_device(10));
     nc.add_destination(make_dest_device(20));
@@ -120,14 +121,14 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
             );
             assert_eq!(
                 code,
-                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                bacnet_types::enums::ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
             );
         }
-        other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        other => panic!("expected PROPERTY/PROPERTY_IS_NOT_AN_ARRAY, got {other:?}"),
     }
 
     // Legacy flat single-entry shape (what an indexed network write decodes
-    // to) — rejected too.
+    // to) — rejected with the same classification.
     let flat_single = PropertyValue::List(vec![
         PropertyValue::BitString {
             unused_bits: 1,
@@ -143,14 +144,27 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
             data: vec![0xE0],
         },
     ]);
-    assert!(nc
+    match nc
         .write_property(
             PropertyIdentifier::RECIPIENT_LIST,
             Some(1),
             flat_single,
-            None
+            None,
         )
-        .is_err());
+        .unwrap_err()
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/PROPERTY_IS_NOT_AN_ARRAY, got {other:?}"),
+    }
 
     // The whole list is untouched.
     assert_eq!(nc.recipient_list.len(), 3);
