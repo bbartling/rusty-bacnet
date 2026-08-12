@@ -76,6 +76,21 @@ impl LightingOutputObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (finite Real
+    /// within the 0..=100 light level); after the store, Present_Value is
+    /// resolved anew from the priority array so an empty array falls back to
+    /// the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: f32) -> Result<(), Error> {
+        if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
 }
 
 impl BACnetObject for LightingOutputObject {
@@ -192,6 +207,16 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
+        // RELINQUISH_DEFAULT — writable per Table 12-64 (R; the standard
+        // permits writability), validated the same way a commanded
+        // Present_Value is by the shared setter.
+        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+            if let PropertyValue::Real(f) = value {
+                return self.set_relinquish_default(f);
+            }
+            return Err(common::invalid_data_type_error());
+        }
+
         // BLINK_WARN_ENABLE
         if property == PropertyIdentifier::BLINK_WARN_ENABLE {
             if let PropertyValue::Boolean(v) = value {
@@ -246,6 +271,23 @@ impl BACnetObject for LightingOutputObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the LightingOutputObject `write_property` arms so the PICS
+        // and runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::PRIORITY_ARRAY
+                | PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::RELINQUISH_DEFAULT
+                | PropertyIdentifier::LIGHTING_COMMAND
+                | PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY
+                | PropertyIdentifier::BLINK_WARN_ENABLE
+                | PropertyIdentifier::EGRESS_TIME
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+        )
     }
 }
 
@@ -305,6 +347,21 @@ impl BinaryLightingOutputObject {
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
+    }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (BinaryLightingPV
+    /// 0..=4: off, on, warn, warn-off, fade-on) per Table 12-69; after the
+    /// store, Present_Value is resolved anew from the priority array so an
+    /// empty array falls back to the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if value > Self::MAX_PV {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
     }
 }
 
@@ -404,6 +461,16 @@ impl BACnetObject for BinaryLightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
+        // RELINQUISH_DEFAULT — writable per Table 12-69 (R; the standard
+        // permits writability), validated the same way a commanded
+        // Present_Value is by the shared setter.
+        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+            if let PropertyValue::Enumerated(e) = value {
+                return self.set_relinquish_default(e);
+            }
+            return Err(common::invalid_data_type_error());
+        }
+
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -436,6 +503,21 @@ impl BACnetObject for BinaryLightingOutputObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the BinaryLightingOutputObject `write_property` arms so the
+        // PICS and runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::PRIORITY_ARRAY
+                | PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::RELINQUISH_DEFAULT
+                | PropertyIdentifier::BLINK_WARN_ENABLE
+                | PropertyIdentifier::EGRESS_TIME
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+        )
     }
 }
 

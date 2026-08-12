@@ -1,6 +1,8 @@
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+use crate::schedule::ScheduleObject;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -192,6 +194,46 @@ fn reliability_value_boundaries_match_asn1() {
     );
 }
 
+/// #252: the write-path predicate must be exactly ALL_NAMED-membership plus
+/// the vendor-proprietary range — never a restated literal that can drift
+/// from `Reliability`. Sweeps the full BACnetReliability domain (0..=65535
+/// plus the first overflow value).
+#[test]
+fn reliability_predicate_tracks_all_named_plus_vendor_range() {
+    let named: std::collections::BTreeSet<u32> = Reliability::ALL_NAMED
+        .iter()
+        .map(|&(_, r)| r.to_raw())
+        .collect();
+    for value in 0..=65_536u32 {
+        assert_eq!(
+            crate::common::is_reliability_value_valid(value),
+            named.contains(&value) || (64..=65_535).contains(&value),
+            "predicate must equal ALL_NAMED-membership ∪ vendor range at {value}"
+        );
+    }
+    assert!(!crate::common::is_reliability_value_valid(u32::MAX));
+
+    // The next-unnamed value above the enum ceiling flips from rejected to
+    // accepted exactly when its addendum constant lands in `Reliability`, so
+    // derive the boundary from ALL_NAMED instead of hardcoding 25/26.
+    let enum_ceiling = *named
+        .iter()
+        .filter(|&&v| v < 64)
+        .max()
+        .expect("named set is non-empty");
+    assert!(
+        !named.contains(&(enum_ceiling + 1)),
+        "test premise: {enum_ceiling} + 1 is not yet named"
+    );
+    assert!(
+        !crate::common::is_reliability_value_valid(enum_ceiling + 1),
+        "the value past the enum ceiling must stay rejected until its constant lands"
+    );
+    // 11 is reserved for a future addendum inside the named span (Clause 21).
+    assert!(!named.contains(&11));
+    assert!(!crate::common::is_reliability_value_valid(11));
+}
+
 #[test]
 fn entering_out_of_service_saves_evaluated_reliability() {
     let mut out_of_service = false;
@@ -300,4 +342,17 @@ reliability_gate_test!(
 reliability_gate_test!(
     multistate_value_reliability_requires_out_of_service,
     MultiStateValueObject::new(1, "MSV-1", 3).unwrap()
+);
+// Clause 12.17 Table 12-20 lists Reliability O7; footnote 7 requires
+// writability when Out_Of_Service is TRUE.
+reliability_gate_test!(
+    loop_reliability_requires_out_of_service,
+    LoopObject::new(1, "LOOP-1", 62).unwrap()
+);
+// Clause 12.24: the Reliability_Evaluation_Inhibit text anticipates an
+// out-of-service client write ("...unless Out_Of_Service is TRUE and an
+// alternate value has been written to the Reliability property").
+reliability_gate_test!(
+    schedule_reliability_requires_out_of_service,
+    ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap()
 );

@@ -49,6 +49,34 @@ impl AccessDoorObject {
             relinquish_default: 0, // closed
         })
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Table 12-30 types both Present_Value and Relinquish_Default as
+    /// BACnetDoorValue, whose Clause 21 production is a closed set of four:
+    /// lock(0), unlock(1), pulse-unlock(2), extended-pulse-unlock(3) — so the
+    /// valid domain is 0..=3, matching what the priority-slot Present_Value
+    /// arm accepts for value 3. After the store, Present_Value is resolved
+    /// anew from the priority array so an empty array falls back to the new
+    /// default immediately.
+    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if value > 3 {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
+
+    fn recalculate_present_value(&mut self) {
+        self.present_value = self
+            .priority_array
+            .iter()
+            .flatten()
+            .next()
+            .copied()
+            .unwrap_or(self.relinquish_default);
+    }
 }
 
 impl BACnetObject for AccessDoorObject {
@@ -140,14 +168,16 @@ impl BACnetObject for AccessDoorObject {
                     return Err(common::invalid_data_type_error());
                 }
                 // Recalculate PV from priority array
-                self.present_value = self
-                    .priority_array
-                    .iter()
-                    .flatten()
-                    .next()
-                    .copied()
-                    .unwrap_or(self.relinquish_default);
+                self.recalculate_present_value();
                 Ok(())
+            }
+            // Table 12-30 carries Relinquish_Default R (BACnetDoorValue) for
+            // the commandable Access Door; the standard permits writability.
+            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
+                if let PropertyValue::Enumerated(v) = value {
+                    return self.set_relinquish_default(v);
+                }
+                Err(common::invalid_data_type_error())
             }
             _ => Err(common::write_access_denied_error()),
         }
@@ -174,6 +204,18 @@ impl BACnetObject for AccessDoorObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the AccessDoorObject `write_property` arms so the PICS and
+        // runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::RELINQUISH_DEFAULT
+        )
     }
 }
 
