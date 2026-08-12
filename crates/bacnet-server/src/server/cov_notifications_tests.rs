@@ -1,3 +1,4 @@
+use super::cov_notifications::cov_multiple_timestamps;
 use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
@@ -74,7 +75,8 @@ fn sample_cov_multiple_notification() -> COVNotificationMultipleRequest {
 #[test]
 fn unconfirmed_cov_multiple_apdu_uses_multiple_service_choice() {
     let notification = sample_cov_multiple_notification();
-    let buf = BACnetServer::<BipTransport>::encode_unconfirmed_cov_multiple_apdu(&notification);
+    let buf =
+        BACnetServer::<BipTransport>::encode_unconfirmed_cov_multiple_apdu(&notification).unwrap();
 
     match decode_apdu(buf.freeze()).unwrap() {
         Apdu::UnconfirmedRequest(req) => {
@@ -93,7 +95,8 @@ fn unconfirmed_cov_multiple_apdu_uses_multiple_service_choice() {
 fn confirmed_cov_multiple_apdu_uses_multiple_service_choice() {
     let notification = sample_cov_multiple_notification();
     let buf =
-        BACnetServer::<BipTransport>::encode_confirmed_cov_multiple_apdu(&notification, 9, 1476);
+        BACnetServer::<BipTransport>::encode_confirmed_cov_multiple_apdu(&notification, 9, 1476)
+            .unwrap();
 
     match decode_apdu(buf.freeze()).unwrap() {
         Apdu::ConfirmedRequest(req) => {
@@ -107,6 +110,35 @@ fn confirmed_cov_multiple_apdu_uses_multiple_service_choice() {
         }
         other => panic!("expected confirmed COVNotificationMultiple, got {other:?}"),
     }
+}
+
+#[test]
+fn cov_multiple_timestamps_wrap_seconds_of_epoch_into_range() {
+    // A 2026-era seconds-of-epoch value (far above 65535): both the request
+    // timestamp and the timeOfChange [3] content bytes must read back as
+    // sequence-number ≤ 65535 through the shared timestamp codec.
+    let (timestamp, ts_choice_bytes) = cov_multiple_timestamps(1_776_000_000);
+    let (decoded, end) =
+        bacnet_encoding::primitives::decode_timestamp_choice(&ts_choice_bytes, 0).unwrap();
+    assert_eq!(end, ts_choice_bytes.len());
+    let BACnetTimeStamp::SequenceNumber(n) = decoded else {
+        panic!("expected sequence-number choice, got {decoded:?}");
+    };
+    assert!(n <= 65_535);
+    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(n));
+    assert_eq!(n, 1_776_000_000 % 65_536);
+
+    // Small values pass through unchanged.
+    let (timestamp, ts_choice_bytes) = cov_multiple_timestamps(42);
+    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(42));
+    let (decoded, _) =
+        bacnet_encoding::primitives::decode_timestamp_choice(&ts_choice_bytes, 0).unwrap();
+    assert_eq!(decoded, BACnetTimeStamp::SequenceNumber(42));
+    // Exact boundary.
+    let (timestamp, _) = cov_multiple_timestamps(65_535);
+    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(65_535));
+    let (timestamp, _) = cov_multiple_timestamps(65_536);
+    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(0));
 }
 
 #[tokio::test]

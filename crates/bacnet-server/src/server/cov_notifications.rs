@@ -1,5 +1,23 @@
 use super::*;
 
+/// Timestamp fields for COVNotificationMultiple: the request-level
+/// `timestamp [3] BACnetTimeStamp` and each value's `timeOfChange [3]` both
+/// carry a sequence-number form. Clause 21's `BACnetTimeStamp` production
+/// constrains `sequence-number` to `Unsigned (0..65535)` and the shared
+/// codec rejects anything larger on encode — wrap seconds-of-epoch into the
+/// valid window ONCE so both fields agree (previously the request timestamp
+/// was wrapped but `timeOfChange` encoded raw seconds, reintroducing the
+/// non-conformant >65535 value the wrap exists to prevent).
+pub(crate) fn cov_multiple_timestamps(total_secs: u64) -> (BACnetTimeStamp, Vec<u8>) {
+    let seconds = total_secs % 65_536;
+    let mut timestamp_choice = BytesMut::new();
+    encode_ctx_unsigned(&mut timestamp_choice, 1, seconds);
+    (
+        BACnetTimeStamp::SequenceNumber(seconds),
+        timestamp_choice.to_vec(),
+    )
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn send_cov_apdu(
         network: &NetworkLayer<T>,
@@ -201,9 +219,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         notification: &COVNotificationMultipleRequest,
         invoke_id: u8,
         max_apdu_length: u16,
-    ) -> BytesMut {
+    ) -> Result<BytesMut, Error> {
         let mut service_buf = BytesMut::new();
-        notification.encode(&mut service_buf);
+        notification.encode(&mut service_buf)?;
 
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
@@ -220,14 +238,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let mut buf = BytesMut::new();
         encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-        buf
+        Ok(buf)
     }
 
     pub(super) fn encode_unconfirmed_cov_multiple_apdu(
         notification: &COVNotificationMultipleRequest,
-    ) -> BytesMut {
+    ) -> Result<BytesMut, Error> {
         let mut service_buf = BytesMut::new();
-        notification.encode(&mut service_buf);
+        notification.encode(&mut service_buf)?;
 
         let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
@@ -236,7 +254,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let mut buf = BytesMut::new();
         encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-        buf
+        Ok(buf)
     }
 
     /// Fire the initial COVNotificationMultiple for a newly accepted
@@ -285,9 +303,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let total_secs = now.as_secs();
-        let timestamp = BACnetTimeStamp::SequenceNumber(total_secs);
+        let (timestamp, timestamp_choice_bytes) = cov_multiple_timestamps(total_secs);
         let mut timestamp_choice = BytesMut::new();
-        encode_ctx_unsigned(&mut timestamp_choice, 1, total_secs);
+        timestamp_choice.extend_from_slice(&timestamp_choice_bytes);
 
         let (device_oid, items, last_notified) = {
             let db = db.read().await;
@@ -386,11 +404,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             };
 
-            let buf = Self::encode_confirmed_cov_multiple_apdu(
+            let buf = match Self::encode_confirmed_cov_multiple_apdu(
                 &notification,
                 id,
                 config.max_apdu_length as u16,
-            );
+            ) {
+                Ok(buf) => buf,
+                Err(e) => {
+                    warn!(error = %e, "Failed to encode confirmed COVNotificationMultiple");
+                    return;
+                }
+            };
 
             {
                 let mut table = cov_table.write().await;
@@ -474,7 +498,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 tsm.remove(&peer, id);
             });
         } else {
-            let buf = Self::encode_unconfirmed_cov_multiple_apdu(&notification);
+            let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
+                Ok(buf) => buf,
+                Err(e) => {
+                    warn!(error = %e, "Failed to encode unconfirmed COVNotificationMultiple");
+                    return;
+                }
+            };
 
             if let Err(e) = Self::send_cov_apdu(network, &buf, representative, false).await {
                 warn!(error = %e, "Failed to send COVNotificationMultiple");

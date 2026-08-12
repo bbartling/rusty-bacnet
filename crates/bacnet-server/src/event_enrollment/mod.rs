@@ -567,6 +567,17 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let params = match enrollment.read_property(PropertyIdentifier::EVENT_PARAMETERS, None) {
+            // Framed wire form (the EventEnrollment object's read arm emits
+            // full ASN.1 CHOICE framing).
+            Ok(PropertyValue::ApplicationData(bytes)) => {
+                match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
+                    Ok((ep, _)) => ep,
+                    // Malformed framed value: nothing to evaluate.
+                    Err(_) => continue,
+                }
+            }
+            // Legacy flat application-tagged form (downstream/custom object
+            // types that have not migrated to the framed read arm).
             Ok(v) => match BACnetEventParameter::decode(&v) {
                 Ok(ep) => ep,
                 // Malformed structured value: nothing to evaluate.
@@ -647,13 +658,19 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                 };
                 state
             }
-            // Opaque/Extended/unmodeled algorithms: fall back to the legacy
-            // little-endian byte layouts, dispatching on the enrollment's
-            // Event_Type, preserving compatibility with values written by
-            // older clients that used the raw-octets encoding.
-            BACnetEventParameter::Opaque { data, .. } => {
+            // Legacy raw-octet writes are stored under the sentinel tag 0xFF
+            // with the private little-endian payload — only those route to
+            // the byte-layout evaluator. A framed write of an UNMODELED spec
+            // alternative (e.g. access-event [13]) decodes to `Opaque` too,
+            // but its payload is a context-tagged TLV body: feeding tag
+            // bytes to the LE evaluator would reinterpret them as IEEE-754
+            // limits and fabricate spurious HIGH/LOW_LIMIT transitions from
+            // a conformant peer's configuration. Unmodeled alternatives are
+            // preserved for read-back but never evaluated.
+            BACnetEventParameter::Opaque { tag: 0xFF, data } => {
                 eval_legacy_le(data, &monitored_value, current_state, event_type)
             }
+            BACnetEventParameter::Opaque { .. } => continue,
             // Extended [9] and any other modeled-but-unmodeled-for-evaluation
             // alternatives produce no transition here.
             _ => continue,

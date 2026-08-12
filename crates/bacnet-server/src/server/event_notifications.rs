@@ -160,7 +160,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 process_identifier: 0,
                 initiating_device_identifier: device_oid,
                 event_object_identifier: *oid,
-                timestamp: BACnetTimeStamp::SequenceNumber(utc_secs),
+                // Clause 21 constrains sequence-number to Unsigned (0..65535),
+                // enforced by the shared timestamp codec on encode; wrap
+                // seconds-of-epoch into the valid window.
+                timestamp: BACnetTimeStamp::SequenceNumber(utc_secs % 65_536),
                 notification_class,
                 priority,
                 event_type: event_type.to_raw(),
@@ -180,13 +183,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 event_values: None,
             };
 
-            let recipients = get_notification_recipients(
+            let recipients = match get_notification_recipients_strict(
                 &db,
                 notification_class,
                 transition,
                 today_bit,
                 &current_time,
-            );
+            ) {
+                Some(recipients) => recipients,
+                None => {
+                    // The NotificationClass's Recipient_List failed to
+                    // decode — its configured recipients are UNKNOWN. Fail
+                    // closed (consistent with the encode-failure branches
+                    // below): deliver this notification to NO ONE rather
+                    // than to a silently-truncated prefix of the configured
+                    // destinations or the no-recipients broadcast fallback.
+                    warn!(
+                        notification_class,
+                        "Recipient_List failed to decode; skipping event notification delivery"
+                    );
+                    return;
+                }
+            };
 
             (base_notification, recipients)
         };

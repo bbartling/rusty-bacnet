@@ -197,6 +197,18 @@ fn property_list_complete() {
     assert!(props.contains(&PropertyIdentifier::NOTIFICATION_CLASS));
 }
 
+/// Decode the read arm's framed wire form back to a structured value.
+fn decode_framed_event_parameters(
+    val: PropertyValue,
+) -> bacnet_types::constructed::BACnetEventParameter {
+    let PropertyValue::ApplicationData(bytes) = val else {
+        panic!("expected framed ApplicationData, got {val:?}");
+    };
+    bacnet_encoding::constructed::decode_event_parameter(&bytes, 0)
+        .unwrap()
+        .0
+}
+
 #[test]
 fn write_event_parameters_structured_round_trip() {
     use bacnet_types::constructed::{event_parameter_tag, BACnetEventParameter};
@@ -207,6 +219,7 @@ fn write_event_parameters_structured_round_trip() {
         high_limit: 90.0,
         deadband: 1.0,
     };
+    // Legacy flat form write (still accepted as a decode fallback).
     ee.write_property(
         PropertyIdentifier::EVENT_PARAMETERS,
         None,
@@ -217,8 +230,110 @@ fn write_event_parameters_structured_round_trip() {
     let val = ee
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(BACnetEventParameter::decode(&val).unwrap(), params);
+    assert_eq!(decode_framed_event_parameters(val), params);
     assert_eq!(params.tag(), event_parameter_tag::OUT_OF_RANGE);
+}
+
+#[test]
+fn write_event_parameters_framed_round_trip() {
+    use bacnet_types::constructed::BACnetEventParameter;
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let params = BACnetEventParameter::OutOfRange {
+        time_delay: 5,
+        low_limit: 10.0,
+        high_limit: 90.0,
+        deadband: 1.0,
+    };
+    // Framed wire form write: exactly what a conformant peer sends.
+    let mut buf = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params);
+    ee.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        PropertyValue::ApplicationData(buf.to_vec()),
+        None,
+    )
+    .unwrap();
+    let val = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    assert_eq!(decode_framed_event_parameters(val), params);
+    // And the emitted read bytes are byte-identical to the written bytes.
+    let val2 = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    let PropertyValue::ApplicationData(bytes) = val2 else {
+        panic!("expected ApplicationData");
+    };
+    assert_eq!(bytes, buf.to_vec());
+}
+
+#[test]
+fn write_event_parameters_framed_trailing_garbage_rejected() {
+    use bacnet_types::constructed::BACnetEventParameter;
+    // Review blocker: a well-formed framed element followed by garbage must
+    // be REJECTED (pre-fix the head was accepted and the tail silently
+    // dropped between wire and read-back).
+    let params = BACnetEventParameter::OutOfRange {
+        time_delay: 5,
+        low_limit: 10.0,
+        high_limit: 90.0,
+        deadband: 1.0,
+    };
+    let mut good = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_event_parameter(&mut good, &params);
+    for extra in 1..=4usize {
+        let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+        let mut bytes = good.to_vec();
+        bytes.extend_from_slice(&vec![0xAA; extra]);
+        let result = ee.write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            PropertyValue::ApplicationData(bytes),
+            None,
+        );
+        match result.unwrap_err() {
+            bacnet_types::error::Error::Protocol { class, code } => {
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
+                assert_eq!(
+                    code,
+                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                );
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        }
+        // Stored value is untouched: the default Opaque placeholder remains.
+        let val = ee
+            .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap();
+        let PropertyValue::ApplicationData(bytes) = &val else {
+            panic!("expected ApplicationData");
+        };
+        let (decoded, _) = bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap();
+        assert_eq!(
+            decoded,
+            BACnetEventParameter::Opaque {
+                tag: 0xFF,
+                data: Vec::new()
+            }
+        );
+    }
+}
+
+#[test]
+fn write_event_parameters_framed_malformed_rejected() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    // Truncated framed value: out-of-range opening with no closing.
+    let result = ee.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        PropertyValue::ApplicationData(vec![0x5E, 0x09, 0x07]),
+        None,
+    );
+    assert!(result.is_err());
 }
 
 #[test]
@@ -239,7 +354,7 @@ fn write_event_parameters_opaque_octets_preserved() {
     let val = ee
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
-    match BACnetEventParameter::decode(&val).unwrap() {
+    match decode_framed_event_parameters(val) {
         BACnetEventParameter::Opaque { data, .. } => assert_eq!(data, bytes),
         other => panic!("expected Opaque, got {other:?}"),
     }
