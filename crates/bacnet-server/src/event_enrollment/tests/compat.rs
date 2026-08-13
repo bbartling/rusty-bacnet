@@ -37,7 +37,7 @@ fn extended_algorithm_produces_no_transition() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(
         transitions.is_empty(),
         "Extended algorithm is not evaluated"
@@ -73,7 +73,7 @@ fn legacy_le_out_of_range_fallback_round_trip() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }
@@ -102,7 +102,7 @@ fn legacy_le_change_of_state_fallback() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }
@@ -165,15 +165,17 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     );
 
     // …but produces NO event transition: it is not evaluated as LE limits.
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(
         transitions.is_empty(),
         "unmodeled spec alternative must not be fed to eval_legacy_le: {transitions:?}"
     );
 }
 
-/// CHANGE_OF_VALUE with a `bitmask` criteria reports OFFNORMAL when any masked
-/// bit is set on the monitored bitstring value.
+/// CHANGE_OF_VALUE with a `bitmask` criteria indicates NORMAL→NORMAL when any
+/// *significant (masked) bit changes state* against the detection baseline
+/// (Clause 13.3.3, BIT STRING form) — never OFFNORMAL (Figure 13-10 admits no
+/// offnormal transition). The first sample establishes the baseline.
 #[test]
 fn change_of_value_bitmask_criteria() {
     let mut db = ObjectDatabase::new();
@@ -190,7 +192,7 @@ fn change_of_value_bitmask_criteria() {
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
     )));
-    // Bitmask criterion: any bit in 0x80 set → OFFNORMAL.
+    // Bitmask criterion: bit 0x80 is the significant one.
     ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
         criteria: ChangeOfValueCriteria::Bitmask {
@@ -201,10 +203,54 @@ fn change_of_value_bitmask_criteria() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
-    // 0xE0 & 0x80 = 0x80 (bit set) → OFFNORMAL
+    // First sample: baseline masked value = 0xE0 & 0x80 = 0x80; no transition
+    // is indicated even though the significant bit is set — COV detects
+    // CHANGE, not state.
+    assert!(
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
+        "first sample initializes the baseline; it must not indicate"
+    );
+
+    // An insignificant bit changing state indicates nothing: mask 0x80 makes
+    // the 0xE0 -> 0xA0 flip invisible (masked value stays 0x80).
+    db.get_mut(&target_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::EVENT_ENABLE,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xA0],
+            },
+            None,
+        )
+        .unwrap();
+    assert!(
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
+        "only masked bits are significant (13.3.3: 'changes in any of the bits \
+         specified by a bitmask')"
+    );
+
+    // The significant bit clearing is a change: NORMAL -> NORMAL, actions run.
+    db.get_mut(&target_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::EVENT_ENABLE,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0x20],
+            },
+            None,
+        )
+        .unwrap();
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
-    assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
+    assert_eq!(transitions[0].change.from, EventState::NORMAL);
+    assert_eq!(transitions[0].change.to, EventState::NORMAL);
+
+    // Baseline advanced: holding the new masked value indicates nothing.
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 }
 
 /// A CHANGE_OF_VALUE enrollment whose monitored value is the wrong type for
@@ -238,7 +284,7 @@ fn change_of_value_wrong_type_monitored_value_skips() {
     ee.set_event_state(EventState::OFFNORMAL.to_raw());
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     // Wrong-type monitored value → skip, no transition to NORMAL.
     assert!(
         transitions.is_empty(),
@@ -253,7 +299,7 @@ fn no_reference_is_skipped() {
     let ee = EventEnrollmentObject::new(91, "EE-noref", EventType::OUT_OF_RANGE.to_raw()).unwrap();
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }
 
@@ -276,7 +322,7 @@ fn empty_parameters_is_skipped() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }
 
@@ -313,7 +359,7 @@ fn evaluation_does_not_use_network_write_route() {
     db.add(Box::new(ee)).unwrap();
 
     // 1) Evaluation drives a transition and persists the new Event_State.
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
     let obj = db.get(&ee_oid).unwrap();

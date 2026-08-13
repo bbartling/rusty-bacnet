@@ -68,7 +68,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `complex-event-type` CHOICE of `BACnetNotificationParameters`; tag 7
     deprecated).
 
-### Changed
+- `Time_Delay_Normal` (property 356) on the Event Enrollment object
+  (#163): Table 12-14 carries it O-coded as the `pTimeDelayNormal`
+  parameter for the object's event algorithm. Read-back applies the
+  Clause 13.3 fallback (absent → the `Event_Parameters` `Time_Delay`),
+  mirroring the intrinsic types; writes are accepted as Unsigned within
+  the u32 span (writability is the Clause 12.1.2 option no table
+  prohibits, and the one that makes the delay asymmetry commissionable);
+  the property is advertised in `Property_List` and the PICS writability
+  set. The same object-internal (in-memory, never network-visible)
+  evaluation state as the intrinsic detectors — pending delay countdown,
+  the CHANGE_OF_STATE last-offnormal-causing value, and the
+  CHANGE_OF_VALUE detection baseline — is now owned by the EE object
+  behind guarded `BACnetObject` internal trait methods mirroring the
+  `set_event_state_internal` precedent (#130); the Clause 13.2.2.1
+  detection-disabled reset clears all three, and restart semantics match
+  the intrinsic detectors (in-memory only).
+
+### Fixed
+
+- The Event Enrollment evaluator honors `Time_Delay` and
+  `Time_Delay_Normal` (#163). Every algorithm arm previously discarded
+  the variant's `time_delay`, so a condition first observed by an
+  evaluation pass transitioned immediately even with a nonzero delay
+  configured. Indicated transitions into OFFNORMAL states now wait
+  `pTimeDelay` (`Event_Parameters.Time_Delay`, Table 12-15's mapping for
+  every evaluated algorithm); transitions to NORMAL wait
+  `pTimeDelayNormal` (the property above, falling back to
+  `Time_Delay`). Both delays are seconds in Clause 13.3, and the
+  countdown honors that in wall time: it is seeded with
+  `ceil(delay_secs / interval_secs)` — never-fire-early ceiling
+  semantics against the actual (≥1s-clamped)
+  `event_enrollment_interval_secs` (#133) — and advances once per
+  evaluation pass. With the intrinsic detectors' semantics: a reverted
+  condition cancels, a redundant qualifying observation never re-seeds,
+  a changed target re-seeds with the new target's direction delay, and a
+  mid-pending change to parameters OR the monitored reference
+  (both are re-read and fingerprinted every pass, and the cancellation
+  is persisted immediately) cancels and re-gates from the current
+  configuration. The interval is builder configuration and the countdown
+  is in-memory, so no runtime rescale exists; a restart re-evaluates
+  with a fresh conversion. The legacy `Opaque` octet layouts carry no
+  delay slot and keep their immediate transitions.
+
+- Event Enrollment same-state transitions execute their Clause
+  13.2.2.1.4 actions (#166). The evaluator previously dropped any
+  evaluation whose result equaled the current state; it now
+  distinguishes "the algorithm indicated a transition" from "no
+  condition is true", and runs the actions for both: the SPECIFIC
+  returned state is stored in `Event_State` (it is not acceptable to
+  collapse HIGH_LIMIT/LOW_LIMIT into OFFNORMAL), and the corresponding
+  `Acked_Transitions` bit is maintained per Clause 13.2.3 — cleared when
+  the referenced Notification Class's `Ack_Required` marks the
+  transition ack-owed, set otherwise (an unresolvable class reads as
+  not-required, per the clause's own "otherwise it is set").
+  CHANGE_OF_STATE condition (c) (`Optional:` in 13.3.2) is implemented
+  so an enrollment moving between listed alarm values re-indicates
+  OFFNORMAL→OFFNORMAL instead of sitting silent; CHANGE_OF_BITSTRING's
+  condition (c) stays deliberately unimplemented (also `Optional:` — no
+  bitstring baseline is retained, and guessing would re-fire every
+  poll). OUT_OF_RANGE and FLOATING_LIMIT define no same-state condition
+  and still emit exactly one transition per excursion. The intrinsic
+  detectors' missing Acked_Transitions maintenance on transition stays
+  tracked under #123.
+
+- Event Enrollment CHANGE_OF_VALUE evaluation now tracks the Clause
+  13.3.3 detection baseline (#137) instead of comparing the absolute
+  monitored magnitude against the increment: the value "when a
+  transition to NORMAL is indicated" is retained per enrollment and both
+  criteria compare against it — `|current − baseline| >= pIncrement` for
+  REAL (a positive increment only), masked-bit change for BIT STRING.
+  The algorithm's only indication is NORMAL→NORMAL (Figure 13-10), never
+  OFFNORMAL; the baseline advances to the sample at each indicated
+  NORMAL transition. The first observed sample initializes the baseline
+  without indicating (the clause's explicit local matter), so a newly
+  evaluated enrollment no longer false-fires on an opening value larger
+  than the increment. Two pre-existing tests pinned the removed
+  absolute-magnitude behavior and were rewritten to the conformant
+  semantics. The legacy `Opaque` path is unchanged by design.
+
+- Event Enrollment algorithm arms recover from a foreign `Event_State`
+  instead of wedging: `Event_Parameters` rewritten to a different
+  algorithm can leave the enrollment holding a state the new algorithm's
+  conditions never name (e.g. HIGH_LIMIT under CHANGE_OF_STATE
+  parameters), and the condition keying then matched nothing forever.
+  Each arm names its reachable set (OUT_OF_RANGE/FLOATING_LIMIT
+  {NORMAL, HIGH_LIMIT, LOW_LIMIT}; CHANGE_OF_STATE/CHANGE_OF_BITSTRING
+  {NORMAL, OFFNORMAL}; CHANGE_OF_VALUE {NORMAL}); outside it, the arm
+  evaluates as from NORMAL and indicates the computed state through the
+  ordinary actions path, including the direction rule's delay gating.
+  CHANGE_OF_VALUE's recovery installs the current sample as the
+  detection baseline, per Clause 13.3.3.
+
+- Event Enrollment CHANGE_OF_BITSTRING no longer reports OFFNORMAL on a
+  prefix match: the masked comparison now spans `max(mask, value)` with
+  zero-filled missing bytes, so an alarm bit set beyond the monitored
+  bitstring's width correctly counts as NOT equal (the structured
+  matcher previously truncated to `min(mask, alarm, value)` while the
+  legacy path and the pending-condition hash zero-padded).
+
+- EventEnrollment alarms are acknowledgeable: `AcknowledgeAlarm` on an EE
+  previously failed unconditionally (the trait default rejected it), so
+  a Clause 13.2.3 ack-owed bit could never be acknowledged. The object
+  now implements the acknowledgment indication (unconditional,
+  idempotent bit set per 13.2.3); a detection-disabled EE refuses with
+  OBJECT/NO_ALARM_CONFIGURED per Table 13-10 ("the object exists but
+  does not support or is not configured for event generation"), which
+  also keeps Clause 12.12's initial-condition `Acked_Transitions`
+  invariant while disabled.
 
 - WriteProperty and WritePropertyMultiple now decode the ENTIRE
   `propertyValue` payload instead of exactly one application-tagged

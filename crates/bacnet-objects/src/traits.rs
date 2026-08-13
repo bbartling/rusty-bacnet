@@ -8,6 +8,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::event::TransitionOutcome;
+use crate::event_enrollment::EventEnrollmentEvalState;
 
 /// The core trait for all BACnet objects.
 ///
@@ -211,6 +212,85 @@ pub trait BACnetObject: Send + Sync {
     /// `Event_State` writes — lives in [`write_property`](Self::write_property),
     /// not here.
     fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Snapshot this object's Event Enrollment evaluation state, if it models one.
+    ///
+    /// This is the read half of the internal channel the server's Event
+    /// Enrollment evaluator uses to persist per-enrollment algorithm state
+    /// across evaluation cycles: the pending (delayed) transition countdown,
+    /// the CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of
+    /// the monitored value when a transition to NORMAL is indicated"), and
+    /// the value that caused the last transition to OFFNORMAL (Clause 13.3.2
+    /// condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
+    /// it deliberately bypasses the network property model: none of the three
+    /// slots is a BACnet property, and 135-2020 assigns their initialization
+    /// to local matters.
+    ///
+    /// The default returns `None` — objects without algorithmic event
+    /// detection carry no such state, and the evaluator treats `None` as an
+    /// empty state it cannot write back (delay honoring and the COV baseline
+    /// then stay unavailable, matching this crate's pre-delay behavior).
+    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
+        None
+    }
+
+    /// Store this object's Event Enrollment evaluation state.
+    ///
+    /// The write half of [`enrollment_eval_state_internal`](Self::enrollment_eval_state_internal).
+    /// The only caller is the trusted server evaluator, passing a state it
+    /// derived from a prior snapshot plus the current cycle's evaluation.
+    /// Implementations enforce the Clause 13.2.2.1 invariant by construction:
+    /// while `Event_Detection_Enable` is FALSE "no transitions shall occur",
+    /// so a write arriving then is refused rather than queued (and the
+    /// detection-disable reset has already cleared the fields).
+    ///
+    /// The **default** returns `Err`, so objects without enrollment evaluation
+    /// state opt out and the evaluator's write-back is dropped, never stored
+    /// into an object that does not model it.
+    fn set_enrollment_eval_state_internal(
+        &mut self,
+        _state: EventEnrollmentEvalState,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Set or clear one `Acked_Transitions` bit on a received event-state
+    /// transition.
+    ///
+    /// Implements the alarm-acknowledgment half of Clause 13.2.2.1.4's fourth
+    /// transition action ("indicate the transition to the Alarm-Acknowledgment
+    /// process"), per Clause 13.2.3: "When an event state transition is
+    /// received, the corresponding bit in Acked_Transitions is either set or
+    /// cleared. If the corresponding bit in Ack_Required is set, then the bit
+    /// in Acked_Transitions is cleared, otherwise it is set." The caller (the
+    /// server evaluator) resolves `Ack_Required` from the referenced
+    /// Notification Class object and passes the outcome as `acknowledged`;
+    /// this method performs only the bit maintenance.
+    ///
+    /// `transition_bit` is the transition direction's bit mask in
+    /// `Acked_Transitions`' internal bit0-first form (`0x01` TO_OFFNORMAL,
+    /// `0x02` TO_FAULT, `0x04` TO_NORMAL). The set half overlaps the
+    /// network-reachable [`acknowledge_alarm`](Self::acknowledge_alarm), which
+    /// also ORs the bit in per Clause 13.2.3's acknowledgment-indication
+    /// paragraph; the clear half has no network route by design (a property
+    /// write could fabricate or erase acknowledgments — see the
+    /// `write_generic_event_properties!` denial comment).
+    ///
+    /// The **default** returns `Err`, so objects without an algorithmic
+    /// `Acked_Transitions` opt out.
+    fn set_acked_transitions_internal(
+        &mut self,
+        _transition_bit: u8,
+        _acknowledged: bool,
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

@@ -6,9 +6,55 @@
 //!
 //! Supported algorithms: OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_STATE,
 //! CHANGE_OF_BITSTRING, CHANGE_OF_VALUE.
+//!
+//! Delay model (#163): `Event_Parameters.Time_Delay` (pTimeDelay, Table 12-15)
+//! gates every indicated transition into an OFFNORMAL state; the EE object's
+//! optional `Time_Delay_Normal` property (pTimeDelayNormal, Table 12-14 O —
+//! falling back to pTimeDelay per Clause 13.3) gates transitions to NORMAL.
+//! Both delays are SECONDS in the standard (e.g. 13.3.1: "the time, in
+//! seconds, that the offnormal conditions must exist"), and this evaluator
+//! keeps them in seconds: the pending countdown (owned by the EE object,
+//! in-memory only) is seeded with `ceil(delay_secs / interval_secs)` —
+//! never-fire-early ceiling semantics, so at the default 10s
+//! `event_enrollment_interval_secs` a 5s delay fires on the second pass
+//! (~10s elapsed), not after five passes (~50s) — and advances once per
+//! evaluation pass. Semantics otherwise mirror the intrinsic detectors'
+//! probe/tick (`bacnet_objects::event`, #120/#225) — condition reverted
+//! cancels, same target never restarts, changed target re-seeds — without
+//! sharing code across the objects/server boundary.
+//!
+//! Residual countdown behavior: the interval is builder configuration, not
+//! runtime-mutable, and the countdown is in-memory, so no mid-run rescale
+//! exists; a restart re-evaluates from the confirmed `Event_State` and a
+//! fresh `ceil` conversion, like the intrinsic detectors.
+//!
+//! Transition actions (#166): an *indicated* transition executes Clause
+//! 13.2.2.1.4's actions even when it does not change the event state — the
+//! specific returned state is stored in `Event_State`, the corresponding
+//! `Acked_Transitions` bit is set/cleared per the referenced Notification
+//! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
+//! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
+//! `Event_Time_Stamps` / `Event_Message_Texts` are not modeled on the EE
+//! object (tranche E, #264), and no notification is sent (#127, tranche E) —
+//! the lifecycle task only logs the returned transitions.
+
+mod algorithms;
+
+pub use algorithms::{
+    encode_change_of_bitstring_params, encode_change_of_state_params,
+    encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
+};
+
+use algorithms::{
+    eval_change_of_bitstring_struct, eval_change_of_state_struct, eval_change_of_value_struct,
+    eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
+    extract_enumerated, extract_real, ArmEvaluation,
+};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition};
+use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -20,7 +66,9 @@ pub struct EventEnrollmentTransition {
     pub enrollment_oid: ObjectIdentifier,
     /// The monitored object whose property triggered the transition.
     pub monitored_oid: ObjectIdentifier,
-    /// The detected state change.
+    /// The detected state change. `from == to` is a genuine same-state
+    /// transition (Clause 13.2.2.1.4), emitted by CHANGE_OF_VALUE (Figure
+    /// 13-10's NORMAL→NORMAL) and CHANGE_OF_STATE condition (c).
     pub change: EventStateChange,
     /// The event type that was evaluated.
     pub event_type: EventType,
@@ -29,357 +77,6 @@ pub struct EventEnrollmentTransition {
     /// either way; a cleared bit suppresses only the outbound notification
     /// (ASHRAE 135-2020 Clause 12.12).
     pub distribute: bool,
-}
-
-// ---- Event parameter encoding helpers ----
-
-/// Encode OUT_OF_RANGE parameters: `[high_limit: f32 LE][low_limit: f32 LE][deadband: f32 LE]`
-pub fn encode_out_of_range_params(high_limit: f32, low_limit: f32, deadband: f32) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(12);
-    buf.extend_from_slice(&high_limit.to_le_bytes());
-    buf.extend_from_slice(&low_limit.to_le_bytes());
-    buf.extend_from_slice(&deadband.to_le_bytes());
-    buf
-}
-
-/// Encode FLOATING_LIMIT parameters:
-/// `[setpoint: f32 LE][high_diff: f32 LE][low_diff: f32 LE][deadband: f32 LE]`
-pub fn encode_floating_limit_params(
-    setpoint: f32,
-    high_diff_limit: f32,
-    low_diff_limit: f32,
-    deadband: f32,
-) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(16);
-    buf.extend_from_slice(&setpoint.to_le_bytes());
-    buf.extend_from_slice(&high_diff_limit.to_le_bytes());
-    buf.extend_from_slice(&low_diff_limit.to_le_bytes());
-    buf.extend_from_slice(&deadband.to_le_bytes());
-    buf
-}
-
-/// Encode CHANGE_OF_STATE parameters: `[count: u32 LE][alarm_values: u32 LE ...]`
-pub fn encode_change_of_state_params(alarm_values: &[u32]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(4 + alarm_values.len() * 4);
-    buf.extend_from_slice(&(alarm_values.len() as u32).to_le_bytes());
-    for &v in alarm_values {
-        buf.extend_from_slice(&v.to_le_bytes());
-    }
-    buf
-}
-
-/// Encode CHANGE_OF_VALUE parameters: `[increment: f32 LE]`
-pub fn encode_change_of_value_params(increment: f32) -> Vec<u8> {
-    increment.to_le_bytes().to_vec()
-}
-
-/// Encode CHANGE_OF_BITSTRING parameters:
-/// `[mask_len: u32 LE][mask_bytes ...][alarm_bits ...]`
-pub fn encode_change_of_bitstring_params(mask: &[u8], alarm_bits: &[u8]) -> Vec<u8> {
-    let len = mask.len().min(alarm_bits.len());
-    let mut buf = Vec::with_capacity(4 + len * 2);
-    buf.extend_from_slice(&(len as u32).to_le_bytes());
-    buf.extend_from_slice(&mask[..len]);
-    buf.extend_from_slice(&alarm_bits[..len]);
-    buf
-}
-
-// ---- Algorithm evaluation ----
-
-/// Evaluate the OUT_OF_RANGE algorithm.
-///
-/// Compares a real present_value against high/low limits with deadband hysteresis.
-fn eval_out_of_range(params: &[u8], value: f32, current: EventState) -> EventState {
-    if params.len() < 12 {
-        return current;
-    }
-    let high_limit = f32::from_le_bytes([params[0], params[1], params[2], params[3]]);
-    let low_limit = f32::from_le_bytes([params[4], params[5], params[6], params[7]]);
-    let deadband = f32::from_le_bytes([params[8], params[9], params[10], params[11]]);
-
-    match current {
-        s if s == EventState::NORMAL => {
-            if value > high_limit {
-                EventState::HIGH_LIMIT
-            } else if value < low_limit {
-                EventState::LOW_LIMIT
-            } else {
-                EventState::NORMAL
-            }
-        }
-        s if s == EventState::HIGH_LIMIT => {
-            if value < low_limit {
-                EventState::LOW_LIMIT
-            } else if value < high_limit - deadband {
-                EventState::NORMAL
-            } else {
-                EventState::HIGH_LIMIT
-            }
-        }
-        s if s == EventState::LOW_LIMIT => {
-            if value > high_limit {
-                EventState::HIGH_LIMIT
-            } else if value > low_limit + deadband {
-                EventState::NORMAL
-            } else {
-                EventState::LOW_LIMIT
-            }
-        }
-        _ => current,
-    }
-}
-
-/// Evaluate the FLOATING_LIMIT algorithm.
-///
-/// Compares a real present_value against a setpoint +/- differential limits
-/// with deadband hysteresis.
-fn eval_floating_limit(params: &[u8], value: f32, current: EventState) -> EventState {
-    if params.len() < 16 {
-        return current;
-    }
-    let setpoint = f32::from_le_bytes([params[0], params[1], params[2], params[3]]);
-    let high_diff = f32::from_le_bytes([params[4], params[5], params[6], params[7]]);
-    let low_diff = f32::from_le_bytes([params[8], params[9], params[10], params[11]]);
-    let deadband = f32::from_le_bytes([params[12], params[13], params[14], params[15]]);
-
-    let high_limit = setpoint + high_diff;
-    let low_limit = setpoint - low_diff;
-
-    match current {
-        s if s == EventState::NORMAL => {
-            if value > high_limit {
-                EventState::HIGH_LIMIT
-            } else if value < low_limit {
-                EventState::LOW_LIMIT
-            } else {
-                EventState::NORMAL
-            }
-        }
-        s if s == EventState::HIGH_LIMIT => {
-            if value < low_limit {
-                EventState::LOW_LIMIT
-            } else if value < high_limit - deadband {
-                EventState::NORMAL
-            } else {
-                EventState::HIGH_LIMIT
-            }
-        }
-        s if s == EventState::LOW_LIMIT => {
-            if value > high_limit {
-                EventState::HIGH_LIMIT
-            } else if value > low_limit + deadband {
-                EventState::NORMAL
-            } else {
-                EventState::LOW_LIMIT
-            }
-        }
-        _ => current,
-    }
-}
-
-/// Evaluate the CHANGE_OF_STATE algorithm.
-///
-/// OFFNORMAL if the value matches any alarm value, otherwise NORMAL.
-fn eval_change_of_state(params: &[u8], value: u32, _current: EventState) -> EventState {
-    if params.len() < 4 {
-        return EventState::NORMAL;
-    }
-    let count = u32::from_le_bytes([params[0], params[1], params[2], params[3]]) as usize;
-    let needed = 4usize.saturating_add(count.saturating_mul(4));
-    if params.len() < needed {
-        return EventState::NORMAL;
-    }
-    for i in 0..count {
-        let offset = 4 + i * 4;
-        let alarm_val = u32::from_le_bytes([
-            params[offset],
-            params[offset + 1],
-            params[offset + 2],
-            params[offset + 3],
-        ]);
-        if value == alarm_val {
-            return EventState::OFFNORMAL;
-        }
-    }
-    EventState::NORMAL
-}
-
-/// Evaluate the CHANGE_OF_BITSTRING algorithm.
-///
-/// Applies a mask to the monitored bitstring and compares against the alarm pattern.
-fn eval_change_of_bitstring(params: &[u8], value_bits: &[u8], _current: EventState) -> EventState {
-    if params.len() < 4 {
-        return EventState::NORMAL;
-    }
-    let mask_len = u32::from_le_bytes([params[0], params[1], params[2], params[3]]) as usize;
-    let needed = 4usize.saturating_add(mask_len.saturating_mul(2));
-    if params.len() < needed {
-        return EventState::NORMAL;
-    }
-
-    let mask = &params[4..4 + mask_len];
-    let alarm_bits = &params[4 + mask_len..4 + 2 * mask_len];
-
-    for i in 0..mask_len {
-        let monitored_byte = value_bits.get(i).copied().unwrap_or(0);
-        if (monitored_byte & mask[i]) != (alarm_bits[i] & mask[i]) {
-            return EventState::NORMAL;
-        }
-    }
-    EventState::OFFNORMAL
-}
-
-/// Evaluate the CHANGE_OF_VALUE algorithm.
-///
-/// OFFNORMAL if |current_value| >= increment, otherwise NORMAL.
-fn eval_change_of_value(params: &[u8], value: f32, _current: EventState) -> EventState {
-    if params.len() < 4 {
-        return EventState::NORMAL;
-    }
-    let increment = f32::from_le_bytes([params[0], params[1], params[2], params[3]]);
-    if increment <= 0.0 || !increment.is_finite() {
-        return EventState::NORMAL;
-    }
-    if value.abs() >= increment {
-        EventState::OFFNORMAL
-    } else {
-        EventState::NORMAL
-    }
-}
-
-// ---- Structured evaluation (consumes BACnetEventParameter fields) ----
-
-/// Structured OUT_OF_RANGE evaluation with explicit limits and deadband.
-fn eval_out_of_range_struct(
-    low_limit: f32,
-    high_limit: f32,
-    deadband: f32,
-    value: f32,
-    current: EventState,
-) -> EventState {
-    eval_out_of_range(
-        &encode_out_of_range_params(high_limit, low_limit, deadband),
-        value,
-        current,
-    )
-}
-
-/// Structured FLOATING_LIMIT evaluation with an explicit setpoint.
-fn eval_floating_limit_struct(
-    setpoint: f32,
-    high_diff_limit: f32,
-    low_diff_limit: f32,
-    deadband: f32,
-    value: f32,
-    current: EventState,
-) -> EventState {
-    eval_floating_limit(
-        &encode_floating_limit_params(setpoint, high_diff_limit, low_diff_limit, deadband),
-        value,
-        current,
-    )
-}
-
-/// Structured CHANGE_OF_STATE evaluation against a list of alarm values.
-///
-/// OFFNORMAL if the monitored enumerated value matches any listed
-/// [`BACnetPropertyStates`] payload, otherwise NORMAL.
-fn eval_change_of_state_struct(
-    alarm_values: &[bacnet_types::constructed::BACnetPropertyStates],
-    value: u32,
-    _current: EventState,
-) -> EventState {
-    use bacnet_types::constructed::BACnetPropertyStates as S;
-    for state in alarm_values {
-        let matched = match state {
-            S::BooleanValue(v) => value == u32::from(*v),
-            S::BinaryValue(v) => value == *v,
-            S::EventType(v) => value == *v,
-            S::Polarity(v) => value == *v,
-            S::ProgramChange(v) => value == *v,
-            S::ProgramState(v) => value == *v,
-            S::ReasonForHalt(v) => value == *v,
-            S::Reliability(v) => value == *v,
-            S::State(v) => value == *v,
-            S::SystemStatus(v) => value == *v,
-            S::Units(v) => value == *v,
-            S::UnsignedValue(v) => value == *v,
-            S::LifeSafetyMode(v) => value == *v,
-            S::LifeSafetyState(v) => value == *v,
-            S::DoorAlarmState(v) => value == *v,
-            S::Action(v) => value == *v,
-            S::DoorSecuredStatus(v) => value == *v,
-            S::DoorStatus(v) => value == *v,
-            S::DoorValue(v) => value == *v,
-            S::LiftCarDirection(v) => value == *v,
-            S::LiftCarDoorCommand(v) => value == *v,
-            S::TimerState(v) => value == *v,
-            S::TimerTransition(v) => value == *v,
-            S::Other { .. } => false,
-        };
-        if matched {
-            return EventState::OFFNORMAL;
-        }
-    }
-    EventState::NORMAL
-}
-
-/// Structured CHANGE_OF_BITSTRING evaluation against a bitmask and alarm values.
-fn eval_change_of_bitstring_struct(
-    bitmask: &(u8, Vec<u8>),
-    list_of_values: &[(u8, Vec<u8>)],
-    value_bits: &[u8],
-    _current: EventState,
-) -> EventState {
-    // OFFNORMAL if the masked monitored bits match any alarm pattern.
-    let mask = &bitmask.1;
-    for alarm in list_of_values {
-        let alarm_bits = &alarm.1;
-        let len = mask.len().min(alarm_bits.len()).min(value_bits.len());
-        let mut matched = true;
-        for i in 0..len {
-            if (value_bits[i] & mask[i]) != (alarm_bits[i] & mask[i]) {
-                matched = false;
-                break;
-            }
-        }
-        if matched && len > 0 {
-            return EventState::OFFNORMAL;
-        }
-    }
-    EventState::NORMAL
-}
-
-/// Structured CHANGE_OF_VALUE evaluation against a `cov-criteria`.
-///
-/// For a `bitmask` criterion the monitored value is a bitstring and the
-/// algorithm reports OFFNORMAL when any masked bit is set; for a
-/// `referenced-property-increment` criterion the monitored value is a real
-/// and the algorithm reports OFFNORMAL when `|value| >= increment`. Returns
-/// `None` when the monitored value is the wrong type for the criterion, so
-/// the caller can skip the enrollment rather than spuriously transitioning
-/// to `NORMAL`.
-fn eval_change_of_value_struct(
-    criteria: &bacnet_types::constructed::ChangeOfValueCriteria,
-    monitored_value: &PropertyValue,
-    _current: EventState,
-) -> Option<EventState> {
-    use bacnet_types::constructed::ChangeOfValueCriteria as C;
-    match criteria {
-        C::Bitmask { data, .. } => {
-            let bits = extract_bitstring(monitored_value)?;
-            let mut state = EventState::NORMAL;
-            for i in 0..data.len().min(bits.len()) {
-                if (bits[i] & data[i]) != 0 {
-                    state = EventState::OFFNORMAL;
-                    break;
-                }
-            }
-            Some(state)
-        }
-        C::ReferencedPropertyIncrement(increment) => extract_real(monitored_value)
-            .map(|v| eval_change_of_value(&increment.to_le_bytes(), v, EventState::NORMAL)),
-    }
 }
 
 /// Read the setpoint referenced by a FLOATING_LIMIT enrollment.
@@ -402,79 +99,11 @@ fn read_setpoint(
     )
 }
 
-/// Legacy little-endian fallback for `Opaque` event parameters.
-///
-/// Used when an enrollment's `Event_Parameters` could not be decoded into a
-/// structured alternative (e.g. raw octets written by an older client that
-/// used the private little-endian byte layouts). The algorithm is inferred
-/// from the enrollment's `Event_Type`, and the original byte-oriented
-/// evaluators consume the opaque payload. Returns `current` (no transition)
-/// when the `Event_Type` does not name a known evaluator or the monitored
-/// value is the wrong type.
-fn eval_legacy_le(
-    data: &[u8],
-    monitored_value: &PropertyValue,
-    current: EventState,
-    event_type: EventType,
-) -> EventState {
-    if event_type == EventType::OUT_OF_RANGE {
-        extract_real(monitored_value)
-            .map(|v| eval_out_of_range(data, v, current))
-            .unwrap_or(current)
-    } else if event_type == EventType::FLOATING_LIMIT {
-        extract_real(monitored_value)
-            .map(|v| eval_floating_limit(data, v, current))
-            .unwrap_or(current)
-    } else if event_type == EventType::CHANGE_OF_STATE {
-        extract_enumerated(monitored_value)
-            .map(|v| eval_change_of_state(data, v, current))
-            .unwrap_or(current)
-    } else if event_type == EventType::CHANGE_OF_BITSTRING {
-        extract_bitstring(monitored_value)
-            .map(|bits| eval_change_of_bitstring(data, &bits, current))
-            .unwrap_or(current)
-    } else if event_type == EventType::CHANGE_OF_VALUE {
-        extract_real(monitored_value)
-            .map(|v| eval_change_of_value(data, v, current))
-            .unwrap_or(current)
-    } else {
-        current
-    }
-}
-
-/// Extract a real (f32) value from a PropertyValue.
-fn extract_real(pv: &PropertyValue) -> Option<f32> {
-    match pv {
-        PropertyValue::Real(v) => Some(*v),
-        PropertyValue::Double(v) => Some(*v as f32),
-        PropertyValue::Unsigned(v) => Some(*v as f32),
-        PropertyValue::Signed(v) => Some(*v as f32),
-        _ => None,
-    }
-}
-
-/// Extract an enumerated (u32) value from a PropertyValue.
-fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
-    match pv {
-        PropertyValue::Enumerated(v) => Some(*v),
-        PropertyValue::Unsigned(v) => Some(*v as u32),
-        _ => None,
-    }
-}
-
-/// Extract bitstring bytes from a PropertyValue.
-fn extract_bitstring(pv: &PropertyValue) -> Option<Vec<u8>> {
-    match pv {
-        PropertyValue::BitString { data, .. } => Some(data.clone()),
-        _ => None,
-    }
-}
-
 /// Read the object_property_reference from an EventEnrollment object.
 ///
 /// Returns (monitored_object_id, monitored_property_id) if valid.
 fn read_object_property_ref(
-    enrollment: &dyn bacnet_objects::traits::BACnetObject,
+    enrollment: &dyn BACnetObject,
 ) -> Option<(ObjectIdentifier, PropertyIdentifier)> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
         Ok(PropertyValue::List(ref items)) if items.len() >= 2 => {
@@ -492,22 +121,138 @@ fn read_object_property_ref(
     }
 }
 
+/// Convert a seconds delay to pending passes with never-fire-early ceiling
+/// semantics: `ceil(delay_secs / interval_secs)`. At the default 10s
+/// interval a 5s delay seeds 1 pass (fires when that pass elapses, ~10s
+/// later); a 15s delay seeds 2 (~20s). Callers never pass `delay_secs == 0`
+/// — a zero delay fires without seeding.
+fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
+    let passes = (delay_secs as u64).div_ceil(interval_secs.max(1));
+    u32::try_from(passes).unwrap_or(u32::MAX)
+}
+
+/// Fingerprint the configuration a pending countdown was gated under: the
+/// framed `Event_Parameters` encoding (which includes any algorithm-carried
+/// references, e.g. FLOATING_LIMIT's `setpoint_reference`), the effective
+/// normal-direction delay, the configured event type, and the monitored
+/// object+property the enrollment's `Object_Property_Reference` resolves to.
+/// A mismatch with [`EventEnrollmentPending::params_fingerprint`] cancels
+/// the in-flight countdown and re-gates from the current parameters — the
+/// pinned behavior for a mid-pending retarget or parameter change (the
+/// evaluator re-reads them every pass, so the change is observed on the pass
+/// after the write).
+fn params_fingerprint(
+    params: &BACnetEventParameter,
+    normal_delay: u64,
+    event_type_raw: u32,
+    monitored: &(ObjectIdentifier, PropertyIdentifier),
+) -> u64 {
+    let mut buf = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, params);
+    let (monitored_oid, monitored_prop) = monitored;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in buf
+        .iter()
+        .copied()
+        .chain(normal_delay.to_le_bytes())
+        .chain(event_type_raw.to_le_bytes())
+        .chain(monitored_oid.encode())
+        .chain(monitored_prop.to_raw().to_le_bytes())
+    {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Resolve whether the Notification Class referenced by an enrollment
+/// requires acknowledgment of `transition_bit`.
+///
+/// Clause 13.2.3: "Whether or not an acknowledgment is required is determined
+/// by the Ack_Required property from the referenced Notification Class
+/// object." A missing or unreadable Notification Class resolves to
+/// not-required — the standard's fallback for an absent parameter is the
+/// "otherwise it is set" half of the same sentence, which leaves
+/// `Acked_Transitions` alone-equals-acknowledged rather than stranding a
+/// transition permanently unacknowledged for want of a class object.
+fn ack_required_for_transition(
+    db: &ObjectDatabase,
+    enrollment: &dyn BACnetObject,
+    transition_bit: u8,
+) -> bool {
+    let Ok(PropertyValue::Unsigned(nc_instance)) =
+        enrollment.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+    else {
+        return false;
+    };
+    let Ok(nc_oid) = ObjectIdentifier::new(
+        ObjectType::NOTIFICATION_CLASS,
+        u32::try_from(nc_instance).unwrap_or(u32::MAX),
+    ) else {
+        return false;
+    };
+    let Some(nc) = db.get(&nc_oid) else {
+        return false;
+    };
+    match nc.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
+        Ok(PropertyValue::BitString { data, .. }) => {
+            bacnet_types::bitstring::unpack_octet(&data, 3) & transition_bit != 0
+        }
+        _ => false,
+    }
+}
+
+/// What phase 1 decided for one enrollment, applied under a mutable borrow in
+/// phase 2 (phase 1 holds immutable database borrows to read monitored
+/// objects, so all mutation is deferred).
+struct EnrollmentUpdate {
+    /// Evaluation state to write back — pending countdown and/or baselines —
+    /// when it changed this pass, even with no transition.
+    eval_state: Option<EventEnrollmentEvalState>,
+    /// A transition that fired this pass, with everything the transition
+    /// actions need.
+    fired: Option<FiredTransition>,
+}
+
+struct FiredTransition {
+    monitored_oid: ObjectIdentifier,
+    event_type_raw: u32,
+    from: EventState,
+    to: EventState,
+    distribute: bool,
+    transition_bit: u8,
+    ack_required: bool,
+}
+
+impl EnrollmentUpdate {
+    fn eval_state_only(eval_state: EventEnrollmentEvalState) -> Self {
+        Self {
+            eval_state: Some(eval_state),
+            fired: None,
+        }
+    }
+}
+
 /// Evaluate all EventEnrollment objects in the database.
 ///
 /// For each active enrollment, reads the monitored property, evaluates the
-/// configured algorithm, and returns any state transitions.
-pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmentTransition> {
+/// configured algorithm, applies the Time_Delay / Time_Delay_Normal
+/// countdown (seconds, converted with [`passes_for_delay`]), executes the
+/// Clause 13.2.2.1.4 transition actions for every indicated transition that
+/// fires — same-state included — and returns the fired transitions.
+///
+/// `interval_secs` is the driving task's evaluation period in wall-clock
+/// seconds; the lifecycle passes its (clamped to >= 1)
+/// `event_enrollment_interval_secs`. The conversion is never-fire-early, and
+/// the pending countdown retains no residual seconds: in-memory state plus
+/// builder-config interval means no mid-run rescale exists.
+pub fn evaluate_event_enrollments(
+    db: &mut ObjectDatabase,
+    interval_secs: u64,
+) -> Vec<EventEnrollmentTransition> {
+    let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
 
-    // (enrollment, monitored, event_type, from, to, distribute)
-    let mut updates: Vec<(
-        ObjectIdentifier,
-        ObjectIdentifier,
-        u32,
-        EventState,
-        EventState,
-        bool,
-    )> = Vec::new();
+    let mut updates: Vec<(ObjectIdentifier, EnrollmentUpdate)> = Vec::new();
 
     for oid in &oids {
         let Some(enrollment) = db.get(oid) else {
@@ -525,24 +270,14 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         // transitions shall occur". The accompanying reset is applied by the
         // object when the property is written (Clause 12.12 states the disabled
         // condition as an invariant), so skipping here cannot strand a stale
-        // non-NORMAL state the way the pre-#136 Event_Enable gate did.
+        // non-NORMAL state the way the pre-#136 Event_Enable gate did, nor a
+        // stale countdown — the object-side reset clears the pending state.
         //
         // An object that does not model the property at all reads as an error
         // here and is treated as enabled. The property is required (R) on both
         // Event Enrollment (Table 12-14) and Alert Enrollment (Table 12-61) and
         // optional on most other types, so absence is common and must not
         // silently disable detection.
-        //
-        // Removing this guard does NOT change observable behavior, and no test
-        // fails if you do — `EventEnrollmentObject::set_event_state_internal`
-        // independently refuses a non-NORMAL state while detection is off, and
-        // the push below is gated on that call succeeding. Verified by mutation;
-        // stated here so nobody deletes it believing it is covered. It stays for
-        // two reasons the object-level guard cannot serve: it implements the
-        // clause's first sentence literally (the algorithm genuinely does not
-        // run, and the monitored object is not read), and without it every pass
-        // over every disabled enrollment would do the full evaluation and then
-        // silently swallow an `Err` — once per interval, forever.
         if let Ok(PropertyValue::Boolean(false)) =
             enrollment.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
         {
@@ -587,9 +322,60 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             Err(_) => continue,
         };
 
+        // The effective normal-direction delay: the EE object's read arm
+        // applies the Clause 13.3 fallback (Time_Delay_Normal absent → the
+        // Event_Parameters Time_Delay), so this read IS pTimeDelayNormal.
+        // Unreadable (custom object without the property) degrades to 0,
+        // the pre-#163 immediate-transition behavior.
+        let normal_delay =
+            match enrollment.read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None) {
+                Ok(PropertyValue::Unsigned(v)) => u32::try_from(v).unwrap_or(u32::MAX),
+                _ => 0,
+            };
+
+        // Per-enrollment evaluation state owned by the object. An object whose
+        // trait impl predates the channel (a downstream custom EE type)
+        // reports `None`: evaluation still runs, but with no durable pending
+        // countdown (a nonzero delay then re-seeds every pass and never
+        // fires — delays are effectively unsupported for such objects) and no
+        // COV baseline (every pass is a first sample, so COV never indicates).
+        let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
+        let mut eval_state = enrollment
+            .enrollment_eval_state_internal()
+            .unwrap_or_default();
+        let mut eval_state_dirty = false;
+
+        // The reference is folded into the fingerprint, so it is read BEFORE
+        // the check. An unreadable reference exits here — before the cancel —
+        // deliberately: a transiently unreadable reference retains the
+        // countdown, whereas every failure AFTER this point leaves the
+        // cancellation persisted (see the flush below).
         let Some((monitored_oid, monitored_prop)) = read_object_property_ref(enrollment) else {
             continue;
         };
+
+        // A parameter (or reference) change mid-pending cancels the countdown
+        // and re-gates from the current parameters; no partial countdown is
+        // resumed. The cancellation is flushed BEFORE any later exit — a
+        // dropped write-back here is what let a params round-trip A→B→A
+        // resume a stale countdown.
+        let fingerprint = params_fingerprint(
+            &params,
+            normal_delay as u64,
+            event_type_raw,
+            &(monitored_oid, monitored_prop),
+        );
+        if eval_state
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.params_fingerprint != fingerprint)
+        {
+            eval_state.pending = None;
+            eval_state_dirty = false;
+            if eval_state_supported {
+                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state.clone())));
+            }
+        }
 
         let Some(monitored_obj) = db.get(&monitored_oid) else {
             continue;
@@ -600,24 +386,33 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let event_type = EventType::from_raw(event_type_raw);
-        let new_state = match &params {
+        let (time_delay, arm) = match &params {
             BACnetEventParameter::OutOfRange {
                 high_limit,
                 low_limit,
                 deadband,
-                ..
+                time_delay,
             } => {
                 let Some(val) = extract_real(&monitored_value) else {
                     continue;
                 };
-                eval_out_of_range_struct(*low_limit, *high_limit, *deadband, val, current_state)
+                (
+                    *time_delay,
+                    eval_out_of_range_struct(
+                        *low_limit,
+                        *high_limit,
+                        *deadband,
+                        val,
+                        current_state,
+                    ),
+                )
             }
             BACnetEventParameter::FloatingLimit {
                 setpoint_reference,
                 low_diff_limit,
                 high_diff_limit,
                 deadband,
-                ..
+                time_delay,
             } => {
                 let Some(setpoint) = read_setpoint(db, setpoint_reference) else {
                     continue;
@@ -625,38 +420,61 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                 let Some(val) = extract_real(&monitored_value) else {
                     continue;
                 };
-                eval_floating_limit_struct(
-                    setpoint,
-                    *high_diff_limit,
-                    *low_diff_limit,
-                    *deadband,
-                    val,
-                    current_state,
+                (
+                    *time_delay,
+                    eval_floating_limit_struct(
+                        setpoint,
+                        *high_diff_limit,
+                        *low_diff_limit,
+                        *deadband,
+                        val,
+                        current_state,
+                    ),
                 )
             }
-            BACnetEventParameter::ChangeOfState { list_of_values, .. } => {
+            BACnetEventParameter::ChangeOfState {
+                list_of_values,
+                time_delay,
+            } => {
                 let Some(val) = extract_enumerated(&monitored_value) else {
                     continue;
                 };
-                eval_change_of_state_struct(list_of_values, val, current_state)
+                (
+                    *time_delay,
+                    eval_change_of_state_struct(
+                        list_of_values,
+                        val,
+                        current_state,
+                        eval_state.last_offnormal_value,
+                    ),
+                )
             }
             BACnetEventParameter::ChangeOfBitstring {
                 bitmask,
                 list_of_values,
-                ..
+                time_delay,
             } => {
                 let Some(bits) = extract_bitstring(&monitored_value) else {
                     continue;
                 };
-                eval_change_of_bitstring_struct(bitmask, list_of_values, &bits, current_state)
+                (
+                    *time_delay,
+                    eval_change_of_bitstring_struct(bitmask, list_of_values, &bits, current_state),
+                )
             }
-            BACnetEventParameter::ChangeOfValue { criteria, .. } => {
-                let Some(state) =
-                    eval_change_of_value_struct(criteria, &monitored_value, current_state)
-                else {
+            BACnetEventParameter::ChangeOfValue {
+                criteria,
+                time_delay,
+            } => {
+                let Some(eval) = eval_change_of_value_struct(
+                    criteria,
+                    &monitored_value,
+                    eval_state.cov_baseline.as_ref(),
+                    current_state,
+                ) else {
                     continue;
                 };
-                state
+                (*time_delay, eval)
             }
             // Legacy raw-octet writes are stored under the sentinel tag 0xFF
             // with the private little-endian payload — only those route to
@@ -667,61 +485,169 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             // limits and fabricate spurious HIGH/LOW_LIMIT transitions from
             // a conformant peer's configuration. Unmodeled alternatives are
             // preserved for read-back but never evaluated.
-            BACnetEventParameter::Opaque { tag: 0xFF, data } => {
-                eval_legacy_le(data, &monitored_value, current_state, event_type)
-            }
+            //
+            // The LE layouts carry no Time_Delay field: delay 0 keeps this
+            // path's historical immediate-transition behavior.
+            BACnetEventParameter::Opaque { tag: 0xFF, data } => (
+                0,
+                eval_legacy_le_arm(data, &monitored_value, current_state, event_type),
+            ),
             BACnetEventParameter::Opaque { .. } => continue,
             // Extended [9] and any other modeled-but-unmodeled-for-evaluation
             // alternatives produce no transition here.
             _ => continue,
         };
 
-        // Clause 13.2.2.1.4 requires the transition actions to run "even if the
-        // transition does not change the event state", so this skip is not
-        // conformant. Removing it alone would be worse: no evaluator here can
-        // yet distinguish a genuine same-state indication from "nothing
-        // changed", so an unguarded pass would re-fire every poll. Tracked as
-        // #166, which depends on the change baseline from #137.
-        if new_state == current_state {
+        let ArmEvaluation {
+            indication,
+            establish_baseline,
+        } = arm;
+        if let Some(baseline) = establish_baseline {
+            eval_state.cov_baseline = Some(baseline);
+            eval_state_dirty = true;
+        }
+
+        let Some(ind) = indication else {
+            // No condition true — or the condition that seeded the countdown
+            // reverted: cancel any pending transition without firing.
+            if eval_state.pending.is_some() {
+                eval_state.pending = None;
+                eval_state_dirty = true;
+            }
+            if eval_state_dirty && eval_state_supported {
+                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state)));
+            }
             continue;
+        };
+
+        // Direction-selected delay: pTimeDelay toward OFFNORMAL states,
+        // pTimeDelayNormal (already the fallback-composed effective value)
+        // toward NORMAL — the Clause 13.3 split, mirroring the intrinsic
+        // detectors' `delay_toward` without sharing code across the boundary.
+        let delay = if ind.target == EventState::NORMAL {
+            normal_delay
+        } else {
+            time_delay
+        };
+
+        let fired = if delay == 0 {
+            Some(ind)
+        } else {
+            let mut fire = None;
+            match &mut eval_state.pending {
+                // In flight to the same target under the same condition: the
+                // countdown advances; a redundant qualifying observation does
+                // NOT re-seed it (Clause 13.2.4's debounce semantics, the same
+                // rule the intrinsic detectors document at
+                // `OutOfRangeDetector::probe`).
+                Some(p) if p.state == ind.target && p.condition == ind.condition => {
+                    p.remaining = p.remaining.saturating_sub(1);
+                    eval_state_dirty = true;
+                    if p.remaining == 0 {
+                        fire = Some(ind);
+                    }
+                }
+                // No countdown, or the condition's target changed mid-delay:
+                // (re-)seed with the current target's direction-appropriate
+                // delay, converted from seconds with never-fire-early ceiling
+                // semantics.
+                _ => {
+                    eval_state.pending = Some(EventEnrollmentPending {
+                        state: ind.target,
+                        remaining: passes_for_delay(delay, interval_secs),
+                        condition: ind.condition,
+                        params_fingerprint: fingerprint,
+                    });
+                    eval_state_dirty = true;
+                }
+            }
+            if fire.is_some() {
+                eval_state.pending = None;
+            }
+            fire
+        };
+
+        let Some(fired) = fired else {
+            if eval_state_dirty && eval_state_supported {
+                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state)));
+            }
+            continue;
+        };
+
+        // The transition fired. Its side-effect state lands now: the COV
+        // baseline becomes the value at the indicated NORMAL transition
+        // (Clause 13.3.3), and a fired OFFNORMAL records its causing value
+        // for CHANGE_OF_STATE condition (c).
+        if let Some(baseline) = fired.new_baseline {
+            eval_state.cov_baseline = Some(baseline);
+            eval_state_dirty = true;
+        }
+        if let Some(causing) = fired.offnormal_value {
+            eval_state.last_offnormal_value = Some(causing);
+            eval_state_dirty = true;
         }
 
         // `Event_Enable` governs distribution only (Clause 12.12). The
         // transition is recorded either way; the flag rides along so the
         // notification pipeline can suppress the send (#127).
-        let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
+        let transition_bit = EventTransition::for_target_state(fired.target).bit_mask();
         let distribute = event_enable & transition_bit != 0;
+        let ack_required = ack_required_for_transition(db, enrollment, transition_bit);
 
         updates.push((
             *oid,
-            monitored_oid,
-            event_type_raw,
-            current_state,
-            new_state,
-            distribute,
+            EnrollmentUpdate {
+                eval_state: (eval_state_dirty && eval_state_supported).then_some(eval_state),
+                fired: Some(FiredTransition {
+                    monitored_oid,
+                    event_type_raw,
+                    from: current_state,
+                    to: fired.target,
+                    distribute,
+                    transition_bit,
+                    ack_required,
+                }),
+            },
         ));
     }
 
     let mut transitions = Vec::new();
-    for (oid, monitored_oid, event_type_raw, from_state, to_state, distribute) in updates {
-        if let Some(obj) = db.get_mut(&oid) {
+    for (oid, update) in updates {
+        let Some(obj) = db.get_mut(&oid) else {
+            continue;
+        };
+        if let Some(fired) = update.fired {
             // Persist the transition through the internal lifecycle path, not
             // the network `write_property(EVENT_STATE, …)` route. `Event_State`
             // is algorithmically derived (ASHRAE 135-2020 Clause 12.12) and
             // read-only over the network, so the evaluator reaches the field
-            // via `set_event_state_internal` (issue #130).
-            if obj.set_event_state_internal(to_state).is_ok() {
-                transitions.push(EventEnrollmentTransition {
-                    enrollment_oid: oid,
-                    monitored_oid,
-                    change: EventStateChange {
-                        from: from_state,
-                        to: to_state,
-                    },
-                    event_type: EventType::from_raw(event_type_raw),
-                    distribute,
-                });
+            // via `set_event_state_internal` (issue #130). The SPECIFIC
+            // returned state is stored — 13.2.2.1.4 forbids collapsing
+            // HIGH_LIMIT/LOW_LIMIT to OFFNORMAL — and the actions run for
+            // same-state transitions too (`from == to`).
+            if obj.set_event_state_internal(fired.to).is_err() {
+                continue;
             }
+            // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
+            // with the transition's Ack_Required bit set, the corresponding
+            // Acked_Transitions bit is cleared (ack now owed); otherwise it is
+            // set. The notification-distribution half is tranche E's #127.
+            let _ = obj.set_acked_transitions_internal(fired.transition_bit, !fired.ack_required);
+            if let Some(state) = update.eval_state {
+                let _ = obj.set_enrollment_eval_state_internal(state);
+            }
+            transitions.push(EventEnrollmentTransition {
+                enrollment_oid: oid,
+                monitored_oid: fired.monitored_oid,
+                change: EventStateChange {
+                    from: fired.from,
+                    to: fired.to,
+                },
+                event_type: EventType::from_raw(fired.event_type_raw),
+                distribute: fired.distribute,
+            });
+        } else if let Some(state) = update.eval_state {
+            let _ = obj.set_enrollment_eval_state_internal(state);
         }
     }
 

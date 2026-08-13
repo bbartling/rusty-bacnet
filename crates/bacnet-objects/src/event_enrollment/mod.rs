@@ -11,6 +11,79 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+/// A delayed Event Enrollment transition, counting down its delay.
+///
+/// The enrollment counterpart of the intrinsic detectors'
+/// [`PendingTransition`](crate::event::PendingTransition), kept as a distinct
+/// type because the driving mechanism differs: the server evaluator advances
+/// `remaining` once per *evaluation pass* (the `event_enrollment_task`
+/// interval, configurable via #133), whereas the intrinsic detectors tick on
+/// a fixed one-second task and seed from per-write probes. Clause 13.2.4
+/// semantics are shared — the observable `Event_State` holds at the confirmed
+/// state while the countdown runs, a reverted condition cancels without
+/// firing, and a redundant qualifying observation never re-seeds — but the
+/// two implementations do not share code across the objects/server boundary.
+///
+/// In-memory only: like the intrinsic detectors' pending state and baselines,
+/// this is not persisted; a device restart re-evaluation starts from the
+/// confirmed `Event_State`, which is the same restart semantics the
+/// intrinsic-reporting path ships.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventEnrollmentPending {
+    /// The event state the algorithm indicated and will enter when the
+    /// countdown elapses.
+    pub state: EventState,
+    /// Evaluation passes remaining before the transition fires; seeded with
+    /// the direction-appropriate delay (pTimeDelay for offnormal targets,
+    /// pTimeDelayNormal — else pTimeDelay — for NORMAL), converted from
+    /// seconds by the evaluator as `ceil(delay_secs / interval_secs)`.
+    pub remaining: u32,
+    /// Identity of the indicating condition, per algorithm. CHANGE_OF_STATE
+    /// discriminates by the matched alarm value because Clause 13.3.2
+    /// conditions (a)/(c) key on *which* value the monitored value equals
+    /// ("remains equal to that value for pTimeDelay"); CHANGE_OF_BITSTRING by
+    /// the masked monitored bytes. Algorithms whose delay applies to the
+    /// threshold condition itself (OUT_OF_RANGE, FLOATING_LIMIT,
+    /// CHANGE_OF_VALUE) use `0` — the target alone identifies them.
+    pub condition: u64,
+    /// Fingerprint of the `Event_Parameters` (framed encoding) plus the
+    /// effective `Time_Delay_Normal` in force when this countdown was seeded.
+    /// The evaluator re-reads its parameters every pass; a mismatch cancels
+    /// the in-flight countdown and re-gates from the current parameters —
+    /// no partial countdown is resumed across a parameter change.
+    pub params_fingerprint: u64,
+}
+
+/// Algorithm-side evaluation state owned by an Event Enrollment object.
+///
+/// Not BACnet properties: none of the three slots maps to a Clause 12.12
+/// property (nor to the Table 12-14 `Time_Delay_Normal`, which is
+/// configuration and lives on the object directly). Clause 13.3 assigns the
+/// baseline's initialization and the countdown's existence to local matters,
+/// so they are reachable only through the internal trait channel
+/// ([`BACnetObject::enrollment_eval_state_internal`] /
+/// [`BACnetObject::set_enrollment_eval_state_internal`]), mirroring the
+/// `set_event_state_internal` precedent (issue #130).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EventEnrollmentEvalState {
+    /// Delayed transition in flight, if any.
+    pub pending: Option<EventEnrollmentPending>,
+    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of the
+    /// monitored value when a transition to NORMAL is indicated shall be used
+    /// in evaluation of the conditions until the next transition to NORMAL is
+    /// indicated"). `None` before the first sample; the first observed value
+    /// initializes it without indicating a transition ("the initialization of
+    /// the value used in evaluation before the first transition to NORMAL is
+    /// indicated is a local matter" — the policy chosen here).
+    pub cov_baseline: Option<PropertyValue>,
+    /// The monitored value that caused the last transition to OFFNORMAL, for
+    /// CHANGE_OF_STATE condition (c) (Clause 13.3.2: a re-indication is
+    /// indicated only when the monitored value equals an alarm value
+    /// "different from the value that caused the last transition to
+    /// OFFNORMAL").
+    pub last_offnormal_value: Option<u32>,
+}
+
 /// BACnet EventEnrollment object.
 ///
 /// Provides algorithmic event detection for a referenced object property.
@@ -34,6 +107,21 @@ pub struct EventEnrollmentObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: u32,
+    /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): the
+    /// pTimeDelayNormal parameter for the object's event algorithm (Clause
+    /// 12.12). `None` is the not-configured case and takes on the
+    /// `Time_Delay` carried inside `event_parameters` (Table 12-15 maps
+    /// `Time_Delay` to pTimeDelay for every evaluated algorithm): "If no
+    /// value is available for this parameter, then it takes on the value of
+    /// the pTimeDelay parameter" (Clause 13.3).
+    time_delay_normal: Option<u32>,
+    /// Delayed transition counting down, if any. In-memory only.
+    pending: Option<EventEnrollmentPending>,
+    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3). In-memory only.
+    cov_baseline: Option<PropertyValue>,
+    /// Monitored value that caused the last OFFNORMAL transition (Clause
+    /// 13.3.2 condition (c)). In-memory only.
+    last_offnormal_value: Option<u32>,
 }
 
 impl EventEnrollmentObject {
@@ -66,6 +154,13 @@ impl EventEnrollmentObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
+            // Absent so the delay behavior equals the normative pTimeDelay
+            // fallback until a client writes the property — never an error,
+            // never a zero.
+            time_delay_normal: None,
+            pending: None,
+            cov_baseline: None,
+            last_offnormal_value: None,
         })
     }
 
@@ -84,16 +179,21 @@ impl EventEnrollmentObject {
     /// object yet (#123); when they are, their initial conditions belong here
     /// — X'FF' octets / sequence number 0, and the empty string respectively.
     ///
-    /// Only the `Event_State` assignment is observable today. Nothing on this
-    /// object ever clears `Acked_Transitions` — the alarm-acknowledgment
-    /// process of Clause 13.2.3 that would (and `acknowledge_alarm`, still
-    /// unimplemented here) is part of #123 — so the second line cannot change
-    /// the value and no test can prove it. It is written anyway so the reset is
-    /// already correct when #123 gives the field a mutator, rather than being a
-    /// line someone must remember to add later.
+    /// The pending countdown and both baselines are cleared too: they are
+    /// extensions of the same event-state-detection state machine the clause
+    /// freezes ("this state machine is not evaluated"), so a stale countdown
+    /// must not survive into the next enabled period and fire against a
+    /// condition the object no longer observes. The intrinsic types make the
+    /// same choice for their detectors (`analog/input.rs` clears
+    /// `detector.pending` on the identical write). The COV baseline's
+    /// initialization on re-enable is the local matter Clause 13.3.3 assigns
+    /// it; clearing is consistent with the first-sample policy.
     fn apply_detection_disabled_reset(&mut self) {
         self.event_state = EventState::NORMAL.to_raw();
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
+        self.pending = None;
+        self.cov_baseline = None;
+        self.last_offnormal_value = None;
     }
 
     /// Set the description string.
@@ -142,6 +242,31 @@ impl EventEnrollmentObject {
     /// Set the event enable bitmask (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     pub fn set_event_enable(&mut self, enable: u8) {
         self.event_enable = enable & 0x07;
+    }
+
+    /// Set `Time_Delay_Normal` (the pTimeDelayNormal parameter). `None`
+    /// restores the not-configured case, which takes on the
+    /// `Event_Parameters` `Time_Delay` value (Clause 13.3 fallback).
+    pub fn set_time_delay_normal(&mut self, delay: Option<u32>) {
+        self.time_delay_normal = delay;
+    }
+
+    /// The pTimeDelay the stored `Event_Parameters` supply: the `time_delay`
+    /// field every evaluated algorithm carries (Table 12-15). Unmodeled
+    /// alternatives — including the `0xFF` legacy octet layout, which has no
+    /// time-delay slot — contribute zero, so their TDN fallback reads as 0
+    /// and their evaluation fires immediately, exactly as they did before
+    /// delay honoring existed.
+    fn event_parameters_time_delay(&self) -> u32 {
+        use BACnetEventParameter as P;
+        match &self.event_parameters {
+            P::ChangeOfBitstring { time_delay, .. }
+            | P::ChangeOfState { time_delay, .. }
+            | P::ChangeOfValue { time_delay, .. }
+            | P::FloatingLimit { time_delay, .. }
+            | P::OutOfRange { time_delay, .. } => *time_delay,
+            _ => 0,
+        }
     }
 }
 
@@ -222,6 +347,18 @@ impl BACnetObject for EventEnrollmentObject {
                     Ok(PropertyValue::ApplicationData(buf.to_vec()))
                 }
             },
+            p if p == PropertyIdentifier::TIME_DELAY_NORMAL => {
+                // Clause 13.3: "If no value is available for this parameter,
+                // then it takes on the value of the pTimeDelay parameter" —
+                // the read-back of an unwritten Time_Delay_Normal is the
+                // Event_Parameters Time_Delay, matching the algorithm's
+                // behavior (mirrors the intrinsic types' read arm).
+                Ok(PropertyValue::Unsigned(
+                    self.time_delay_normal
+                        .unwrap_or_else(|| self.event_parameters_time_delay())
+                        as u64,
+                ))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -333,6 +470,17 @@ impl BACnetObject for EventEnrollmentObject {
             };
             return Ok(());
         }
+        if property == PropertyIdentifier::TIME_DELAY_NORMAL {
+            // Table 12-14 codes the property O, not W; accepting the write is
+            // the Clause 12.1.2 implementor's option the intrinsic types
+            // already exercise, and is what makes the Clause 13.3 delay
+            // asymmetry commissionable on an enrollment at all.
+            if let PropertyValue::Unsigned(v) = value {
+                self.time_delay_normal = Some(common::u64_to_u32(v)?);
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -364,6 +512,77 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
+    /// Snapshot the enrollment evaluation state (pending countdown, COV
+    /// baseline, last offnormal-causing value) for the server evaluator.
+    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
+        Some(EventEnrollmentEvalState {
+            pending: self.pending.clone(),
+            cov_baseline: self.cov_baseline.clone(),
+            last_offnormal_value: self.last_offnormal_value,
+        })
+    }
+
+    /// Store the enrollment evaluation state. Refused while
+    /// `Event_Detection_Enable` is FALSE: Clause 13.2.2.1 freezes the state
+    /// machine ("this state machine is not evaluated"), and the reset in the
+    /// write arm has already returned these fields to their initial
+    /// condition, so a write arriving while disabled can only be stale.
+    fn set_enrollment_eval_state_internal(
+        &mut self,
+        state: EventEnrollmentEvalState,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        self.pending = state.pending;
+        self.cov_baseline = state.cov_baseline;
+        self.last_offnormal_value = state.last_offnormal_value;
+        Ok(())
+    }
+
+    /// Acknowledge an alarm transition (the AcknowledgeAlarm service route,
+    /// Clause 13.9): Clause 13.2.3 sets the bit on the acknowledgment
+    /// indication — unconditional and idempotent, so a repeated ack succeeds
+    /// again. A detection-DISABLED enrollment instead refuses with
+    /// OBJECT/NO_ALARM_CONFIGURED, Table 13-10's "The object exists but does
+    /// not support or is not configured for event generation": it can
+    /// generate nothing, and Clause 12.12 keeps its `Acked_Transitions` at
+    /// the initial condition, which an accepted ack would break.
+    /// Out_Of_Service does not gate the ack: no clause bars acknowledging a
+    /// notification already issued while the object is out of service.
+    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
+        if !self.event_detection_enable {
+            return Err(bacnet_types::error::Error::Protocol {
+                class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
+                code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.acked_transitions |= transition_bit & 0x07;
+        Ok(())
+    }
+
+    /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:
+    /// the evaluator resolves `Ack_Required` from the referenced Notification
+    /// Class object and this call applies the outcome — clear the bit when
+    /// ack is required, set it otherwise. Refused while detection is
+    /// disabled, the same invariant as above: "Acked_Transitions shall be
+    /// equal to [its] initial condition" while FALSE.
+    fn set_acked_transitions_internal(
+        &mut self,
+        transition_bit: u8,
+        acknowledged: bool,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        if acknowledged {
+            self.acked_transitions |= transition_bit & 0x07;
+        } else {
+            self.acked_transitions &= !(transition_bit & 0x07);
+        }
+        Ok(())
+    }
+
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
     /// actually accepts — with one known exception, `OBJECT_NAME`.
     ///
@@ -381,6 +600,8 @@ impl BACnetObject for EventEnrollmentObject {
     /// `HIGH_LIMIT`, `LOW_LIMIT`, `DEADBAND`, `LIMIT_ENABLE` and `TIME_DELAY`,
     /// none of which an Event Enrollment accepts — it carries those inside
     /// `Event_Parameters` instead. Reusing it would over-report writability.
+    /// `TIME_DELAY_NORMAL` overlaps the helper: an enrollment carries THAT
+    /// one as a real (O-coded) property, per Table 12-14.
     ///
     /// `Event_Detection_Enable` is writable even though Table 12-14 codes it R
     /// rather than W: Clause 12.1.2 allows an R property to be writable "at the
@@ -401,6 +622,7 @@ impl BACnetObject for EventEnrollmentObject {
                     | PropertyIdentifier::EVENT_DETECTION_ENABLE
                     | PropertyIdentifier::EVENT_PARAMETERS
                     | PropertyIdentifier::FAULT_PARAMETERS
+                    | PropertyIdentifier::TIME_DELAY_NORMAL
             )
     }
 
@@ -420,6 +642,7 @@ impl BACnetObject for EventEnrollmentObject {
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::FAULT_PARAMETERS,
+            PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::RELIABILITY,

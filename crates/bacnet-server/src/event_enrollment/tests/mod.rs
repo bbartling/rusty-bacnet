@@ -2,10 +2,13 @@ mod change_of_bitstring;
 mod change_of_state;
 mod change_of_value;
 mod compat;
+mod delays;
 mod detection_enable;
 mod floating_limit;
+mod foreign_state;
 mod integration;
 mod out_of_range;
+mod same_state;
 
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
