@@ -35,6 +35,15 @@ fn encode_read_ack(count_tag: u8, value: u64, leading_zero: bool) -> BytesMut {
     buf
 }
 
+fn append_empty_records(mut buf: BytesMut) -> BytesMut {
+    buf.truncate(buf.len() - 1);
+    for _ in 0..MAX_DECODED_ITEMS {
+        primitives::encode_app_octet_string(&mut buf, &[]);
+    }
+    tags::encode_closing_tag(&mut buf, 1);
+    buf
+}
+
 #[test]
 fn read_request_counts_accept_u32_max_with_leading_zero() {
     let stream = AtomicReadFileRequest::decode(&encode_read_request(
@@ -71,24 +80,33 @@ fn read_request_counts_accept_u32_max_with_leading_zero() {
 #[test]
 fn bounded_record_counts_accept_limit_with_leading_zero() {
     let value = MAX_DECODED_ITEMS as u64;
-    let request = encode_read_request(1, tags::app_tag::UNSIGNED, value, true);
+    let request =
+        append_empty_records(encode_read_request(1, tags::app_tag::UNSIGNED, value, true));
     let write = AtomicWriteFileRequest::decode(&request).unwrap();
     assert!(matches!(
         write.access,
         FileWriteAccessMethod::Record {
             record_count,
+            file_record_data,
             ..
         } if record_count == MAX_DECODED_ITEMS as u32
+            && file_record_data.len() == MAX_DECODED_ITEMS
     ));
 
-    let ack =
-        AtomicReadFileAck::decode(&encode_read_ack(tags::app_tag::UNSIGNED, value, true)).unwrap();
+    let ack = AtomicReadFileAck::decode(&append_empty_records(encode_read_ack(
+        tags::app_tag::UNSIGNED,
+        value,
+        true,
+    )))
+    .unwrap();
     assert!(matches!(
         ack.access,
         FileReadAckMethod::Record {
             returned_record_count,
+            file_record_data,
             ..
         } if returned_record_count == MAX_DECODED_ITEMS as u32
+            && file_record_data.len() == MAX_DECODED_ITEMS
     ));
 }
 
@@ -123,15 +141,25 @@ fn atomic_file_counts_require_application_unsigned_tags() {
 
     let ack = encode_read_ack(tags::app_tag::ENUMERATED, 1, false);
     assert!(AtomicReadFileAck::decode(&ack).is_err());
+
+    let mut context = BytesMut::new();
+    primitives::encode_app_object_id(&mut context, &file_oid());
+    tags::encode_opening_tag(&mut context, 0);
+    primitives::encode_app_signed(&mut context, 0);
+    primitives::encode_ctx_unsigned(&mut context, 2, 1);
+    tags::encode_closing_tag(&mut context, 0);
+    assert!(AtomicReadFileRequest::decode(&context).is_err());
 }
 
 #[test]
 fn atomic_file_counts_reject_reserved_application_lvt() {
-    let mut stream = BytesMut::new();
-    primitives::encode_app_object_id(&mut stream, &file_oid());
-    tags::encode_opening_tag(&mut stream, 0);
-    primitives::encode_app_signed(&mut stream, 0);
-    stream.extend_from_slice(&[0x26, 0x01, 0x00]);
-    tags::encode_closing_tag(&mut stream, 0);
-    assert!(AtomicReadFileRequest::decode(&stream).is_err());
+    for header in [0x26, 0x27] {
+        let mut stream = BytesMut::new();
+        primitives::encode_app_object_id(&mut stream, &file_oid());
+        tags::encode_opening_tag(&mut stream, 0);
+        primitives::encode_app_signed(&mut stream, 0);
+        stream.extend_from_slice(&[header, 0x01, 0x00]);
+        tags::encode_closing_tag(&mut stream, 0);
+        assert!(AtomicReadFileRequest::decode(&stream).is_err());
+    }
 }
