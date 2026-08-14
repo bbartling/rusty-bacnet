@@ -54,6 +54,12 @@ impl ReadPropertyMultipleRequest {
 
             // [0] object-identifier
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !tag.is_context(0) {
+                return Err(Error::decoding(
+                    offset,
+                    "RPM request expected context tag 0",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(pos, "RPM request truncated at object-id"));
@@ -173,6 +179,9 @@ impl ReadPropertyMultipleACK {
 
             // [0] object-identifier
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !tag.is_context(0) {
+                return Err(Error::decoding(offset, "RPM ACK expected context tag 0"));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(pos, "RPM ACK truncated at object-id"));
@@ -209,7 +218,9 @@ impl ReadPropertyMultipleACK {
                 if end > data.len() {
                     return Err(Error::decoding(tag_end, "RPM ACK truncated at property-id"));
                 }
-                let prop_raw = primitives::decode_unsigned(&data[tag_end..end])? as u32;
+                let prop_raw = primitives::decode_unsigned(&data[tag_end..end])?;
+                let prop_raw = u32::try_from(prop_raw)
+                    .map_err(|_| Error::decoding(tag_end, "RPM ACK property-id exceeds u32"))?;
                 let property_identifier = PropertyIdentifier::from_raw(prop_raw);
                 offset = end;
 
@@ -221,7 +232,10 @@ impl ReadPropertyMultipleACK {
                     if end > data.len() {
                         return Err(Error::decoding(tag_end, "RPM ACK truncated at array-index"));
                     }
-                    array_index = Some(primitives::decode_unsigned(&data[tag_end..end])? as u32);
+                    let value = primitives::decode_unsigned(&data[tag_end..end])?;
+                    array_index = Some(u32::try_from(value).map_err(|_| {
+                        Error::decoding(tag_end, "RPM ACK array-index exceeds u32")
+                    })?);
                     offset = end;
                     let (tag, tag_end) = tags::decode_tag(data, offset)?;
                     if tag.is_opening_tag(4) {
@@ -341,6 +355,22 @@ fn decode_error_pair(data: &[u8], offset: usize) -> Result<(ErrorClass, ErrorCod
 mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;
+
+    fn ack_with_property_fields(property: &[u8], array_index: Option<&[u8]>) -> BytesMut {
+        let mut buf = BytesMut::new();
+        let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        primitives::encode_ctx_object_id(&mut buf, 0, &object);
+        tags::encode_opening_tag(&mut buf, 1);
+        primitives::encode_ctx_octet_string(&mut buf, 2, property);
+        if let Some(array_index) = array_index {
+            primitives::encode_ctx_octet_string(&mut buf, 3, array_index);
+        }
+        tags::encode_opening_tag(&mut buf, 4);
+        primitives::encode_app_null(&mut buf);
+        tags::encode_closing_tag(&mut buf, 4);
+        tags::encode_closing_tag(&mut buf, 1);
+        buf
+    }
 
     #[test]
     fn request_single_object_round_trip() {
@@ -484,6 +514,40 @@ mod tests {
                 "unexpected error for error {field} tag: {error}"
             );
         }
+    }
+
+    #[test]
+    fn ack_property_values_must_fit_u32() {
+        let max_with_leading_zero = [0, 0xFF, 0xFF, 0xFF, 0xFF];
+        let encoded =
+            ack_with_property_fields(&max_with_leading_zero, Some(&max_with_leading_zero));
+        let decoded = ReadPropertyMultipleACK::decode(&encoded).unwrap();
+        let result = &decoded.list_of_read_access_results[0].list_of_results[0];
+        assert_eq!(result.property_identifier.to_raw(), u32::MAX);
+        assert_eq!(result.property_array_index, Some(u32::MAX));
+
+        for overflow in [u32::MAX as u64 + 1, u64::MAX] {
+            let overflow = overflow.to_be_bytes();
+            let property = ack_with_property_fields(&overflow, None);
+            assert!(ReadPropertyMultipleACK::decode(&property).is_err());
+
+            let index = ack_with_property_fields(&[1], Some(&overflow));
+            assert!(ReadPropertyMultipleACK::decode(&index).is_err());
+        }
+    }
+
+    #[test]
+    fn rpm_requires_object_context_tag_zero() {
+        let mut encoded = ack_with_property_fields(&[85], None);
+        encoded[0] = 0x1C;
+        assert!(ReadPropertyMultipleACK::decode(&encoded).is_err());
+
+        let mut request = BytesMut::new();
+        let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        primitives::encode_ctx_object_id(&mut request, 1, &object);
+        tags::encode_opening_tag(&mut request, 1);
+        tags::encode_closing_tag(&mut request, 1);
+        assert!(ReadPropertyMultipleRequest::decode(&request).is_err());
     }
 
     // -----------------------------------------------------------------------
