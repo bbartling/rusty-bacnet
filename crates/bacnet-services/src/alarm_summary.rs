@@ -111,10 +111,13 @@ impl GetAlarmSummaryAck {
                 ));
             }
             let acknowledged_transitions = primitives::decode_bit_string(&data[pos..end])?;
-            if acknowledged_transitions.0 != 5 || acknowledged_transitions.1.len() != 1 {
+            if acknowledged_transitions.0 != 5
+                || acknowledged_transitions.1.len() != 1
+                || acknowledged_transitions.1[0] & 0x1F != 0
+            {
                 return Err(Error::decoding(
                     pos,
-                    "AlarmSummaryAck acknowledgedTransitions must contain three bits",
+                    "AlarmSummaryAck acknowledgedTransitions must contain three bits with zero padding",
                 ));
             }
             offset = end;
@@ -243,9 +246,13 @@ mod tests {
 
     #[test]
     fn acknowledged_transitions_must_contain_three_bits() {
-        for (unused_bits, transitions) in
-            [(5, &[][..]), (4, &[0][..]), (0, &[0][..]), (5, &[0, 0][..])]
-        {
+        for (unused_bits, transitions) in [
+            (5, &[][..]),
+            (4, &[0][..]),
+            (0, &[0][..]),
+            (5, &[0, 0][..]),
+            (5, &[0b00011111][..]),
+        ] {
             assert!(
                 GetAlarmSummaryAck::decode(&ack_with_fields(&[0], unused_bits, transitions,))
                     .is_err()
