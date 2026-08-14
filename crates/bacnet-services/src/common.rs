@@ -171,14 +171,16 @@ impl BACnetPropertyValue {
                         "BACnetPropertyValue truncated at priority",
                     ));
                 }
-                let prio = primitives::decode_unsigned(&data[new_pos..end])? as u8;
+                let prio = primitives::decode_unsigned(&data[new_pos..end])?;
                 if !(1..=16).contains(&prio) {
                     return Err(Error::decoding(
                         new_pos,
                         format!("BACnetPropertyValue priority {prio} out of range 1-16"),
                     ));
                 }
-                priority = Some(prio);
+                priority = Some(u8::try_from(prio).map_err(|_| {
+                    Error::decoding(new_pos, "BACnetPropertyValue priority conversion failed")
+                })?);
                 return Ok((
                     Self {
                         property_identifier: PropertyIdentifier::from_raw(prop_id),
@@ -265,18 +267,29 @@ mod tests {
             property_identifier: PropertyIdentifier::PRESENT_VALUE,
             property_array_index: None,
             value: vec![0x10], // app boolean true
-            priority: Some(8),
+            priority: None,
         };
-        let mut buf = BytesMut::new();
-        pv.encode(&mut buf);
+        let mut base = BytesMut::new();
+        pv.encode(&mut base);
 
-        // Manually corrupt priority to 0
-        let data = buf.to_vec();
-        let mut corrupted = data.clone();
-        // Priority is the last encoded byte — find and change it
-        let last = corrupted.len() - 1;
-        corrupted[last] = 0; // set priority value to 0
-        assert!(BACnetPropertyValue::decode(&corrupted, 0).is_err());
+        for priority in [0, 17, 257, 272, u64::MAX] {
+            let mut encoded = base.clone();
+            primitives::encode_ctx_unsigned(&mut encoded, 3, priority);
+            let error = BACnetPropertyValue::decode(&encoded, 0).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("priority {priority} out of range 1-16")),
+                "unexpected error for priority {priority}: {error}"
+            );
+        }
+
+        let mut leading_zero = base;
+        // Context tag 3 with a two-octet leading-zero encoding of numeric 1.
+        leading_zero.extend_from_slice(&[0x3A, 0x00, 0x01]);
+        let (decoded, consumed) = BACnetPropertyValue::decode(&leading_zero, 0).unwrap();
+        assert_eq!(decoded.priority, Some(1));
+        assert_eq!(consumed, leading_zero.len());
     }
 
     // -----------------------------------------------------------------------
