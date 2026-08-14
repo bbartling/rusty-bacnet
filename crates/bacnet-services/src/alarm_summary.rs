@@ -111,6 +111,12 @@ impl GetAlarmSummaryAck {
                 ));
             }
             let acknowledged_transitions = primitives::decode_bit_string(&data[pos..end])?;
+            if acknowledged_transitions.0 != 5 || acknowledged_transitions.1.len() != 1 {
+                return Err(Error::decoding(
+                    pos,
+                    "AlarmSummaryAck acknowledgedTransitions must contain three bits",
+                ));
+            }
             offset = end;
 
             entries.push(AlarmSummaryEntry {
@@ -129,7 +135,7 @@ mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;
 
-    fn ack_with_alarm_state(state: &[u8]) -> BytesMut {
+    fn ack_with_fields(state: &[u8], unused_bits: u8, transitions: &[u8]) -> BytesMut {
         let mut buf = BytesMut::new();
         let object_identifier = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         primitives::encode_app_object_id(&mut buf, &object_identifier);
@@ -140,8 +146,12 @@ mod tests {
             state.len() as u32,
         );
         buf.extend_from_slice(state);
-        primitives::encode_app_bit_string(&mut buf, 5, &[0b10100000]);
+        primitives::encode_app_bit_string(&mut buf, unused_bits, transitions);
         buf
+    }
+
+    fn ack_with_alarm_state(state: &[u8]) -> BytesMut {
+        ack_with_fields(state, 5, &[0b10100000])
     }
 
     #[test]
@@ -229,6 +239,18 @@ mod tests {
         let mut trailing = encoded;
         primitives::encode_app_null(&mut trailing);
         assert!(GetAlarmSummaryAck::decode(&trailing).is_err());
+    }
+
+    #[test]
+    fn acknowledged_transitions_must_contain_three_bits() {
+        for (unused_bits, transitions) in
+            [(5, &[][..]), (4, &[0][..]), (0, &[0][..]), (5, &[0, 0][..])]
+        {
+            assert!(
+                GetAlarmSummaryAck::decode(&ack_with_fields(&[0], unused_bits, transitions,))
+                    .is_err()
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
