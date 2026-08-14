@@ -569,7 +569,13 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
             "ErrorPDU truncated at error class",
         ));
     }
-    let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])? as u16;
+    let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])?;
+    let error_class_raw = u16::try_from(error_class_raw).map_err(|_| {
+        Error::decoding(
+            tag_end,
+            format!("ErrorPDU error class {error_class_raw} exceeds u16"),
+        )
+    })?;
     offset = class_end;
 
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
@@ -585,7 +591,13 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     if code_end > data.len() {
         return Err(Error::decoding(tag_end, "ErrorPDU truncated at error code"));
     }
-    let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])? as u16;
+    let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])?;
+    let error_code_raw = u16::try_from(error_code_raw).map_err(|_| {
+        Error::decoding(
+            tag_end,
+            format!("ErrorPDU error code {error_code_raw} exceeds u16"),
+        )
+    })?;
     offset = code_end;
 
     let error_data = if offset < data.len() {
