@@ -9,6 +9,29 @@ use bytes::{BufMut, BytesMut};
 /// Safety limit for decoded sequences to prevent unbounded allocations.
 pub const MAX_DECODED_ITEMS: usize = 10_000;
 
+fn decode_context_u32(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(u32, usize), Error> {
+    let (tag, pos) = tags::decode_tag(data, offset)?;
+    if !tag.is_context(expected_tag) {
+        return Err(Error::decoding(
+            offset,
+            format!("{field} expected context tag {expected_tag}"),
+        ));
+    }
+    let end = pos + tag.length as usize;
+    if end > data.len() {
+        return Err(Error::decoding(pos, format!("{field} truncated")));
+    }
+    let value = primitives::decode_unsigned(&data[pos..end])?;
+    let value =
+        u32::try_from(value).map_err(|_| Error::decoding(pos, format!("{field} exceeds u32")))?;
+    Ok((value, end))
+}
+
 // ---------------------------------------------------------------------------
 // PropertyReference
 // ---------------------------------------------------------------------------
@@ -37,30 +60,17 @@ impl PropertyReference {
 
     pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         // [0] propertyIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "PropertyReference truncated at property-id",
-            ));
-        }
-        let prop_id = primitives::decode_unsigned(&data[pos..end])? as u32;
-        let mut offset = end;
+        let (prop_id, mut offset) =
+            decode_context_u32(data, offset, 0, "PropertyReference property-id")?;
 
         // [1] propertyArrayIndex (optional)
         let mut array_index = None;
         if offset < data.len() {
-            let (tag, new_pos) = tags::decode_tag(data, offset)?;
+            let (tag, _) = tags::decode_tag(data, offset)?;
             if tag.is_context(1) {
-                let end = new_pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        new_pos,
-                        "PropertyReference truncated at array-index",
-                    ));
-                }
-                array_index = Some(primitives::decode_unsigned(&data[new_pos..end])? as u32);
+                let (value, end) =
+                    decode_context_u32(data, offset, 1, "PropertyReference array-index")?;
+                array_index = Some(value);
                 offset = end;
             }
         }
@@ -120,30 +130,17 @@ impl BACnetPropertyValue {
 
     pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         // [0] propertyIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "BACnetPropertyValue truncated at property-id",
-            ));
-        }
-        let prop_id = primitives::decode_unsigned(&data[pos..end])? as u32;
-        let mut offset = end;
+        let (prop_id, mut offset) =
+            decode_context_u32(data, offset, 0, "BACnetPropertyValue property-id")?;
 
         // [1] propertyArrayIndex (optional)
         let mut array_index = None;
         if offset < data.len() {
-            let (tag, new_pos) = tags::decode_tag(data, offset)?;
+            let (tag, _) = tags::decode_tag(data, offset)?;
             if tag.is_context(1) {
-                let end = new_pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        new_pos,
-                        "BACnetPropertyValue truncated at array-index",
-                    ));
-                }
-                array_index = Some(primitives::decode_unsigned(&data[new_pos..end])? as u32);
+                let (value, end) =
+                    decode_context_u32(data, offset, 1, "BACnetPropertyValue array-index")?;
+                array_index = Some(value);
                 offset = end;
             }
         }
@@ -208,6 +205,23 @@ impl BACnetPropertyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags::TagClass;
+
+    fn encode_context_bytes(buf: &mut BytesMut, tag: u8, value: &[u8]) {
+        tags::encode_tag(
+            buf,
+            tag,
+            TagClass::Context,
+            u32::try_from(value.len()).unwrap(),
+        );
+        buf.put_slice(value);
+    }
+
+    fn append_null_value(buf: &mut BytesMut) {
+        tags::encode_opening_tag(buf, 2);
+        primitives::encode_app_null(buf);
+        tags::encode_closing_tag(buf, 2);
+    }
 
     #[test]
     fn property_reference_round_trip() {
@@ -290,6 +304,60 @@ mod tests {
         let (decoded, consumed) = BACnetPropertyValue::decode(&leading_zero, 0).unwrap();
         assert_eq!(decoded.priority, Some(1));
         assert_eq!(consumed, leading_zero.len());
+    }
+
+    #[test]
+    fn shared_property_values_must_fit_u32() {
+        let max_with_leading_zero = [0, 0xFF, 0xFF, 0xFF, 0xFF];
+
+        let mut reference = BytesMut::new();
+        encode_context_bytes(&mut reference, 0, &max_with_leading_zero);
+        encode_context_bytes(&mut reference, 1, &max_with_leading_zero);
+        let (decoded, consumed) = PropertyReference::decode(&reference, 0).unwrap();
+        assert_eq!(decoded.property_identifier.to_raw(), u32::MAX);
+        assert_eq!(decoded.property_array_index, Some(u32::MAX));
+        assert_eq!(consumed, reference.len());
+
+        let mut property_value = BytesMut::new();
+        encode_context_bytes(&mut property_value, 0, &max_with_leading_zero);
+        encode_context_bytes(&mut property_value, 1, &max_with_leading_zero);
+        append_null_value(&mut property_value);
+        let (decoded, consumed) = BACnetPropertyValue::decode(&property_value, 0).unwrap();
+        assert_eq!(decoded.property_identifier.to_raw(), u32::MAX);
+        assert_eq!(decoded.property_array_index, Some(u32::MAX));
+        assert_eq!(consumed, property_value.len());
+
+        for overflow in [u32::MAX as u64 + 1, u64::MAX] {
+            let mut reference_property = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut reference_property, 0, overflow);
+            assert!(PropertyReference::decode(&reference_property, 0).is_err());
+
+            let mut reference_index = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut reference_index, 0, 1);
+            primitives::encode_ctx_unsigned(&mut reference_index, 1, overflow);
+            assert!(PropertyReference::decode(&reference_index, 0).is_err());
+
+            let mut value_property = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut value_property, 0, overflow);
+            append_null_value(&mut value_property);
+            assert!(BACnetPropertyValue::decode(&value_property, 0).is_err());
+
+            let mut value_index = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut value_index, 0, 1);
+            primitives::encode_ctx_unsigned(&mut value_index, 1, overflow);
+            append_null_value(&mut value_index);
+            assert!(BACnetPropertyValue::decode(&value_index, 0).is_err());
+        }
+    }
+
+    #[test]
+    fn shared_property_values_require_property_context_tag_zero() {
+        let mut wrong_tag = BytesMut::new();
+        primitives::encode_ctx_unsigned(&mut wrong_tag, 1, 85);
+        append_null_value(&mut wrong_tag);
+
+        assert!(PropertyReference::decode(&wrong_tag, 0).is_err());
+        assert!(BACnetPropertyValue::decode(&wrong_tag, 0).is_err());
     }
 
     // -----------------------------------------------------------------------
