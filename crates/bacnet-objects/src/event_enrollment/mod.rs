@@ -11,93 +11,14 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
-enum EventEnrollmentWriteRollback {
-    Detection {
-        enabled: bool,
-        event_state: u32,
-        acked_transitions: u8,
-        evaluation: EventEnrollmentEvalState,
-    },
-    TimeDelayNormal(Option<u32>),
-}
+mod state;
+use state::EventEnrollmentWriteRollback;
+pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
 
 struct AlertEnrollmentWriteRollback {
     enabled: bool,
     event_state: u32,
     acked_transitions: u8,
-}
-
-/// A delayed Event Enrollment transition, counting down its delay.
-///
-/// The enrollment counterpart of the intrinsic detectors'
-/// [`PendingTransition`](crate::event::PendingTransition), kept as a distinct
-/// type because the driving mechanism differs: the server evaluator advances
-/// `remaining` once per *evaluation pass* (the `event_enrollment_task`
-/// interval, configurable via #133), whereas the intrinsic detectors tick on
-/// a fixed one-second task and seed from per-write probes. Clause 13.2.4
-/// semantics are shared — the observable `Event_State` holds at the confirmed
-/// state while the countdown runs, a reverted condition cancels without
-/// firing, and a redundant qualifying observation never re-seeds — but the
-/// two implementations do not share code across the objects/server boundary.
-///
-/// In-memory only: like the intrinsic detectors' pending state and baselines,
-/// this is not persisted; a device restart re-evaluation starts from the
-/// confirmed `Event_State`, which is the same restart semantics the
-/// intrinsic-reporting path ships.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EventEnrollmentPending {
-    /// The event state the algorithm indicated and will enter when the
-    /// countdown elapses.
-    pub state: EventState,
-    /// Evaluation passes remaining before the transition fires; seeded with
-    /// the direction-appropriate delay (pTimeDelay for offnormal targets,
-    /// pTimeDelayNormal — else pTimeDelay — for NORMAL), converted from
-    /// seconds by the evaluator as `ceil(delay_secs / interval_secs)`.
-    pub remaining: u32,
-    /// Identity of the indicating condition, per algorithm. CHANGE_OF_STATE
-    /// discriminates by the matched alarm value because Clause 13.3.2
-    /// conditions (a)/(c) key on *which* value the monitored value equals
-    /// ("remains equal to that value for pTimeDelay"); CHANGE_OF_BITSTRING by
-    /// the masked monitored bytes. Algorithms whose delay applies to the
-    /// threshold condition itself (OUT_OF_RANGE, FLOATING_LIMIT,
-    /// CHANGE_OF_VALUE) use `0` — the target alone identifies them.
-    pub condition: u64,
-    /// Fingerprint of the `Event_Parameters` (framed encoding) plus the
-    /// effective `Time_Delay_Normal` in force when this countdown was seeded.
-    /// The evaluator re-reads its parameters every pass; a mismatch cancels
-    /// the in-flight countdown and re-gates from the current parameters —
-    /// no partial countdown is resumed across a parameter change.
-    pub params_fingerprint: u64,
-}
-
-/// Algorithm-side evaluation state owned by an Event Enrollment object.
-///
-/// Not BACnet properties: none of the three slots maps to a Clause 12.12
-/// property (nor to the Table 12-14 `Time_Delay_Normal`, which is
-/// configuration and lives on the object directly). Clause 13.3 assigns the
-/// baseline's initialization and the countdown's existence to local matters,
-/// so they are reachable only through the internal trait channel
-/// ([`BACnetObject::enrollment_eval_state_internal`] /
-/// [`BACnetObject::set_enrollment_eval_state_internal`]), mirroring the
-/// `set_event_state_internal` precedent (issue #130).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct EventEnrollmentEvalState {
-    /// Delayed transition in flight, if any.
-    pub pending: Option<EventEnrollmentPending>,
-    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of the
-    /// monitored value when a transition to NORMAL is indicated shall be used
-    /// in evaluation of the conditions until the next transition to NORMAL is
-    /// indicated"). `None` before the first sample; the first observed value
-    /// initializes it without indicating a transition ("the initialization of
-    /// the value used in evaluation before the first transition to NORMAL is
-    /// indicated is a local matter" — the policy chosen here).
-    pub cov_baseline: Option<PropertyValue>,
-    /// The monitored value that caused the last transition to OFFNORMAL, for
-    /// CHANGE_OF_STATE condition (c) (Clause 13.3.2: a re-indication is
-    /// indicated only when the monitored value equals an alarm value
-    /// "different from the value that caused the last transition to
-    /// OFFNORMAL").
-    pub last_offnormal_value: Option<u32>,
 }
 
 /// BACnet EventEnrollment object.
@@ -133,6 +54,8 @@ pub struct EventEnrollmentObject {
     time_delay_normal: Option<u32>,
     /// Delayed transition counting down, if any. In-memory only.
     pending: Option<EventEnrollmentPending>,
+    /// Effective source of the private evaluation state. In-memory only.
+    monitored_reference: Option<EventEnrollmentMonitoredSource>,
     /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3). In-memory only.
     cov_baseline: Option<PropertyValue>,
     /// Monitored value that caused the last OFFNORMAL transition (Clause
@@ -175,6 +98,7 @@ impl EventEnrollmentObject {
             // never a zero.
             time_delay_normal: None,
             pending: None,
+            monitored_reference: None,
             cov_baseline: None,
             last_offnormal_value: None,
         })
@@ -195,19 +119,21 @@ impl EventEnrollmentObject {
     /// object yet (#264); when they are, their initial conditions belong here
     /// — X'FF' octets / sequence number 0, and the empty string respectively.
     ///
-    /// The pending countdown and both baselines are cleared too: they are
-    /// extensions of the same event-state-detection state machine the clause
-    /// freezes ("this state machine is not evaluated"), so a stale countdown
-    /// must not survive into the next enabled period and fire against a
-    /// condition the object no longer observes. The intrinsic types make the
-    /// same choice for their detectors (`analog/input.rs` clears
-    /// `detector.pending` on the identical write). The COV baseline's
-    /// initialization on re-enable is the local matter Clause 13.3.3 assigns
-    /// it; clearing is consistent with the first-sample policy.
+    /// The monitored-source identity, pending countdown, and both baselines
+    /// are cleared too: they are extensions of the same event-state-detection
+    /// state machine the clause freezes ("this state machine is not
+    /// evaluated"), so a stale countdown must not survive into the next
+    /// enabled period and fire against a condition the object no longer
+    /// observes. The intrinsic types make the same choice for their detectors
+    /// (`analog/input.rs` clears `detector.pending` on the identical write).
+    /// The COV baseline's initialization on re-enable is the local matter
+    /// Clause 13.3.3 assigns it; clearing is consistent with the first-sample
+    /// policy.
     fn apply_detection_disabled_reset(&mut self) {
         self.event_state = EventState::NORMAL.to_raw();
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
         self.pending = None;
+        self.monitored_reference = None;
         self.cov_baseline = None;
         self.last_offnormal_value = None;
     }
@@ -550,8 +476,8 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
-    /// Snapshot the enrollment evaluation state (pending countdown, COV
-    /// baseline, last offnormal-causing value) for the server evaluator.
+    /// Snapshot the pending countdown and algorithm baselines for the server
+    /// evaluator.
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(EventEnrollmentEvalState {
             pending: self.pending.clone(),
@@ -575,6 +501,21 @@ impl BACnetObject for EventEnrollmentObject {
         self.pending = state.pending;
         self.cov_baseline = state.cov_baseline;
         self.last_offnormal_value = state.last_offnormal_value;
+        Ok(())
+    }
+
+    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+        Some(self.monitored_reference)
+    }
+
+    fn set_enrollment_eval_source_internal(
+        &mut self,
+        source: Option<EventEnrollmentMonitoredSource>,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        self.monitored_reference = source;
         Ok(())
     }
 
@@ -632,6 +573,7 @@ impl BACnetObject for EventEnrollmentObject {
                     enabled: self.event_detection_enable,
                     event_state: self.event_state,
                     acked_transitions: self.acked_transitions,
+                    monitored_reference: self.monitored_reference,
                     evaluation: EventEnrollmentEvalState {
                         pending: self.pending.clone(),
                         cov_baseline: self.cov_baseline.clone(),
@@ -655,11 +597,13 @@ impl BACnetObject for EventEnrollmentObject {
                 enabled,
                 event_state,
                 acked_transitions,
+                monitored_reference,
                 evaluation,
             } => {
                 self.event_detection_enable = enabled;
                 self.event_state = event_state;
                 self.acked_transitions = acked_transitions;
+                self.monitored_reference = monitored_reference;
                 self.pending = evaluation.pending;
                 self.cov_baseline = evaluation.cov_baseline;
                 self.last_offnormal_value = evaluation.last_offnormal_value;

@@ -39,6 +39,9 @@
 //! the lifecycle task only logs the returned transitions.
 
 mod algorithms;
+mod reference;
+
+use std::collections::HashSet;
 
 pub use algorithms::{
     encode_change_of_bitstring_params, encode_change_of_state_params,
@@ -50,13 +53,21 @@ use algorithms::{
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
     extract_enumerated, extract_real, ArmEvaluation,
 };
+#[cfg(test)]
+use reference::MonitoredReference;
+use reference::{params_fingerprint, read_object_property_ref};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition};
-use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
+use bacnet_objects::event_enrollment::{
+    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending,
+};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
-use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
+};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// A state transition detected during event enrollment evaluation.
@@ -79,68 +90,37 @@ pub struct EventEnrollmentTransition {
     pub distribute: bool,
 }
 
-/// Read the setpoint referenced by a FLOATING_LIMIT enrollment.
-///
-/// Returns the referenced property's real value, or `None` if the reference is
-/// remote or unreadable.
+enum SetpointRead {
+    Value(f32),
+    Unusable,
+    Transient,
+}
+
 fn read_setpoint(
     db: &ObjectDatabase,
     reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-) -> Option<f32> {
+) -> SetpointRead {
     // Remote-device setpoint references are not resolvable from a local DB.
     if reference.device_identifier.is_some() {
-        return None;
+        return SetpointRead::Transient;
     }
-    let obj = db.get(&reference.object_identifier)?;
+    let Some(obj) = db.get(&reference.object_identifier) else {
+        return SetpointRead::Transient;
+    };
     let prop = PropertyIdentifier::from_raw(reference.property_identifier);
-    extract_real(
-        &obj.read_property(prop, reference.property_array_index)
-            .ok()?,
-    )
-}
-
-/// Read the object_property_reference from an EventEnrollment object.
-///
-/// Returns the monitored object, property, and optional device qualifier.
-fn read_object_property_ref(
-    enrollment: &dyn BACnetObject,
-) -> Result<
-    Option<(
-        ObjectIdentifier,
-        PropertyIdentifier,
-        Option<ObjectIdentifier>,
-    )>,
-    (),
-> {
-    match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
-        Ok(PropertyValue::List(ref items)) if (2..=4).contains(&items.len()) => {
-            let obj_id = match &items[0] {
-                PropertyValue::ObjectIdentifier(oid) => *oid,
-                _ => return Ok(None),
-            };
-            let PropertyValue::Unsigned(prop_id) = &items[1] else {
-                return Ok(None);
-            };
-            let Ok(prop_id) = u32::try_from(*prop_id) else {
-                return Ok(None);
-            };
-            if prop_id > 0x3F_FFFF {
-                return Ok(None);
-            }
-            let prop_id = PropertyIdentifier::from_raw(prop_id);
-            match items.get(2) {
-                None | Some(PropertyValue::Null | PropertyValue::Unsigned(_)) => {}
-                Some(_) => return Ok(None),
-            }
-            let device_id = match items.get(3) {
-                None | Some(PropertyValue::Null) => None,
-                Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
-                Some(_) => return Ok(None),
-            };
-            Ok(Some((obj_id, prop_id, device_id)))
+    if reference.property_array_index.is_some() && !obj.is_array_property(prop) {
+        return SetpointRead::Unusable;
+    }
+    match obj.read_property(prop, reference.property_array_index) {
+        Ok(value) => extract_real(&value)
+            .map(SetpointRead::Value)
+            .unwrap_or(SetpointRead::Unusable),
+        Err(error)
+            if reference.property_array_index.is_some() && invalid_indexed_target_error(&error) =>
+        {
+            SetpointRead::Unusable
         }
-        Ok(_) => Ok(None),
-        Err(_) => Err(()),
+        Err(_) => SetpointRead::Transient,
     }
 }
 
@@ -152,39 +132,6 @@ fn read_object_property_ref(
 fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
     let passes = (delay_secs as u64).div_ceil(interval_secs.max(1));
     u32::try_from(passes).unwrap_or(u32::MAX)
-}
-
-/// Fingerprint the configuration a pending countdown was gated under: the
-/// framed `Event_Parameters` encoding (which includes any algorithm-carried
-/// references, e.g. FLOATING_LIMIT's `setpoint_reference`), the effective
-/// normal-direction delay, the configured event type, and the monitored
-/// object+property the enrollment's `Object_Property_Reference` resolves to.
-/// A mismatch with [`EventEnrollmentPending::params_fingerprint`] cancels
-/// the in-flight countdown and re-gates from the current parameters — the
-/// pinned behavior for a mid-pending retarget or parameter change (the
-/// evaluator re-reads them every pass, so the change is observed on the pass
-/// after the write).
-fn params_fingerprint(
-    params: &BACnetEventParameter,
-    normal_delay: u64,
-    event_type_raw: u32,
-    monitored: &(ObjectIdentifier, PropertyIdentifier),
-) -> u64 {
-    let mut buf = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, params);
-    let (monitored_oid, monitored_prop) = monitored;
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in buf
-        .iter()
-        .copied()
-        .chain(normal_delay.to_le_bytes())
-        .chain(event_type_raw.to_le_bytes())
-        .chain(monitored_oid.encode())
-        .chain(monitored_prop.to_raw().to_le_bytes())
-    {
-        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
 }
 
 /// Resolve whether the Notification Class referenced by an enrollment
@@ -231,6 +178,10 @@ struct EnrollmentUpdate {
     /// Evaluation state to write back — pending countdown and/or baselines —
     /// when it changed this pass, even with no transition.
     eval_state: Option<EventEnrollmentEvalState>,
+    /// Monitored-source ownership update for objects that support the channel.
+    eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
+    /// Clear the database-level reset requirement if this state write lands.
+    clears_invalidation: bool,
     /// A transition that fired this pass, with everything the transition
     /// actions need.
     fired: Option<FiredTransition>,
@@ -250,9 +201,75 @@ impl EnrollmentUpdate {
     fn eval_state_only(eval_state: EventEnrollmentEvalState) -> Self {
         Self {
             eval_state: Some(eval_state),
+            eval_source: None,
+            clears_invalidation: false,
             fired: None,
         }
     }
+
+    fn eval_source_only(source: Option<EventEnrollmentMonitoredSource>) -> Self {
+        Self {
+            eval_state: None,
+            eval_source: Some(source),
+            clears_invalidation: false,
+            fired: None,
+        }
+    }
+
+    fn eval_state_reset() -> Self {
+        Self {
+            eval_state: Some(EventEnrollmentEvalState::default()),
+            eval_source: None,
+            clears_invalidation: true,
+            fired: None,
+        }
+    }
+}
+
+fn queue_eval_state_reset(
+    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    oid: ObjectIdentifier,
+    supported: bool,
+    state: &EventEnrollmentEvalState,
+) {
+    if supported && *state != EventEnrollmentEvalState::default() {
+        updates.push((oid, EnrollmentUpdate::eval_state_reset()));
+    }
+}
+
+fn queue_pending_cancellation(
+    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    oid: ObjectIdentifier,
+    supported: bool,
+    state: &mut EventEnrollmentEvalState,
+) {
+    if state.pending.take().is_some() && supported {
+        updates.push((oid, EnrollmentUpdate::eval_state_only(state.clone())));
+    }
+}
+
+fn queue_eval_source_reset(
+    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    oid: ObjectIdentifier,
+    source: Option<Option<EventEnrollmentMonitoredSource>>,
+) {
+    if source.flatten().is_some() {
+        updates.push((oid, EnrollmentUpdate::eval_source_only(None)));
+    }
+}
+
+fn invalid_indexed_target_error(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Protocol { class, code }
+            if *class == ErrorClass::PROPERTY.to_raw() as u32
+                && matches!(
+                    *code,
+                    code if code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                        || code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
+                        || code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+                )
+    )
 }
 
 /// Evaluate all EventEnrollment objects in the database.
@@ -283,6 +300,7 @@ pub fn evaluate_event_enrollments(
     };
 
     let mut updates: Vec<(ObjectIdentifier, EnrollmentUpdate)> = Vec::new();
+    let mut database_eval_sources = HashSet::new();
 
     for oid in &oids {
         let Some(enrollment) = db.get(oid) else {
@@ -290,27 +308,51 @@ pub fn evaluate_event_enrollments(
         };
 
         // A property read failure is transient and retains evaluation state.
-        // Any successfully read invalid or unsupported-device reference clears
-        // state before unrelated properties can short-circuit this pass.
+        // An invalid reference shape or unsupported device clears state before
+        // unrelated properties can short-circuit this pass.
         let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
             .unwrap_or_default();
+        let eval_source = match enrollment.enrollment_eval_source_internal() {
+            Some(source) => Some(source),
+            None if eval_state_supported => {
+                database_eval_sources.insert(*oid);
+                Some(db.enrollment_eval_source(oid))
+            }
+            None => None,
+        };
+        let force_state_reset = db.enrollment_eval_state_invalidated(oid);
         let reference = match read_object_property_ref(enrollment) {
             Ok(reference) => reference,
             Err(()) => continue,
         };
-        let Some((monitored_oid, monitored_prop, _)) = reference.filter(|(_, _, device_oid)| {
-            device_oid.is_none_or(|oid| Some(oid) == local_device_oid)
+        let Some(monitored) = reference.filter(|reference| {
+            reference
+                .device_identifier
+                .is_none_or(|oid| Some(oid) == local_device_oid)
         }) else {
-            if eval_state_supported && eval_state != EventEnrollmentEvalState::default() {
-                updates.push((
-                    *oid,
-                    EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
-                ));
-            }
+            queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+            queue_eval_source_reset(&mut updates, *oid, eval_source);
             continue;
         };
+        let monitored_oid = monitored.object_identifier;
+        let monitored_prop = monitored.property_identifier;
+        let monitored_reference = (monitored_oid, monitored_prop, monitored.array_index);
+        // Private evaluation state belongs to one exact monitored source. A
+        // nonempty ownerless state cannot be adopted safely.
+        let source_changed = match eval_source {
+            Some(Some(current)) => current != monitored_reference,
+            Some(None) => eval_state != EventEnrollmentEvalState::default(),
+            None => false,
+        };
+        if source_changed || force_state_reset {
+            let had_private_state = eval_state != EventEnrollmentEvalState::default();
+            eval_state = EventEnrollmentEvalState::default();
+            if eval_state_supported && (had_private_state || force_state_reset) {
+                updates.push((*oid, EnrollmentUpdate::eval_state_reset()));
+            }
+        }
 
         if let Ok(PropertyValue::Boolean(true)) =
             enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
@@ -395,12 +437,8 @@ pub fn evaluate_event_enrollments(
         // resumed. The cancellation is flushed BEFORE any later exit — a
         // dropped write-back here is what let a params round-trip A→B→A
         // resume a stale countdown.
-        let fingerprint = params_fingerprint(
-            &params,
-            normal_delay as u64,
-            event_type_raw,
-            &(monitored_oid, monitored_prop),
-        );
+        let fingerprint =
+            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored);
         if eval_state
             .pending
             .as_ref()
@@ -416,12 +454,33 @@ pub fn evaluate_event_enrollments(
         let Some(monitored_obj) = db.get(&monitored_oid) else {
             continue;
         };
-        let monitored_value = match monitored_obj.read_property(monitored_prop, None) {
+        if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
+            queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+            queue_eval_source_reset(&mut updates, *oid, eval_source);
+            continue;
+        }
+        let monitored_value = match monitored_obj
+            .read_property(monitored_prop, monitored.array_index)
+        {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(error) => {
+                if monitored.array_index.is_some() && invalid_indexed_target_error(&error) {
+                    // A definitive indexed-target error is not a request to
+                    // retry the whole property.
+                    queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+                    queue_eval_source_reset(&mut updates, *oid, eval_source);
+                }
+                continue;
+            }
         };
-
         let event_type = EventType::from_raw(event_type_raw);
+        if eval_source.is_some_and(|current| current != Some(monitored_reference)) {
+            updates.push((
+                *oid,
+                EnrollmentUpdate::eval_source_only(Some(monitored_reference)),
+            ));
+        }
+
         let (time_delay, arm) = match &params {
             BACnetEventParameter::OutOfRange {
                 high_limit,
@@ -430,6 +489,12 @@ pub fn evaluate_event_enrollments(
                 time_delay,
             } => {
                 let Some(val) = extract_real(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -450,11 +515,27 @@ pub fn evaluate_event_enrollments(
                 deadband,
                 time_delay,
             } => {
-                let Some(setpoint) = read_setpoint(db, setpoint_reference) else {
+                let Some(val) = extract_real(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
-                let Some(val) = extract_real(&monitored_value) else {
-                    continue;
+                let setpoint = match read_setpoint(db, setpoint_reference) {
+                    SetpointRead::Value(value) => value,
+                    SetpointRead::Unusable => {
+                        queue_pending_cancellation(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            &mut eval_state,
+                        );
+                        continue;
+                    }
+                    SetpointRead::Transient => continue,
                 };
                 (
                     *time_delay,
@@ -473,6 +554,12 @@ pub fn evaluate_event_enrollments(
                 time_delay,
             } => {
                 let Some(val) = extract_enumerated(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -491,6 +578,12 @@ pub fn evaluate_event_enrollments(
                 time_delay,
             } => {
                 let Some(bits) = extract_bitstring(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -508,6 +601,12 @@ pub fn evaluate_event_enrollments(
                     eval_state.cov_baseline.as_ref(),
                     current_state,
                 ) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (*time_delay, eval)
@@ -555,7 +654,6 @@ pub fn evaluate_event_enrollments(
             }
             continue;
         };
-
         // Direction-selected delay: pTimeDelay toward OFFNORMAL states,
         // pTimeDelayNormal (already the fallback-composed effective value)
         // toward NORMAL — the Clause 13.3 split, mirroring the intrinsic
@@ -634,6 +732,8 @@ pub fn evaluate_event_enrollments(
             *oid,
             EnrollmentUpdate {
                 eval_state: (eval_state_dirty && eval_state_supported).then_some(eval_state),
+                eval_source: None,
+                clears_invalidation: false,
                 fired: Some(FiredTransition {
                     monitored_oid,
                     event_type_raw,
@@ -648,10 +748,39 @@ pub fn evaluate_event_enrollments(
     }
 
     let mut transitions = Vec::new();
+    let mut source_failures = HashSet::new();
+    let mut state_failures = HashSet::new();
+    let mut invalidation_changes = Vec::new();
+    let mut database_source_changes = Vec::new();
     for (oid, update) in updates {
+        let source_failed = source_failures.contains(&oid);
+        if state_failures.contains(&oid)
+            || (source_failed && update.eval_source.is_some())
+            || (source_failed && update.fired.is_none() && update.eval_state.is_some())
+        {
+            continue;
+        }
         let Some(obj) = db.get_mut(&oid) else {
             continue;
         };
+        if let Some(source) = update.eval_source {
+            if database_eval_sources.contains(&oid) {
+                database_source_changes.push((oid, source));
+            } else if obj.set_enrollment_eval_source_internal(source).is_err() {
+                // State written later in this pass would have no reliable
+                // owner. Clear it and suppress dependent state updates, while
+                // allowing an immediate stateless transition to proceed.
+                if obj
+                    .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
+                    .is_err()
+                {
+                    state_failures.insert(oid);
+                    invalidation_changes.push((oid, true));
+                }
+                source_failures.insert(oid);
+                continue;
+            }
+        }
         if let Some(fired) = update.fired {
             // Persist the transition through the internal lifecycle path, not
             // the network `write_property(EVENT_STATE, …)` route. `Event_State`
@@ -661,7 +790,45 @@ pub fn evaluate_event_enrollments(
             // returned state is stored — 13.2.2.1.4 forbids collapsing
             // HIGH_LIMIT/LOW_LIMIT to OFFNORMAL — and the actions run for
             // same-state transitions too (`from == to`).
-            if obj.set_event_state_internal(fired.to).is_err() {
+            if source_failed && fired.from == fired.to {
+                continue;
+            }
+            let mut persisted_eval_state = false;
+            if !source_failed {
+                if let Some(state) = update.eval_state {
+                    if obj.set_enrollment_eval_state_internal(state).is_err() {
+                        if database_eval_sources.contains(&oid) {
+                            database_source_changes.push((oid, None));
+                        } else {
+                            let _ = obj.set_enrollment_eval_source_internal(None);
+                        }
+                        state_failures.insert(oid);
+                        invalidation_changes.push((oid, true));
+                        continue;
+                    }
+                    persisted_eval_state = true;
+                }
+            }
+            let event_state_landed = fired.from == fired.to
+                || obj.set_event_state_internal(fired.to).is_ok()
+                || matches!(
+                    obj.read_property(PropertyIdentifier::EVENT_STATE, None),
+                    Ok(PropertyValue::Enumerated(state)) if state == fired.to.to_raw()
+                );
+            if !event_state_landed {
+                if persisted_eval_state {
+                    if obj
+                        .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
+                        .is_err()
+                    {
+                        invalidation_changes.push((oid, true));
+                    }
+                    if database_eval_sources.contains(&oid) {
+                        database_source_changes.push((oid, None));
+                    } else {
+                        let _ = obj.set_enrollment_eval_source_internal(None);
+                    }
+                }
                 continue;
             }
             // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
@@ -669,9 +836,6 @@ pub fn evaluate_event_enrollments(
             // Acked_Transitions bit is cleared (ack now owed); otherwise it is
             // set. The notification-distribution half is tranche E's #127.
             let _ = obj.set_acked_transitions_internal(fired.transition_bit, !fired.ack_required);
-            if let Some(state) = update.eval_state {
-                let _ = obj.set_enrollment_eval_state_internal(state);
-            }
             transitions.push(EventEnrollmentTransition {
                 enrollment_oid: oid,
                 monitored_oid: fired.monitored_oid,
@@ -683,8 +847,27 @@ pub fn evaluate_event_enrollments(
                 distribute: fired.distribute,
             });
         } else if let Some(state) = update.eval_state {
-            let _ = obj.set_enrollment_eval_state_internal(state);
+            if obj.set_enrollment_eval_state_internal(state).is_err() {
+                // A later source write must not claim state that failed to
+                // reset.
+                if database_eval_sources.contains(&oid) {
+                    database_source_changes.push((oid, None));
+                } else {
+                    let _ = obj.set_enrollment_eval_source_internal(None);
+                }
+                state_failures.insert(oid);
+                invalidation_changes.push((oid, true));
+            } else if update.clears_invalidation {
+                invalidation_changes.push((oid, false));
+            }
         }
+    }
+
+    for (oid, source) in database_source_changes {
+        db.set_enrollment_eval_source(oid, source);
+    }
+    for (oid, invalidated) in invalidation_changes {
+        db.set_enrollment_eval_state_invalidated(oid, invalidated);
     }
 
     transitions
