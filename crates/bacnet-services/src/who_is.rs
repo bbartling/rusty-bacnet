@@ -132,8 +132,11 @@ impl IAmRequest {
         let mut offset = 0;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        // Application L/V/T values 6 and 7 are reserved, but decode_tag treats
+        // them as extended lengths because they mark context opening/closing tags.
         if tag.class != tags::TagClass::Application
             || tag.number != tags::app_tag::OBJECT_IDENTIFIER
+            || data[offset] & 0x07 > 5
         {
             return Err(Error::decoding(
                 offset,
@@ -148,7 +151,10 @@ impl IAmRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::UNSIGNED
+            || data[offset] & 0x07 > 5
+        {
             return Err(Error::decoding(
                 offset,
                 "IAm max APDU length: expected application-tagged unsigned",
@@ -168,7 +174,10 @@ impl IAmRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::ENUMERATED
+            || data[offset] & 0x07 > 5
+        {
             return Err(Error::decoding(
                 offset,
                 "IAm segmentation: expected application-tagged enumerated",
@@ -185,7 +194,10 @@ impl IAmRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::UNSIGNED
+            || data[offset] & 0x07 > 5
+        {
             return Err(Error::decoding(
                 offset,
                 "IAm vendor ID: expected application-tagged unsigned",
@@ -444,6 +456,17 @@ mod tests {
                 "unexpected error for {field} tag: {error}"
             );
         }
+
+        let valid = encode_request(1476, 0, 999);
+        let mut reserved_lvt = BytesMut::from(&[0xc6, 4][..]);
+        reserved_lvt.extend_from_slice(&valid[1..]);
+        let error = IAmRequest::decode(&reserved_lvt).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("IAm object identifier: expected application-tagged"),
+            "unexpected error for reserved application L/V/T: {error}"
+        );
     }
 
     #[test]
