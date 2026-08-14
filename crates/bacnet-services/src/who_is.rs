@@ -61,7 +61,10 @@ impl WhoIsRequest {
             if end > data.len() {
                 return Err(Error::decoding(pos, "WhoIs truncated at low-limit"));
             }
-            low_limit = Some(primitives::decode_unsigned(&data[pos..end])? as u32);
+            let low_limit_raw = primitives::decode_unsigned(&data[pos..end])?;
+            low_limit = Some(u32::try_from(low_limit_raw).map_err(|_| {
+                Error::decoding(pos, format!("WhoIs low-limit {low_limit_raw} exceeds u32"))
+            })?);
             offset = end;
         }
 
@@ -73,7 +76,13 @@ impl WhoIsRequest {
                 if end > data.len() {
                     return Err(Error::decoding(pos, "WhoIs truncated at high-limit"));
                 }
-                high_limit = Some(primitives::decode_unsigned(&data[pos..end])? as u32);
+                let high_limit_raw = primitives::decode_unsigned(&data[pos..end])?;
+                high_limit = Some(u32::try_from(high_limit_raw).map_err(|_| {
+                    Error::decoding(
+                        pos,
+                        format!("WhoIs high-limit {high_limit_raw} exceeds u32"),
+                    )
+                })?);
             }
         }
 
@@ -135,7 +144,13 @@ impl IAmRequest {
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at max-apdu-length"));
         }
-        let max_apdu_length = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let max_apdu_length_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let max_apdu_length = u32::try_from(max_apdu_length_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("IAm max APDU length {max_apdu_length_raw} exceeds u32"),
+            )
+        })?;
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
@@ -143,7 +158,9 @@ impl IAmRequest {
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at segmentation"));
         }
-        let seg_raw = primitives::decode_unsigned(&data[pos..end])? as u8;
+        let seg_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let seg_raw = u8::try_from(seg_raw)
+            .map_err(|_| Error::decoding(pos, format!("IAm segmentation {seg_raw} exceeds u8")))?;
         let segmentation_supported = Segmentation::from_raw(seg_raw);
         offset = end;
 
@@ -152,7 +169,10 @@ impl IAmRequest {
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at vendor-id"));
         }
-        let vendor_id = primitives::decode_unsigned(&data[pos..end])? as u16;
+        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let vendor_id = u16::try_from(vendor_id_raw).map_err(|_| {
+            Error::decoding(pos, format!("IAm vendor ID {vendor_id_raw} exceeds u16"))
+        })?;
 
         Ok(Self {
             object_identifier,
@@ -261,6 +281,85 @@ mod tests {
         let decoded = WhoIsRequest::decode(&buf).unwrap();
         assert_eq!(decoded.low_limit, Some(1500));
         assert_eq!(decoded.high_limit, Some(1500));
+    }
+
+    #[test]
+    fn who_is_limits_must_fit_u32() {
+        let encode_range = |low, high| {
+            let mut buf = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut buf, 0, low);
+            primitives::encode_ctx_unsigned(&mut buf, 1, high);
+            buf
+        };
+
+        for (low, high, field, value) in [
+            (4_294_967_297, 4_294_967_297, "low-limit", 4_294_967_297_u64),
+            (1, 4_294_967_297, "high-limit", 4_294_967_297),
+        ] {
+            let encoded = encode_range(low, high);
+            let error = WhoIsRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("WhoIs {field} {value}")),
+                "unexpected error for {field} {value}: {error}"
+            );
+        }
+
+        let mut leading_zero = BytesMut::new();
+        for tag_number in [0, 1] {
+            tags::encode_tag(&mut leading_zero, tag_number, tags::TagClass::Context, 5);
+            leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        }
+        let decoded = WhoIsRequest::decode(&leading_zero).unwrap();
+        assert_eq!(decoded.low_limit, Some(u32::MAX));
+        assert_eq!(decoded.high_limit, Some(u32::MAX));
+    }
+
+    #[test]
+    fn i_am_values_must_fit_field_widths() {
+        let object_identifier = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
+        let encode_request = |max_apdu_length, segmentation, vendor_id| {
+            let mut buf = BytesMut::new();
+            primitives::encode_app_object_id(&mut buf, &object_identifier);
+            primitives::encode_app_unsigned(&mut buf, max_apdu_length);
+            primitives::encode_app_enumerated(&mut buf, segmentation);
+            primitives::encode_app_unsigned(&mut buf, vendor_id);
+            buf
+        };
+
+        for (max_apdu_length, segmentation, vendor_id, field, value) in [
+            (4_294_967_296, 0, 0, "max APDU length", 4_294_967_296_u64),
+            (1, 256, 0, "segmentation", 256),
+            (1, 0, 65_536, "vendor ID", 65_536),
+        ] {
+            let encoded = encode_request(max_apdu_length, segmentation, vendor_id);
+            let error = IAmRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!("IAm {field} {value}")),
+                "unexpected error for {field} {value}: {error}"
+            );
+        }
+
+        let mut leading_zero = BytesMut::new();
+        primitives::encode_app_object_id(&mut leading_zero, &object_identifier);
+        for (tag_number, content) in [
+            (tags::app_tag::UNSIGNED, &[0, 0xff, 0xff, 0xff, 0xff][..]),
+            (tags::app_tag::ENUMERATED, &[0, 0xff][..]),
+            (tags::app_tag::UNSIGNED, &[0, 0xff, 0xff][..]),
+        ] {
+            tags::encode_tag(
+                &mut leading_zero,
+                tag_number,
+                tags::TagClass::Application,
+                content.len() as u32,
+            );
+            leading_zero.extend_from_slice(content);
+        }
+        let decoded = IAmRequest::decode(&leading_zero).unwrap();
+        assert_eq!(decoded.max_apdu_length, u32::MAX);
+        assert_eq!(decoded.segmentation_supported.to_raw(), u8::MAX);
+        assert_eq!(decoded.vendor_id, u16::MAX);
     }
 
     #[test]
