@@ -302,6 +302,64 @@ async fn confirmed_request_simple_ack() {
 }
 
 #[tokio::test]
+async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
+    let client_mac = vec![0x01];
+    let remote_mac = vec![0x02];
+    let (client_transport, remote_transport) =
+        LoopbackTransport::pair(client_mac, remote_mac.clone());
+    let mut remote_network = NetworkLayer::new(remote_transport);
+    let mut remote_rx = remote_network.start().await.unwrap();
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+
+    client.device_table.lock().await.upsert(DiscoveredDevice {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2002).unwrap(),
+        mac_address: MacAddr::from_slice(&remote_mac),
+        max_apdu_length: u32::from(u16::MAX) + 1,
+        segmentation_supported: Segmentation::NONE,
+        max_segments_accepted: None,
+        vendor_id: 42,
+        last_seen: Instant::now(),
+        source_network: None,
+        source_address: None,
+    });
+
+    let responder = tokio::spawn(async move {
+        let received = timeout(Duration::from_secs(1), remote_rx.recv())
+            .await
+            .expect("remote timed out")
+            .expect("remote channel closed");
+        let Apdu::ConfirmedRequest(req) = apdu::decode_apdu(received.apdu).unwrap() else {
+            panic!("expected ConfirmedRequest");
+        };
+        assert!(!req.segmented);
+
+        let ack = Apdu::SimpleAck(SimpleAck {
+            invoke_id: req.invoke_id,
+            service_choice: req.service_choice,
+        });
+        let mut buf = BytesMut::new();
+        encode_apdu(&mut buf, &ack).unwrap();
+        remote_network
+            .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+            .await
+            .unwrap();
+        remote_network.stop().await.unwrap();
+    });
+
+    let result = client
+        .confirmed_request(&remote_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
+        .await;
+
+    assert!(result.unwrap().is_empty());
+    responder.await.unwrap();
+    client.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn confirmed_request_complex_ack() {
     let mut client_a = make_client().await;
 

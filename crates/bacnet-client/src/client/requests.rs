@@ -62,7 +62,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     let dt = self.device_table.lock().await;
                     let device = dt.get_by_mac(mac);
                     let max_apdu = device
-                        .map(|d| d.max_apdu_length as u16)
+                        .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
                         .unwrap_or(self.config.max_apdu_length);
                     let max_seg = device.and_then(|d| d.max_segments_accepted);
                     (max_apdu.min(target_transport_max_apdu), max_seg)
