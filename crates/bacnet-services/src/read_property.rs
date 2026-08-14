@@ -90,11 +90,21 @@ impl ReadPropertyRequest {
         let mut property_array_index = None;
         if offset < data.len() {
             let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (index, _) =
-                    decode_context_u32(data, offset, 2, "ReadProperty request array-index")?;
-                property_array_index = Some(index);
+            if !tag.is_context(2) {
+                return Err(Error::decoding(
+                    offset,
+                    "ReadProperty request expected context tag 2 for array-index",
+                ));
             }
+            let (index, end) =
+                decode_context_u32(data, offset, 2, "ReadProperty request array-index")?;
+            if end != data.len() {
+                return Err(Error::decoding(
+                    end,
+                    "ReadProperty request has trailing data",
+                ));
+            }
+            property_array_index = Some(index);
         }
 
         Ok(Self {
@@ -181,7 +191,10 @@ impl ReadPropertyACK {
                     "ReadPropertyACK expected opening tag 3",
                 ));
             }
-            let (value_bytes, _end) = tags::extract_context_value(data, tag_end, 3)?;
+            let (value_bytes, end) = tags::extract_context_value(data, tag_end, 3)?;
+            if end != data.len() {
+                return Err(Error::decoding(end, "ReadPropertyACK has trailing data"));
+            }
             return Ok(Self {
                 object_identifier,
                 property_identifier,
@@ -196,7 +209,10 @@ impl ReadPropertyACK {
                 "ReadPropertyACK expected opening tag 3",
             ));
         }
-        let (value_bytes, _) = tags::extract_context_value(data, tag_end, 3)?;
+        let (value_bytes, end) = tags::extract_context_value(data, tag_end, 3)?;
+        if end != data.len() {
+            return Err(Error::decoding(end, "ReadPropertyACK has trailing data"));
+        }
 
         Ok(Self {
             object_identifier,
@@ -343,6 +359,31 @@ mod tests {
         primitives::encode_ctx_object_id(&mut application_property, 0, &object_id());
         primitives::encode_app_unsigned(&mut application_property, 1);
         assert!(ReadPropertyRequest::decode(&application_property).is_err());
+    }
+
+    #[test]
+    fn read_property_rejects_malformed_optional_and_trailing_fields() {
+        let request = ReadPropertyRequest {
+            object_identifier: object_id(),
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+        };
+        let mut request_data = BytesMut::new();
+        request.encode(&mut request_data);
+        request_data.extend_from_slice(&[0x2e]);
+        assert!(ReadPropertyRequest::decode(&request_data).is_err());
+
+        let mut indexed_request = encode_fields(0, 1, 1, Some((2, 1)), false, false);
+        primitives::encode_ctx_unsigned(&mut indexed_request, 4, 1);
+        assert!(ReadPropertyRequest::decode(&indexed_request).is_err());
+
+        let mut ack = encode_fields(0, 1, 1, None, true, false);
+        primitives::encode_ctx_unsigned(&mut ack, 4, 1);
+        assert!(ReadPropertyACK::decode(&ack).is_err());
+
+        let mut indexed_ack = encode_fields(0, 1, 1, Some((2, 1)), true, false);
+        primitives::encode_ctx_unsigned(&mut indexed_ack, 4, 1);
+        assert!(ReadPropertyACK::decode(&indexed_ack).is_err());
     }
 
     // -----------------------------------------------------------------------
