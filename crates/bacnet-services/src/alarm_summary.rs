@@ -58,7 +58,10 @@ impl GetAlarmSummaryAck {
 
             // objectIdentifier (app)
             let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.class != TagClass::Application || tag.number != app_tag::OBJECT_IDENTIFIER {
+            if tag.class != TagClass::Application
+                || tag.number != app_tag::OBJECT_IDENTIFIER
+                || data[offset] & 0x07 > 5
+            {
                 return Err(Error::decoding(
                     offset,
                     "AlarmSummaryAck expected object-id application tag",
@@ -76,7 +79,10 @@ impl GetAlarmSummaryAck {
 
             // alarmState (app enumerated)
             let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.class != TagClass::Application || tag.number != app_tag::ENUMERATED {
+            if tag.class != TagClass::Application
+                || tag.number != app_tag::ENUMERATED
+                || data[offset] & 0x07 > 5
+            {
                 return Err(Error::decoding(
                     offset,
                     "AlarmSummaryAck expected enumerated application tag",
@@ -97,7 +103,10 @@ impl GetAlarmSummaryAck {
 
             // acknowledgedTransitions (app bitstring)
             let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.class != TagClass::Application || tag.number != app_tag::BIT_STRING {
+            if tag.class != TagClass::Application
+                || tag.number != app_tag::BIT_STRING
+                || data[offset] & 0x07 > 5
+            {
                 return Err(Error::decoding(
                     offset,
                     "AlarmSummaryAck expected bit-string application tag",
@@ -242,6 +251,24 @@ mod tests {
         let mut trailing = encoded;
         primitives::encode_app_null(&mut trailing);
         assert!(GetAlarmSummaryAck::decode(&trailing).is_err());
+    }
+
+    #[test]
+    fn ack_rejects_reserved_application_lvt_forms() {
+        let encoded = ack_with_alarm_state(&[0]);
+        let (object_tag, object_pos) = tags::decode_tag(&encoded, 0).unwrap();
+        let state_offset = object_pos + object_tag.length as usize;
+        let (state_tag, state_pos) = tags::decode_tag(&encoded, state_offset).unwrap();
+        let transitions_offset = state_pos + state_tag.length as usize;
+
+        for lvt in [6, 7] {
+            for (offset, declared_length) in [(0, 4), (state_offset, 1), (transitions_offset, 2)] {
+                let mut reserved = encoded.to_vec();
+                reserved[offset] = (reserved[offset] & 0xF8) | lvt;
+                reserved.insert(offset + 1, declared_length);
+                assert!(GetAlarmSummaryAck::decode(&reserved).is_err());
+            }
+        }
     }
 
     #[test]
