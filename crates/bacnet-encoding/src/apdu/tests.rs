@@ -306,6 +306,49 @@ fn error_with_trailing_data_round_trip() {
     assert_eq!(apdu, decoded);
 }
 
+#[test]
+fn error_enumerated_values_must_fit_u16() {
+    let encode_error = |error_class, error_code| {
+        let mut buf = BytesMut::with_capacity(16);
+        buf.put_u8(0x50);
+        buf.put_u8(1);
+        buf.put_u8(ConfirmedServiceChoice::READ_PROPERTY.to_raw());
+        primitives::encode_app_enumerated(&mut buf, error_class);
+        primitives::encode_app_enumerated(&mut buf, error_code);
+        buf.freeze()
+    };
+
+    for (error_class, error_code, field, value) in
+        [(65_536, 0, "class", 65_536), (0, 65_537, "code", 65_537)]
+    {
+        let error = decode_apdu(encode_error(error_class, error_code)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("ErrorPDU error {field} {value}")),
+            "unexpected error for error {field} {value}: {error}"
+        );
+    }
+
+    let decoded = decode_apdu(encode_error(u16::MAX as u32, u16::MAX as u32)).unwrap();
+    let Apdu::Error(decoded) = decoded else {
+        panic!("expected ErrorPDU");
+    };
+    assert_eq!(decoded.error_class.to_raw(), u16::MAX);
+    assert_eq!(decoded.error_code.to_raw(), u16::MAX);
+
+    // Three-octet representations of numeric class 2 and code 32 remain valid.
+    let decoded = decode_apdu(Bytes::from_static(&[
+        0x50, 1, 12, 0x93, 0, 0, 2, 0x93, 0, 0, 32,
+    ]))
+    .unwrap();
+    let Apdu::Error(decoded) = decoded else {
+        panic!("expected ErrorPDU");
+    };
+    assert_eq!(decoded.error_class, ErrorClass::PROPERTY);
+    assert_eq!(decoded.error_code, ErrorCode::UNKNOWN_PROPERTY);
+}
+
 // --- Reject ---
 
 #[test]
