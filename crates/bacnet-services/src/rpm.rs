@@ -289,6 +289,12 @@ impl ReadPropertyMultipleACK {
 fn decode_error_pair(data: &[u8], offset: usize) -> Result<(ErrorClass, ErrorCode, usize), Error> {
     // error-class: app-tagged enumerated
     let (tag, pos) = tags::decode_tag(data, offset)?;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        return Err(Error::decoding(
+            offset,
+            "RPM error class: expected application-tagged enumerated",
+        ));
+    }
     let end = pos + tag.length as usize;
     if end > data.len() {
         return Err(Error::decoding(pos, "RPM error truncated at error-class"));
@@ -305,6 +311,12 @@ fn decode_error_pair(data: &[u8], offset: usize) -> Result<(ErrorClass, ErrorCod
 
     // error-code: app-tagged enumerated
     let (tag, pos) = tags::decode_tag(data, offset)?;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        return Err(Error::decoding(
+            offset,
+            "RPM error code: expected application-tagged enumerated",
+        ));
+    }
     let end = pos + tag.length as usize;
     if end > data.len() {
         return Err(Error::decoding(pos, "RPM error truncated at error-code"));
@@ -426,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn error_pair_values_must_fit_u16() {
+    fn error_pair_values_must_be_enumerated_and_fit_u16() {
         let encode_pair = |error_class, error_code| {
             let mut buf = BytesMut::new();
             primitives::encode_app_enumerated(&mut buf, error_class);
@@ -460,6 +472,18 @@ mod tests {
         assert_eq!(error_class, ErrorClass::PROPERTY);
         assert_eq!(error_code, ErrorCode::UNKNOWN_PROPERTY);
         assert_eq!(consumed, leading_zero.len());
+
+        for (tag_offset, field) in [(0, "class"), (2, "code")] {
+            let mut encoded = encode_pair(2, 32);
+            encoded[tag_offset] = 0x21; // Application Unsigned with one content octet.
+            let error = decode_error_pair(&encoded, 0).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!(
+                    "RPM error {field}: expected application-tagged enumerated"
+                )),
+                "unexpected error for error {field} tag: {error}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
