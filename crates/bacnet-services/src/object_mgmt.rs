@@ -115,13 +115,13 @@ impl CreateObjectRequest {
                             "CreateObject missing closing tag 1",
                         ));
                     }
-                    if values.len() >= MAX_DECODED_ITEMS {
-                        return Err(Error::decoding(offset, "CreateObject values exceeds max"));
-                    }
                     let (tag, closing_end) = tags::decode_tag(data, offset)?;
                     if tag.is_closing_tag(1) {
                         offset = closing_end;
                         break;
+                    }
+                    if values.len() >= MAX_DECODED_ITEMS {
+                        return Err(Error::decoding(offset, "CreateObject values exceeds max"));
                     }
                     let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
                     values.push(pv);
@@ -252,6 +252,37 @@ mod tests {
         let mut trailing = empty_values;
         primitives::encode_app_null(&mut trailing);
         assert!(CreateObjectRequest::decode(&trailing).is_err());
+    }
+
+    #[test]
+    fn create_object_accepts_exact_initial_value_limit() {
+        let value = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0],
+            priority: None,
+        };
+        let request = CreateObjectRequest {
+            object_specifier: ObjectSpecifier::Type(ObjectType::ANALOG_INPUT),
+            list_of_initial_values: vec![value.clone(); MAX_DECODED_ITEMS],
+        };
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded);
+        assert_eq!(
+            CreateObjectRequest::decode(&encoded)
+                .unwrap()
+                .list_of_initial_values
+                .len(),
+            MAX_DECODED_ITEMS
+        );
+
+        let request = CreateObjectRequest {
+            object_specifier: ObjectSpecifier::Type(ObjectType::ANALOG_INPUT),
+            list_of_initial_values: vec![value; MAX_DECODED_ITEMS + 1],
+        };
+        encoded.clear();
+        request.encode(&mut encoded);
+        assert!(CreateObjectRequest::decode(&encoded).is_err());
     }
 
     #[test]
