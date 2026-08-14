@@ -132,6 +132,14 @@ impl IAmRequest {
         let mut offset = 0;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::OBJECT_IDENTIFIER
+        {
+            return Err(Error::decoding(
+                offset,
+                "IAm object identifier: expected application-tagged object identifier",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at object-identifier"));
@@ -140,6 +148,12 @@ impl IAmRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
+            return Err(Error::decoding(
+                offset,
+                "IAm max APDU length: expected application-tagged unsigned",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at max-apdu-length"));
@@ -154,6 +168,12 @@ impl IAmRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+            return Err(Error::decoding(
+                offset,
+                "IAm segmentation: expected application-tagged enumerated",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at segmentation"));
@@ -165,6 +185,12 @@ impl IAmRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
+            return Err(Error::decoding(
+                offset,
+                "IAm vendor ID: expected application-tagged unsigned",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "IAm truncated at vendor-id"));
@@ -360,6 +386,64 @@ mod tests {
         assert_eq!(decoded.max_apdu_length, u32::MAX);
         assert_eq!(decoded.segmentation_supported.to_raw(), u8::MAX);
         assert_eq!(decoded.vendor_id, u16::MAX);
+
+        let encode_with_tags = |object_tag, max_apdu_tag, segmentation_tag, vendor_tag| {
+            let mut buf = BytesMut::new();
+            for (tag_number, content) in [
+                (object_tag, &object_identifier.encode()[..]),
+                (max_apdu_tag, &1476_u16.to_be_bytes()[..]),
+                (segmentation_tag, &[0][..]),
+                (vendor_tag, &999_u16.to_be_bytes()[..]),
+            ] {
+                tags::encode_tag(
+                    &mut buf,
+                    tag_number,
+                    tags::TagClass::Application,
+                    content.len() as u32,
+                );
+                buf.extend_from_slice(content);
+            }
+            buf
+        };
+        for (object_tag, max_apdu_tag, segmentation_tag, vendor_tag, field) in [
+            (
+                tags::app_tag::UNSIGNED,
+                tags::app_tag::UNSIGNED,
+                tags::app_tag::ENUMERATED,
+                tags::app_tag::UNSIGNED,
+                "object identifier",
+            ),
+            (
+                tags::app_tag::OBJECT_IDENTIFIER,
+                tags::app_tag::ENUMERATED,
+                tags::app_tag::ENUMERATED,
+                tags::app_tag::UNSIGNED,
+                "max APDU length",
+            ),
+            (
+                tags::app_tag::OBJECT_IDENTIFIER,
+                tags::app_tag::UNSIGNED,
+                tags::app_tag::UNSIGNED,
+                tags::app_tag::UNSIGNED,
+                "segmentation",
+            ),
+            (
+                tags::app_tag::OBJECT_IDENTIFIER,
+                tags::app_tag::UNSIGNED,
+                tags::app_tag::ENUMERATED,
+                tags::app_tag::SIGNED,
+                "vendor ID",
+            ),
+        ] {
+            let encoded = encode_with_tags(object_tag, max_apdu_tag, segmentation_tag, vendor_tag);
+            let error = IAmRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("IAm {field}: expected application-tagged")),
+                "unexpected error for {field} tag: {error}"
+            );
+        }
     }
 
     #[test]
