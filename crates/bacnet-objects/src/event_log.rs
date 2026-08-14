@@ -9,7 +9,11 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::{self, read_common_properties};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
+
+struct EventLogWriteRollback {
+    buffer: VecDeque<BACnetLogRecord>,
+}
 
 /// BACnet EventLog object.
 ///
@@ -232,6 +236,28 @@ impl BACnetObject for EventLogObject {
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn capture_write_property_rollback(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        (property == PropertyIdentifier::RECORD_COUNT
+            && matches!(value, PropertyValue::Unsigned(0)))
+        .then(|| {
+            WritePropertyRollback::new(EventLogWriteRollback {
+                buffer: std::mem::take(&mut self.buffer),
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        self.buffer = rollback.downcast::<EventLogWriteRollback>()?.buffer;
+        Ok(())
     }
 }
 

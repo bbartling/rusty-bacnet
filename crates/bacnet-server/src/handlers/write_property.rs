@@ -25,10 +25,157 @@ fn check_and_prepare_name_write(
     Ok(())
 }
 
+struct PropertyRollback {
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    value: PropertyValue,
+}
+
+struct RollbackRecord {
+    oid: ObjectIdentifier,
+    written_property: PropertyIdentifier,
+    properties: Vec<PropertyRollback>,
+    object_state: Option<WritePropertyRollback>,
+}
+
+struct RollbackFailure {
+    error: Error,
+    residual_oids: Vec<ObjectIdentifier>,
+}
+
+fn record_rollback_failure(
+    first_error: &mut Option<Error>,
+    residual_oids: &mut Vec<ObjectIdentifier>,
+    oid: ObjectIdentifier,
+    error: Error,
+) {
+    if first_error.is_none() {
+        *first_error = Some(error);
+    }
+    if !residual_oids.contains(&oid) {
+        residual_oids.push(oid);
+    }
+}
+
+fn rollback_writes(
+    db: &mut ObjectDatabase,
+    applied: Vec<RollbackRecord>,
+) -> Result<(), RollbackFailure> {
+    let mut first_error = None;
+    let mut residual_oids = Vec::new();
+    for rollback in applied.into_iter().rev() {
+        let RollbackRecord {
+            oid,
+            written_property,
+            properties,
+            object_state,
+        } = rollback;
+        if properties.is_empty() && object_state.is_none() {
+            let error = Error::Encoding(format!(
+                "no rollback snapshot available for property {}",
+                written_property.to_raw()
+            ));
+            tracing::error!(
+                object = ?oid,
+                property = written_property.to_raw(),
+                "WPM rollback snapshot unavailable"
+            );
+            record_rollback_failure(&mut first_error, &mut residual_oids, oid, error);
+            if written_property == PropertyIdentifier::OBJECT_NAME {
+                db.update_name_index(&oid);
+            }
+            continue;
+        }
+        let mut rejected_properties = Vec::new();
+        if let Some(object) = db.get_mut(&oid) {
+            for property_rollback in properties.into_iter().rev() {
+                let PropertyRollback {
+                    property,
+                    array_index,
+                    value,
+                } = property_rollback;
+                // PRIORITY_ARRAY ignores the priority argument; other
+                // properties replay their saved value.
+                if let Err(error) =
+                    object.write_property(property, array_index, value.clone(), None)
+                {
+                    // The object-state token may restore this value as a side
+                    // effect. Check rejected replays after restoring the token.
+                    rejected_properties.push((property, array_index, value, error));
+                }
+            }
+            if let Some(state) = object_state {
+                if let Err(error) = object.restore_write_property_rollback(state) {
+                    tracing::error!(
+                        object = ?oid,
+                        %error,
+                        "WPM object-state rollback failed"
+                    );
+                    record_rollback_failure(&mut first_error, &mut residual_oids, oid, error);
+                }
+            }
+            for (property, array_index, value, error) in rejected_properties {
+                // A rollback in the same write can restore this value as a
+                // side effect (notably OOS restoring Reliability, or an
+                // object-owned token restoring fallback-backed storage).
+                let restored = object
+                    .read_property(property, array_index)
+                    .is_ok_and(|current| current == value);
+                if !restored {
+                    tracing::error!(
+                        object = ?oid,
+                        property = property.to_raw(),
+                        %error,
+                        "WPM property rollback failed"
+                    );
+                    record_rollback_failure(&mut first_error, &mut residual_oids, oid, error);
+                }
+            }
+        }
+        // A token may own state that also affects Object_Name. Refresh after
+        // the complete write rollback rather than only after property replay.
+        if written_property == PropertyIdentifier::OBJECT_NAME {
+            db.update_name_index(&oid);
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(RollbackFailure {
+            error,
+            residual_oids,
+        }),
+        None => Ok(()),
+    }
+}
+
+fn error_after_rollback(
+    db: &mut ObjectDatabase,
+    applied: Vec<RollbackRecord>,
+    write_error: Error,
+    residual_oids: &mut Vec<ObjectIdentifier>,
+) -> Error {
+    match rollback_writes(db, applied) {
+        Ok(()) => write_error,
+        Err(rollback_failure) => {
+            for oid in rollback_failure.residual_oids {
+                if !residual_oids.contains(&oid) {
+                    residual_oids.push(oid);
+                }
+            }
+            Error::Encoding(format!(
+                "WritePropertyMultiple failed ({write_error}); rollback failed ({})",
+                rollback_failure.error
+            ))
+        }
+    }
+}
+
 /// Handle a WritePropertyMultiple request.
 ///
-/// Validates all properties first, then commits atomically. If any write fails,
-/// all previously applied writes are rolled back. Returns the written object identifiers.
+/// Validates all properties first, then applies the repository's atomic-write
+/// policy. If any write fails, every snapshotted write is rolled back; a
+/// restoration failure is returned instead of being hidden in tracing. Returns
+/// the written object identifiers.
 ///
 /// `OBJECT_NAME` writes are routed through the database name index: a
 /// duplicate name is rejected up front, and a successful rename refreshes the
@@ -52,9 +199,34 @@ fn check_and_prepare_name_write(
 /// value and the object's saved evaluated value. Rollback replays
 /// `OUT_OF_SERVICE` first and then `RELIABILITY`, reconstructing both visible
 /// state and the object's private saved-value slot.
+///
+/// Objects may also supply an opaque rollback token when property readback is
+/// not state-equivalent. Tokens cover reset side effects, derived properties,
+/// destructive log writes, command slots that cannot be written directly, and
+/// fallback-backed storage. Replaying the readable value alone would not
+/// restore the pre-request state. This rollback is repository policy; Clause
+/// 15.10 itself permits preceding writes to remain applied when a later write
+/// fails.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
+) -> Result<Vec<ObjectIdentifier>, Error> {
+    handle_write_property_multiple_with_residuals(db, service_data).0
+}
+
+pub(crate) fn handle_write_property_multiple_with_residuals(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+) -> (Result<Vec<ObjectIdentifier>, Error>, Vec<ObjectIdentifier>) {
+    let mut residual_oids = Vec::new();
+    let result = handle_write_property_multiple_inner(db, service_data, &mut residual_oids);
+    (result, residual_oids)
+}
+
+fn handle_write_property_multiple_inner(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    residual_oids: &mut Vec<ObjectIdentifier>,
 ) -> Result<Vec<ObjectIdentifier>, Error> {
     let request = WritePropertyMultipleRequest::decode(service_data)?;
 
@@ -101,18 +273,15 @@ pub fn handle_write_property_multiple(
     }
 
     // Commit: apply all writes, rolling back on failure.
-    let mut applied: Vec<(
-        ObjectIdentifier,
-        PropertyIdentifier,
-        Option<u32>,
-        PropertyValue,
-    )> = Vec::new();
+    let mut applied: Vec<RollbackRecord> = Vec::new();
 
     for (oid, prop_id, array_index, value, priority) in &decoded_writes {
         // Enforce Object_Name uniqueness against the database index before
         // mutating the object, so a rejected duplicate leaves no trace.
         if *prop_id == PropertyIdentifier::OBJECT_NAME {
-            check_and_prepare_name_write(db, oid, value)?;
+            if let Err(error) = check_and_prepare_name_write(db, oid, value) {
+                return Err(error_after_rollback(db, applied, error, residual_oids));
+            }
         }
         let object = db.get_mut(oid).unwrap();
         // Capture a state-equivalent snapshot for rollback. For a commandable
@@ -131,8 +300,8 @@ pub fn handle_write_property_multiple(
         // In that case fall back to snapshotting PRESENT_VALUE directly — the
         // same value the old code snapshotted — so the write still rolls back.
         // Without this fallback a failed multi-write would leave the
-        // non-commandable PRESENT_VALUE changed despite reporting failure
-        // (ASHRAE 135-2020 §19.1.2).
+        // non-commandable PRESENT_VALUE changed despite this implementation's
+        // all-or-nothing WPM policy.
         let rollback_records = if *prop_id == PropertyIdentifier::PRESENT_VALUE {
             // The write targets priority `priority.unwrap_or(16)` (matching
             // `write_priority_array!`). Snapshot that exact slot so rollback
@@ -168,12 +337,21 @@ pub fn handle_write_property_multiple(
             }
         } else if *prop_id == PropertyIdentifier::OUT_OF_SERVICE {
             let mut records = Vec::new();
-            if let Ok(reliability) = object.read_property(PropertyIdentifier::RELIABILITY, None) {
-                // Pushed before OUT_OF_SERVICE so reverse-order rollback
-                // restores OOS first, then the client simulation.
-                records.push((PropertyIdentifier::RELIABILITY, None, reliability));
-            }
             if let Ok(out_of_service) = object.read_property(*prop_id, *array_index) {
+                // Leaving OOS may replace the client's simulated Reliability
+                // with a saved evaluated value. Preserve both only in that
+                // direction. Entering OOS needs no separate Reliability replay:
+                // restoring OOS to FALSE restores the saved value itself, and a
+                // subsequent network Reliability write would be rejected.
+                if out_of_service == PropertyValue::Boolean(true) {
+                    if let Ok(reliability) =
+                        object.read_property(PropertyIdentifier::RELIABILITY, None)
+                    {
+                        // Pushed before OUT_OF_SERVICE so reverse rollback
+                        // restores OOS first, then the client simulation.
+                        records.push((PropertyIdentifier::RELIABILITY, None, reliability));
+                    }
+                }
                 records.push((*prop_id, *array_index, out_of_service));
             }
             records
@@ -185,6 +363,18 @@ pub fn handle_write_property_multiple(
                 .into_iter()
                 .collect()
         };
+        let properties = rollback_records
+            .into_iter()
+            .map(|(property, array_index, value)| PropertyRollback {
+                property,
+                array_index,
+                value,
+            })
+            .collect::<Vec<_>>();
+        // Readable snapshots must be captured before this hook: destructive
+        // writes may move private state into their rollback token.
+        let object_rollback = object.capture_write_property_rollback(*prop_id, value);
+        let has_rollback = !properties.is_empty() || object_rollback.is_some();
         match object.write_property(*prop_id, *array_index, value.clone(), *priority) {
             Ok(()) => {
                 // A successful Object_Name write changed the object's name field;
@@ -192,27 +382,26 @@ pub fn handle_write_property_multiple(
                 if *prop_id == PropertyIdentifier::OBJECT_NAME {
                     db.update_name_index(oid);
                 }
-                for (rb_prop, rb_idx, rb_val) in rollback_records {
-                    applied.push((*oid, rb_prop, rb_idx, rb_val));
-                }
+                applied.push(RollbackRecord {
+                    oid: *oid,
+                    written_property: *prop_id,
+                    properties,
+                    object_state: object_rollback,
+                });
             }
             Err(e) => {
-                for (rb_oid, rb_prop, rb_idx, rb_val) in applied.into_iter().rev() {
-                    if let Some(obj) = db.get_mut(&rb_oid) {
-                        // Restore the snapshotted state. For a PRIORITY_ARRAY slot
-                        // the priority argument is ignored (write_priority_array_direct
-                        // writes the indexed slot; a `Null` value relinquishes it);
-                        // for any other property this re-writes the saved value.
-                        let _ = obj.write_property(rb_prop, rb_idx, rb_val, None);
-                        // The rollback restored the object's name field; resync
-                        // the database index so it no longer maps the rolled-back
-                        // name and once again maps the restored name.
-                        if rb_prop == PropertyIdentifier::OBJECT_NAME {
-                            db.update_name_index(&rb_oid);
-                        }
-                    }
+                // `BACnetObject::write_property` requires errors to be
+                // side-effect-free. A snapshot still lets rollback defend
+                // against a custom implementation that violates the contract.
+                if has_rollback {
+                    applied.push(RollbackRecord {
+                        oid: *oid,
+                        written_property: *prop_id,
+                        properties,
+                        object_state: object_rollback,
+                    });
                 }
-                return Err(e);
+                return Err(error_after_rollback(db, applied, e, residual_oids));
             }
         }
     }

@@ -182,7 +182,7 @@ fn read_repo_file(path: &str) -> String {
 fn ledger_schema_has_required_seed_rows_and_unique_ids() {
     let data = ledger();
     assert_eq!(data["standard"], "ANSI/ASHRAE Standard 135-2020");
-    assert_eq!(data["reviewed_at"], "2026-08-12");
+    assert_eq!(data["reviewed_at"], "2026-08-13");
     assert!(
         data["repo_sha"].as_str().is_some_and(|sha| sha.len() == 40),
         "repo_sha must be a full git SHA"
@@ -347,10 +347,19 @@ fn public_claim_guard_rejects_claim_without_standard_anchor() {
 #[test]
 fn generated_support_docs_are_current_with_ledger() {
     let data = ledger();
+    let repo_sha = data["repo_sha"]
+        .as_str()
+        .expect("repo_sha should be a string");
     for doc in [SUPPORT_SUMMARY, PICS_DRAFT, BIBBS_DRAFT] {
         assert!(doc.contains("DRAFT internal support evidence"));
         assert!(doc.contains("docs/conformance/bacnet-135-2020.json"));
     }
+    assert!(
+        STANDARD_LEDGER.contains(&format!(
+            "Implementation evidence SHA reviewed: `{repo_sha}`"
+        )),
+        "standard ledger evidence SHA differs from the machine-readable ledger"
+    );
     assert!(STANDARD_LEDGER.contains("## Clause 4 Architecture"));
     assert!(STANDARD_LEDGER.contains("## Annex AB BACnet/SC"));
     for id in REQUIRED_IDS {

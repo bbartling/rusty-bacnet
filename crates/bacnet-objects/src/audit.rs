@@ -8,7 +8,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::read_property_list_property;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
 
 // ---------------------------------------------------------------------------
 // AuditLog (type 61)
@@ -31,6 +31,10 @@ pub struct AuditLogObject {
     buffer: VecDeque<AuditRecord>,
     total_record_count: u64,
     status_flags: StatusFlags,
+}
+
+struct AuditLogWriteRollback {
+    buffer: VecDeque<AuditRecord>,
 }
 
 impl AuditLogObject {
@@ -180,6 +184,28 @@ impl BACnetObject for AuditLogObject {
             PropertyIdentifier::EVENT_STATE,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn capture_write_property_rollback(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        (property == PropertyIdentifier::RECORD_COUNT
+            && matches!(value, PropertyValue::Unsigned(0)))
+        .then(|| {
+            WritePropertyRollback::new(AuditLogWriteRollback {
+                buffer: std::mem::take(&mut self.buffer),
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        self.buffer = rollback.downcast::<AuditLogWriteRollback>()?.buffer;
+        Ok(())
     }
 }
 

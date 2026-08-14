@@ -1,5 +1,6 @@
 //! BACnetObject trait — the interface all BACnet objects implement.
 
+use std::any::Any;
 use std::borrow::Cow;
 
 use bacnet_types::constructed::BACnetLogRecord;
@@ -9,6 +10,32 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::event::TransitionOutcome;
 use crate::event_enrollment::EventEnrollmentEvalState;
+
+/// Object-owned state that cannot be reconstructed from property readback.
+///
+/// This token supports the server's stronger-than-Clause-15.10 rollback policy
+/// for WritePropertyMultiple. The server still snapshots readable property
+/// values when a token exists; the token supplements that snapshot with state
+/// hidden by readback. This includes event-detection resets, fallback-backed
+/// values, destructive log writes, and writes that update derived properties.
+#[doc(hidden)]
+pub struct WritePropertyRollback(Box<dyn Any + Send + Sync>);
+
+impl WritePropertyRollback {
+    /// Wrap object-private rollback state.
+    #[doc(hidden)]
+    pub fn new<T: Any + Send + Sync>(state: T) -> Self {
+        Self(Box::new(state))
+    }
+
+    /// Recover object-private rollback state.
+    #[doc(hidden)]
+    pub fn downcast<T: Any + Send + Sync>(self) -> Result<T, Error> {
+        self.0.downcast::<T>().map(|state| *state).map_err(|_| {
+            Error::Encoding("object received an incompatible write rollback token".into())
+        })
+    }
+}
 
 /// The core trait for all BACnet objects.
 ///
@@ -29,6 +56,10 @@ pub trait BACnetObject: Send + Sync {
     ) -> Result<PropertyValue, Error>;
 
     /// Write a property value.
+    ///
+    /// Returning `Err` MUST leave the object unchanged. WritePropertyMultiple
+    /// can restore earlier successful writes, but it cannot reconstruct a
+    /// write-only property that mutates before rejecting its own write.
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
@@ -76,6 +107,35 @@ pub trait BACnetObject: Send + Sync {
     /// vendor or per-instance array properties override.
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         array_property_default(self.object_identifier().object_type(), property)
+    }
+
+    /// Capture state that property readback cannot preserve during rollback.
+    ///
+    /// The default returns `None`; the server snapshots readable property
+    /// values before calling this hook. Implementations may return a token for
+    /// writes whose side effects, destructive behavior, or fallback-backed
+    /// storage make replay lossy. A destructive write may move state into the
+    /// token when `value` is valid; the token is restored if the write or a
+    /// later write fails, and dropped when the WPM request succeeds. Returning
+    /// `None` MUST leave the object unchanged.
+    #[doc(hidden)]
+    fn capture_write_property_rollback(
+        &mut self,
+        _property: PropertyIdentifier,
+        _value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        None
+    }
+
+    /// Restore a token returned by [`capture_write_property_rollback`](Self::capture_write_property_rollback).
+    #[doc(hidden)]
+    fn restore_write_property_rollback(
+        &mut self,
+        _rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        Err(Error::Encoding(
+            "object does not support this write rollback token".into(),
+        ))
     }
 
     /// Whether this object type can be created at runtime via CreateObject.
