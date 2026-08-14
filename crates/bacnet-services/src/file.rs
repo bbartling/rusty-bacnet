@@ -21,6 +21,31 @@ fn checked_slice<'a>(
     Ok((&content[p..end], end))
 }
 
+fn checked_unsigned_u32(
+    content: &[u8],
+    offset: usize,
+    context: &str,
+) -> Result<(u32, usize), Error> {
+    let (tag, pos) = tags::decode_tag(content, offset)?;
+    if tag.class != tags::TagClass::Application
+        || tag.number != tags::app_tag::UNSIGNED
+        || content[offset] & 0x07 > 5
+    {
+        return Err(Error::decoding(
+            offset,
+            format!("{context} expected application Unsigned"),
+        ));
+    }
+    let end = pos + tag.length as usize;
+    if end > content.len() {
+        return Err(Error::decoding(pos, format!("{context} truncated")));
+    }
+    let raw = primitives::decode_unsigned(&content[pos..end])?;
+    let value = u32::try_from(raw)
+        .map_err(|_| Error::decoding(pos, format!("{context} {raw} exceeds u32")))?;
+    Ok((value, end))
+}
+
 // ---------------------------------------------------------------------------
 // AtomicReadFile-Request
 // ---------------------------------------------------------------------------
@@ -112,12 +137,11 @@ impl AtomicReadFileRequest {
             let (slice, inner) =
                 checked_slice(content, 0, "AtomicReadFile stream file-start-position")?;
             let file_start_position = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(
+            let (requested_octet_count, _) = checked_unsigned_u32(
                 content,
                 inner,
                 "AtomicReadFile stream requested-octet-count",
             )?;
-            let requested_octet_count = primitives::decode_unsigned(slice)? as u32;
             FileAccessMethod::Stream {
                 file_start_position,
                 requested_octet_count,
@@ -127,12 +151,11 @@ impl AtomicReadFileRequest {
             let (slice, inner) =
                 checked_slice(content, 0, "AtomicReadFile record file-start-record")?;
             let file_start_record = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(
+            let (requested_record_count, _) = checked_unsigned_u32(
                 content,
                 inner,
                 "AtomicReadFile record requested-record-count",
             )?;
-            let requested_record_count = primitives::decode_unsigned(slice)? as u32;
             FileAccessMethod::Record {
                 file_start_record,
                 requested_record_count,
@@ -205,9 +228,8 @@ impl AtomicWriteFileRequest {
             let (slice, mut inner) =
                 checked_slice(content, 0, "AtomicWriteFile record file-start-record")?;
             let file_start_record = primitives::decode_signed(slice)?;
-            let (slice, new_inner) =
-                checked_slice(content, inner, "AtomicWriteFile record record-count")?;
-            let record_count = primitives::decode_unsigned(slice)? as u32;
+            let (record_count, new_inner) =
+                checked_unsigned_u32(content, inner, "AtomicWriteFile record record-count")?;
             inner = new_inner;
             if record_count as usize > MAX_DECODED_ITEMS {
                 return Err(Error::decoding(0, "record count exceeds maximum"));
@@ -318,12 +340,11 @@ impl AtomicReadFileAck {
             let (slice, mut inner) =
                 checked_slice(content, 0, "AtomicReadFileAck record file-start-record")?;
             let file_start_record = primitives::decode_signed(slice)?;
-            let (slice, new_inner) = checked_slice(
+            let (returned_record_count, new_inner) = checked_unsigned_u32(
                 content,
                 inner,
                 "AtomicReadFileAck record returned-record-count",
             )?;
-            let returned_record_count = primitives::decode_unsigned(slice)? as u32;
             inner = new_inner;
             if returned_record_count as usize > MAX_DECODED_ITEMS {
                 return Err(Error::decoding(0, "record count exceeds maximum"));
@@ -782,3 +803,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "file_width_tests.rs"]
+mod width_tests;
