@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::{decode_context, decode_context_u32};
 
 /// Encode a BACnetPropertyStates value.
 pub(super) fn encode_property_states(buf: &mut BytesMut, state: &BACnetPropertyStates) {
@@ -177,42 +178,23 @@ pub(super) fn decode_device_obj_prop_ref(
     pos: &mut usize,
 ) -> Result<BACnetDeviceObjectPropertyReference, Error> {
     // [0] objectIdentifier
-    let (t, p) = tags::decode_tag(data, *pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            p,
-            "DeviceObjectPropertyRef: truncated objectIdentifier",
-        ));
-    }
-    let object_identifier = ObjectIdentifier::decode(&data[p..end])?;
+    let (content, end) = decode_context(data, *pos, 0, "DeviceObjectPropertyRef objectIdentifier")?;
+    let object_identifier = ObjectIdentifier::decode(content)?;
     *pos = end;
 
     // [1] propertyIdentifier
-    let (t, p) = tags::decode_tag(data, *pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            p,
-            "DeviceObjectPropertyRef: truncated propertyIdentifier",
-        ));
-    }
-    let property_identifier = primitives::decode_unsigned(&data[p..end])? as u32;
+    let (property_identifier, end) =
+        decode_context_u32(data, *pos, 1, "DeviceObjectPropertyRef propertyIdentifier")?;
     *pos = end;
 
     // [2] propertyArrayIndex — optional
     let mut property_array_index = None;
     if *pos < data.len() {
-        let (peek, peek_pos) = tags::decode_tag(data, *pos)?;
+        let (peek, _) = tags::decode_tag(data, *pos)?;
         if peek.is_context(2) {
-            let end = peek_pos + peek.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    peek_pos,
-                    "DeviceObjectPropertyRef: truncated propertyArrayIndex",
-                ));
-            }
-            property_array_index = Some(primitives::decode_unsigned(&data[peek_pos..end])? as u32);
+            let (value, end) =
+                decode_context_u32(data, *pos, 2, "DeviceObjectPropertyRef propertyArrayIndex")?;
+            property_array_index = Some(value);
             *pos = end;
         }
     }
@@ -220,16 +202,11 @@ pub(super) fn decode_device_obj_prop_ref(
     // [3] deviceIdentifier — optional
     let mut device_identifier = None;
     if *pos < data.len() {
-        let (peek, peek_pos) = tags::decode_tag(data, *pos)?;
+        let (peek, _) = tags::decode_tag(data, *pos)?;
         if peek.is_context(3) {
-            let end = peek_pos + peek.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    peek_pos,
-                    "DeviceObjectPropertyRef: truncated deviceIdentifier",
-                ));
-            }
-            device_identifier = Some(ObjectIdentifier::decode(&data[peek_pos..end])?);
+            let (content, end) =
+                decode_context(data, *pos, 3, "DeviceObjectPropertyRef deviceIdentifier")?;
+            device_identifier = Some(ObjectIdentifier::decode(content)?);
             *pos = end;
         }
     }
@@ -242,35 +219,64 @@ pub(super) fn decode_device_obj_prop_ref(
     })
 }
 
-/// Extract raw bytes between an opening and its matching closing context tag.
-///
-/// `start` is the position just past the opening tag. The closing tag byte for
-/// context tags 0–14 is `(tag_number << 4) | 0x0F`. This scans byte-by-byte to
-/// find the matching close without parsing inner content as BACnet tags.
+/// Extract an encoded BACnet value sequence from a constructed context field.
 pub(super) fn extract_raw_context(
     data: &[u8],
     start: usize,
     tag_number: u8,
 ) -> Result<(Vec<u8>, usize), Error> {
-    // For context tags < 15 the opening/closing bytes are single-byte:
-    //   opening = (tag << 4) | 0x0E, closing = (tag << 4) | 0x0F
-    let open_byte = (tag_number << 4) | 0x0E;
-    let close_byte = (tag_number << 4) | 0x0F;
-    let mut depth: usize = 1;
+    let mut stack = [0; tags::MAX_CONTEXT_NESTING_DEPTH];
+    stack[0] = tag_number;
+    let mut depth = 1;
     let mut pos = start;
+
     while pos < data.len() {
-        let b = data[pos];
-        if b == open_byte {
+        let tag_start = pos;
+        let (tag, content_start) = tags::decode_tag(data, pos)?;
+        if tag.is_opening {
+            if depth == stack.len() {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "context tag nesting depth exceeds maximum ({})",
+                        tags::MAX_CONTEXT_NESTING_DEPTH
+                    ),
+                ));
+            }
+            stack[depth] = tag.number;
             depth += 1;
-        } else if b == close_byte {
+            pos = content_start;
+        } else if tag.is_closing {
+            if tag.number != stack[depth - 1] {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "closing tag {} does not match opening tag {}",
+                        tag.number,
+                        stack[depth - 1]
+                    ),
+                ));
+            }
             depth -= 1;
             if depth == 0 {
-                let raw = data[start..pos].to_vec();
-                return Ok((raw, pos + 1)); // past closing tag byte
+                return Ok((data[start..tag_start].to_vec(), content_start));
+            }
+            pos = content_start;
+        } else if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
+            pos = content_start;
+        } else {
+            pos = content_start
+                .checked_add(tag.length as usize)
+                .ok_or_else(|| Error::decoding(content_start, "tag length overflow"))?;
+            if pos > data.len() {
+                return Err(Error::decoding(
+                    content_start,
+                    format!("tag data overflows buffer: need {} bytes", tag.length),
+                ));
             }
         }
-        pos += 1;
     }
+
     Err(Error::decoding(
         start,
         format!("extract_raw_context: missing closing tag [{tag_number}]"),
