@@ -19,16 +19,21 @@ pub fn handle_get_event_information(
     let request = GetEventInformationRequest::decode(service_data)?;
 
     let mut summaries = Vec::new();
-    let mut skipping = request.last_received_object_identifier.is_some();
     let mut more_events = false;
+    let cursor = request
+        .last_received_object_identifier
+        .map(|identifier| identifier.encode());
+    let mut object_identifiers = db.list_objects();
+    object_identifiers.sort_unstable_by_key(ObjectIdentifier::encode);
+    let notification_class_identifiers = db.find_by_type(ObjectType::NOTIFICATION_CLASS);
 
-    for (oid, object) in db.iter_objects() {
-        if skipping {
-            if Some(oid) == request.last_received_object_identifier {
-                skipping = false;
-            }
+    for oid in object_identifiers {
+        if cursor.is_some_and(|cursor| oid.encode() <= cursor) {
             continue;
         }
+        let Some(object) = db.get(&oid) else {
+            continue;
+        };
 
         // Clause 12.12: Event_Detection_Enable controls whether the object is
         // considered by the event-summarization services. Checked after the
@@ -50,7 +55,7 @@ pub fn handle_get_event_information(
                     .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
                     .ok()
                     .and_then(|v| match v {
-                        PropertyValue::Unsigned(n) => Some(n as u32),
+                        PropertyValue::Unsigned(n) => u32::try_from(n).ok(),
                         _ => None,
                     })
                     .unwrap_or(0);
@@ -75,22 +80,41 @@ pub fn handle_get_event_information(
                     })
                     .unwrap_or(0);
 
-                let event_priorities =
-                    ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, notification_class)
-                        .ok()
-                        .and_then(|nc_oid| db.get(&nc_oid))
-                        .and_then(|nc_obj| {
-                            nc_obj
-                                .read_property(PropertyIdentifier::PRIORITY, None)
-                                .ok()
-                        })
-                        .and_then(|v| match v {
-                            PropertyValue::OctetString(bytes) if bytes.len() == 3 => {
-                                Some([bytes[0] as u32, bytes[1] as u32, bytes[2] as u32])
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or([0, 0, 0]);
+                let matching_notification_class =
+                    notification_class_identifiers.iter().find_map(|nc_oid| {
+                        let nc_obj = db.get(nc_oid)?;
+                        matches!(
+                            nc_obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None),
+                            Ok(PropertyValue::Unsigned(class_number))
+                                if class_number == u64::from(notification_class)
+                        )
+                        .then_some(nc_obj)
+                    });
+                let event_priorities = matching_notification_class
+                    .and_then(|nc_obj| {
+                        nc_obj
+                            .read_property(PropertyIdentifier::PRIORITY, None)
+                            .ok()
+                    })
+                    .and_then(|v| match v {
+                        PropertyValue::List(items) => {
+                            let [
+                                PropertyValue::Unsigned(offnormal),
+                                PropertyValue::Unsigned(fault),
+                                PropertyValue::Unsigned(normal),
+                            ] = items.as_slice()
+                            else {
+                                return None;
+                            };
+                            Some([
+                                u32::try_from(*offnormal).ok()?,
+                                u32::try_from(*fault).ok()?,
+                                u32::try_from(*normal).ok()?,
+                            ])
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or([0, 0, 0]);
 
                 let acked = object
                     .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
@@ -107,7 +131,24 @@ pub fn handle_get_event_information(
                     .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
                     .ok()
                     .and_then(|v| match v {
-                        PropertyValue::List(items) if items.len() == 3 => None,
+                        PropertyValue::List(items) => {
+                            let [
+                                PropertyValue::Unsigned(offnormal),
+                                PropertyValue::Unsigned(fault),
+                                PropertyValue::Unsigned(normal),
+                            ] = items.as_slice()
+                            else {
+                                return None;
+                            };
+                            let offnormal = u16::try_from(*offnormal).ok()?;
+                            let fault = u16::try_from(*fault).ok()?;
+                            let normal = u16::try_from(*normal).ok()?;
+                            Some([
+                                BACnetTimeStamp::SequenceNumber(offnormal.into()),
+                                BACnetTimeStamp::SequenceNumber(fault.into()),
+                                BACnetTimeStamp::SequenceNumber(normal.into()),
+                            ])
+                        }
                         _ => None,
                     })
                     .unwrap_or([
