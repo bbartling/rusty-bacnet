@@ -401,33 +401,7 @@ pub(crate) fn eval_floating_limit_struct(
 /// Whether a [`BACnetPropertyStates`] payload equals the monitored discrete
 /// value.
 fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
-    use bacnet_types::constructed::BACnetPropertyStates as S;
-    match state {
-        S::BooleanValue(v) => value == u32::from(*v),
-        S::BinaryValue(v) => value == *v,
-        S::EventType(v) => value == *v,
-        S::Polarity(v) => value == *v,
-        S::ProgramChange(v) => value == *v,
-        S::ProgramState(v) => value == *v,
-        S::ReasonForHalt(v) => value == *v,
-        S::Reliability(v) => value == *v,
-        S::State(v) => value == *v,
-        S::SystemStatus(v) => value == *v,
-        S::Units(v) => value == *v,
-        S::UnsignedValue(v) => value == *v,
-        S::LifeSafetyMode(v) => value == *v,
-        S::LifeSafetyState(v) => value == *v,
-        S::DoorAlarmState(v) => value == *v,
-        S::Action(v) => value == *v,
-        S::DoorSecuredStatus(v) => value == *v,
-        S::DoorStatus(v) => value == *v,
-        S::DoorValue(v) => value == *v,
-        S::LiftCarDirection(v) => value == *v,
-        S::LiftCarDoorCommand(v) => value == *v,
-        S::TimerState(v) => value == *v,
-        S::TimerTransition(v) => value == *v,
-        S::Other { .. } => false,
-    }
+    state.as_u32() == Some(value)
 }
 
 /// Structured CHANGE_OF_STATE evaluation against a list of alarm values.

@@ -42,15 +42,51 @@ pub(super) fn property_state_parts(state: &BACnetPropertyStates) -> (u8, Vec<u8>
         BACnetPropertyStates::UnsignedValue(v) => (11, v.to_le_bytes().to_vec()),
         BACnetPropertyStates::LifeSafetyMode(v) => (12, v.to_le_bytes().to_vec()),
         BACnetPropertyStates::LifeSafetyState(v) => (13, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorAlarmState(v) => (14, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::Action(v) => (15, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorSecuredStatus(v) => (16, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorStatus(v) => (17, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorValue(v) => (18, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::LiftCarDirection(v) => (40, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::LiftCarDoorCommand(v) => (42, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::TimerState(v) => (38, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::TimerTransition(v) => (39, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::RestartReason(v) => (14, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorAlarmState(v) => (15, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::Action(v) => (16, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorSecuredStatus(v) => (17, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorStatus(v) => (18, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorValue(v) => (19, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::FileAccessMethod(v) => (20, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LockStatus(v) => (21, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LifeSafetyOperation(v) => (22, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::Maintenance(v) => (23, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NodeType(v) => (24, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NotifyType(v) => (25, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ShedState(v) => (27, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::SilencedState(v) => (28, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessEvent(v) => (30, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessZoneOccupancyState(v) => (31, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessCredentialDisableReason(v) => (32, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessCredentialDisable(v) => (33, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AuthenticationStatus(v) => (34, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::BackupState(v) => (36, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::WriteStatus(v) => (37, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LightingInProgress(v) => (38, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LightingOperation(v) => (39, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LightingTransition(v) => (40, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::IntegerValue(v) => (41, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::BinaryLightingValue(v) => (42, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::TimerState(v) => (43, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::TimerTransition(v) => (44, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::BacnetIpMode(v) => (45, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NetworkPortCommand(v) => (46, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NetworkType(v) => (47, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NetworkNumberQuality(v) => (48, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::EscalatorOperationDirection(v) => (49, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::EscalatorFault(v) => (50, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::EscalatorMode(v) => (51, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarDirection(v) => (52, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarDoorCommand(v) => (53, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarDriveStatus(v) => (54, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarMode(v) => (55, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftGroupMode(v) => (56, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftFault(v) => (57, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ProtocolLevel(v) => (58, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AuditLevel(v) => (59, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AuditOperation(v) => (60, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ExtendedValue(v) => (63, v.to_le_bytes().to_vec()),
         BACnetPropertyStates::Other { tag, data } => (*tag, data.clone()),
     }
 }
@@ -215,8 +251,8 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
     let PropertyValue::Unsigned(tag) = tag_pv else {
         return Err(Error::decoding(0, "property state tag not Unsigned"));
     };
-    let data = match rest.first() {
-        Some(PropertyValue::OctetString(b)) => b.clone(),
+    let data = match rest {
+        [PropertyValue::OctetString(data)] => data.clone(),
         _ => return Err(Error::decoding(1, "property state data not octets")),
     };
     let read_u32 = |data: &[u8]| -> Result<u32, Error> {
@@ -224,8 +260,19 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
             .map(u32::from_le_bytes)
             .map_err(|_| Error::decoding(1, "property state data wrong length"))
     };
-    Ok(match *tag as u8 {
-        0 => BACnetPropertyStates::BooleanValue(data.first().copied().unwrap_or(0) != 0),
+    let read_i32 = |data: &[u8]| -> Result<i32, Error> {
+        data.try_into()
+            .map(i32::from_le_bytes)
+            .map_err(|_| Error::decoding(1, "property state data wrong length"))
+    };
+    let tag =
+        u8::try_from(*tag).map_err(|_| Error::decoding(0, "property state tag exceeds u8"))?;
+    Ok(match tag {
+        0 => match data.as_slice() {
+            [0] => BACnetPropertyStates::BooleanValue(false),
+            [1] => BACnetPropertyStates::BooleanValue(true),
+            _ => return Err(Error::decoding(1, "property state Boolean must be 0 or 1")),
+        },
         1 => BACnetPropertyStates::BinaryValue(read_u32(&data)?),
         2 => BACnetPropertyStates::EventType(read_u32(&data)?),
         3 => BACnetPropertyStates::Polarity(read_u32(&data)?),
@@ -239,15 +286,57 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
         11 => BACnetPropertyStates::UnsignedValue(read_u32(&data)?),
         12 => BACnetPropertyStates::LifeSafetyMode(read_u32(&data)?),
         13 => BACnetPropertyStates::LifeSafetyState(read_u32(&data)?),
-        14 => BACnetPropertyStates::DoorAlarmState(read_u32(&data)?),
-        15 => BACnetPropertyStates::Action(read_u32(&data)?),
-        16 => BACnetPropertyStates::DoorSecuredStatus(read_u32(&data)?),
-        17 => BACnetPropertyStates::DoorStatus(read_u32(&data)?),
-        18 => BACnetPropertyStates::DoorValue(read_u32(&data)?),
-        40 => BACnetPropertyStates::LiftCarDirection(read_u32(&data)?),
-        42 => BACnetPropertyStates::LiftCarDoorCommand(read_u32(&data)?),
-        38 => BACnetPropertyStates::TimerState(read_u32(&data)?),
-        39 => BACnetPropertyStates::TimerTransition(read_u32(&data)?),
-        other => BACnetPropertyStates::Other { tag: other, data },
+        14 => BACnetPropertyStates::RestartReason(read_u32(&data)?),
+        15 => BACnetPropertyStates::DoorAlarmState(read_u32(&data)?),
+        16 => BACnetPropertyStates::Action(read_u32(&data)?),
+        17 => BACnetPropertyStates::DoorSecuredStatus(read_u32(&data)?),
+        18 => BACnetPropertyStates::DoorStatus(read_u32(&data)?),
+        19 => BACnetPropertyStates::DoorValue(read_u32(&data)?),
+        20 => BACnetPropertyStates::FileAccessMethod(read_u32(&data)?),
+        21 => BACnetPropertyStates::LockStatus(read_u32(&data)?),
+        22 => BACnetPropertyStates::LifeSafetyOperation(read_u32(&data)?),
+        23 => BACnetPropertyStates::Maintenance(read_u32(&data)?),
+        24 => BACnetPropertyStates::NodeType(read_u32(&data)?),
+        25 => BACnetPropertyStates::NotifyType(read_u32(&data)?),
+        27 => BACnetPropertyStates::ShedState(read_u32(&data)?),
+        28 => BACnetPropertyStates::SilencedState(read_u32(&data)?),
+        30 => BACnetPropertyStates::AccessEvent(read_u32(&data)?),
+        31 => BACnetPropertyStates::AccessZoneOccupancyState(read_u32(&data)?),
+        32 => BACnetPropertyStates::AccessCredentialDisableReason(read_u32(&data)?),
+        33 => BACnetPropertyStates::AccessCredentialDisable(read_u32(&data)?),
+        34 => BACnetPropertyStates::AuthenticationStatus(read_u32(&data)?),
+        36 => BACnetPropertyStates::BackupState(read_u32(&data)?),
+        37 => BACnetPropertyStates::WriteStatus(read_u32(&data)?),
+        38 => BACnetPropertyStates::LightingInProgress(read_u32(&data)?),
+        39 => BACnetPropertyStates::LightingOperation(read_u32(&data)?),
+        40 => BACnetPropertyStates::LightingTransition(read_u32(&data)?),
+        41 => BACnetPropertyStates::IntegerValue(read_i32(&data)?),
+        42 => BACnetPropertyStates::BinaryLightingValue(read_u32(&data)?),
+        43 => BACnetPropertyStates::TimerState(read_u32(&data)?),
+        44 => BACnetPropertyStates::TimerTransition(read_u32(&data)?),
+        45 => BACnetPropertyStates::BacnetIpMode(read_u32(&data)?),
+        46 => BACnetPropertyStates::NetworkPortCommand(read_u32(&data)?),
+        47 => BACnetPropertyStates::NetworkType(read_u32(&data)?),
+        48 => BACnetPropertyStates::NetworkNumberQuality(read_u32(&data)?),
+        49 => BACnetPropertyStates::EscalatorOperationDirection(read_u32(&data)?),
+        50 => BACnetPropertyStates::EscalatorFault(read_u32(&data)?),
+        51 => BACnetPropertyStates::EscalatorMode(read_u32(&data)?),
+        52 => BACnetPropertyStates::LiftCarDirection(read_u32(&data)?),
+        53 => BACnetPropertyStates::LiftCarDoorCommand(read_u32(&data)?),
+        54 => BACnetPropertyStates::LiftCarDriveStatus(read_u32(&data)?),
+        55 => BACnetPropertyStates::LiftCarMode(read_u32(&data)?),
+        56 => BACnetPropertyStates::LiftGroupMode(read_u32(&data)?),
+        57 => BACnetPropertyStates::LiftFault(read_u32(&data)?),
+        58 => BACnetPropertyStates::ProtocolLevel(read_u32(&data)?),
+        59 => BACnetPropertyStates::AuditLevel(read_u32(&data)?),
+        60 => BACnetPropertyStates::AuditOperation(read_u32(&data)?),
+        63 => BACnetPropertyStates::ExtendedValue(read_u32(&data)?),
+        other @ 64..=254 => BACnetPropertyStates::Other { tag: other, data },
+        reserved => {
+            return Err(Error::decoding(
+                0,
+                format!("property state tag {reserved} is reserved"),
+            ));
+        }
     })
 }

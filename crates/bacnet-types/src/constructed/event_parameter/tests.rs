@@ -49,6 +49,32 @@ fn change_of_state_round_trip() {
 }
 
 #[test]
+fn change_of_state_legacy_form_preserves_corrected_property_states() {
+    let states = vec![
+        BACnetPropertyStates::RestartReason(1),
+        BACnetPropertyStates::DoorAlarmState(2),
+        BACnetPropertyStates::LightingTransition(3),
+        BACnetPropertyStates::IntegerValue(-4),
+        BACnetPropertyStates::TimerState(5),
+        BACnetPropertyStates::LiftCarDirection(6),
+        BACnetPropertyStates::AuditOperation(7),
+        BACnetPropertyStates::ExtendedValue(25_500_008),
+        BACnetPropertyStates::Other {
+            tag: 64,
+            data: vec![0xde, 0xad],
+        },
+    ];
+    let parameters = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: states,
+    };
+    assert_eq!(
+        BACnetEventParameter::decode(&parameters.encode()).unwrap(),
+        parameters
+    );
+}
+
+#[test]
 fn change_of_bitstring_round_trip() {
     let p = BACnetEventParameter::ChangeOfBitstring {
         time_delay: 4,

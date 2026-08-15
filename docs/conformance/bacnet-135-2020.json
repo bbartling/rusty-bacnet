@@ -328,6 +328,8 @@
     "crates/bacnet-encoding/src/constructed/event_parameter.rs",
     "crates/bacnet-encoding/src/constructed/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/mod.rs",
+    "crates/bacnet-types/src/constructed/property_states.rs",
+    "crates/bacnet-services/src/alarm_event/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/mod.rs",
     "crates/bacnet-server/src/event_enrollment/mod.rs"
    ],
@@ -335,19 +337,23 @@
     "crates/bacnet-encoding/src/constructed/tests/event_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/mod.rs",
+    "crates/bacnet-types/src/constructed/event_parameter/tests.rs",
+    "crates/bacnet-services/src/alarm_event/tests/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/tests",
     "crates/bacnet-server/src/event_enrollment/tests"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs",
+    "crates/bacnet-encoding/src/constructed/tests/mod.rs",
+    "crates/bacnet-services/src/alarm_event/tests/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/tests"
    ],
    "benchmarks": [],
    "public_claims": [
     "README BACnet object implementations feature"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL. Evidence covers the modeled alternatives (change-of-bitstring/change-of-state/change-of-value/floating-limit/out-of-range/extended; all eight fault parameters) with golden vectors and round-trips, Opaque preservation of unmodeled alternatives (byte-for-byte for constructed forms; none [20] NULL decodes to Opaque{20, []} and re-encodes constructed), rejection of omitted/deprecated/reserved tags 6/7/12/19, rejection of trailing garbage after a framed element, property-state goldens, and the legacy flat + OctetString-to-Opaque write fallback retained per #129; unmodeled Opaques never reach the legacy little-endian evaluator. The framed property-state codec uses 135-2020 CHOICE tags which correct invented pre-2020 tags for door/timer/lift variants; the older BACnetNotificationParameters codec in bacnet-services still uses the old tags for those variants -- reconciling it is follow-up work with its own wire change (out of this row's scope)."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL. Evidence covers the modeled event/fault alternatives with golden vectors and round-trips, Opaque preservation of unmodeled alternatives, rejection of omitted/deprecated/reserved tags 6/7/12/19, rejection of trailing garbage after a framed element, and the legacy flat + OctetString-to-Opaque write fallback retained per #129; unmodeled Opaques never reach the legacy little-endian evaluator. BACnetPropertyStates models every 135-2020 alternative, including signed integer-value [41] and extended-value [63]; rejects reserved tags, malformed Boolean values, wrong tag forms, over-wide unsigned/enumerated contents, and signed integers wider than i32; and preserves proprietary tags 64..=254. Event/fault parameter and notification parameter paths share the same codec, while the retained flat compatibility form uses the corrected discriminants."
   },
   {
    "id": "BACNET-12-OOS-RELIABILITY-WRITABILITY",

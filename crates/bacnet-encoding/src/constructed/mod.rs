@@ -212,18 +212,7 @@ fn decode_app_character_string(
 // BACnetPropertyStates (Clause 21 CHOICE) — spec-tagged framing
 // ---------------------------------------------------------------------------
 
-/// Encode a [`BACnetPropertyStates`] with the CHOICE tags of the Clause 21
-/// production (135-2020).
-///
-/// The enum-value-typed alternatives travel as unsigned-encoded contents
-/// under their CHOICE tag, `boolean-value [0]` as the context-tagged Boolean
-/// form (one contents octet, Clause 20.2), and `Other` as raw contents under
-/// its recorded tag.
-///
-/// NOTE: the 135-2020 production numbers `restart-reason [14]` and shifts
-/// the door alternatives to 15–19; the timer/lift alternatives sit at
-/// 43/44/52/53. This codec follows 135-2020 throughout — which corrects the
-/// tag numbers the legacy flat property-value codec used for those variants.
+/// Encode a [`BACnetPropertyStates`] using the Standard 135-2020 Clause 21 tags.
 pub fn encode_property_state(buf: &mut BytesMut, state: &BACnetPropertyStates) {
     use BACnetPropertyStates as S;
     match state {
@@ -241,27 +230,59 @@ pub fn encode_property_state(buf: &mut BytesMut, state: &BACnetPropertyStates) {
         S::UnsignedValue(v) => primitives::encode_ctx_unsigned(buf, 11, *v as u64),
         S::LifeSafetyMode(v) => primitives::encode_ctx_enumerated(buf, 12, *v),
         S::LifeSafetyState(v) => primitives::encode_ctx_enumerated(buf, 13, *v),
-        // 135-2020: [14] is restart-reason (unmodeled); door alternatives
-        // moved to 15..=19.
+        S::RestartReason(v) => primitives::encode_ctx_enumerated(buf, 14, *v),
         S::DoorAlarmState(v) => primitives::encode_ctx_enumerated(buf, 15, *v),
         S::Action(v) => primitives::encode_ctx_enumerated(buf, 16, *v),
         S::DoorSecuredStatus(v) => primitives::encode_ctx_enumerated(buf, 17, *v),
         S::DoorStatus(v) => primitives::encode_ctx_enumerated(buf, 18, *v),
         S::DoorValue(v) => primitives::encode_ctx_enumerated(buf, 19, *v),
+        S::FileAccessMethod(v) => primitives::encode_ctx_enumerated(buf, 20, *v),
+        S::LockStatus(v) => primitives::encode_ctx_enumerated(buf, 21, *v),
+        S::LifeSafetyOperation(v) => primitives::encode_ctx_enumerated(buf, 22, *v),
+        S::Maintenance(v) => primitives::encode_ctx_enumerated(buf, 23, *v),
+        S::NodeType(v) => primitives::encode_ctx_enumerated(buf, 24, *v),
+        S::NotifyType(v) => primitives::encode_ctx_enumerated(buf, 25, *v),
+        S::ShedState(v) => primitives::encode_ctx_enumerated(buf, 27, *v),
+        S::SilencedState(v) => primitives::encode_ctx_enumerated(buf, 28, *v),
+        S::AccessEvent(v) => primitives::encode_ctx_enumerated(buf, 30, *v),
+        S::AccessZoneOccupancyState(v) => primitives::encode_ctx_enumerated(buf, 31, *v),
+        S::AccessCredentialDisableReason(v) => primitives::encode_ctx_enumerated(buf, 32, *v),
+        S::AccessCredentialDisable(v) => primitives::encode_ctx_enumerated(buf, 33, *v),
+        S::AuthenticationStatus(v) => primitives::encode_ctx_enumerated(buf, 34, *v),
+        S::BackupState(v) => primitives::encode_ctx_enumerated(buf, 36, *v),
+        S::WriteStatus(v) => primitives::encode_ctx_enumerated(buf, 37, *v),
+        S::LightingInProgress(v) => primitives::encode_ctx_enumerated(buf, 38, *v),
+        S::LightingOperation(v) => primitives::encode_ctx_enumerated(buf, 39, *v),
+        S::LightingTransition(v) => primitives::encode_ctx_enumerated(buf, 40, *v),
+        S::IntegerValue(v) => primitives::encode_ctx_signed(buf, 41, *v),
+        S::BinaryLightingValue(v) => primitives::encode_ctx_enumerated(buf, 42, *v),
         S::TimerState(v) => primitives::encode_ctx_enumerated(buf, 43, *v),
         S::TimerTransition(v) => primitives::encode_ctx_enumerated(buf, 44, *v),
+        S::BacnetIpMode(v) => primitives::encode_ctx_enumerated(buf, 45, *v),
+        S::NetworkPortCommand(v) => primitives::encode_ctx_enumerated(buf, 46, *v),
+        S::NetworkType(v) => primitives::encode_ctx_enumerated(buf, 47, *v),
+        S::NetworkNumberQuality(v) => primitives::encode_ctx_enumerated(buf, 48, *v),
+        S::EscalatorOperationDirection(v) => primitives::encode_ctx_enumerated(buf, 49, *v),
+        S::EscalatorFault(v) => primitives::encode_ctx_enumerated(buf, 50, *v),
+        S::EscalatorMode(v) => primitives::encode_ctx_enumerated(buf, 51, *v),
         S::LiftCarDirection(v) => primitives::encode_ctx_enumerated(buf, 52, *v),
         S::LiftCarDoorCommand(v) => primitives::encode_ctx_enumerated(buf, 53, *v),
+        S::LiftCarDriveStatus(v) => primitives::encode_ctx_enumerated(buf, 54, *v),
+        S::LiftCarMode(v) => primitives::encode_ctx_enumerated(buf, 55, *v),
+        S::LiftGroupMode(v) => primitives::encode_ctx_enumerated(buf, 56, *v),
+        S::LiftFault(v) => primitives::encode_ctx_enumerated(buf, 57, *v),
+        S::ProtocolLevel(v) => primitives::encode_ctx_enumerated(buf, 58, *v),
+        S::AuditLevel(v) => primitives::encode_ctx_enumerated(buf, 59, *v),
+        S::AuditOperation(v) => primitives::encode_ctx_enumerated(buf, 60, *v),
+        S::ExtendedValue(v) => primitives::encode_ctx_unsigned(buf, 63, *v as u64),
         S::Other { tag, data } => primitives::encode_ctx_octet_string(buf, *tag, data),
     }
 }
 
 /// Decode one [`BACnetPropertyStates`] CHOICE element at `offset`.
 ///
-/// Modeled alternatives decode by their Clause 21 tag; any other tag
-/// (including the ones with no Rust variant, e.g. `restart-reason [14]` or
-/// `integer-value [41]` INTEGER) is preserved verbatim as
-/// [`BACnetPropertyStates::Other`].
+/// Proprietary tags 64 through 254 retain their encoded contents in
+/// [`BACnetPropertyStates::Other`]. Reserved standard tags are rejected.
 pub fn decode_property_state(
     data: &[u8],
     offset: usize,
@@ -296,7 +317,16 @@ pub fn decode_property_state(
                     ),
                 ));
             }
-            S::BooleanValue(content[0] != 0)
+            match content[0] {
+                0 => S::BooleanValue(false),
+                1 => S::BooleanValue(true),
+                value => {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("BACnetPropertyStates boolean-value must be 0 or 1, got {value}"),
+                    ));
+                }
+            }
         }
         1 => S::BinaryValue(unsigned()?),
         2 => S::EventType(unsigned()?),
@@ -311,19 +341,61 @@ pub fn decode_property_state(
         11 => S::UnsignedValue(unsigned()?),
         12 => S::LifeSafetyMode(unsigned()?),
         13 => S::LifeSafetyState(unsigned()?),
+        14 => S::RestartReason(unsigned()?),
         15 => S::DoorAlarmState(unsigned()?),
         16 => S::Action(unsigned()?),
         17 => S::DoorSecuredStatus(unsigned()?),
         18 => S::DoorStatus(unsigned()?),
         19 => S::DoorValue(unsigned()?),
+        20 => S::FileAccessMethod(unsigned()?),
+        21 => S::LockStatus(unsigned()?),
+        22 => S::LifeSafetyOperation(unsigned()?),
+        23 => S::Maintenance(unsigned()?),
+        24 => S::NodeType(unsigned()?),
+        25 => S::NotifyType(unsigned()?),
+        27 => S::ShedState(unsigned()?),
+        28 => S::SilencedState(unsigned()?),
+        30 => S::AccessEvent(unsigned()?),
+        31 => S::AccessZoneOccupancyState(unsigned()?),
+        32 => S::AccessCredentialDisableReason(unsigned()?),
+        33 => S::AccessCredentialDisable(unsigned()?),
+        34 => S::AuthenticationStatus(unsigned()?),
+        36 => S::BackupState(unsigned()?),
+        37 => S::WriteStatus(unsigned()?),
+        38 => S::LightingInProgress(unsigned()?),
+        39 => S::LightingOperation(unsigned()?),
+        40 => S::LightingTransition(unsigned()?),
+        41 => S::IntegerValue(primitives::decode_signed(content)?),
+        42 => S::BinaryLightingValue(unsigned()?),
         43 => S::TimerState(unsigned()?),
         44 => S::TimerTransition(unsigned()?),
+        45 => S::BacnetIpMode(unsigned()?),
+        46 => S::NetworkPortCommand(unsigned()?),
+        47 => S::NetworkType(unsigned()?),
+        48 => S::NetworkNumberQuality(unsigned()?),
+        49 => S::EscalatorOperationDirection(unsigned()?),
+        50 => S::EscalatorFault(unsigned()?),
+        51 => S::EscalatorMode(unsigned()?),
         52 => S::LiftCarDirection(unsigned()?),
         53 => S::LiftCarDoorCommand(unsigned()?),
-        other => S::Other {
+        54 => S::LiftCarDriveStatus(unsigned()?),
+        55 => S::LiftCarMode(unsigned()?),
+        56 => S::LiftGroupMode(unsigned()?),
+        57 => S::LiftFault(unsigned()?),
+        58 => S::ProtocolLevel(unsigned()?),
+        59 => S::AuditLevel(unsigned()?),
+        60 => S::AuditOperation(unsigned()?),
+        63 => S::ExtendedValue(unsigned()?),
+        other @ 64..=254 => S::Other {
             tag: other,
             data: content.to_vec(),
         },
+        reserved => {
+            return Err(Error::decoding(
+                offset,
+                format!("BACnetPropertyStates context tag {reserved} is reserved"),
+            ));
+        }
     };
     Ok((state, end))
 }
