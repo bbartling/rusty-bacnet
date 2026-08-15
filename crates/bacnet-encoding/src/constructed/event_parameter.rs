@@ -151,6 +151,10 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             tags::encode_closing_tag(buf, 2);
             tags::encode_closing_tag(buf, 9);
         }
+        BACnetEventParameter::Opaque { tag, data } if *tag == u8::MAX => {
+            // Legacy pre-framing EventEnrollment values used an Octet String.
+            primitives::encode_app_octet_string(buf, data);
+        }
         BACnetEventParameter::Opaque { tag, data } => {
             // Preserved alternative: its captured bytes are the complete
             // SEQUENCE body, re-emitted under its own opening/closing pair.
@@ -175,8 +179,48 @@ pub fn decode_event_parameter(
     offset: usize,
 ) -> Result<(BACnetEventParameter, usize), Error> {
     use BACnetEventParameter as EP;
+
+    // Pre-framing EventEnrollment writes use [255] as an internal wrapper.
+    // Keep this shipped compatibility form local so the generic tag parser
+    // can reject ASHRAE-reserved tag number 255 everywhere else.
+    if data.get(offset..offset.saturating_add(2)) == Some(&[0xFE, 0xFF]) {
+        let body_start = offset + 2;
+        let body_end = data.len().checked_sub(2).ok_or_else(|| {
+            Error::decoding(offset, "BACnetEventParameter: truncated legacy wrapper")
+        })?;
+        if body_end < body_start || data.get(body_end..) != Some(&[0xFF, 0xFF]) {
+            return Err(Error::decoding(
+                offset,
+                "BACnetEventParameter: missing legacy closing tag",
+            ));
+        }
+        return Ok((
+            EP::Opaque {
+                tag: u8::MAX,
+                data: data[body_start..body_end].to_vec(),
+            },
+            data.len(),
+        ));
+    }
+
     let (tag, pos) = tags::decode_tag(data, offset)?;
     let what = "BACnetEventParameter";
+
+    if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::OCTET_STRING {
+        let end = pos
+            .checked_add(tag.length as usize)
+            .ok_or_else(|| Error::decoding(pos, "BACnetEventParameter: length overflow"))?;
+        if end > data.len() {
+            return Err(Error::buffer_too_short(end, data.len()));
+        }
+        return Ok((
+            EP::Opaque {
+                tag: u8::MAX,
+                data: data[pos..end].to_vec(),
+            },
+            end,
+        ));
+    }
 
     if RESERVED_EVENT_TAGS.contains(&tag.number) {
         return Err(Error::decoding(

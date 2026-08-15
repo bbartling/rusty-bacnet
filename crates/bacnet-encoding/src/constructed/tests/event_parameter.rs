@@ -267,6 +267,35 @@ fn opaque_unmodeled_alternatives_preserved() {
     }
 }
 
+#[test]
+fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
+    let value = BACnetEventParameter::Opaque {
+        tag: u8::MAX,
+        data: vec![0xFF, 0x01, 0x02],
+    };
+    let mut encoded = BytesMut::new();
+    encode_event_parameter(&mut encoded, &value);
+
+    let (tag, _) = tags::decode_tag(&encoded, 0).unwrap();
+    assert_eq!(tag.class, tags::TagClass::Application);
+    assert_eq!(tag.number, tags::app_tag::OCTET_STRING);
+    let (decoded, end) = decode_event_parameter(&encoded, 0).unwrap();
+    assert_eq!(decoded, value);
+    assert_eq!(end, encoded.len());
+
+    let historical = [0xFE, 0xFF, 1, 0xFF, 0xFF, 0x2F, 2, 0xFF, 0xFF];
+    assert!(tags::decode_tag(&historical, 0).is_err());
+    let (decoded, end) = decode_event_parameter(&historical, 0).unwrap();
+    assert_eq!(
+        decoded,
+        BACnetEventParameter::Opaque {
+            tag: u8::MAX,
+            data: vec![1, 0xFF, 0xFF, 0x2F, 2],
+        }
+    );
+    assert_eq!(end, historical.len());
+}
+
 // --- Negatives ----------------------------------------------------------------
 
 #[test]

@@ -44,6 +44,79 @@ pub(crate) fn decode_context_u32(
     Ok((value, end))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PropertyValueBoundary {
+    End,
+    Context(u8),
+    ContextToEnd(u8),
+    Closing(u8),
+}
+
+fn matches_property_boundary(data: &[u8], offset: usize, boundary: PropertyValueBoundary) -> bool {
+    match boundary {
+        PropertyValueBoundary::End => offset == data.len(),
+        PropertyValueBoundary::Context(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_context(number))
+        }
+        PropertyValueBoundary::ContextToEnd(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, content_start)| {
+                tag.is_context(number)
+                    && content_start
+                        .checked_add(tag.length as usize)
+                        .is_some_and(|end| end == data.len())
+            })
+        }
+        PropertyValueBoundary::Closing(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_closing_tag(number))
+        }
+    }
+}
+
+pub(crate) fn extract_property_value<'a>(
+    data: &'a [u8],
+    offset: usize,
+    closing_tag: u8,
+    property: PropertyIdentifier,
+    boundaries: &[PropertyValueBoundary],
+) -> Result<(&'a [u8], usize), Error> {
+    if property == PropertyIdentifier::EVENT_PARAMETERS
+        && data.get(offset..offset.saturating_add(2)) == Some(&[0xfe, 0xff])
+    {
+        // Before EventParameter framing, tag 255 wrapped arbitrary octets. Use
+        // the enclosing service grammar to distinguish a payload marker from
+        // the wrapper terminator without consuming a sibling property. Reject
+        // multiple valid boundaries because the old format cannot disambiguate them.
+        let outer_close = (closing_tag << 4) | 0x0f;
+        let mut candidate = None;
+        for pos in offset.saturating_add(4)..data.len() {
+            let end = pos + 1;
+            if data[pos] == outer_close
+                && data.get(pos - 2..pos) == Some(&[0xff, 0xff])
+                && boundaries
+                    .iter()
+                    .any(|boundary| matches_property_boundary(data, end, *boundary))
+            {
+                if candidate.is_some() {
+                    return Err(Error::decoding(
+                        offset,
+                        "legacy EventParameters value has ambiguous closing tags",
+                    ));
+                }
+                candidate = Some((pos, end));
+            }
+        }
+        if let Some((pos, end)) = candidate {
+            return Ok((&data[offset..pos], end));
+        }
+        return Err(Error::decoding(
+            offset,
+            "legacy EventParameters value is missing its closing tags",
+        ));
+    }
+
+    tags::extract_context_value(data, offset, closing_tag)
+}
+
 // ---------------------------------------------------------------------------
 // PropertyReference
 // ---------------------------------------------------------------------------
@@ -141,6 +214,37 @@ impl BACnetPropertyValue {
     }
 
     pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
+        Self::decode_with_boundaries(
+            data,
+            offset,
+            &[
+                PropertyValueBoundary::End,
+                PropertyValueBoundary::ContextToEnd(3),
+            ],
+        )
+    }
+
+    pub(crate) fn decode_in_list(
+        data: &[u8],
+        offset: usize,
+        closing_tag: u8,
+    ) -> Result<(Self, usize), Error> {
+        Self::decode_with_boundaries(
+            data,
+            offset,
+            &[
+                PropertyValueBoundary::Context(3),
+                PropertyValueBoundary::Context(0),
+                PropertyValueBoundary::Closing(closing_tag),
+            ],
+        )
+    }
+
+    fn decode_with_boundaries(
+        data: &[u8],
+        offset: usize,
+        boundaries: &[PropertyValueBoundary],
+    ) -> Result<(Self, usize), Error> {
         // [0] propertyIdentifier
         let (prop_id, mut offset) =
             decode_context_u32(data, offset, 0, "BACnetPropertyValue property-id")?;
@@ -165,7 +269,9 @@ impl BACnetPropertyValue {
                 "BACnetPropertyValue expected opening tag 2",
             ));
         }
-        let (value_bytes, offset) = tags::extract_context_value(data, tag_end, 2)?;
+        let property_identifier = PropertyIdentifier::from_raw(prop_id);
+        let (value_bytes, offset) =
+            extract_property_value(data, tag_end, 2, property_identifier, boundaries)?;
         let value = value_bytes.to_vec();
 
         // [3] priority (optional)
@@ -192,7 +298,7 @@ impl BACnetPropertyValue {
                 })?);
                 return Ok((
                     Self {
-                        property_identifier: PropertyIdentifier::from_raw(prop_id),
+                        property_identifier,
                         property_array_index: array_index,
                         value,
                         priority,
@@ -204,7 +310,7 @@ impl BACnetPropertyValue {
 
         Ok((
             Self {
-                property_identifier: PropertyIdentifier::from_raw(prop_id),
+                property_identifier,
                 property_array_index: array_index,
                 value,
                 priority,
@@ -285,6 +391,36 @@ mod tests {
         pv.encode(&mut buf);
         let (decoded, _) = BACnetPropertyValue::decode(&buf, 0).unwrap();
         assert_eq!(pv, decoded);
+    }
+
+    #[test]
+    fn bacnet_property_value_preserves_legacy_event_parameters() {
+        let pv = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            value: vec![0xfe, 0xff, 1, 0xff, 0xff, 0x2f, 2, 0xff, 0xff],
+            priority: None,
+        };
+        let mut buf = BytesMut::new();
+        pv.encode(&mut buf);
+
+        let (decoded, consumed) = BACnetPropertyValue::decode(&buf, 0).unwrap();
+        assert_eq!(decoded, pv);
+        assert_eq!(consumed, buf.len());
+    }
+
+    #[test]
+    fn bacnet_property_value_rejects_unclosed_legacy_event_parameters() {
+        let pv = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            value: vec![0xfe, 0xff, 1, 2],
+            priority: None,
+        };
+        let mut buf = BytesMut::new();
+        pv.encode(&mut buf);
+
+        assert!(BACnetPropertyValue::decode(&buf, 0).is_err());
     }
 
     #[test]

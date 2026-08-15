@@ -83,7 +83,7 @@ impl WritePropertyMultipleRequest {
                     offset = tag_end;
                     break;
                 }
-                let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
+                let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
                 props.push(pv);
                 offset = new_offset;
             }
@@ -152,6 +152,55 @@ mod tests {
         req.encode(&mut buf);
         let decoded = WritePropertyMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn legacy_event_parameters_do_not_consume_the_next_property() {
+        let req = WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+                list_of_properties: vec![
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+                        property_array_index: None,
+                        value: vec![0xfe, 0xff, 1, 0xff, 0xff, 0x2f, 2, 0xff, 0xff],
+                        priority: None,
+                    },
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::NOTIFICATION_CLASS,
+                        property_array_index: None,
+                        value: vec![0x21, 8],
+                        priority: None,
+                    },
+                ],
+            }],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+
+        assert_eq!(WritePropertyMultipleRequest::decode(&buf).unwrap(), req);
+    }
+
+    #[test]
+    fn ambiguous_legacy_event_parameters_are_rejected() {
+        let req = WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+                list_of_properties: vec![BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+                    property_array_index: None,
+                    value: vec![
+                        0xfe, 0xff, 0xaa, 0xff, 0xff, 0x2f, 0x09, 0x53, 0x2e, 0xfe, 0xff, 0xbb,
+                        0xff, 0xff,
+                    ],
+                    priority: None,
+                }],
+            }],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+
+        assert!(WritePropertyMultipleRequest::decode(&buf).is_err());
     }
 
     // -----------------------------------------------------------------------

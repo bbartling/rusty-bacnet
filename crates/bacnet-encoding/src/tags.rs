@@ -178,12 +178,21 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         TagClass::Application
     };
     let lvt = initial & 0x07;
+    if class == TagClass::Application && lvt > 5 {
+        return Err(Error::decoding(offset, "reserved application tag L/V/T"));
+    }
 
     if tag_number == 0x0F {
         if pos >= data.len() {
             return Err(Error::decoding(pos, "truncated extended tag number"));
         }
         tag_number = data[pos];
+        if !(15..=254).contains(&tag_number) {
+            return Err(Error::decoding(
+                pos,
+                format!("invalid extended tag number {tag_number}"),
+            ));
+        }
         pos += 1;
     }
 
@@ -224,12 +233,24 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         pos += 1;
 
         match ext {
-            0..=253 => ext as u32,
+            0..=4 => {
+                return Err(Error::decoding(
+                    pos - 1,
+                    format!("non-canonical extended tag length {ext}"),
+                ));
+            }
+            5..=253 => ext as u32,
             254 => {
                 if pos + 2 > data.len() {
                     return Err(Error::decoding(pos, "truncated 2-byte extended length"));
                 }
                 let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
+                if len < 254 {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("non-canonical 2-byte extended tag length {len}"),
+                    ));
+                }
                 pos += 2;
                 len
             }
@@ -239,6 +260,12 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
                 }
                 let len =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                if len < 65_536 {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("non-canonical 4-byte extended tag length {len}"),
+                    ));
+                }
                 pos += 4;
                 len
             }
