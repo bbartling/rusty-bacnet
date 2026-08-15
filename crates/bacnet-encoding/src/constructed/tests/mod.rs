@@ -2,7 +2,8 @@
 
 use super::*;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetExtendedPropertyState,
+    BACnetPropertyStates, BACnetProprietaryPropertyState,
 };
 use bacnet_types::enums::ObjectType;
 
@@ -55,7 +56,7 @@ fn modeled_property_states() -> Vec<(u8, BACnetPropertyStates)> {
         (27, S::ShedState(1)),
         (28, S::SilencedState(1)),
         (30, S::AccessEvent(1)),
-        (31, S::AccessZoneOccupancyState(1)),
+        (31, S::ZoneOccupancyState(1)),
         (32, S::AccessCredentialDisableReason(1)),
         (33, S::AccessCredentialDisable(1)),
         (34, S::AuthenticationStatus(1)),
@@ -84,7 +85,10 @@ fn modeled_property_states() -> Vec<(u8, BACnetPropertyStates)> {
         (58, S::ProtocolLevel(1)),
         (59, S::AuditLevel(1)),
         (60, S::AuditOperation(1)),
-        (63, S::ExtendedValue(1)),
+        (
+            63,
+            S::ExtendedValue(BACnetExtendedPropertyState::new(255, 1).unwrap()),
+        ),
     ]
 }
 
@@ -100,15 +104,21 @@ fn property_state_clause_21_tag_table_and_round_trips() {
     for (tag, state) in modeled_property_states() {
         let mut encoded = BytesMut::new();
         encode_property_state(&mut encoded, &state);
-        let content = if matches!(state, BACnetPropertyStates::IntegerValue(_)) {
-            0xff
+        let expected = if let BACnetPropertyStates::ExtendedValue(value) = state {
+            let mut expected = vec![0xfc, 63];
+            expected.extend_from_slice(&value.encoded().to_be_bytes());
+            expected
         } else {
-            1
-        };
-        let expected = if tag <= 14 {
-            vec![(tag << 4) | 0x09, content]
-        } else {
-            vec![0xf9, tag, content]
+            let content = if matches!(state, BACnetPropertyStates::IntegerValue(_)) {
+                0xff
+            } else {
+                1
+            };
+            if tag <= 14 {
+                vec![(tag << 4) | 0x09, content]
+            } else {
+                vec![0xf9, tag, content]
+            }
         };
         assert_eq!(encoded.as_ref(), expected, "context tag {tag}");
 
@@ -133,7 +143,12 @@ fn property_state_unsigned_alternatives_enforce_u32() {
         let (decoded, _) =
             decode_property_state(&raw_property_state(tag, &[0, 0xff, 0xff, 0xff, 0xff]), 0)
                 .unwrap();
-        assert_eq!(decoded.as_u32(), Some(u32::MAX), "context tag {tag}");
+        let expected = if tag == 63 {
+            Some(u32::MAX % 100_000)
+        } else {
+            Some(u32::MAX)
+        };
+        assert_eq!(decoded.as_u32(), expected, "context tag {tag}");
     }
 }
 
@@ -185,10 +200,9 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
     }
 
     for tag in [64, 254] {
-        let expected = BACnetPropertyStates::Other {
-            tag,
-            data: vec![0xde, 0xad],
-        };
+        let expected = BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::primitive(tag, vec![0xde, 0xad]).unwrap(),
+        );
         let (decoded, _) =
             decode_property_state(&raw_property_state(tag, &[0xde, 0xad]), 0).unwrap();
         assert_eq!(decoded, expected);
@@ -196,6 +210,31 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
         encode_property_state(&mut encoded, &expected);
         assert_eq!(decode_property_state(&encoded, 0).unwrap().0, expected);
     }
+
+    let expected = BACnetPropertyStates::Other(
+        BACnetProprietaryPropertyState::constructed(64, vec![0x21, 0x07]).unwrap(),
+    );
+    let mut encoded = BytesMut::new();
+    encode_property_state(&mut encoded, &expected);
+    assert_eq!(encoded.as_ref(), &[0xfe, 64, 0x21, 0x07, 0xff, 64]);
+    assert_eq!(decode_property_state(&encoded, 0).unwrap().0, expected);
+
+    for tag in [0, 26, 63, 255] {
+        assert!(BACnetProprietaryPropertyState::primitive(tag, vec![]).is_err());
+        assert!(BACnetProprietaryPropertyState::constructed(tag, vec![]).is_err());
+    }
+
+    assert!(BACnetExtendedPropertyState::new(254, 0).is_err());
+    assert!(BACnetExtendedPropertyState::new(255, 100_000).is_err());
+    assert!(BACnetExtendedPropertyState::new(u32::MAX, 0).is_err());
+    assert!(decode_property_state(&raw_property_state(63, &[1]), 0).is_err());
+
+    let extended = BACnetExtendedPropertyState::new(256, 7).unwrap();
+    assert_eq!(extended.encoded(), 25_600_007);
+    assert_eq!(
+        BACnetExtendedPropertyState::from_encoded(extended.encoded()).unwrap(),
+        extended
+    );
 }
 
 // --- DOPR body codec --------------------------------------------------------

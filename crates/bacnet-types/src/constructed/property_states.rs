@@ -1,6 +1,111 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::error::Error;
+
+const EXTENDED_VALUE_FACTOR: u32 = 100_000;
+
+/// Property-state value for a choice tag greater than 254.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BACnetExtendedPropertyState {
+    tag: u32,
+    value: u32,
+}
+
+impl BACnetExtendedPropertyState {
+    /// Build the tag-63 representation for a choice tag greater than 254.
+    pub fn new(tag: u32, value: u32) -> Result<Self, Error> {
+        if tag <= 254 {
+            return Err(Error::decoding(
+                0,
+                "extended property-state tag must exceed 254",
+            ));
+        }
+        if value >= EXTENDED_VALUE_FACTOR {
+            return Err(Error::decoding(
+                0,
+                "extended property-state value must be below 100000",
+            ));
+        }
+        tag.checked_mul(EXTENDED_VALUE_FACTOR)
+            .and_then(|base| base.checked_add(value))
+            .ok_or_else(|| Error::decoding(0, "extended property-state value exceeds u32"))?;
+        Ok(Self { tag, value })
+    }
+
+    /// Decode the Unsigned32 carried by context tag 63.
+    pub fn from_encoded(encoded: u32) -> Result<Self, Error> {
+        Self::new(
+            encoded / EXTENDED_VALUE_FACTOR,
+            encoded % EXTENDED_VALUE_FACTOR,
+        )
+    }
+
+    /// Return the choice tag represented by tag 63.
+    pub const fn tag(self) -> u32 {
+        self.tag
+    }
+
+    /// Return the vendor enumeration value.
+    pub const fn value(self) -> u32 {
+        self.value
+    }
+
+    /// Return the Unsigned32 encoded under context tag 63.
+    pub fn encoded(self) -> u32 {
+        self.tag * EXTENDED_VALUE_FACTOR + self.value
+    }
+}
+
+/// Vendor-defined property state using a context tag from 64 through 254.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BACnetProprietaryPropertyState {
+    tag: u8,
+    data: Vec<u8>,
+    constructed: bool,
+}
+
+impl BACnetProprietaryPropertyState {
+    fn new(tag: u8, data: Vec<u8>, constructed: bool) -> Result<Self, Error> {
+        if !(64..=254).contains(&tag) {
+            return Err(Error::decoding(
+                0,
+                "proprietary property-state tag must be in 64..=254",
+            ));
+        }
+        Ok(Self {
+            tag,
+            data,
+            constructed,
+        })
+    }
+
+    /// Preserve a primitive vendor-defined alternative.
+    pub fn primitive(tag: u8, data: Vec<u8>) -> Result<Self, Error> {
+        Self::new(tag, data, false)
+    }
+
+    /// Preserve the body of a constructed vendor-defined alternative.
+    pub fn constructed(tag: u8, data: Vec<u8>) -> Result<Self, Error> {
+        Self::new(tag, data, true)
+    }
+
+    /// Return the proprietary context tag.
+    pub const fn tag(&self) -> u8 {
+        self.tag
+    }
+
+    /// Return the encoded primitive contents or constructed body.
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Return whether the value uses opening and closing tags.
+    pub const fn is_constructed(&self) -> bool {
+        self.constructed
+    }
+}
+
 /// Discrete or enumerated property value used by event and fault parameters.
 ///
 /// The variants follow the `BACnetPropertyStates` CHOICE in Standard 135-2020
@@ -66,7 +171,7 @@ pub enum BACnetPropertyStates {
     /// `access-event [30] BACnetAccessEvent`.
     AccessEvent(u32),
     /// `zone-occupancy-state [31] BACnetAccessZoneOccupancyState`.
-    AccessZoneOccupancyState(u32),
+    ZoneOccupancyState(u32),
     /// `access-credential-disable-reason [32] BACnetAccessCredentialDisableReason`.
     AccessCredentialDisableReason(u32),
     /// `access-credential-disable [33] BACnetAccessCredentialDisable`.
@@ -123,15 +228,10 @@ pub enum BACnetPropertyStates {
     AuditLevel(u32),
     /// `audit-operation [60] BACnetAuditOperation`.
     AuditOperation(u32),
-    /// `extended-value [63] Unsigned32`.
-    ExtendedValue(u32),
-    /// Proprietary context tag 64 through 254 with its encoded contents.
-    Other {
-        /// Proprietary context tag number.
-        tag: u8,
-        /// Encoded primitive contents.
-        data: Vec<u8>,
-    },
+    /// `extended-value [63] Unsigned32` with its unpacked tag and value.
+    ExtendedValue(BACnetExtendedPropertyState),
+    /// Vendor-defined context tag 64 through 254.
+    Other(BACnetProprietaryPropertyState),
 }
 
 impl BACnetPropertyStates {
@@ -169,7 +269,7 @@ impl BACnetPropertyStates {
             | S::ShedState(value)
             | S::SilencedState(value)
             | S::AccessEvent(value)
-            | S::AccessZoneOccupancyState(value)
+            | S::ZoneOccupancyState(value)
             | S::AccessCredentialDisableReason(value)
             | S::AccessCredentialDisable(value)
             | S::AuthenticationStatus(value)
@@ -196,10 +296,15 @@ impl BACnetPropertyStates {
             | S::LiftFault(value)
             | S::ProtocolLevel(value)
             | S::AuditLevel(value)
-            | S::AuditOperation(value)
-            | S::ExtendedValue(value) => Some(*value),
+            | S::AuditOperation(value) => Some(*value),
+            S::ExtendedValue(value) => Some(value.value()),
             S::IntegerValue(value) => u32::try_from(*value).ok(),
-            S::Other { .. } => None,
+            S::Other(value) if !value.is_constructed() && !value.data().is_empty() => {
+                value.data().iter().try_fold(0u32, |acc, byte| {
+                    acc.checked_mul(256)?.checked_add(*byte as u32)
+                })
+            }
+            S::Other(_) => None,
         }
     }
 }

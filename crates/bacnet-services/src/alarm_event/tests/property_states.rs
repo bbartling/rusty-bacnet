@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::constructed::{BACnetExtendedPropertyState, BACnetProprietaryPropertyState};
 
 fn encode_change_of_state(state: BACnetPropertyStates) -> BytesMut {
     let mut encoded = BytesMut::new();
@@ -38,7 +39,13 @@ fn change_of_state_uses_clause_21_property_state_tags() {
         BACnetPropertyStates::TimerState(1),
         BACnetPropertyStates::LiftCarDirection(1),
         BACnetPropertyStates::AuditOperation(1),
-        BACnetPropertyStates::ExtendedValue(25_500_007),
+        BACnetPropertyStates::ExtendedValue(BACnetExtendedPropertyState::new(255, 7).unwrap()),
+        BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::primitive(64, vec![0xde]).unwrap(),
+        ),
+        BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(65, vec![0x21, 0x07]).unwrap(),
+        ),
     ];
 
     for state in variants {
@@ -75,7 +82,12 @@ fn change_of_state_property_values_enforce_u32() {
         let NotificationParameters::ChangeOfState { new_state, .. } = decoded else {
             unreachable!();
         };
-        assert_eq!(new_state.as_u32(), Some(u32::MAX), "context tag {tag}");
+        let expected = if tag == 63 {
+            Some(u32::MAX % 100_000)
+        } else {
+            Some(u32::MAX)
+        };
+        assert_eq!(new_state.as_u32(), expected, "context tag {tag}");
     }
 }
 
@@ -92,11 +104,23 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
     assert!(matches!(
         proprietary,
         NotificationParameters::ChangeOfState {
-            new_state: BACnetPropertyStates::Other {
-                tag: 64,
-                data
-            },
+            new_state: BACnetPropertyStates::Other(value),
             ..
-        } if data == [0xde]
+        } if value.tag() == 64 && value.data() == [0xde] && !value.is_constructed()
+    ));
+
+    let proprietary = NotificationParameters::decode(
+        &encode_change_of_state(BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(65, vec![0x21, 0x07]).unwrap(),
+        )),
+        0,
+    )
+    .unwrap();
+    assert!(matches!(
+        proprietary,
+        NotificationParameters::ChangeOfState {
+            new_state: BACnetPropertyStates::Other(value),
+            ..
+        } if value.tag() == 65 && value.data() == [0x21, 0x07] && value.is_constructed()
     ));
 }

@@ -624,7 +624,9 @@ mod event_parameter;
 pub use event_parameter::{event_parameter_tag, BACnetEventParameter, ChangeOfValueCriteria};
 
 mod property_states;
-pub use property_states::BACnetPropertyStates;
+pub use property_states::{
+    BACnetExtendedPropertyState, BACnetPropertyStates, BACnetProprietaryPropertyState,
+};
 
 // ---------------------------------------------------------------------------
 // Tests

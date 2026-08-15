@@ -6,7 +6,10 @@
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec, vec::Vec};
 
-use crate::constructed::{BACnetDeviceObjectPropertyReference, BACnetPropertyStates};
+use crate::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetExtendedPropertyState, BACnetPropertyStates,
+    BACnetProprietaryPropertyState,
+};
 use crate::error::Error;
 use crate::primitives::PropertyValue;
 

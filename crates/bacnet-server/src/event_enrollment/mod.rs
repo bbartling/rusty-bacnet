@@ -51,7 +51,7 @@ pub use algorithms::{
 use algorithms::{
     eval_change_of_bitstring_struct, eval_change_of_state_struct, eval_change_of_value_struct,
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
-    extract_enumerated, extract_real, ArmEvaluation,
+    extract_property_state_value, extract_real, ArmEvaluation,
 };
 #[cfg(test)]
 use reference::MonitoredReference;
@@ -553,7 +553,7 @@ pub fn evaluate_event_enrollments(
                 list_of_values,
                 time_delay,
             } => {
-                let Some(val) = extract_enumerated(&monitored_value) else {
+                let Some(val) = extract_property_state_value(&monitored_value) else {
                     queue_pending_cancellation(
                         &mut updates,
                         *oid,

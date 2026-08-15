@@ -58,11 +58,15 @@ fn change_of_state_legacy_form_preserves_corrected_property_states() {
         BACnetPropertyStates::TimerState(5),
         BACnetPropertyStates::LiftCarDirection(6),
         BACnetPropertyStates::AuditOperation(7),
-        BACnetPropertyStates::ExtendedValue(25_500_008),
-        BACnetPropertyStates::Other {
-            tag: 64,
-            data: vec![0xde, 0xad],
-        },
+        BACnetPropertyStates::ExtendedValue(
+            BACnetExtendedPropertyState::from_encoded(25_500_008).unwrap(),
+        ),
+        BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::primitive(64, vec![0xde, 0xad]).unwrap(),
+        ),
+        BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(65, vec![0x21, 0x07]).unwrap(),
+        ),
     ];
     let parameters = BACnetEventParameter::ChangeOfState {
         time_delay: 0,

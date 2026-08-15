@@ -400,8 +400,34 @@ pub(crate) fn eval_floating_limit_struct(
 
 /// Whether a [`BACnetPropertyStates`] payload equals the monitored discrete
 /// value.
-fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
-    state.as_u32() == Some(value)
+fn property_state_matches(state: &BACnetPropertyStates, value: PropertyStateValue) -> bool {
+    use BACnetPropertyStates as S;
+
+    match (state, value) {
+        (S::BooleanValue(expected), PropertyStateValue::Boolean(actual)) => *expected == actual,
+        (S::IntegerValue(expected), PropertyStateValue::Signed(actual)) => *expected == actual,
+        (S::BooleanValue(_) | S::IntegerValue(_), _) => false,
+        (_, PropertyStateValue::Unsigned(actual)) => state.as_u32() == Some(actual),
+        _ => false,
+    }
+}
+
+/// Monitored value forms accepted by `BACnetPropertyStates`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PropertyStateValue {
+    Boolean(bool),
+    Signed(i32),
+    Unsigned(u32),
+}
+
+impl PropertyStateValue {
+    fn identity(self) -> u32 {
+        match self {
+            Self::Boolean(value) => u32::from(value),
+            Self::Signed(value) => value as u32,
+            Self::Unsigned(value) => value,
+        }
+    }
 }
 
 /// Structured CHANGE_OF_STATE evaluation against a list of alarm values.
@@ -430,17 +456,18 @@ fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
 /// values restarts its countdown instead of accumulating one.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
-    value: u32,
+    value: PropertyStateValue,
     current: EventState,
     last_offnormal_value: Option<u32>,
 ) -> ArmEvaluation {
     let matched = alarm_values
         .iter()
         .any(|s| property_state_matches(s, value));
+    let identity = value.identity();
     let offnormal = || Indication {
         target: EventState::OFFNORMAL,
-        condition: value as u64,
-        offnormal_value: Some(value),
+        condition: identity as u64,
+        offnormal_value: Some(identity),
         new_baseline: None,
     };
     // Foreign-state recovery (see ArmEvaluation's note): NORMAL's view of
@@ -459,7 +486,7 @@ pub(crate) fn eval_change_of_state_struct(
         Some(Indication::plain(EventState::NORMAL, 0))
     } else if current == EventState::OFFNORMAL
         && matched
-        && last_offnormal_value.is_some_and(|caused| caused != value)
+        && last_offnormal_value.is_some_and(|caused| caused != identity)
     {
         Some(offnormal())
     } else {
@@ -726,7 +753,20 @@ pub(crate) fn extract_real(pv: &PropertyValue) -> Option<f32> {
 pub(crate) fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
     match pv {
         PropertyValue::Enumerated(v) => Some(*v),
-        PropertyValue::Unsigned(v) => Some(*v as u32),
+        PropertyValue::Unsigned(v) => u32::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+/// Extract a monitored value accepted by the PropertyStates CHOICE.
+pub(crate) fn extract_property_state_value(pv: &PropertyValue) -> Option<PropertyStateValue> {
+    match pv {
+        PropertyValue::Boolean(value) => Some(PropertyStateValue::Boolean(*value)),
+        PropertyValue::Signed(value) => Some(PropertyStateValue::Signed(*value)),
+        PropertyValue::Enumerated(value) => Some(PropertyStateValue::Unsigned(*value)),
+        PropertyValue::Unsigned(value) => {
+            u32::try_from(*value).ok().map(PropertyStateValue::Unsigned)
+        }
         _ => None,
     }
 }

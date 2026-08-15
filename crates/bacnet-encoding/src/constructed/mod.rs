@@ -21,7 +21,10 @@
 //!   primitives; inner `SEQUENCE OF` / embedded `SEQUENCE` members are
 //!   constructed opening/closing pairs holding application-tagged elements.
 
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetPropertyStates};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetExtendedPropertyState, BACnetPropertyStates,
+    BACnetProprietaryPropertyState,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -245,7 +248,7 @@ pub fn encode_property_state(buf: &mut BytesMut, state: &BACnetPropertyStates) {
         S::ShedState(v) => primitives::encode_ctx_enumerated(buf, 27, *v),
         S::SilencedState(v) => primitives::encode_ctx_enumerated(buf, 28, *v),
         S::AccessEvent(v) => primitives::encode_ctx_enumerated(buf, 30, *v),
-        S::AccessZoneOccupancyState(v) => primitives::encode_ctx_enumerated(buf, 31, *v),
+        S::ZoneOccupancyState(v) => primitives::encode_ctx_enumerated(buf, 31, *v),
         S::AccessCredentialDisableReason(v) => primitives::encode_ctx_enumerated(buf, 32, *v),
         S::AccessCredentialDisable(v) => primitives::encode_ctx_enumerated(buf, 33, *v),
         S::AuthenticationStatus(v) => primitives::encode_ctx_enumerated(buf, 34, *v),
@@ -274,8 +277,13 @@ pub fn encode_property_state(buf: &mut BytesMut, state: &BACnetPropertyStates) {
         S::ProtocolLevel(v) => primitives::encode_ctx_enumerated(buf, 58, *v),
         S::AuditLevel(v) => primitives::encode_ctx_enumerated(buf, 59, *v),
         S::AuditOperation(v) => primitives::encode_ctx_enumerated(buf, 60, *v),
-        S::ExtendedValue(v) => primitives::encode_ctx_unsigned(buf, 63, *v as u64),
-        S::Other { tag, data } => primitives::encode_ctx_octet_string(buf, *tag, data),
+        S::ExtendedValue(v) => primitives::encode_ctx_unsigned(buf, 63, v.encoded() as u64),
+        S::Other(v) if v.is_constructed() => {
+            tags::encode_opening_tag(buf, v.tag());
+            buf.extend_from_slice(v.data());
+            tags::encode_closing_tag(buf, v.tag());
+        }
+        S::Other(v) => primitives::encode_ctx_octet_string(buf, v.tag(), v.data()),
     }
 }
 
@@ -289,10 +297,26 @@ pub fn decode_property_state(
 ) -> Result<(BACnetPropertyStates, usize), Error> {
     use BACnetPropertyStates as S;
     let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Context || tag.is_opening || tag.is_closing {
+    if tag.class != TagClass::Context || tag.is_closing {
         return Err(Error::decoding(
             offset,
-            "BACnetPropertyStates: expected a primitive context tag",
+            "BACnetPropertyStates: expected a context tag",
+        ));
+    }
+    if tag.is_opening {
+        if !(64..=254).contains(&tag.number) {
+            return Err(Error::decoding(
+                offset,
+                "BACnetPropertyStates: constructed form requires a proprietary tag",
+            ));
+        }
+        let (content, end) = tags::extract_context_value(data, pos, tag.number)?;
+        return Ok((
+            S::Other(BACnetProprietaryPropertyState::constructed(
+                tag.number,
+                content.to_vec(),
+            )?),
+            end,
         ));
     }
     let end = pos
@@ -356,7 +380,7 @@ pub fn decode_property_state(
         27 => S::ShedState(unsigned()?),
         28 => S::SilencedState(unsigned()?),
         30 => S::AccessEvent(unsigned()?),
-        31 => S::AccessZoneOccupancyState(unsigned()?),
+        31 => S::ZoneOccupancyState(unsigned()?),
         32 => S::AccessCredentialDisableReason(unsigned()?),
         33 => S::AccessCredentialDisable(unsigned()?),
         34 => S::AuthenticationStatus(unsigned()?),
@@ -385,11 +409,11 @@ pub fn decode_property_state(
         58 => S::ProtocolLevel(unsigned()?),
         59 => S::AuditLevel(unsigned()?),
         60 => S::AuditOperation(unsigned()?),
-        63 => S::ExtendedValue(unsigned()?),
-        other @ 64..=254 => S::Other {
-            tag: other,
-            data: content.to_vec(),
-        },
+        63 => S::ExtendedValue(BACnetExtendedPropertyState::from_encoded(unsigned()?)?),
+        other @ 64..=254 => S::Other(BACnetProprietaryPropertyState::primitive(
+            other,
+            content.to_vec(),
+        )?),
         reserved => {
             return Err(Error::decoding(
                 offset,
