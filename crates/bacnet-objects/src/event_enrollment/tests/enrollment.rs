@@ -337,6 +337,36 @@ fn write_event_parameters_framed_malformed_rejected() {
 }
 
 #[test]
+fn write_event_parameters_flat_malformed_proprietary_body_rejected() {
+    use bacnet_types::constructed::{BACnetPropertyStates, BACnetProprietaryPropertyState};
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    let malformed = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            malformed.encode(),
+            None,
+        )
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
 fn write_event_parameters_opaque_octets_preserved() {
     use bacnet_types::constructed::BACnetEventParameter;
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();

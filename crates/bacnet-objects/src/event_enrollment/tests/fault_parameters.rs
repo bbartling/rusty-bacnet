@@ -266,6 +266,35 @@ fn fault_parameters_write_round_trip() {
 }
 
 #[test]
+fn fault_parameters_flat_malformed_proprietary_body_rejected() {
+    use bacnet_types::constructed::{BACnetPropertyStates, BACnetProprietaryPropertyState};
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    let malformed = FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::FAULT_PARAMETERS,
+            None,
+            malformed.encode_property_value(),
+            None,
+        )
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
 fn fault_parameters_framed_write_round_trip() {
     // Framed wire form write: exactly what a conformant peer sends, and the
     // read arm's bytes come back byte-identical.

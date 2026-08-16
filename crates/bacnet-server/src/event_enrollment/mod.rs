@@ -402,19 +402,40 @@ pub fn evaluate_event_enrollments(
             Ok(PropertyValue::ApplicationData(bytes)) => {
                 match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
                     Ok((ep, consumed)) if consumed == bytes.len() => ep,
-                    // Malformed framed value: nothing to evaluate.
-                    _ => continue,
+                    _ => {
+                        queue_pending_cancellation(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            &mut eval_state,
+                        );
+                        continue;
+                    }
                 }
             }
             // Legacy flat application-tagged form (downstream/custom object
             // types that have not migrated to the framed read arm).
             Ok(v) => match BACnetEventParameter::decode(&v) {
                 Ok(ep) => ep,
-                // Malformed structured value: nothing to evaluate.
-                Err(_) => continue,
+                Err(_) => {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
+                    continue;
+                }
             },
-            // Missing/unreadable Event_Parameters: nothing to evaluate.
-            Err(_) => continue,
+            Err(_) => {
+                queue_pending_cancellation(
+                    &mut updates,
+                    *oid,
+                    eval_state_supported,
+                    &mut eval_state,
+                );
+                continue;
+            }
         };
 
         // The effective normal-direction delay: the EE object's read arm

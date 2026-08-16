@@ -10,6 +10,48 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[test]
+fn unreadable_parameters_cancel_pending_countdown() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(97, "AV-unreadable-params", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    let parameters_readable = Arc::clone(&enrollment.event_parameters_readable);
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    parameters_readable.store(false, Ordering::SeqCst);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(db
+        .get(&enrollment_oid)
+        .unwrap()
+        .enrollment_eval_state_internal()
+        .unwrap()
+        .pending
+        .is_none());
+
+    parameters_readable.store(true, Ordering::SeqCst);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::HIGH_LIMIT
+    );
+}
+
+#[test]
 fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(98, "AV-custom-source", 62).unwrap();

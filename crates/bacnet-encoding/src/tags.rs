@@ -305,13 +305,14 @@ pub fn extract_context_value(
     let value_start = offset;
     let mut pos = offset;
     let mut depth: usize = 1;
+    let mut open_tags = [0u8; MAX_CONTEXT_NESTING_DEPTH];
+    open_tags[0] = tag_number;
 
     while depth > 0 && pos < data.len() {
         let (tag, new_pos) = decode_tag(data, pos)?;
 
         if tag.is_opening {
-            depth += 1;
-            if depth > MAX_CONTEXT_NESTING_DEPTH {
+            if depth == MAX_CONTEXT_NESTING_DEPTH {
                 return Err(Error::decoding(
                     pos,
                     format!(
@@ -319,19 +320,22 @@ pub fn extract_context_value(
                     ),
                 ));
             }
+            open_tags[depth] = tag.number;
+            depth += 1;
             pos = new_pos;
         } else if tag.is_closing {
+            let expected = open_tags[depth - 1];
+            if tag.number != expected {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "closing tag {} does not match opening tag {expected}",
+                        tag.number
+                    ),
+                ));
+            }
             depth -= 1;
             if depth == 0 {
-                if tag.number != tag_number {
-                    return Err(Error::decoding(
-                        pos,
-                        format!(
-                            "closing tag {} does not match opening tag {tag_number}",
-                            tag.number
-                        ),
-                    ));
-                }
                 let value_end = pos;
                 return Ok((&data[value_start..value_end], new_pos));
             }
@@ -783,6 +787,13 @@ mod tests {
     fn extract_context_value_mismatched_closing_tag() {
         // Opening tag 0, data, closing tag 1 (mismatch!)
         let data = [0x0E, 0x21, 42, 0x1F]; // open 0, data, close 1
+        assert!(extract_context_value(&data, 1, 0).is_err());
+    }
+
+    #[test]
+    fn extract_context_value_mismatched_nested_closing_tag() {
+        // Opening tag 0, opening tag 1, closing tag 2, closing tag 0.
+        let data = [0x0E, 0x1E, 0x2F, 0x0F];
         assert!(extract_context_value(&data, 1, 0).is_err());
     }
 

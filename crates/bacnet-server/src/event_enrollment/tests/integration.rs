@@ -215,7 +215,7 @@ fn unresolvable_reference_clears_private_evaluator_state() {
 pub(super) struct ReferenceValueObject {
     pub(super) inner: EventEnrollmentObject,
     reference: Option<PropertyValue>,
-    event_parameters_readable: bool,
+    pub(super) event_parameters_readable: Arc<AtomicBool>,
     pub(super) state_writable: Arc<AtomicBool>,
     pub(super) source_supported: bool,
     pub(super) source_writable: Arc<AtomicBool>,
@@ -244,7 +244,7 @@ impl ReferenceValueObject {
         Self {
             inner,
             reference,
-            event_parameters_readable: true,
+            event_parameters_readable: Arc::new(AtomicBool::new(true)),
             state_writable: Arc::new(AtomicBool::new(true)),
             source_supported: true,
             source_writable: Arc::new(AtomicBool::new(true)),
@@ -273,7 +273,7 @@ impl BACnetObject for ReferenceValueObject {
                 .clone()
                 .ok_or_else(|| bacnet_types::error::Error::Encoding("reference read failed".into()))
         } else if property == PropertyIdentifier::EVENT_PARAMETERS
-            && !self.event_parameters_readable
+            && !self.event_parameters_readable.load(Ordering::SeqCst)
         {
             Err(bacnet_types::error::Error::Encoding(
                 "event parameters read failed".into(),
@@ -670,7 +670,9 @@ fn invalid_reference_clears_before_other_property_failure() {
         PropertyValue::ObjectIdentifier(target),
         PropertyValue::Unsigned(4_194_304),
     ])));
-    enrollment.event_parameters_readable = false;
+    enrollment
+        .event_parameters_readable
+        .store(false, Ordering::SeqCst);
     enrollment
         .set_enrollment_eval_state_internal(stale_eval_state())
         .unwrap();
