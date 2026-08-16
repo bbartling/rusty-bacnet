@@ -248,6 +248,20 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
     );
     assert!(encode_property_state(&mut BytesMut::new(), &mismatched).is_err());
     assert!(decode_property_state(&[0xfe, 64, 0x1e, 0x2f, 0xff, 64], 0).is_err());
+
+    for body in [vec![0x01, 0x00], vec![0x12]] {
+        let malformed = BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, body.clone()).unwrap(),
+        );
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_property_state(&mut untouched, &malformed).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+
+        let mut framed = vec![0xfe, 64];
+        framed.extend_from_slice(&body);
+        framed.extend_from_slice(&[0xff, 64]);
+        assert!(decode_property_state(&framed, 0).is_err());
+    }
 }
 
 // --- DOPR body codec --------------------------------------------------------

@@ -488,6 +488,19 @@ pub fn decode_application_value(
         return Err(Error::decoding(offset, "unexpected opening/closing tag"));
     }
 
+    if tag.number == app_tag::NULL && tag.length != 0 {
+        return Err(Error::decoding(
+            offset,
+            "application NULL must have no contents",
+        ));
+    }
+    if tag.number == app_tag::BOOLEAN && tag.length > 1 {
+        return Err(Error::decoding(
+            offset,
+            "application BOOLEAN L/V/T must be 0 or 1",
+        ));
+    }
+
     let content_start = new_offset;
     let content_len = tag.length as usize;
     let content_end = content_start

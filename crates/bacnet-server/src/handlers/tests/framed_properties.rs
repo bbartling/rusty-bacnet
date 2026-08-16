@@ -351,13 +351,39 @@ fn malformed_framed_event_parameters_write_rejected() {
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    // Reserved context tag [6] — rejected by decode, so INVALID_DATA_TYPE.
-    let bad = vec![0x6E, 0x09, 0x01, 0x6F];
-    let err = write_framed(&mut db, oid, PropertyIdentifier::EVENT_PARAMETERS, bad).unwrap_err();
-    match err {
-        Error::Protocol { class, .. } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+    for bad in [
+        vec![0x6E, 0x09, 0x01, 0x6F], // reserved Event Parameter [6]
+        vec![0x9E, 0x09, 0x01, 0x19, 0x02, 0x2E, 0x01, 0x00, 0x2F, 0x9F],
+        vec![0xFE, 200, 0x12, 0xFF, 200],
+    ] {
+        let err =
+            write_framed(&mut db, oid, PropertyIdentifier::EVENT_PARAMETERS, bad).unwrap_err();
+        match err {
+            Error::Protocol { class, .. } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            }
+            other => panic!("expected protocol error, got {other:?}"),
         }
-        other => panic!("expected protocol error, got {other:?}"),
     }
+}
+
+#[test]
+fn malformed_extended_fault_application_form_is_rejected() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let malformed = vec![0x2E, 0x09, 0x01, 0x19, 0x02, 0x2E, 0x01, 0x00, 0x2F, 0x2F];
+    assert!(write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        malformed,
+    )
+    .is_err());
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        vec![0x08]
+    );
 }

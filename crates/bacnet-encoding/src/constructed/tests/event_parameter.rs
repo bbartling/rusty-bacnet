@@ -248,6 +248,19 @@ fn extended_empty_parameters_round_trip() {
 }
 
 #[test]
+fn extended_reference_parameter_round_trip() {
+    let mut parameters = BytesMut::new();
+    tags::encode_opening_tag(&mut parameters, 0);
+    encode_dopr_body(&mut parameters, &dopr_ai(5, 85));
+    tags::encode_closing_tag(&mut parameters, 0);
+    round_trip(&BACnetEventParameter::Extended {
+        vendor_id: 42,
+        extended_event_type: 99,
+        parameters: parameters.to_vec(),
+    });
+}
+
+#[test]
 fn opaque_unmodeled_alternatives_preserved() {
     // change-of-life-safety [8] — a valid but unmodeled SEQUENCE alternative:
     // body bytes preserved verbatim through decode->encode.
@@ -373,6 +386,24 @@ fn event_parameter_choice_tag_forms_are_enforced() {
         let mut untouched = BytesMut::from(&[0xaa][..]);
         assert!(encode_event_parameter(&mut untouched, &value).is_err());
         assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
+
+    for data in [vec![0x01, 0x00], vec![0x12]] {
+        for value in [
+            BACnetEventParameter::Extended {
+                vendor_id: 1,
+                extended_event_type: 2,
+                parameters: data.clone(),
+            },
+            BACnetEventParameter::Opaque {
+                tag: 200,
+                data: data.clone(),
+            },
+        ] {
+            let mut untouched = BytesMut::from(&[0xaa][..]);
+            assert!(encode_event_parameter(&mut untouched, &value).is_err());
+            assert_eq!(untouched.as_ref(), &[0xaa]);
+        }
     }
 }
 

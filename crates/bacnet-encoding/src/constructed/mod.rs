@@ -226,6 +226,7 @@ pub fn encode_property_state(
     use BACnetPropertyStates as S;
     if let S::Other(value) = state {
         if value.is_constructed() {
+            validate_tlv_sequence(value.data(), "proprietary property-state body")?;
             let mut framed = BytesMut::new();
             tags::encode_opening_tag(&mut framed, value.tag());
             let (_, body_start) = tags::decode_tag(&framed, 0)?;
@@ -334,6 +335,7 @@ pub fn decode_property_state(
             ));
         }
         let (content, end) = tags::extract_context_value(data, pos, tag.number)?;
+        validate_tlv_sequence(content, "proprietary property-state body")?;
         return Ok((
             S::Other(BACnetProprietaryPropertyState::constructed(
                 tag.number,
@@ -563,6 +565,9 @@ pub(crate) fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error
 }
 
 /// Validate the shared Extended Event/Fault `parameters` production.
+/// Its only context-tagged CHOICE is `reference [0]` over
+/// `BACnetDeviceObjectPropertyReference`; NotificationParameters uses a
+/// different Extended production with `property-value [0]`.
 pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<(), Error> {
     let mut offset = 0;
     let mut count = 0;

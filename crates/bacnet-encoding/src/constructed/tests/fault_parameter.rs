@@ -151,6 +151,33 @@ fn fault_extended_rejects_malformed_parameters_atomically() {
 }
 
 #[test]
+fn fault_extended_reference_parameter_round_trip() {
+    let mut parameters = BytesMut::new();
+    tags::encode_opening_tag(&mut parameters, 0);
+    encode_dopr_body(&mut parameters, &dopr_ai(5, 85));
+    tags::encode_closing_tag(&mut parameters, 0);
+    round_trip(&FaultParameters::FaultExtended {
+        vendor_id: 42,
+        extended_fault_type: 7,
+        parameters: parameters.to_vec(),
+    });
+}
+
+#[test]
+fn fault_extended_rejects_malformed_application_forms_atomically() {
+    for parameters in [vec![0x01, 0x00], vec![0x12]] {
+        let value = FaultParameters::FaultExtended {
+            vendor_id: 42,
+            extended_fault_type: 7,
+            parameters,
+        };
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
+}
+
+#[test]
 fn fault_life_safety_golden() {
     let value = FaultParameters::FaultLifeSafety {
         fault_values: vec![1, 2, 3],

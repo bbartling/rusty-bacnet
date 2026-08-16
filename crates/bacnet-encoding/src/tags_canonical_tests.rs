@@ -46,3 +46,20 @@ fn rejects_reserved_application_lvt_forms() {
         assert!(crate::primitives::decode_application_value(&encoded, 0).is_err());
     }
 }
+
+#[test]
+fn enforces_application_null_and_boolean_forms() {
+    for encoded in [&[0x01, 0x00][..], &[0x02, 0x00, 0x00][..]] {
+        assert!(tags::decode_tag(encoded, 0).is_ok());
+        assert!(crate::primitives::decode_application_value(encoded, 0).is_err());
+    }
+    for encoded in [&[0x12][..], &[0x15, 5, 0, 0, 0, 0, 1][..]] {
+        assert!(tags::decode_tag(encoded, 0).is_ok());
+        assert!(crate::primitives::decode_application_value(encoded, 0).is_err());
+    }
+
+    for encoded in [&[0x00][..], &[0x10][..], &[0x11][..]] {
+        assert!(tags::decode_tag(encoded, 0).is_ok());
+        assert!(crate::primitives::decode_application_value(encoded, 0).is_ok());
+    }
+}
