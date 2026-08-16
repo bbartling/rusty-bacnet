@@ -557,8 +557,15 @@ pub(crate) fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error
                 format!("{what}: sequence exceeds item limit"),
             ));
         }
-        let (_, next) = primitives::decode_application_value(data, offset)?;
-        offset = next;
+        let (tag, content) = tags::decode_tag(data, offset)?;
+        if tag.is_opening {
+            let (inner, next) = tags::extract_context_value(data, content, tag.number)?;
+            validate_tlv_sequence(inner, what)?;
+            offset = next;
+        } else {
+            let (_, next) = primitives::decode_application_value(data, offset)?;
+            offset = next;
+        }
         count += 1;
     }
     Ok(())

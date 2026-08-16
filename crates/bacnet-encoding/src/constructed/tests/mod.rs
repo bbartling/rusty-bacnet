@@ -249,7 +249,12 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
     assert!(encode_property_state(&mut BytesMut::new(), &mismatched).is_err());
     assert!(decode_property_state(&[0xfe, 64, 0x1e, 0x2f, 0xff, 64], 0).is_err());
 
-    for body in [vec![0x01, 0x00], vec![0x12]] {
+    for body in [
+        vec![0x01, 0x00],
+        vec![0x12],
+        vec![0x0e, 0x01, 0x00, 0x0f],
+        vec![0x1e, 0x12, 0x1f],
+    ] {
         let malformed = BACnetPropertyStates::Other(
             BACnetProprietaryPropertyState::constructed(64, body.clone()).unwrap(),
         );

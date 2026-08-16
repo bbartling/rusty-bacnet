@@ -388,7 +388,12 @@ fn event_parameter_choice_tag_forms_are_enforced() {
         assert_eq!(untouched.as_ref(), &[0xaa]);
     }
 
-    for data in [vec![0x01, 0x00], vec![0x12]] {
+    for data in [
+        vec![0x01, 0x00],
+        vec![0x12],
+        vec![0x0e, 0x01, 0x00, 0x0f],
+        vec![0x1e, 0x12, 0x1f],
+    ] {
         for value in [
             BACnetEventParameter::Extended {
                 vendor_id: 1,

@@ -165,7 +165,12 @@ fn fault_extended_reference_parameter_round_trip() {
 
 #[test]
 fn fault_extended_rejects_malformed_application_forms_atomically() {
-    for parameters in [vec![0x01, 0x00], vec![0x12]] {
+    for parameters in [
+        vec![0x01, 0x00],
+        vec![0x12],
+        vec![0x0e, 0x01, 0x00, 0x0f],
+        vec![0x1e, 0x12, 0x1f],
+    ] {
         let value = FaultParameters::FaultExtended {
             vendor_id: 42,
             extended_fault_type: 7,
