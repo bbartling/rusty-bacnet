@@ -101,8 +101,7 @@ pub(super) fn decode_change_of_discrete_value(
             "ChangeOfDiscreteValue: expected opening [0]",
         ));
     }
-    let (new_value, after) =
-        extract_required_raw_context(data, p, 0, "ChangeOfDiscreteValue new-value")?;
+    let (new_value, after) = extract_raw_context(data, p, 0)?;
     pos = after;
     // [1] status-flags
     let (status_flags, pos) =

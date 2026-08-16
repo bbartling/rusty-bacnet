@@ -142,7 +142,7 @@ fn encode_event(event_values: NotificationParameters) -> BytesMut {
     encoded
 }
 
-fn access_event(authentication_factor: Vec<u8>) -> NotificationParameters {
+fn access_event(authentication_factor: Option<Vec<u8>>) -> NotificationParameters {
     NotificationParameters::AccessEvent {
         access_event: 5,
         status_flags: 0b1000,
@@ -319,7 +319,7 @@ fn event_notification_preserves_trailing_opaque_payload_bytes() {
             extended_event_type: 7,
             parameters: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0x9f]),
         },
-        access_event(encoded_octet_string(&[0x5e, 0x5f, 0xcf, 0xdf])),
+        access_event(Some(encoded_octet_string(&[0x5e, 0x5f, 0xcf, 0xdf]))),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,
@@ -350,7 +350,7 @@ fn event_notification_requires_exact_event_values_suffix() {
             extended_event_type: 7,
             parameters: encoded_octet_string(&[0x01, 0x02]),
         },
-        access_event(encoded_octet_string(&[0xab, 0xcd])),
+        access_event(Some(encoded_octet_string(&[0xab, 0xcd]))),
         NotificationParameters::ChangeOfTimer {
             new_state: 1,
             status_flags: 0b1000,
@@ -460,7 +460,7 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
             extended_event_type: 7,
             parameters: raw.clone(),
         },
-        access_event(raw.clone()),
+        access_event(Some(raw.clone())),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,
@@ -495,7 +495,7 @@ fn non_trailing_raw_fields_preserve_delimiters_inside_values() {
             feedback_value: raw.clone(),
         },
         NotificationParameters::ChangeOfStatusFlags {
-            present_value: raw.clone(),
+            present_value: Some(raw.clone()),
             referenced_flags: 0b1000,
         },
         NotificationParameters::ChangeOfDiscreteValue {
@@ -550,16 +550,10 @@ fn raw_fields_require_encoded_bacnet_values() {
 }
 
 #[test]
-fn required_raw_values_reject_empty_while_optional_values_are_omitted() {
-    let encoded_value = encoded_octet_string(&[1]);
-    let invalid = [
+fn abstract_syntax_values_preserve_empty_aggregates_and_optional_presence() {
+    for expected in [
         NotificationParameters::CommandFailure {
             command_value: Vec::new(),
-            status_flags: 0,
-            feedback_value: encoded_value.clone(),
-        },
-        NotificationParameters::CommandFailure {
-            command_value: encoded_value.clone(),
             status_flags: 0,
             feedback_value: Vec::new(),
         },
@@ -567,54 +561,25 @@ fn required_raw_values_reject_empty_while_optional_values_are_omitted() {
             new_value: Vec::new(),
             status_flags: 0,
         },
-    ];
-    for value in invalid {
-        let mut untouched = BytesMut::from(&[0xaa][..]);
-        assert!(value.encode(&mut untouched).is_err());
-        assert_eq!(untouched.as_ref(), &[0xaa]);
-    }
-
-    let mut empty_command = BytesMut::new();
-    tags::encode_opening_tag(&mut empty_command, 3);
-    tags::encode_opening_tag(&mut empty_command, 0);
-    tags::encode_closing_tag(&mut empty_command, 0);
-    primitives::encode_ctx_bit_string(&mut empty_command, 1, 4, &[0]);
-    tags::encode_opening_tag(&mut empty_command, 2);
-    empty_command.extend_from_slice(&encoded_value);
-    tags::encode_closing_tag(&mut empty_command, 2);
-    tags::encode_closing_tag(&mut empty_command, 3);
-
-    let mut empty_feedback = BytesMut::new();
-    tags::encode_opening_tag(&mut empty_feedback, 3);
-    tags::encode_opening_tag(&mut empty_feedback, 0);
-    empty_feedback.extend_from_slice(&encoded_value);
-    tags::encode_closing_tag(&mut empty_feedback, 0);
-    primitives::encode_ctx_bit_string(&mut empty_feedback, 1, 4, &[0]);
-    tags::encode_opening_tag(&mut empty_feedback, 2);
-    tags::encode_closing_tag(&mut empty_feedback, 2);
-    tags::encode_closing_tag(&mut empty_feedback, 3);
-
-    let mut empty_discrete_value = BytesMut::new();
-    tags::encode_opening_tag(&mut empty_discrete_value, 21);
-    tags::encode_opening_tag(&mut empty_discrete_value, 0);
-    tags::encode_closing_tag(&mut empty_discrete_value, 0);
-    primitives::encode_ctx_bit_string(&mut empty_discrete_value, 1, 4, &[0]);
-    tags::encode_closing_tag(&mut empty_discrete_value, 21);
-
-    for raw in [empty_command, empty_feedback, empty_discrete_value] {
-        assert!(decode_variant(&raw).is_err());
-    }
-
-    for expected in [
-        access_event(Vec::new()),
+        access_event(None),
         NotificationParameters::ChangeOfStatusFlags {
-            present_value: Vec::new(),
+            present_value: None,
+            referenced_flags: 0,
+        },
+        NotificationParameters::ChangeOfStatusFlags {
+            present_value: Some(Vec::new()),
             referenced_flags: 0,
         },
     ] {
         let mut encoded = BytesMut::new();
         expected.encode(&mut encoded).unwrap();
         assert_eq!(decode_variant(&encoded).unwrap(), expected);
+        assert_eq!(
+            EventNotificationRequest::decode(&encode_event(expected.clone()))
+                .unwrap()
+                .event_values,
+            Some(expected)
+        );
     }
 }
 

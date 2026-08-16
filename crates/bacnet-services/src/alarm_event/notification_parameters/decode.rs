@@ -275,8 +275,7 @@ impl NotificationParameters {
                 if !t.is_opening || t.number != 0 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [0]"));
                 }
-                let (command_value, after) =
-                    extract_required_raw_context(data, p, 0, "CommandFailure command-value")?;
+                let (command_value, after) = extract_raw_context(data, p, 0)?;
                 pos = after;
                 // [1] status-flags
                 let (status_flags, pos) =
@@ -286,8 +285,7 @@ impl NotificationParameters {
                 if !t.is_opening || t.number != 2 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [2]"));
                 }
-                let (feedback_value, after) =
-                    extract_required_raw_context(data, p, 2, "CommandFailure feedback-value")?;
+                let (feedback_value, after) = extract_raw_context(data, p, 2)?;
                 finish_variant(
                     Self::CommandFailure {
                         command_value,
@@ -439,9 +437,10 @@ impl NotificationParameters {
                             "AccessEvent: expected opening [5] for authentication-factor",
                         ));
                     }
-                    extract_raw_context(data, p, 5)?
+                    let (value, after) = extract_raw_context(data, p, 5)?;
+                    (Some(value), after)
                 } else {
-                    (Vec::new(), pos)
+                    (None, pos)
                 };
                 finish_variant(
                     Self::AccessEvent {
@@ -622,9 +621,9 @@ impl NotificationParameters {
                 let present_value = if t.is_opening_tag(0) {
                     let (value, after) = extract_raw_context(data, p, 0)?;
                     pos = after;
-                    value
+                    Some(value)
                 } else {
-                    Vec::new()
+                    None
                 };
                 // [1] referenced-flags
                 let (referenced_flags, pos) = decode_context_status_flags(

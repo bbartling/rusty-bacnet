@@ -1,13 +1,6 @@
 use super::*;
 use bacnet_encoding::constructed::validate_tlv_sequence;
 
-fn require_encoded_value(value: &[u8], field: &str) -> Result<(), Error> {
-    if value.is_empty() {
-        return Err(Error::Encoding(format!("{field} is empty")));
-    }
-    Ok(())
-}
-
 impl NotificationParameters {
     /// Encode notification parameters into the buffer.
     ///
@@ -76,8 +69,6 @@ impl NotificationParameters {
                 status_flags,
                 feedback_value,
             } => {
-                require_encoded_value(command_value, "CommandFailure command-value")?;
-                require_encoded_value(feedback_value, "CommandFailure feedback-value")?;
                 tags::encode_opening_tag(buf, 3);
                 // [0] command-value — abstract syntax, encoded as raw octet string
                 tags::encode_opening_tag(buf, 0);
@@ -214,7 +205,7 @@ impl NotificationParameters {
                     primitives::encode_ctx_object_id(buf, 3, dev);
                 }
                 tags::encode_closing_tag(buf, 4);
-                if !authentication_factor.is_empty() {
+                if let Some(authentication_factor) = authentication_factor {
                     // [5] authentication-factor — raw, optional
                     tags::encode_opening_tag(buf, 5);
                     buf.extend_from_slice(authentication_factor);
@@ -277,7 +268,7 @@ impl NotificationParameters {
                 referenced_flags,
             } => {
                 tags::encode_opening_tag(buf, 18);
-                if !present_value.is_empty() {
+                if let Some(present_value) = present_value {
                     // [0] present-value — abstract syntax, raw, optional
                     tags::encode_opening_tag(buf, 0);
                     buf.extend_from_slice(present_value);
@@ -309,7 +300,6 @@ impl NotificationParameters {
                 new_value,
                 status_flags,
             } => {
-                require_encoded_value(new_value, "ChangeOfDiscreteValue new-value")?;
                 tags::encode_opening_tag(buf, 21);
                 // [0] new-value — abstract syntax, raw
                 tags::encode_opening_tag(buf, 0);
