@@ -18,7 +18,7 @@ fn framed_event_parameters() -> Vec<u8> {
         deadband: 1.0,
     };
     let mut buf = BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params).unwrap();
     buf.to_vec()
 }
 
@@ -128,6 +128,35 @@ fn event_parameters_framed_wire_round_trip() {
 }
 
 #[test]
+fn opaque_event_parameters_with_tag_like_payload_round_trip() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let mut framed = BytesMut::new();
+    bacnet_encoding::constructed::encode_event_parameter(
+        &mut framed,
+        &BACnetEventParameter::Opaque {
+            tag: 200,
+            data: vec![0x61, 0x2f],
+        },
+    )
+    .unwrap();
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::EVENT_PARAMETERS,
+        framed.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::EVENT_PARAMETERS),
+        framed.to_vec()
+    );
+}
+
+#[test]
 fn legacy_event_parameters_wire_write_is_canonicalized() {
     let mut db = ObjectDatabase::new();
     let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
@@ -172,6 +201,90 @@ fn fault_parameters_framed_wire_round_trip() {
     assert_eq!(
         read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
         framed
+    );
+}
+
+#[test]
+fn extended_fault_parameters_with_tag_like_payload_round_trip() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let mut framed = BytesMut::new();
+    bacnet_encoding::constructed::encode_fault_parameters(
+        &mut framed,
+        &FaultParameters::FaultExtended {
+            vendor_id: 1,
+            extended_fault_type: 2,
+            parameters: vec![0x61, 0x2f],
+        },
+    )
+    .unwrap();
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        framed.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        framed.to_vec()
+    );
+}
+
+#[test]
+fn defined_preserved_character_sets_round_trip_over_wire() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+    let ucs4_a = vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41];
+
+    for (property, value) in [
+        (
+            PropertyIdentifier::EVENT_PARAMETERS,
+            BACnetEventParameter::Extended {
+                vendor_id: 1,
+                extended_event_type: 2,
+                parameters: ucs4_a.clone(),
+            },
+        ),
+        (
+            PropertyIdentifier::EVENT_PARAMETERS,
+            BACnetEventParameter::Opaque {
+                tag: 200,
+                data: ucs4_a.clone(),
+            },
+        ),
+    ] {
+        let mut framed = BytesMut::new();
+        bacnet_encoding::constructed::encode_event_parameter(&mut framed, &value).unwrap();
+        write_framed(&mut db, oid, property, framed.to_vec()).unwrap();
+        assert_eq!(read_raw(&db, oid, property), framed.to_vec());
+    }
+
+    let mut framed = BytesMut::new();
+    bacnet_encoding::constructed::encode_fault_parameters(
+        &mut framed,
+        &FaultParameters::FaultExtended {
+            vendor_id: 1,
+            extended_fault_type: 2,
+            parameters: ucs4_a,
+        },
+    )
+    .unwrap();
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        framed.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        framed.to_vec()
     );
 }
 
@@ -292,13 +405,41 @@ fn malformed_framed_event_parameters_write_rejected() {
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    // Reserved context tag [6] — rejected by decode, so INVALID_DATA_TYPE.
-    let bad = vec![0x6E, 0x09, 0x01, 0x6F];
-    let err = write_framed(&mut db, oid, PropertyIdentifier::EVENT_PARAMETERS, bad).unwrap_err();
-    match err {
-        Error::Protocol { class, .. } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+    for bad in [
+        vec![0x6E, 0x09, 0x01, 0x6F], // reserved Event Parameter [6]
+        vec![0x9E, 0x09, 0x01, 0x19, 0x02, 0x2E, 0x01, 0x00, 0x2F, 0x9F],
+        vec![0xFE, 200, 0x12, 0xFF, 200],
+        vec![0xFE, 200, 0x0E, 0x01, 0x00, 0x0F, 0xFF, 200],
+        vec![0xFE, 200, 0x1E, 0x12, 0x1F, 0xFF, 200],
+    ] {
+        let err =
+            write_framed(&mut db, oid, PropertyIdentifier::EVENT_PARAMETERS, bad).unwrap_err();
+        match err {
+            Error::Protocol { class, .. } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            }
+            other => panic!("expected protocol error, got {other:?}"),
         }
-        other => panic!("expected protocol error, got {other:?}"),
     }
+}
+
+#[test]
+fn malformed_extended_fault_application_form_is_rejected() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let malformed = vec![0x2E, 0x09, 0x01, 0x19, 0x02, 0x2E, 0x01, 0x00, 0x2F, 0x2F];
+    assert!(write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        malformed,
+    )
+    .is_err());
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        vec![0x08]
+    );
 }

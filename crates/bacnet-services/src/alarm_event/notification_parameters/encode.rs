@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::validate_tlv_sequence;
 
 impl NotificationParameters {
     /// Encode notification parameters into the buffer.
@@ -6,6 +7,15 @@ impl NotificationParameters {
     /// Each variant is wrapped in its own opening/closing tag pair
     /// matching the variant's context tag number.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let mut encoded = BytesMut::new();
+        self.encode_into(&mut encoded)?;
+        validate_tlv_sequence(&encoded, "NotificationParameters")
+            .map_err(|error| Error::Encoding(error.to_string()))?;
+        buf.extend_from_slice(&encoded);
+        Ok(())
+    }
+
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
         match self {
             Self::ChangeOfBitstring {
                 referenced_bitstring,
@@ -28,7 +38,7 @@ impl NotificationParameters {
                 tags::encode_opening_tag(buf, 1);
                 // [0] new-state: BACnetPropertyStates — wrapped in opening/closing [0]
                 tags::encode_opening_tag(buf, 0);
-                encode_property_states(buf, new_state);
+                encode_property_states(buf, new_state)?;
                 tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
                 primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
@@ -195,10 +205,12 @@ impl NotificationParameters {
                     primitives::encode_ctx_object_id(buf, 3, dev);
                 }
                 tags::encode_closing_tag(buf, 4);
-                // [5] authentication-factor — raw
-                tags::encode_opening_tag(buf, 5);
-                buf.extend_from_slice(authentication_factor);
-                tags::encode_closing_tag(buf, 5);
+                if let Some(authentication_factor) = authentication_factor {
+                    // [5] authentication-factor — raw, optional
+                    tags::encode_opening_tag(buf, 5);
+                    buf.extend_from_slice(authentication_factor);
+                    tags::encode_closing_tag(buf, 5);
+                }
                 tags::encode_closing_tag(buf, 13);
             }
             Self::DoubleOutOfRange {
@@ -256,10 +268,12 @@ impl NotificationParameters {
                 referenced_flags,
             } => {
                 tags::encode_opening_tag(buf, 18);
-                // [0] present-value — abstract syntax, raw
-                tags::encode_opening_tag(buf, 0);
-                buf.extend_from_slice(present_value);
-                tags::encode_closing_tag(buf, 0);
+                if let Some(present_value) = present_value {
+                    // [0] present-value — abstract syntax, raw, optional
+                    tags::encode_opening_tag(buf, 0);
+                    buf.extend_from_slice(present_value);
+                    tags::encode_closing_tag(buf, 0);
+                }
                 // [1] referenced-flags
                 primitives::encode_ctx_bit_string(buf, 1, 4, &[*referenced_flags << 4]);
                 tags::encode_closing_tag(buf, 18);

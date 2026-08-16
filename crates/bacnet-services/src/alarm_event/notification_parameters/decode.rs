@@ -5,6 +5,7 @@ use super::decode_helpers::{
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::*;
 use crate::common::{decode_context, decode_context_u32};
+use bacnet_encoding::constructed::validate_tlv_sequence;
 
 impl NotificationParameters {
     /// Decode one notification-parameter choice, with an optional enclosing `[12]` close.
@@ -22,6 +23,10 @@ impl NotificationParameters {
         let data = data
             .get(..end)
             .ok_or_else(|| Error::decoding(end, "NotificationParameters boundary exceeds input"))?;
+        let framed = data.get(offset..).ok_or_else(|| {
+            Error::decoding(offset, "NotificationParameters offset exceeds input")
+        })?;
+        validate_tlv_sequence(framed, "NotificationParameters")?;
         // Peek the inner opening tag to determine the variant
         if offset >= data.len() {
             return Err(Error::decoding(
@@ -423,15 +428,20 @@ impl NotificationParameters {
                     return Err(Error::decoding(pos, "AccessEvent: expected closing [4]"));
                 }
                 pos = cp;
-                // [5] authentication-factor — opening/closing, raw
-                let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening_tag(5) {
-                    return Err(Error::decoding(
-                        pos,
-                        "AccessEvent: expected opening [5] for authentication-factor",
-                    ));
-                }
-                let (authentication_factor, after) = extract_raw_context(data, p, 5)?;
+                // [5] authentication-factor — opening/closing, raw, optional
+                let (authentication_factor, after) = if pos < variant_body_end {
+                    let (t, p) = tags::decode_tag(data, pos)?;
+                    if !t.is_opening_tag(5) {
+                        return Err(Error::decoding(
+                            pos,
+                            "AccessEvent: expected opening [5] for authentication-factor",
+                        ));
+                    }
+                    let (value, after) = extract_raw_context(data, p, 5)?;
+                    (Some(value), after)
+                } else {
+                    (None, pos)
+                };
                 finish_variant(
                     Self::AccessEvent {
                         access_event,
@@ -606,16 +616,15 @@ impl NotificationParameters {
             // [18] Change of status flags
             18 => {
                 let mut pos = inner_start;
-                // [0] present-value — opening/closing, raw
+                // [0] present-value — opening/closing, raw, optional
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 0 {
-                    return Err(Error::decoding(
-                        pos,
-                        "ChangeOfStatusFlags: expected opening [0]",
-                    ));
-                }
-                let (present_value, after) = extract_raw_context(data, p, 0)?;
-                pos = after;
+                let present_value = if t.is_opening_tag(0) {
+                    let (value, after) = extract_raw_context(data, p, 0)?;
+                    pos = after;
+                    Some(value)
+                } else {
+                    None
+                };
                 // [1] referenced-flags
                 let (referenced_flags, pos) = decode_context_status_flags(
                     data,

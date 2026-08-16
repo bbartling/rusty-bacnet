@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::{decode_context, decode_context_bool, decode_context_u32};
+use bacnet_encoding::constructed::validate_tlv_sequence;
 
 // ---------------------------------------------------------------------------
 // EventNotification
@@ -38,6 +39,15 @@ pub struct EventNotificationRequest {
 
 impl EventNotificationRequest {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let mut encoded = BytesMut::new();
+        self.encode_into(&mut encoded)?;
+        validate_tlv_sequence(&encoded, "EventNotification")
+            .map_err(|error| Error::Encoding(error.to_string()))?;
+        buf.extend_from_slice(&encoded);
+        Ok(())
+    }
+
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] processIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.process_identifier as u64);
         // [1] initiatingDeviceIdentifier
@@ -76,6 +86,7 @@ impl EventNotificationRequest {
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
+        validate_tlv_sequence(data, "EventNotification")?;
         // [0] processIdentifier
         let (process_identifier, mut offset) =
             decode_context_u32(data, 0, 0, "EventNotification processIdentifier")?;

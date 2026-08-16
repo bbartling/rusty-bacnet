@@ -246,7 +246,7 @@ fn write_event_parameters_framed_round_trip() {
     };
     // Framed wire form write: exactly what a conformant peer sends.
     let mut buf = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_PARAMETERS,
         None,
@@ -281,7 +281,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
         deadband: 1.0,
     };
     let mut good = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut good, &params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut good, &params).unwrap();
     for extra in 1..=4usize {
         let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
         let mut bytes = good.to_vec();
@@ -326,14 +326,98 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
 #[test]
 fn write_event_parameters_framed_malformed_rejected() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    // Truncated framed value: out-of-range opening with no closing.
-    let result = ee.write_property(
-        PropertyIdentifier::EVENT_PARAMETERS,
-        None,
-        PropertyValue::ApplicationData(vec![0x5E, 0x09, 0x07]),
-        None,
+    for malformed in [
+        vec![0x5E, 0x09, 0x07], // out-of-range opening with no closing
+        vec![0x58],             // out-of-range encoded as a primitive tag
+    ] {
+        assert!(ee
+            .write_property(
+                PropertyIdentifier::EVENT_PARAMETERS,
+                None,
+                PropertyValue::ApplicationData(malformed),
+                None,
+            )
+            .is_err());
+    }
+}
+
+#[test]
+fn write_event_parameters_flat_malformed_proprietary_body_rejected() {
+    use bacnet_types::constructed::{BACnetPropertyStates, BACnetProprietaryPropertyState};
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    let malformed = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            malformed.encode(),
+            None,
+        )
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap(),
+        before
     );
-    assert!(result.is_err());
+}
+
+#[test]
+fn write_event_parameters_flat_reference_malformed_rejected() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    let PropertyValue::List(base) = (BACnetEventParameter::FloatingLimit {
+        time_delay: 1,
+        setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ),
+        low_diff_limit: 1.0,
+        high_diff_limit: 2.0,
+        deadband: 0.5,
+    })
+    .encode() else {
+        unreachable!();
+    };
+
+    let mut overflow = base.clone();
+    let PropertyValue::List(reference) = &mut overflow[2] else {
+        unreachable!();
+    };
+    reference[1] = PropertyValue::Unsigned(u64::MAX);
+
+    let mut trailing = base;
+    let PropertyValue::List(reference) = &mut trailing[2] else {
+        unreachable!();
+    };
+    reference.push(PropertyValue::Null);
+
+    for malformed in [overflow, trailing] {
+        assert!(ee
+            .write_property(
+                PropertyIdentifier::EVENT_PARAMETERS,
+                None,
+                PropertyValue::List(malformed),
+                None,
+            )
+            .is_err());
+        assert_eq!(
+            ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+                .unwrap(),
+            before
+        );
+    }
 }
 
 #[test]

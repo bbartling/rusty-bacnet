@@ -562,7 +562,8 @@ fn wpm_rollback_restores_event_enrollment_time_delay_normal_fallback() {
     );
 
     let mut framed = BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut framed, &out_of_range_params(9));
+    bacnet_encoding::constructed::encode_event_parameter(&mut framed, &out_of_range_params(9))
+        .unwrap();
     db.get_mut(&oid)
         .unwrap()
         .write_property(

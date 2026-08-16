@@ -133,7 +133,7 @@ fn fault_parameters_extended() {
     let fp = FaultParameters::FaultExtended {
         vendor_id: 42,
         extended_fault_type: 7,
-        parameters: vec![0x01, 0x02],
+        parameters: vec![0x21, 0x02],
     };
     ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
@@ -263,6 +263,67 @@ fn fault_parameters_write_round_trip() {
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
     assert_eq!(decode_framed(val), fp);
+}
+
+#[test]
+fn fault_parameters_flat_malformed_proprietary_body_rejected() {
+    use bacnet_types::constructed::{BACnetPropertyStates, BACnetProprietaryPropertyState};
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    let malformed = FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::FAULT_PARAMETERS,
+            None,
+            malformed.encode_property_value(),
+            None,
+        )
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn fault_parameters_flat_life_safety_overflow_rejected() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    let mut malformed = FaultParameters::FaultLifeSafety {
+        fault_values: vec![1],
+        mode_for_reference: BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ),
+    }
+    .encode_property_value();
+    let PropertyValue::List(items) = &mut malformed else {
+        unreachable!();
+    };
+    let PropertyValue::List(values) = &mut items[1] else {
+        unreachable!();
+    };
+    values[0] = PropertyValue::Unsigned(u64::from(u32::MAX) + 1);
+
+    assert!(ee
+        .write_property(PropertyIdentifier::FAULT_PARAMETERS, None, malformed, None,)
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+            .unwrap(),
+        before
+    );
 }
 
 #[test]

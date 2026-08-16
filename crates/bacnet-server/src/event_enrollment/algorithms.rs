@@ -83,10 +83,10 @@ pub(crate) struct Indication {
     /// monitored bytes. Algorithms whose delay gates a threshold condition
     /// (OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`.
     pub condition: u64,
-    /// CHANGE_OF_STATE only: the matched alarm value, recorded as the value
-    /// that caused the transition to OFFNORMAL when the transition *fires*
-    /// (drives condition (c) on later passes).
-    pub offnormal_value: Option<u32>,
+    /// CHANGE_OF_STATE only: the matched alarm value's domain-tagged identity,
+    /// recorded when the transition to OFFNORMAL fires and used by condition
+    /// (c) on later passes.
+    pub offnormal_value: Option<u64>,
     /// CHANGE_OF_VALUE only: the sample installed as the new detection
     /// baseline when the transition *fires* — Clause 13.3.3: "the value of
     /// the monitored value when a transition to NORMAL is indicated shall be
@@ -400,33 +400,40 @@ pub(crate) fn eval_floating_limit_struct(
 
 /// Whether a [`BACnetPropertyStates`] payload equals the monitored discrete
 /// value.
-fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
-    use bacnet_types::constructed::BACnetPropertyStates as S;
-    match state {
-        S::BooleanValue(v) => value == u32::from(*v),
-        S::BinaryValue(v) => value == *v,
-        S::EventType(v) => value == *v,
-        S::Polarity(v) => value == *v,
-        S::ProgramChange(v) => value == *v,
-        S::ProgramState(v) => value == *v,
-        S::ReasonForHalt(v) => value == *v,
-        S::Reliability(v) => value == *v,
-        S::State(v) => value == *v,
-        S::SystemStatus(v) => value == *v,
-        S::Units(v) => value == *v,
-        S::UnsignedValue(v) => value == *v,
-        S::LifeSafetyMode(v) => value == *v,
-        S::LifeSafetyState(v) => value == *v,
-        S::DoorAlarmState(v) => value == *v,
-        S::Action(v) => value == *v,
-        S::DoorSecuredStatus(v) => value == *v,
-        S::DoorStatus(v) => value == *v,
-        S::DoorValue(v) => value == *v,
-        S::LiftCarDirection(v) => value == *v,
-        S::LiftCarDoorCommand(v) => value == *v,
-        S::TimerState(v) => value == *v,
-        S::TimerTransition(v) => value == *v,
-        S::Other { .. } => false,
+fn property_state_matches(state: &BACnetPropertyStates, value: PropertyStateValue) -> bool {
+    use BACnetPropertyStates as S;
+
+    match (state, value) {
+        (S::BooleanValue(expected), PropertyStateValue::Boolean(actual)) => *expected == actual,
+        (S::IntegerValue(expected), PropertyStateValue::Signed(actual)) => *expected == actual,
+        (S::UnsignedValue(expected), PropertyStateValue::Unsigned(actual)) => {
+            u64::from(*expected) == actual
+        }
+        (S::BooleanValue(_) | S::IntegerValue(_) | S::UnsignedValue(_), _) => false,
+        (_, PropertyStateValue::Enumerated(actual)) => state.as_u32() == Some(actual),
+        _ => false,
+    }
+}
+
+/// Monitored value forms accepted by `BACnetPropertyStates`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PropertyStateValue {
+    Boolean(bool),
+    Signed(i32),
+    Unsigned(u64),
+    Enumerated(u32),
+}
+
+impl PropertyStateValue {
+    fn identity(self) -> u64 {
+        match self {
+            Self::Boolean(value) => u64::from(value),
+            Self::Signed(value) => (1u64 << 32) | value as u32 as u64,
+            // Values above u32 cannot match a BACnetPropertyStates
+            // UnsignedValue, so their identity is never persisted.
+            Self::Unsigned(value) => (2u64 << 32) | value,
+            Self::Enumerated(value) => (3u64 << 32) | value as u64,
+        }
     }
 }
 
@@ -447,26 +454,24 @@ fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
 /// the test/setup helper rather than by evaluation), (c) declines to
 /// indicate rather than fabricating a re-entry every pass.
 ///
-/// The pending-condition identity discriminates by matched value. The driver
-/// for that strictness is (c)'s text — "remains equal to THAT value for
-/// pTimeDelay"; (a) says only "equal to ANY of the values contained in
-/// pAlarmValues for pTimeDelay" and does not, by its letter, require the same
-/// value to persist. Applying the identity to (a) too is the deliberate
-/// stricter-than-required choice: a value flapping between listed alarm
-/// values restarts its countdown instead of accumulating one.
+/// Condition (a)'s pending identity is shared by every listed alarm value:
+/// the clause requires the monitored value to equal "any" pAlarmValues entry
+/// for pTimeDelay. Condition (c) retains the matched-value identity because it
+/// requires the value to remain equal to "that" different value.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
-    value: u32,
+    value: PropertyStateValue,
     current: EventState,
-    last_offnormal_value: Option<u32>,
+    last_offnormal_value: Option<u64>,
 ) -> ArmEvaluation {
     let matched = alarm_values
         .iter()
         .any(|s| property_state_matches(s, value));
-    let offnormal = || Indication {
+    let identity = value.identity();
+    let offnormal = |condition| Indication {
         target: EventState::OFFNORMAL,
-        condition: value as u64,
-        offnormal_value: Some(value),
+        condition,
+        offnormal_value: Some(identity),
         new_baseline: None,
     };
     // Foreign-state recovery (see ArmEvaluation's note): NORMAL's view of
@@ -474,20 +479,20 @@ pub(crate) fn eval_change_of_state_struct(
     // otherwise the algorithm settles at NORMAL.
     if reachable_or_normal(current, &[EventState::NORMAL, EventState::OFFNORMAL]) != current {
         return ArmEvaluation::simple(Some(if matched {
-            offnormal()
+            offnormal(0)
         } else {
             Indication::plain(EventState::NORMAL, 0)
         }));
     }
     let indication = if current == EventState::NORMAL && matched {
-        Some(offnormal())
+        Some(offnormal(0))
     } else if current == EventState::OFFNORMAL && !matched {
         Some(Indication::plain(EventState::NORMAL, 0))
     } else if current == EventState::OFFNORMAL
         && matched
-        && last_offnormal_value.is_some_and(|caused| caused != value)
+        && last_offnormal_value.is_some_and(|caused| caused != identity)
     {
-        Some(offnormal())
+        Some(offnormal(identity))
     } else {
         None
     };
@@ -752,7 +757,18 @@ pub(crate) fn extract_real(pv: &PropertyValue) -> Option<f32> {
 pub(crate) fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
     match pv {
         PropertyValue::Enumerated(v) => Some(*v),
-        PropertyValue::Unsigned(v) => Some(*v as u32),
+        PropertyValue::Unsigned(v) => u32::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+/// Extract a monitored value accepted by the PropertyStates CHOICE.
+pub(crate) fn extract_property_state_value(pv: &PropertyValue) -> Option<PropertyStateValue> {
+    match pv {
+        PropertyValue::Boolean(value) => Some(PropertyStateValue::Boolean(*value)),
+        PropertyValue::Signed(value) => Some(PropertyStateValue::Signed(*value)),
+        PropertyValue::Enumerated(value) => Some(PropertyStateValue::Enumerated(*value)),
+        PropertyValue::Unsigned(value) => Some(PropertyStateValue::Unsigned(*value)),
         _ => None,
     }
 }

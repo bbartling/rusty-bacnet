@@ -142,7 +142,7 @@ fn encode_event(event_values: NotificationParameters) -> BytesMut {
     encoded
 }
 
-fn access_event(authentication_factor: Vec<u8>) -> NotificationParameters {
+fn access_event(authentication_factor: Option<Vec<u8>>) -> NotificationParameters {
     NotificationParameters::AccessEvent {
         access_event: 5,
         status_flags: 0b1000,
@@ -319,7 +319,7 @@ fn event_notification_preserves_trailing_opaque_payload_bytes() {
             extended_event_type: 7,
             parameters: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0x9f]),
         },
-        access_event(encoded_octet_string(&[0x5e, 0x5f, 0xcf, 0xdf])),
+        access_event(Some(encoded_octet_string(&[0x5e, 0x5f, 0xcf, 0xdf]))),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,
@@ -350,7 +350,7 @@ fn event_notification_requires_exact_event_values_suffix() {
             extended_event_type: 7,
             parameters: encoded_octet_string(&[0x01, 0x02]),
         },
-        access_event(encoded_octet_string(&[0xab, 0xcd])),
+        access_event(Some(encoded_octet_string(&[0xab, 0xcd]))),
         NotificationParameters::ChangeOfTimer {
             new_state: 1,
             status_flags: 0b1000,
@@ -460,7 +460,7 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
             extended_event_type: 7,
             parameters: raw.clone(),
         },
-        access_event(raw.clone()),
+        access_event(Some(raw.clone())),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,
@@ -495,7 +495,7 @@ fn non_trailing_raw_fields_preserve_delimiters_inside_values() {
             feedback_value: raw.clone(),
         },
         NotificationParameters::ChangeOfStatusFlags {
-            present_value: raw.clone(),
+            present_value: Some(raw.clone()),
             referenced_flags: 0b1000,
         },
         NotificationParameters::ChangeOfDiscreteValue {
@@ -534,9 +534,93 @@ fn raw_fields_require_encoded_bacnet_values() {
         extended_event_type: 7,
         parameters: vec![0x9f],
     };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(invalid.encode(&mut untouched).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 9);
+    primitives::encode_ctx_unsigned(&mut raw, 0, 42);
+    primitives::encode_ctx_unsigned(&mut raw, 1, 7);
+    tags::encode_opening_tag(&mut raw, 2);
+    raw.extend_from_slice(&[0x9f]);
+    tags::encode_closing_tag(&mut raw, 2);
+    tags::encode_closing_tag(&mut raw, 9);
+    assert!(decode_variant(&raw).is_err());
+}
+
+#[test]
+fn abstract_syntax_values_preserve_empty_aggregates_and_optional_presence() {
+    for expected in [
+        NotificationParameters::CommandFailure {
+            command_value: Vec::new(),
+            status_flags: 0,
+            feedback_value: Vec::new(),
+        },
+        NotificationParameters::ChangeOfDiscreteValue {
+            new_value: Vec::new(),
+            status_flags: 0,
+        },
+        access_event(None),
+        NotificationParameters::ChangeOfStatusFlags {
+            present_value: None,
+            referenced_flags: 0,
+        },
+        NotificationParameters::ChangeOfStatusFlags {
+            present_value: Some(Vec::new()),
+            referenced_flags: 0,
+        },
+    ] {
+        let mut encoded = BytesMut::new();
+        expected.encode(&mut encoded).unwrap();
+        assert_eq!(decode_variant(&encoded).unwrap(), expected);
+        assert_eq!(
+            EventNotificationRequest::decode(&encode_event(expected.clone()))
+                .unwrap()
+                .event_values,
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn event_notification_enforces_total_nesting_on_encode_and_decode() {
+    use bacnet_types::constructed::BACnetProprietaryPropertyState;
+
+    let change_of_state = |body_depth| {
+        let mut body = vec![0x0e; body_depth];
+        body.extend(vec![0x0f; body_depth]);
+        NotificationParameters::ChangeOfState {
+            new_state: BACnetPropertyStates::Other(
+                BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
+            ),
+            status_flags: 0,
+        }
+    };
+
+    let accepted = event_request(change_of_state(tags::MAX_CONTEXT_NESTING_DEPTH - 4));
     let mut encoded = BytesMut::new();
-    invalid.encode(&mut encoded).unwrap();
-    assert!(decode_variant(&encoded).is_err());
+    accepted.encode(&mut encoded).unwrap();
+    assert!(EventNotificationRequest::decode(&encoded).is_ok());
+
+    let too_deep_parameters = change_of_state(tags::MAX_CONTEXT_NESTING_DEPTH - 3);
+    let mut parameters = BytesMut::new();
+    too_deep_parameters.encode(&mut parameters).unwrap();
+
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(event_request(too_deep_parameters.clone())
+        .encode(&mut untouched)
+        .is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut without_values = event_request(too_deep_parameters);
+    without_values.event_values = None;
+    let mut raw = BytesMut::new();
+    without_values.encode(&mut raw).unwrap();
+    tags::encode_opening_tag(&mut raw, 12);
+    raw.extend_from_slice(&parameters);
+    tags::encode_closing_tag(&mut raw, 12);
+    assert!(EventNotificationRequest::decode(&raw).is_err());
 }
 
 #[test]

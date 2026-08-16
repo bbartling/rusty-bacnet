@@ -47,16 +47,36 @@ use crate::tags;
 use super::{
     decode_app_bit_string, decode_ctx_bit_string, decode_ctx_real, decode_ctx_unsigned,
     decode_dopr_body, decode_property_state, encode_dopr_body, encode_property_state,
-    expect_closing, expect_opening, MAX_FRAMED_ITEMS,
+    expect_closing, expect_opening, validate_extended_parameters, validate_tlv_sequence,
+    MAX_FRAMED_ITEMS,
 };
 
 /// Context tags the Clause 21 production omits, deprecates, or reserves.
 /// Decoding one means the peer is speaking something other than the 135-2020
 /// production, so these are hard errors rather than Opaque shadows.
 const RESERVED_EVENT_TAGS: [u8; 4] = [6, 7, 12, 19];
+const MODELED_EVENT_TAGS: [u8; 6] = [0, 1, 2, 4, 5, 9];
 
 /// Encode a [`BACnetEventParameter`] as its full CHOICE framing.
-pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) {
+///
+/// Validation includes the complete framing depth. Errors leave `buf`
+/// unchanged.
+pub fn encode_event_parameter(
+    buf: &mut BytesMut,
+    value: &BACnetEventParameter,
+) -> Result<(), Error> {
+    let mut encoded = BytesMut::new();
+    encode_event_parameter_into(&mut encoded, value)?;
+    validate_tlv_sequence(&encoded, "BACnetEventParameter")
+        .map_err(|error| Error::Encoding(error.to_string()))?;
+    buf.extend_from_slice(&encoded);
+    Ok(())
+}
+
+fn encode_event_parameter_into(
+    buf: &mut BytesMut,
+    value: &BACnetEventParameter,
+) -> Result<(), Error> {
     match value {
         BACnetEventParameter::ChangeOfBitstring {
             time_delay,
@@ -77,12 +97,14 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             time_delay,
             list_of_values,
         } => {
+            let mut encoded_states = BytesMut::new();
+            for state in list_of_values {
+                encode_property_state(&mut encoded_states, state)?;
+            }
             tags::encode_opening_tag(buf, 1);
             primitives::encode_ctx_unsigned(buf, 0, *time_delay as u64);
             tags::encode_opening_tag(buf, 1);
-            for state in list_of_values {
-                encode_property_state(buf, state);
-            }
+            buf.extend_from_slice(&encoded_states);
             tags::encode_closing_tag(buf, 1);
             tags::encode_closing_tag(buf, 1);
         }
@@ -142,6 +164,8 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             extended_event_type,
             parameters,
         } => {
+            validate_extended_parameters(parameters, "extended")
+                .map_err(|error| Error::Encoding(error.to_string()))?;
             tags::encode_opening_tag(buf, 9);
             primitives::encode_ctx_unsigned(buf, 0, *vendor_id as u64);
             primitives::encode_ctx_unsigned(buf, 1, *extended_event_type as u64);
@@ -155,18 +179,30 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             // Legacy pre-framing EventEnrollment values used an Octet String.
             primitives::encode_app_octet_string(buf, data);
         }
+        BACnetEventParameter::Opaque { tag: 20, data } if data.is_empty() => {
+            // Clause 21 defines none [20] as context NULL, not an empty SEQUENCE.
+            tags::encode_tag(buf, 20, tags::TagClass::Context, 0);
+        }
+        BACnetEventParameter::Opaque { tag, .. }
+            if *tag == 20
+                || MODELED_EVENT_TAGS.contains(tag)
+                || RESERVED_EVENT_TAGS.contains(tag) =>
+        {
+            return Err(Error::Encoding(format!(
+                "BACnetEventParameter: tag [{tag}] cannot use an opaque constructed body"
+            )));
+        }
         BACnetEventParameter::Opaque { tag, data } => {
+            validate_tlv_sequence(data, "opaque event parameters")
+                .map_err(|error| Error::Encoding(error.to_string()))?;
             // Preserved alternative: its captured bytes are the complete
             // SEQUENCE body, re-emitted under its own opening/closing pair.
-            // (A `none [20] NULL` captured as a zero-length primitive tag
-            // decodes to `Opaque { tag: 20, data: [] }` and re-encodes in the
-            // constructed form — same value, different but self-consistent
-            // tag form.)
             tags::encode_opening_tag(buf, *tag);
             buf.extend_from_slice(data);
             tags::encode_closing_tag(buf, *tag);
         }
     }
+    Ok(())
 }
 
 /// Decode one framed [`BACnetEventParameter`] CHOICE alternative at `offset`.
@@ -222,6 +258,13 @@ pub fn decode_event_parameter(
         ));
     }
 
+    if tag.class != tags::TagClass::Context {
+        return Err(Error::decoding(
+            offset,
+            "BACnetEventParameter: expected a context tag",
+        ));
+    }
+
     if RESERVED_EVENT_TAGS.contains(&tag.number) {
         return Err(Error::decoding(
             offset,
@@ -232,21 +275,20 @@ pub fn decode_event_parameter(
         ));
     }
 
-    // Primitive alternatives: only none [20] NULL (zero-length). Any other
-    // primitive ctx tag is preserved as opaque contents.
+    // `none [20] NULL` is the only primitive alternative in this CHOICE.
     if !tag.is_opening && !tag.is_closing {
-        let end = pos
-            .checked_add(tag.length as usize)
-            .ok_or_else(|| Error::decoding(pos, "BACnetEventParameter: length overflow"))?;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
+        if tag.number == 20 && tag.length == 0 {
+            return Ok((
+                EP::Opaque {
+                    tag: 20,
+                    data: Vec::new(),
+                },
+                pos,
+            ));
         }
-        return Ok((
-            EP::Opaque {
-                tag: tag.number,
-                data: data[pos..end].to_vec(),
-            },
-            end,
+        return Err(Error::decoding(
+            offset,
+            "BACnetEventParameter: invalid primitive alternative",
         ));
     }
 
@@ -254,6 +296,12 @@ pub fn decode_event_parameter(
         return Err(Error::decoding(
             offset,
             "BACnetEventParameter: unexpected closing tag",
+        ));
+    }
+    if tag.number == 20 {
+        return Err(Error::decoding(
+            offset,
+            "BACnetEventParameter: none [20] must use primitive NULL form",
         ));
     }
 
@@ -427,10 +475,8 @@ pub fn decode_event_parameter(
                 .map_err(|_| Error::decoding(pos, "extended: extended-event-type exceeds u32"))?;
             pos = p;
             pos = expect_opening(data, pos, 2, what)?;
-            // parameters [2] SEQUENCE OF CHOICE — preserved as raw bytes;
-            // vendor-defined content is not guaranteed to be well-formed
-            // TLVs, so skip it with the raw scanner rather than tag-parsing.
-            let (raw_params, p) = tags::extract_raw_context(data, pos, 2)?;
+            let (raw_params, p) = tags::extract_context_value(data, pos, 2)?;
+            validate_extended_parameters(raw_params, "extended")?;
             pos = p;
             pos = expect_closing(data, pos, 9, what)?;
             (
@@ -444,11 +490,9 @@ pub fn decode_event_parameter(
         }
         n => {
             // Unmodeled constructed alternative: preserve the SEQUENCE body
-            // verbatim and consume through the matching closing tag. The body
-            // may be vendor bytes that are not well-formed TLVs (and for
-            // legacy Opaque payloads, actively are not), so use the raw
-            // scanner rather than tag-parsing.
-            let (body, p) = tags::extract_raw_context(data, pos, n)?;
+            // verbatim after validating its nested tag structure.
+            let (body, p) = tags::extract_context_value(data, pos, n)?;
+            validate_tlv_sequence(body, "opaque event parameters")?;
             (
                 EP::Opaque {
                     tag: n,
@@ -458,5 +502,7 @@ pub fn decode_event_parameter(
             )
         }
     };
-    Ok(value)
+    let (value, end) = value;
+    validate_tlv_sequence(&data[offset..end], what)?;
+    Ok((value, end))
 }

@@ -113,6 +113,15 @@ pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     Ok(i32::from_be_bytes(bytes))
 }
 
+pub(crate) fn decode_signed_canonical(data: &[u8]) -> Result<i32, Error> {
+    if data.len() > 1
+        && ((data[0] == 0 && data[1] & 0x80 == 0) || (data[0] == 0xFF && data[1] & 0x80 != 0))
+    {
+        return Err(Error::decoding(0, "signed contains a redundant sign octet"));
+    }
+    decode_signed(data)
+}
+
 // --- Real ---
 
 /// Encode an IEEE-754 single-precision float (big-endian, 4 bytes).
@@ -488,6 +497,19 @@ pub fn decode_application_value(
         return Err(Error::decoding(offset, "unexpected opening/closing tag"));
     }
 
+    if tag.number == app_tag::NULL && tag.length != 0 {
+        return Err(Error::decoding(
+            offset,
+            "application NULL must have no contents",
+        ));
+    }
+    if tag.number == app_tag::BOOLEAN && tag.length > 1 {
+        return Err(Error::decoding(
+            offset,
+            "application BOOLEAN L/V/T must be 0 or 1",
+        ));
+    }
+
     let content_start = new_offset;
     let content_len = tag.length as usize;
     let content_end = content_start
@@ -540,6 +562,73 @@ pub fn decode_application_value(
     };
 
     Ok((value, content_end))
+}
+
+pub(crate) fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
+    let (tag, content_start) = tags::decode_tag(data, offset)?;
+    if tag.class != TagClass::Application || tag.is_opening || tag.is_closing {
+        return Err(Error::decoding(
+            offset,
+            "expected an application-tagged value",
+        ));
+    }
+    if tag.number != app_tag::CHARACTER_STRING && tag.number != app_tag::SIGNED {
+        return decode_application_value(data, offset).map(|(_, end)| end);
+    }
+
+    let content_end = content_start
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(content_start, "length overflow"))?;
+    if content_end > data.len() {
+        return Err(Error::buffer_too_short(content_end, data.len()));
+    }
+    let content = &data[content_start..content_end];
+    if tag.number == app_tag::SIGNED {
+        decode_signed_canonical(content)?;
+        return Ok(content_end);
+    }
+    let Some((&charset_id, payload)) = content.split_first() else {
+        return Err(Error::decoding(
+            content_start,
+            "CharacterString requires a character-set octet",
+        ));
+    };
+    match charset_id {
+        charset::UTF8 | charset::UCS2 | charset::ISO_8859_1 => {
+            decode_character_string(content)?;
+        }
+        charset::IBM_MICROSOFT_DBCS if payload.len() < 2 => {
+            return Err(Error::decoding(
+                content_start + 1,
+                "DBCS CharacterString requires a two-octet code page",
+            ));
+        }
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 => {}
+        charset::UCS4 => {
+            if !payload.len().is_multiple_of(4) {
+                return Err(Error::decoding(
+                    content_start + 1,
+                    "UCS-4 CharacterString length must be a multiple of four",
+                ));
+            }
+            for (index, encoded) in payload.chunks_exact(4).enumerate() {
+                let code_point = u32::from_be_bytes(encoded.try_into().unwrap());
+                if char::from_u32(code_point).is_none() {
+                    return Err(Error::decoding(
+                        content_start + 1 + index * 4,
+                        "invalid UCS-4 code point",
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(Error::decoding(
+                content_start,
+                format!("reserved character set: {charset_id}"),
+            ));
+        }
+    }
+    Ok(content_end)
 }
 
 /// Encode a `PropertyValue` as an application-tagged value.

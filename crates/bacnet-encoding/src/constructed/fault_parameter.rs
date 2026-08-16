@@ -34,11 +34,20 @@ use crate::tags::{self, TagClass};
 use super::{
     decode_app_character_string, decode_app_enumerated, decode_ctx_unsigned, decode_dopr_body,
     decode_property_state, encode_dopr_body, encode_property_state, expect_closing, expect_opening,
-    MAX_FRAMED_ITEMS,
+    validate_extended_parameters, MAX_FRAMED_ITEMS,
 };
 
 /// Encode a [`FaultParameters`] as its full CHOICE framing.
 pub fn encode_fault_parameters(buf: &mut BytesMut, value: &FaultParameters) -> Result<(), Error> {
+    let mut encoded = BytesMut::new();
+    encode_fault_parameters_into(&mut encoded, value)?;
+    super::validate_tlv_sequence(&encoded, "FaultParameters")
+        .map_err(|error| Error::Encoding(error.to_string()))?;
+    buf.extend_from_slice(&encoded);
+    Ok(())
+}
+
+fn encode_fault_parameters_into(buf: &mut BytesMut, value: &FaultParameters) -> Result<(), Error> {
     use FaultParameters as F;
     match value {
         F::FaultNone => {
@@ -59,6 +68,8 @@ pub fn encode_fault_parameters(buf: &mut BytesMut, value: &FaultParameters) -> R
             extended_fault_type,
             parameters,
         } => {
+            validate_extended_parameters(parameters, "fault-extended")
+                .map_err(|error| Error::Encoding(error.to_string()))?;
             tags::encode_opening_tag(buf, 2);
             primitives::encode_ctx_unsigned(buf, 0, *vendor_id as u64);
             primitives::encode_ctx_unsigned(buf, 1, *extended_fault_type as u64);
@@ -84,11 +95,13 @@ pub fn encode_fault_parameters(buf: &mut BytesMut, value: &FaultParameters) -> R
             tags::encode_closing_tag(buf, 3);
         }
         F::FaultState { fault_values } => {
+            let mut encoded_states = BytesMut::new();
+            for state in fault_values {
+                encode_property_state(&mut encoded_states, state)?;
+            }
             tags::encode_opening_tag(buf, 4);
             tags::encode_opening_tag(buf, 0);
-            for state in fault_values {
-                encode_property_state(buf, state);
-            }
+            buf.extend_from_slice(&encoded_states);
             tags::encode_closing_tag(buf, 0);
             tags::encode_closing_tag(buf, 4);
         }
@@ -228,9 +241,8 @@ pub fn decode_fault_parameters(
             })?;
             pos = p;
             pos = expect_opening(data, pos, 2, what)?;
-            // parameters [2] — vendor-defined content preserved verbatim via
-            // the raw scanner (not guaranteed to be well-formed TLVs).
-            let (raw_params, p) = tags::extract_raw_context(data, pos, 2)?;
+            let (raw_params, p) = tags::extract_context_value(data, pos, 2)?;
+            validate_extended_parameters(raw_params, "fault-extended")?;
             pos = p;
             pos = expect_closing(data, pos, 2, what)?;
             (
@@ -337,5 +349,7 @@ pub fn decode_fault_parameters(
             ));
         }
     };
-    Ok(value)
+    let (value, end) = value;
+    super::validate_tlv_sequence(&data[offset..end], what)?;
+    Ok((value, end))
 }

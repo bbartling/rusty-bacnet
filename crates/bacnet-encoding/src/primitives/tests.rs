@@ -107,6 +107,21 @@ fn signed_encode_decode_max() {
     assert_eq!(decode_signed(&buf).unwrap(), i32::MAX);
 }
 
+#[test]
+fn signed_rejects_redundant_sign_octets() {
+    for encoded in [
+        &[0x00, 0x01][..],
+        &[0xFF, 0x80],
+        &[0x00, 0x7F],
+        &[0xFF, 0xFF],
+    ] {
+        assert!(
+            decode_signed_canonical(encoded).is_err(),
+            "accepted {encoded:02x?}"
+        );
+    }
+}
+
 // --- Real / Double ---
 
 #[test]

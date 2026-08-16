@@ -81,6 +81,51 @@ fn fault_state_golden() {
 }
 
 #[test]
+fn fault_state_encode_rejects_malformed_proprietary_body_atomically() {
+    let value = FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}
+
+#[test]
+fn fault_state_encoder_accounts_for_outer_nesting_atomically() {
+    let accepted_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 3;
+    let mut accepted_body = vec![0x0e; accepted_depth];
+    accepted_body.extend(vec![0x0f; accepted_depth]);
+    round_trip(&FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, accepted_body).unwrap(),
+        )],
+    });
+
+    let body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
+    let mut body = vec![0x0e; body_depth];
+    body.extend(vec![0x0f; body_depth]);
+    let too_deep_state =
+        BACnetPropertyStates::Other(BACnetProprietaryPropertyState::constructed(64, body).unwrap());
+    let value = FaultParameters::FaultState {
+        fault_values: vec![too_deep_state.clone()],
+    };
+
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 4);
+    tags::encode_opening_tag(&mut raw, 0);
+    encode_property_state(&mut raw, &too_deep_state).unwrap();
+    tags::encode_closing_tag(&mut raw, 0);
+    tags::encode_closing_tag(&mut raw, 4);
+    assert!(decode_fault_parameters(&raw, 0).is_err());
+}
+
+#[test]
 fn fault_character_string_golden() {
     let value = FaultParameters::FaultCharacterString {
         fault_values: vec!["alarm".to_string()],
@@ -106,7 +151,8 @@ fn fault_extended_golden() {
     let value = FaultParameters::FaultExtended {
         vendor_id: 42,
         extended_fault_type: 7,
-        parameters: vec![0x01, 0x02],
+        // Application OCTET STRING containing a byte that resembles closing [2].
+        parameters: vec![0x61, 0x2F],
     };
     let mut buf = BytesMut::new();
     encode_fault_parameters(&mut buf, &value).unwrap();
@@ -116,13 +162,66 @@ fn fault_extended_golden() {
             0x2E, // opening [2]
             0x09, 0x2A, // vendor-id [0] Unsigned 42
             0x19, 0x07, // extended-fault-type [1] Unsigned 7
-            0x2E, 0x01, 0x02, 0x2F, // parameters [2]
+            0x2E, 0x61, 0x2F, 0x2F, // parameters [2]
             0x2F, // closing
         ]
     );
     let (decoded, end) = decode_fault_parameters(&buf, 0).unwrap();
     assert_eq!(decoded, value);
     assert_eq!(end, buf.len());
+}
+
+#[test]
+fn fault_extended_rejects_malformed_parameters_atomically() {
+    let value = FaultParameters::FaultExtended {
+        vendor_id: 42,
+        extended_fault_type: 7,
+        parameters: vec![0xde],
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}
+
+#[test]
+fn fault_extended_reference_parameter_round_trip() {
+    let mut parameters = BytesMut::new();
+    tags::encode_opening_tag(&mut parameters, 0);
+    encode_dopr_body(&mut parameters, &dopr_ai(5, 85));
+    tags::encode_closing_tag(&mut parameters, 0);
+    round_trip(&FaultParameters::FaultExtended {
+        vendor_id: 42,
+        extended_fault_type: 7,
+        parameters: parameters.to_vec(),
+    });
+}
+
+#[test]
+fn fault_extended_accepts_ucs4_character_strings() {
+    round_trip(&FaultParameters::FaultExtended {
+        vendor_id: 42,
+        extended_fault_type: 7,
+        parameters: vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41],
+    });
+}
+
+#[test]
+fn fault_extended_rejects_malformed_application_forms_atomically() {
+    for parameters in [
+        vec![0x01, 0x00],
+        vec![0x12],
+        vec![0x0e, 0x01, 0x00, 0x0f],
+        vec![0x1e, 0x12, 0x1f],
+    ] {
+        let value = FaultParameters::FaultExtended {
+            vendor_id: 42,
+            extended_fault_type: 7,
+            parameters,
+        };
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
 }
 
 #[test]

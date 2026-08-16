@@ -401,7 +401,7 @@ fn notification_params_access_event_round_trip() {
             },
         ),
         access_credential: cred.clone(),
-        authentication_factor: vec![0x62, 0xAB, 0xCD],
+        authentication_factor: Some(vec![0x62, 0xAB, 0xCD]),
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -423,7 +423,7 @@ fn notification_params_access_event_round_trip() {
             assert_eq!(access_event_time.0.year, 124);
             assert_eq!(access_event_time.1.hour, 10);
             assert_eq!(access_credential, cred);
-            assert_eq!(authentication_factor, vec![0x62, 0xAB, 0xCD]);
+            assert_eq!(authentication_factor, Some(vec![0x62, 0xAB, 0xCD]));
         }
         other => panic!("expected AccessEvent, got {:?}", other),
     }
@@ -545,7 +545,7 @@ fn notification_params_change_of_characterstring_round_trip() {
 #[test]
 fn notification_params_change_of_status_flags_round_trip() {
     let params = NotificationParameters::ChangeOfStatusFlags {
-        present_value: vec![0x91, 0x03],
+        present_value: Some(vec![0x91, 0x03]),
         referenced_flags: 0b1010,
     };
     let req = make_event_req(Some(params));
@@ -558,7 +558,7 @@ fn notification_params_change_of_status_flags_round_trip() {
             present_value,
             referenced_flags,
         } => {
-            assert_eq!(present_value, vec![0x91, 0x03]);
+            assert_eq!(present_value, Some(vec![0x91, 0x03]));
             assert_eq!(referenced_flags, 0b1010);
         }
         other => panic!("expected ChangeOfStatusFlags, got {:?}", other),
@@ -570,7 +570,7 @@ fn notification_params_change_of_reliability_round_trip() {
     let params = NotificationParameters::ChangeOfReliability {
         reliability: 7,
         status_flags: 0b0100,
-        property_values: vec![0x01, 0x02],
+        property_values: vec![0x21, 0x02],
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -585,7 +585,7 @@ fn notification_params_change_of_reliability_round_trip() {
         } => {
             assert_eq!(reliability, 7);
             assert_eq!(status_flags, 0b0100);
-            assert_eq!(property_values, vec![0x01, 0x02]);
+            assert_eq!(property_values, vec![0x21, 0x02]);
         }
         other => panic!("expected ChangeOfReliability, got {:?}", other),
     }

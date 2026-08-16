@@ -305,13 +305,14 @@ pub fn extract_context_value(
     let value_start = offset;
     let mut pos = offset;
     let mut depth: usize = 1;
+    let mut open_tags = [0u8; MAX_CONTEXT_NESTING_DEPTH];
+    open_tags[0] = tag_number;
 
     while depth > 0 && pos < data.len() {
         let (tag, new_pos) = decode_tag(data, pos)?;
 
         if tag.is_opening {
-            depth += 1;
-            if depth > MAX_CONTEXT_NESTING_DEPTH {
+            if depth == MAX_CONTEXT_NESTING_DEPTH {
                 return Err(Error::decoding(
                     pos,
                     format!(
@@ -319,19 +320,22 @@ pub fn extract_context_value(
                     ),
                 ));
             }
+            open_tags[depth] = tag.number;
+            depth += 1;
             pos = new_pos;
         } else if tag.is_closing {
+            let expected = open_tags[depth - 1];
+            if tag.number != expected {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "closing tag {} does not match opening tag {expected}",
+                        tag.number
+                    ),
+                ));
+            }
             depth -= 1;
             if depth == 0 {
-                if tag.number != tag_number {
-                    return Err(Error::decoding(
-                        pos,
-                        format!(
-                            "closing tag {} does not match opening tag {tag_number}",
-                            tag.number
-                        ),
-                    ));
-                }
                 let value_end = pos;
                 return Ok((&data[value_start..value_end], new_pos));
             }
@@ -366,11 +370,10 @@ pub fn extract_context_value(
 ///
 /// [`extract_context_value`] walks the content as well-formed TLVs, which is
 /// the correct way to skip an unknown *conformant* constructed value (Clause
-/// 20.2.1.6 rule (d)); but some fields hold payloads that are not guaranteed
-/// to be well-formed TLVs at all — vendor-defined `parameters [2]` bodies and
-/// `Opaque`-preserved legacy payloads are stored and re-emitted verbatim.
-/// Those are walked here by scanning for the closing tag's raw octet(s) of
-/// `tag_number`, balancing nested opening octet(s) of the same tag number.
+/// 20.2.1.6 rule (d)). This raw scanner is only for compatibility payloads
+/// whose contract explicitly permits non-TLV bytes. It is not safe for a
+/// `SEQUENCE OF CHOICE`: a primitive value can contain a closing-tag octet.
+/// The scan balances raw opening/closing octets for `tag_number`.
 ///
 /// `offset` points just past the opening tag for `tag_number`. Returns the
 /// enclosed bytes and the offset past the closing tag octet(s).
@@ -783,6 +786,13 @@ mod tests {
     fn extract_context_value_mismatched_closing_tag() {
         // Opening tag 0, data, closing tag 1 (mismatch!)
         let data = [0x0E, 0x21, 42, 0x1F]; // open 0, data, close 1
+        assert!(extract_context_value(&data, 1, 0).is_err());
+    }
+
+    #[test]
+    fn extract_context_value_mismatched_nested_closing_tag() {
+        // Opening tag 0, opening tag 1, closing tag 2, closing tag 0.
+        let data = [0x0E, 0x1E, 0x2F, 0x0F];
         assert!(extract_context_value(&data, 1, 0).is_err());
     }
 

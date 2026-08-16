@@ -5,7 +5,7 @@ use super::*;
 
 fn round_trip(value: &BACnetEventParameter) {
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, value);
+    encode_event_parameter(&mut buf, value).unwrap();
     let (decoded, end) = decode_event_parameter(&buf, 0).unwrap();
     assert_eq!(&decoded, value);
     assert_eq!(end, buf.len());
@@ -25,7 +25,7 @@ fn change_of_state_golden() {
         ],
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -44,6 +44,19 @@ fn change_of_state_golden() {
 }
 
 #[test]
+fn change_of_state_encode_rejects_malformed_proprietary_body_atomically() {
+    let value = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_event_parameter(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}
+
+#[test]
 fn change_of_value_increment_golden() {
     let value = BACnetEventParameter::ChangeOfValue {
         time_delay: 2,
@@ -52,7 +65,7 @@ fn change_of_value_increment_golden() {
         ),
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -79,7 +92,7 @@ fn change_of_value_bitmask_golden() {
         },
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -104,7 +117,7 @@ fn floating_limit_golden() {
         deadband: 0.5,
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -134,7 +147,7 @@ fn out_of_range_golden() {
         deadband: 2.0,
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -156,10 +169,11 @@ fn extended_golden() {
     let value = BACnetEventParameter::Extended {
         vendor_id: 42,
         extended_event_type: 99,
-        parameters: vec![0xDE, 0xAD],
+        // Application OCTET STRING containing a byte that resembles closing [2].
+        parameters: vec![0x61, 0x2F],
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -167,13 +181,32 @@ fn extended_golden() {
             0x09, 0x2A, // vendor-id [0] Unsigned 42
             0x19, 0x63, // extended-event-type [1] Unsigned 99
             0x2E, // parameters [2] opening
-            0xDE, 0xAD, 0x2F, // parameters closing
+            0x61, 0x2F, 0x2F, // OCTET STRING 0x2F, parameters closing
             0x9F, // extended closing
         ]
     );
     let (decoded, end) = decode_event_parameter(&buf, 0).unwrap();
     assert_eq!(decoded, value);
     assert_eq!(end, buf.len());
+}
+
+#[test]
+fn preserved_event_parameters_accept_defined_character_sets() {
+    for character_string in [
+        vec![0x73, 0x01, 0x03, 0x52],
+        vec![0x71, 0x02],
+        vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41],
+    ] {
+        round_trip(&BACnetEventParameter::Extended {
+            vendor_id: 42,
+            extended_event_type: 99,
+            parameters: character_string.clone(),
+        });
+        round_trip(&BACnetEventParameter::Opaque {
+            tag: 200,
+            data: character_string,
+        });
+    }
 }
 
 // --- Per-modeled-alternative round-trips -------------------------------------
@@ -234,6 +267,19 @@ fn extended_empty_parameters_round_trip() {
 }
 
 #[test]
+fn extended_reference_parameter_round_trip() {
+    let mut parameters = BytesMut::new();
+    tags::encode_opening_tag(&mut parameters, 0);
+    encode_dopr_body(&mut parameters, &dopr_ai(5, 85));
+    tags::encode_closing_tag(&mut parameters, 0);
+    round_trip(&BACnetEventParameter::Extended {
+        vendor_id: 42,
+        extended_event_type: 99,
+        parameters: parameters.to_vec(),
+    });
+}
+
+#[test]
 fn opaque_unmodeled_alternatives_preserved() {
     // change-of-life-safety [8] — a valid but unmodeled SEQUENCE alternative:
     // body bytes preserved verbatim through decode->encode.
@@ -251,7 +297,7 @@ fn opaque_unmodeled_alternatives_preserved() {
         }
     );
     let mut reencoded = BytesMut::new();
-    encode_event_parameter(&mut reencoded, &decoded);
+    encode_event_parameter(&mut reencoded, &decoded).unwrap();
     assert_eq!(
         reencoded.as_ref(),
         wire.as_slice(),
@@ -262,7 +308,7 @@ fn opaque_unmodeled_alternatives_preserved() {
     for tag in [10u8, 22, 200] {
         round_trip(&BACnetEventParameter::Opaque {
             tag,
-            data: vec![1, 2, 3],
+            data: vec![0x21, 0x03],
         });
     }
 }
@@ -274,7 +320,7 @@ fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
         data: vec![0xFF, 0x01, 0x02],
     };
     let mut encoded = BytesMut::new();
-    encode_event_parameter(&mut encoded, &value);
+    encode_event_parameter(&mut encoded, &value).unwrap();
 
     let (tag, _) = tags::decode_tag(&encoded, 0).unwrap();
     assert_eq!(tag.class, tags::TagClass::Application);
@@ -325,6 +371,118 @@ fn reserved_and_deprecated_tags_rejected() {
             "primitive tag [{tag}]: unexpected error {err}"
         );
     }
+}
+
+#[test]
+fn event_parameter_choice_tag_forms_are_enforced() {
+    // Sequence alternatives cannot use primitive context tags.
+    assert!(decode_event_parameter(&[0x58], 0).is_err());
+    assert!(decode_event_parameter(&[0x88], 0).is_err());
+
+    // none [20] is primitive NULL only: no contents and no constructed form.
+    assert!(decode_event_parameter(&[0xF9, 20, 0], 0).is_err());
+    assert!(decode_event_parameter(&[0xFE, 20, 0xFF, 20], 0).is_err());
+
+    for value in [
+        BACnetEventParameter::Opaque {
+            tag: 5,
+            data: Vec::new(),
+        },
+        BACnetEventParameter::Opaque {
+            tag: 20,
+            data: vec![0],
+        },
+        BACnetEventParameter::Extended {
+            vendor_id: 1,
+            extended_event_type: 2,
+            parameters: vec![0xde],
+        },
+        BACnetEventParameter::Opaque {
+            tag: 200,
+            data: vec![0xde],
+        },
+    ] {
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_event_parameter(&mut untouched, &value).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
+
+    for data in [
+        vec![0x01, 0x00],
+        vec![0x12],
+        vec![0x0e, 0x01, 0x00, 0x0f],
+        vec![0x1e, 0x12, 0x1f],
+    ] {
+        for value in [
+            BACnetEventParameter::Extended {
+                vendor_id: 1,
+                extended_event_type: 2,
+                parameters: data.clone(),
+            },
+            BACnetEventParameter::Opaque {
+                tag: 200,
+                data: data.clone(),
+            },
+        ] {
+            let mut untouched = BytesMut::from(&[0xaa][..]);
+            assert!(encode_event_parameter(&mut untouched, &value).is_err());
+            assert_eq!(untouched.as_ref(), &[0xaa]);
+        }
+    }
+}
+
+#[test]
+fn event_parameter_encoder_accounts_for_outer_nesting_atomically() {
+    let mut accepted_opaque_body = vec![0x0e; tags::MAX_CONTEXT_NESTING_DEPTH - 1];
+    accepted_opaque_body.extend(vec![0x0f; tags::MAX_CONTEXT_NESTING_DEPTH - 1]);
+    round_trip(&BACnetEventParameter::Opaque {
+        tag: 200,
+        data: accepted_opaque_body,
+    });
+
+    let accepted_property_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 3;
+    let mut accepted_property_body = vec![0x0e; accepted_property_depth];
+    accepted_property_body.extend(vec![0x0f; accepted_property_depth]);
+    round_trip(&BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, accepted_property_body).unwrap(),
+        )],
+    });
+
+    let mut deepest_opaque_body = vec![0x0e; tags::MAX_CONTEXT_NESTING_DEPTH];
+    deepest_opaque_body.extend(vec![0x0f; tags::MAX_CONTEXT_NESTING_DEPTH]);
+
+    let property_body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
+    let mut deepest_property_body = vec![0x0e; property_body_depth];
+    deepest_property_body.extend(vec![0x0f; property_body_depth]);
+    let too_deep_property_state = BACnetPropertyStates::Other(
+        BACnetProprietaryPropertyState::constructed(64, deepest_property_body).unwrap(),
+    );
+
+    for value in [
+        BACnetEventParameter::Opaque {
+            tag: 200,
+            data: deepest_opaque_body,
+        },
+        BACnetEventParameter::ChangeOfState {
+            time_delay: 0,
+            list_of_values: vec![too_deep_property_state.clone()],
+        },
+    ] {
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_event_parameter(&mut untouched, &value).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 1);
+    primitives::encode_ctx_unsigned(&mut raw, 0, 0);
+    tags::encode_opening_tag(&mut raw, 1);
+    encode_property_state(&mut raw, &too_deep_property_state).unwrap();
+    tags::encode_closing_tag(&mut raw, 1);
+    tags::encode_closing_tag(&mut raw, 1);
+    assert!(decode_event_parameter(&raw, 0).is_err());
 }
 
 #[test]

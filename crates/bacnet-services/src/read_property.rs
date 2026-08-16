@@ -341,7 +341,7 @@ mod tests {
             data: vec![0xff, 1, 2],
         };
         let mut property_value = BytesMut::new();
-        bacnet_encoding::constructed::encode_event_parameter(&mut property_value, &value);
+        bacnet_encoding::constructed::encode_event_parameter(&mut property_value, &value).unwrap();
         let object_identifier = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
 
         let ack = ReadPropertyACK {

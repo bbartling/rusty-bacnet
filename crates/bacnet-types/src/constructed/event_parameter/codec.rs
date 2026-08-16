@@ -16,13 +16,25 @@ pub(super) fn bitstring_pv((unused_bits, data): (u8, Vec<u8>)) -> PropertyValue 
 ///
 /// `BACnetPropertyStates` is itself a CHOICE; absent full context-tagged
 /// framing we carry its discriminant as the low byte and the raw payload as an
-/// octet string. This round-trips through the flat-`List` encoding.
+/// octet string. A trailing Boolean distinguishes current alternatives whose
+/// tags had different legacy meanings and marks constructed proprietary values.
 pub(super) fn property_state_pv(state: &BACnetPropertyStates) -> PropertyValue {
     let (tag, data) = property_state_parts(state);
-    PropertyValue::List(vec![
+    let mut items = vec![
         PropertyValue::Unsigned(tag as u64),
         PropertyValue::OctetString(data),
-    ])
+    ];
+    match state {
+        BACnetPropertyStates::Other(value) if value.is_constructed() => {
+            items.push(PropertyValue::Boolean(true));
+        }
+        BACnetPropertyStates::Other(_) => {}
+        _ if tag >= 14 => {
+            items.push(PropertyValue::Boolean(false));
+        }
+        _ => {}
+    }
+    PropertyValue::List(items)
 }
 
 /// Extract `(tag, raw data)` from a [`BACnetPropertyStates`].
@@ -42,16 +54,52 @@ pub(super) fn property_state_parts(state: &BACnetPropertyStates) -> (u8, Vec<u8>
         BACnetPropertyStates::UnsignedValue(v) => (11, v.to_le_bytes().to_vec()),
         BACnetPropertyStates::LifeSafetyMode(v) => (12, v.to_le_bytes().to_vec()),
         BACnetPropertyStates::LifeSafetyState(v) => (13, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorAlarmState(v) => (14, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::Action(v) => (15, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorSecuredStatus(v) => (16, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorStatus(v) => (17, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::DoorValue(v) => (18, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::LiftCarDirection(v) => (40, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::LiftCarDoorCommand(v) => (42, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::TimerState(v) => (38, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::TimerTransition(v) => (39, v.to_le_bytes().to_vec()),
-        BACnetPropertyStates::Other { tag, data } => (*tag, data.clone()),
+        BACnetPropertyStates::RestartReason(v) => (14, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorAlarmState(v) => (15, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::Action(v) => (16, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorSecuredStatus(v) => (17, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorStatus(v) => (18, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::DoorValue(v) => (19, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::FileAccessMethod(v) => (20, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LockStatus(v) => (21, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LifeSafetyOperation(v) => (22, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::Maintenance(v) => (23, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NodeType(v) => (24, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NotifyType(v) => (25, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ShedState(v) => (27, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::SilencedState(v) => (28, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessEvent(v) => (30, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ZoneOccupancyState(v) => (31, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessCredentialDisableReason(v) => (32, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AccessCredentialDisable(v) => (33, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AuthenticationStatus(v) => (34, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::BackupState(v) => (36, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::WriteStatus(v) => (37, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LightingInProgress(v) => (38, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LightingOperation(v) => (39, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LightingTransition(v) => (40, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::IntegerValue(v) => (41, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::BinaryLightingValue(v) => (42, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::TimerState(v) => (43, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::TimerTransition(v) => (44, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::BacnetIpMode(v) => (45, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NetworkPortCommand(v) => (46, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NetworkType(v) => (47, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::NetworkNumberQuality(v) => (48, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::EscalatorOperationDirection(v) => (49, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::EscalatorFault(v) => (50, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::EscalatorMode(v) => (51, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarDirection(v) => (52, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarDoorCommand(v) => (53, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarDriveStatus(v) => (54, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftCarMode(v) => (55, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftGroupMode(v) => (56, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::LiftFault(v) => (57, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ProtocolLevel(v) => (58, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AuditLevel(v) => (59, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::AuditOperation(v) => (60, v.to_le_bytes().to_vec()),
+        BACnetPropertyStates::ExtendedValue(v) => (63, v.encoded().to_le_bytes().to_vec()),
+        BACnetPropertyStates::Other(v) => (v.tag(), v.data().to_vec()),
     }
 }
 
@@ -160,10 +208,10 @@ pub(super) fn take_dopr(
         ));
     };
     *idx += 1;
-    if inner.len() < 4 {
+    if inner.len() != 4 {
         return Err(Error::decoding(
             *idx,
-            "device object property reference too short",
+            "device object property reference must contain exactly four values",
         ));
     }
     let object_identifier = match &inner[0] {
@@ -171,11 +219,15 @@ pub(super) fn take_dopr(
         _ => return Err(Error::decoding(0, "reference object id missing")),
     };
     let property_identifier = match &inner[1] {
-        PropertyValue::Unsigned(v) => *v as u32,
+        PropertyValue::Unsigned(v) => u32::try_from(*v)
+            .map_err(|_| Error::decoding(1, "reference property id exceeds u32"))?,
         _ => return Err(Error::decoding(1, "reference property id missing")),
     };
     let property_array_index = match &inner[2] {
-        PropertyValue::Unsigned(v) => Some(*v as u32),
+        PropertyValue::Unsigned(v) => Some(
+            u32::try_from(*v)
+                .map_err(|_| Error::decoding(2, "reference array index exceeds u32"))?,
+        ),
         PropertyValue::Null => None,
         _ => return Err(Error::decoding(2, "reference array index invalid")),
     };
@@ -215,17 +267,85 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
     let PropertyValue::Unsigned(tag) = tag_pv else {
         return Err(Error::decoding(0, "property state tag not Unsigned"));
     };
-    let data = match rest.first() {
-        Some(PropertyValue::OctetString(b)) => b.clone(),
+    let (data, marker) = match rest {
+        [PropertyValue::OctetString(data)] => (data.clone(), None),
+        [PropertyValue::OctetString(data), PropertyValue::Boolean(marker)] => {
+            (data.clone(), Some(*marker))
+        }
         _ => return Err(Error::decoding(1, "property state data not octets")),
     };
+    let tag =
+        u8::try_from(*tag).map_err(|_| Error::decoding(0, "property state tag exceeds u8"))?;
+    let constructed = marker == Some(true);
+    let typed_marker = marker == Some(false);
+    let old_typed_tag = matches!(tag, 0..=18 | 38..=40 | 42);
+    if typed_marker && !(14..64).contains(&tag) {
+        return Err(Error::decoding(1, "unexpected typed property state marker"));
+    }
+    if constructed && !(64..=254).contains(&tag) {
+        return Err(Error::decoding(
+            0,
+            "constructed property state requires a proprietary tag",
+        ));
+    }
+    let legacy_wire = marker.is_none() && !old_typed_tag && tag < 64;
     let read_u32 = |data: &[u8]| -> Result<u32, Error> {
+        if legacy_wire {
+            if data.is_empty() || data.len() > 4 {
+                return Err(Error::decoding(1, "property state data wrong length"));
+            }
+            return Ok(data
+                .iter()
+                .fold(0u32, |value, octet| (value << 8) | u32::from(*octet)));
+        }
         data.try_into()
             .map(u32::from_le_bytes)
             .map_err(|_| Error::decoding(1, "property state data wrong length"))
     };
-    Ok(match *tag as u8 {
-        0 => BACnetPropertyStates::BooleanValue(data.first().copied().unwrap_or(0) != 0),
+    let read_i32 = |data: &[u8]| -> Result<i32, Error> {
+        if legacy_wire {
+            if data.is_empty()
+                || data.len() > 4
+                || (data.len() > 1
+                    && ((data[0] == 0 && data[1] & 0x80 == 0)
+                        || (data[0] == 0xFF && data[1] & 0x80 != 0)))
+            {
+                return Err(Error::decoding(
+                    1,
+                    "property state signed data is not canonical",
+                ));
+            }
+            let mut bytes = [if data[0] & 0x80 == 0 { 0 } else { 0xFF }; 4];
+            bytes[4 - data.len()..].copy_from_slice(data);
+            return Ok(i32::from_be_bytes(bytes));
+        }
+        data.try_into()
+            .map(i32::from_le_bytes)
+            .map_err(|_| Error::decoding(1, "property state data wrong length"))
+    };
+    if marker.is_none() {
+        let legacy = match tag {
+            14 => Some(BACnetPropertyStates::DoorAlarmState(read_u32(&data)?)),
+            15 => Some(BACnetPropertyStates::Action(read_u32(&data)?)),
+            16 => Some(BACnetPropertyStates::DoorSecuredStatus(read_u32(&data)?)),
+            17 => Some(BACnetPropertyStates::DoorStatus(read_u32(&data)?)),
+            18 => Some(BACnetPropertyStates::DoorValue(read_u32(&data)?)),
+            38 => Some(BACnetPropertyStates::TimerState(read_u32(&data)?)),
+            39 => Some(BACnetPropertyStates::TimerTransition(read_u32(&data)?)),
+            40 => Some(BACnetPropertyStates::LiftCarDirection(read_u32(&data)?)),
+            42 => Some(BACnetPropertyStates::LiftCarDoorCommand(read_u32(&data)?)),
+            _ => None,
+        };
+        if let Some(state) = legacy {
+            return Ok(state);
+        }
+    }
+    Ok(match tag {
+        0 => match data.as_slice() {
+            [0] => BACnetPropertyStates::BooleanValue(false),
+            [1] => BACnetPropertyStates::BooleanValue(true),
+            _ => return Err(Error::decoding(1, "property state Boolean must be 0 or 1")),
+        },
         1 => BACnetPropertyStates::BinaryValue(read_u32(&data)?),
         2 => BACnetPropertyStates::EventType(read_u32(&data)?),
         3 => BACnetPropertyStates::Polarity(read_u32(&data)?),
@@ -239,15 +359,64 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
         11 => BACnetPropertyStates::UnsignedValue(read_u32(&data)?),
         12 => BACnetPropertyStates::LifeSafetyMode(read_u32(&data)?),
         13 => BACnetPropertyStates::LifeSafetyState(read_u32(&data)?),
-        14 => BACnetPropertyStates::DoorAlarmState(read_u32(&data)?),
-        15 => BACnetPropertyStates::Action(read_u32(&data)?),
-        16 => BACnetPropertyStates::DoorSecuredStatus(read_u32(&data)?),
-        17 => BACnetPropertyStates::DoorStatus(read_u32(&data)?),
-        18 => BACnetPropertyStates::DoorValue(read_u32(&data)?),
-        40 => BACnetPropertyStates::LiftCarDirection(read_u32(&data)?),
-        42 => BACnetPropertyStates::LiftCarDoorCommand(read_u32(&data)?),
-        38 => BACnetPropertyStates::TimerState(read_u32(&data)?),
-        39 => BACnetPropertyStates::TimerTransition(read_u32(&data)?),
-        other => BACnetPropertyStates::Other { tag: other, data },
+        14 => BACnetPropertyStates::RestartReason(read_u32(&data)?),
+        15 => BACnetPropertyStates::DoorAlarmState(read_u32(&data)?),
+        16 => BACnetPropertyStates::Action(read_u32(&data)?),
+        17 => BACnetPropertyStates::DoorSecuredStatus(read_u32(&data)?),
+        18 => BACnetPropertyStates::DoorStatus(read_u32(&data)?),
+        19 => BACnetPropertyStates::DoorValue(read_u32(&data)?),
+        20 => BACnetPropertyStates::FileAccessMethod(read_u32(&data)?),
+        21 => BACnetPropertyStates::LockStatus(read_u32(&data)?),
+        22 => BACnetPropertyStates::LifeSafetyOperation(read_u32(&data)?),
+        23 => BACnetPropertyStates::Maintenance(read_u32(&data)?),
+        24 => BACnetPropertyStates::NodeType(read_u32(&data)?),
+        25 => BACnetPropertyStates::NotifyType(read_u32(&data)?),
+        27 => BACnetPropertyStates::ShedState(read_u32(&data)?),
+        28 => BACnetPropertyStates::SilencedState(read_u32(&data)?),
+        30 => BACnetPropertyStates::AccessEvent(read_u32(&data)?),
+        31 => BACnetPropertyStates::ZoneOccupancyState(read_u32(&data)?),
+        32 => BACnetPropertyStates::AccessCredentialDisableReason(read_u32(&data)?),
+        33 => BACnetPropertyStates::AccessCredentialDisable(read_u32(&data)?),
+        34 => BACnetPropertyStates::AuthenticationStatus(read_u32(&data)?),
+        36 => BACnetPropertyStates::BackupState(read_u32(&data)?),
+        37 => BACnetPropertyStates::WriteStatus(read_u32(&data)?),
+        38 => BACnetPropertyStates::LightingInProgress(read_u32(&data)?),
+        39 => BACnetPropertyStates::LightingOperation(read_u32(&data)?),
+        40 => BACnetPropertyStates::LightingTransition(read_u32(&data)?),
+        41 => BACnetPropertyStates::IntegerValue(read_i32(&data)?),
+        42 => BACnetPropertyStates::BinaryLightingValue(read_u32(&data)?),
+        43 => BACnetPropertyStates::TimerState(read_u32(&data)?),
+        44 => BACnetPropertyStates::TimerTransition(read_u32(&data)?),
+        45 => BACnetPropertyStates::BacnetIpMode(read_u32(&data)?),
+        46 => BACnetPropertyStates::NetworkPortCommand(read_u32(&data)?),
+        47 => BACnetPropertyStates::NetworkType(read_u32(&data)?),
+        48 => BACnetPropertyStates::NetworkNumberQuality(read_u32(&data)?),
+        49 => BACnetPropertyStates::EscalatorOperationDirection(read_u32(&data)?),
+        50 => BACnetPropertyStates::EscalatorFault(read_u32(&data)?),
+        51 => BACnetPropertyStates::EscalatorMode(read_u32(&data)?),
+        52 => BACnetPropertyStates::LiftCarDirection(read_u32(&data)?),
+        53 => BACnetPropertyStates::LiftCarDoorCommand(read_u32(&data)?),
+        54 => BACnetPropertyStates::LiftCarDriveStatus(read_u32(&data)?),
+        55 => BACnetPropertyStates::LiftCarMode(read_u32(&data)?),
+        56 => BACnetPropertyStates::LiftGroupMode(read_u32(&data)?),
+        57 => BACnetPropertyStates::LiftFault(read_u32(&data)?),
+        58 => BACnetPropertyStates::ProtocolLevel(read_u32(&data)?),
+        59 => BACnetPropertyStates::AuditLevel(read_u32(&data)?),
+        60 => BACnetPropertyStates::AuditOperation(read_u32(&data)?),
+        63 => BACnetPropertyStates::ExtendedValue(BACnetExtendedPropertyState::from_encoded(
+            read_u32(&data)?,
+        )?),
+        other @ 64..=254 if constructed => {
+            BACnetPropertyStates::Other(BACnetProprietaryPropertyState::constructed(other, data)?)
+        }
+        other @ 64..=254 => {
+            BACnetPropertyStates::Other(BACnetProprietaryPropertyState::primitive(other, data)?)
+        }
+        reserved => {
+            return Err(Error::decoding(
+                0,
+                format!("property state tag {reserved} is reserved"),
+            ));
+        }
     })
 }

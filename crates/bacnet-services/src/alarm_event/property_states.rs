@@ -1,82 +1,13 @@
 use super::*;
 use crate::common::{decode_context, decode_context_u32};
+use bacnet_encoding::constructed::{decode_property_state, encode_property_state};
 
 /// Encode a BACnetPropertyStates value.
-pub(super) fn encode_property_states(buf: &mut BytesMut, state: &BACnetPropertyStates) {
-    match state {
-        BACnetPropertyStates::BooleanValue(v) => {
-            primitives::encode_ctx_boolean(buf, 0, *v);
-        }
-        BACnetPropertyStates::BinaryValue(v) => {
-            primitives::encode_ctx_unsigned(buf, 1, *v as u64);
-        }
-        BACnetPropertyStates::EventType(v) => {
-            primitives::encode_ctx_unsigned(buf, 2, *v as u64);
-        }
-        BACnetPropertyStates::Polarity(v) => {
-            primitives::encode_ctx_unsigned(buf, 3, *v as u64);
-        }
-        BACnetPropertyStates::ProgramChange(v) => {
-            primitives::encode_ctx_unsigned(buf, 4, *v as u64);
-        }
-        BACnetPropertyStates::ProgramState(v) => {
-            primitives::encode_ctx_unsigned(buf, 5, *v as u64);
-        }
-        BACnetPropertyStates::ReasonForHalt(v) => {
-            primitives::encode_ctx_unsigned(buf, 6, *v as u64);
-        }
-        BACnetPropertyStates::Reliability(v) => {
-            primitives::encode_ctx_unsigned(buf, 7, *v as u64);
-        }
-        BACnetPropertyStates::State(v) => {
-            primitives::encode_ctx_unsigned(buf, 8, *v as u64);
-        }
-        BACnetPropertyStates::SystemStatus(v) => {
-            primitives::encode_ctx_unsigned(buf, 9, *v as u64);
-        }
-        BACnetPropertyStates::Units(v) => {
-            primitives::encode_ctx_unsigned(buf, 10, *v as u64);
-        }
-        BACnetPropertyStates::LifeSafetyMode(v) => {
-            primitives::encode_ctx_unsigned(buf, 12, *v as u64);
-        }
-        BACnetPropertyStates::UnsignedValue(v) => {
-            primitives::encode_ctx_unsigned(buf, 11, *v as u64);
-        }
-        BACnetPropertyStates::LifeSafetyState(v) => {
-            primitives::encode_ctx_unsigned(buf, 13, *v as u64);
-        }
-        BACnetPropertyStates::DoorAlarmState(v) => {
-            primitives::encode_ctx_unsigned(buf, 14, *v as u64);
-        }
-        BACnetPropertyStates::Action(v) => {
-            primitives::encode_ctx_unsigned(buf, 15, *v as u64);
-        }
-        BACnetPropertyStates::DoorSecuredStatus(v) => {
-            primitives::encode_ctx_unsigned(buf, 16, *v as u64);
-        }
-        BACnetPropertyStates::DoorStatus(v) => {
-            primitives::encode_ctx_unsigned(buf, 17, *v as u64);
-        }
-        BACnetPropertyStates::DoorValue(v) => {
-            primitives::encode_ctx_unsigned(buf, 18, *v as u64);
-        }
-        BACnetPropertyStates::TimerState(v) => {
-            primitives::encode_ctx_unsigned(buf, 38, *v as u64);
-        }
-        BACnetPropertyStates::TimerTransition(v) => {
-            primitives::encode_ctx_unsigned(buf, 39, *v as u64);
-        }
-        BACnetPropertyStates::LiftCarDirection(v) => {
-            primitives::encode_ctx_unsigned(buf, 40, *v as u64);
-        }
-        BACnetPropertyStates::LiftCarDoorCommand(v) => {
-            primitives::encode_ctx_unsigned(buf, 42, *v as u64);
-        }
-        BACnetPropertyStates::Other { tag, data } => {
-            primitives::encode_ctx_octet_string(buf, *tag, data);
-        }
-    }
+pub(super) fn encode_property_states(
+    buf: &mut BytesMut,
+    state: &BACnetPropertyStates,
+) -> Result<(), Error> {
+    encode_property_state(buf, state)
 }
 
 /// Decode BACnetPropertyStates from the current position. Advances `pos`.
@@ -84,91 +15,9 @@ pub(super) fn decode_property_states(
     data: &[u8],
     pos: &mut usize,
 ) -> Result<BACnetPropertyStates, Error> {
-    let (tag, content_start) = tags::decode_tag(data, *pos)?;
-    let end = content_start + tag.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            content_start,
-            "BACnetPropertyStates: truncated",
-        ));
-    }
-    let content = &data[content_start..end];
+    let (state, end) = decode_property_state(data, *pos)?;
     *pos = end;
-    match tag.number {
-        0 => Ok(BACnetPropertyStates::BooleanValue(
-            !content.is_empty() && content[0] != 0,
-        )),
-        1 => Ok(BACnetPropertyStates::BinaryValue(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        2 => Ok(BACnetPropertyStates::EventType(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        3 => Ok(BACnetPropertyStates::Polarity(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        4 => Ok(BACnetPropertyStates::ProgramChange(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        5 => Ok(BACnetPropertyStates::ProgramState(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        6 => Ok(BACnetPropertyStates::ReasonForHalt(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        7 => Ok(BACnetPropertyStates::Reliability(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        8 => Ok(BACnetPropertyStates::State(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        9 => Ok(BACnetPropertyStates::SystemStatus(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        10 => Ok(BACnetPropertyStates::Units(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        11 => Ok(BACnetPropertyStates::UnsignedValue(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        12 => Ok(BACnetPropertyStates::LifeSafetyMode(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        13 => Ok(BACnetPropertyStates::LifeSafetyState(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        14 => Ok(BACnetPropertyStates::DoorAlarmState(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        15 => Ok(BACnetPropertyStates::Action(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        16 => Ok(BACnetPropertyStates::DoorSecuredStatus(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        17 => Ok(BACnetPropertyStates::DoorStatus(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        18 => Ok(BACnetPropertyStates::DoorValue(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        38 => Ok(BACnetPropertyStates::TimerState(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        39 => Ok(BACnetPropertyStates::TimerTransition(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        40 => Ok(BACnetPropertyStates::LiftCarDirection(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        42 => Ok(BACnetPropertyStates::LiftCarDoorCommand(
-            primitives::decode_unsigned(content)? as u32,
-        )),
-        n => Ok(BACnetPropertyStates::Other {
-            tag: n,
-            data: content.to_vec(),
-        }),
-    }
+    Ok(state)
 }
 
 /// Decode BACnetDeviceObjectPropertyReference from context-tagged fields.

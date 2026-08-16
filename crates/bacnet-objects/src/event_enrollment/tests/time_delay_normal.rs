@@ -176,6 +176,69 @@ fn enrollment_eval_state_round_trip() {
     assert_eq!(ee.enrollment_eval_source_internal(), Some(None));
 }
 
+#[test]
+fn configuration_setters_cancel_pending_countdowns() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let pending = EventEnrollmentPending {
+        state: EventState::OFFNORMAL,
+        remaining: 2,
+        condition: 1,
+        params_fingerprint: 2,
+    };
+    let seed = |ee: &mut EventEnrollmentObject| {
+        ee.set_enrollment_eval_state_internal(EventEnrollmentEvalState {
+            pending: Some(pending.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    };
+
+    seed(&mut ee);
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 2,
+        low_limit: 0.0,
+        high_limit: 1.0,
+        deadband: 0.0,
+    });
+    assert!(ee
+        .enrollment_eval_state_internal()
+        .unwrap()
+        .pending
+        .is_none());
+
+    seed(&mut ee);
+    ee.set_time_delay_normal(Some(3));
+    assert!(ee
+        .enrollment_eval_state_internal()
+        .unwrap()
+        .pending
+        .is_none());
+
+    seed(&mut ee);
+    ee.set_object_property_reference(None);
+    assert!(ee
+        .enrollment_eval_state_internal()
+        .unwrap()
+        .pending
+        .is_none());
+
+    seed(&mut ee);
+    let rollback = ee
+        .capture_write_property_rollback(PropertyIdentifier::EVENT_PARAMETERS, &PropertyValue::Null)
+        .unwrap();
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 4,
+        low_limit: 0.0,
+        high_limit: 1.0,
+        deadband: 0.0,
+    });
+    ee.restore_write_property_rollback(rollback).unwrap();
+    assert_eq!(
+        ee.enrollment_eval_state_internal().unwrap().pending,
+        Some(pending)
+    );
+}
+
 /// Clause 13.2.2.1's disable reset covers the evaluation state: "this state
 /// machine is not evaluated" — a stale countdown or baseline must not
 /// survive into the next enabled period.

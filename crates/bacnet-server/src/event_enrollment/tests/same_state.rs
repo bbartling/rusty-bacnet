@@ -52,7 +52,7 @@ fn setup_cos(
         time_delay,
         list_of_values: alarm_values
             .iter()
-            .map(|v| BACnetPropertyStates::UnsignedValue(*v))
+            .map(|v| BACnetPropertyStates::BinaryValue(*v))
             .collect(),
     });
     ee.set_event_enable(0x07);
@@ -199,6 +199,19 @@ fn cos_same_state_reindication_is_delayed_and_value_discriminated() {
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::OFFNORMAL);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
+}
+
+#[test]
+fn cos_initial_delay_accepts_any_continuously_matched_alarm_value() {
+    let (mut db, _ee_oid, bi_oid) = setup_cos(1, &[1, 0], 2);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    set_monitored(&mut db, &bi_oid, 0);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::OFFNORMAL
+    );
 }
 
 /// OUT_OF_RANGE has no same-state condition (Clause 13.3.6 (a)–(h) are all

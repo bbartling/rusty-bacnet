@@ -51,7 +51,7 @@ pub use algorithms::{
 use algorithms::{
     eval_change_of_bitstring_struct, eval_change_of_state_struct, eval_change_of_value_struct,
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
-    extract_enumerated, extract_real, ArmEvaluation,
+    extract_property_state_value, extract_real, ArmEvaluation,
 };
 #[cfg(test)]
 use reference::MonitoredReference;
@@ -402,19 +402,40 @@ pub fn evaluate_event_enrollments(
             Ok(PropertyValue::ApplicationData(bytes)) => {
                 match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
                     Ok((ep, consumed)) if consumed == bytes.len() => ep,
-                    // Malformed framed value: nothing to evaluate.
-                    _ => continue,
+                    _ => {
+                        queue_pending_cancellation(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            &mut eval_state,
+                        );
+                        continue;
+                    }
                 }
             }
             // Legacy flat application-tagged form (downstream/custom object
             // types that have not migrated to the framed read arm).
             Ok(v) => match BACnetEventParameter::decode(&v) {
                 Ok(ep) => ep,
-                // Malformed structured value: nothing to evaluate.
-                Err(_) => continue,
+                Err(_) => {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
+                    continue;
+                }
             },
-            // Missing/unreadable Event_Parameters: nothing to evaluate.
-            Err(_) => continue,
+            Err(_) => {
+                queue_pending_cancellation(
+                    &mut updates,
+                    *oid,
+                    eval_state_supported,
+                    &mut eval_state,
+                );
+                continue;
+            }
         };
 
         // The effective normal-direction delay: the EE object's read arm
@@ -437,8 +458,12 @@ pub fn evaluate_event_enrollments(
         // resumed. The cancellation is flushed BEFORE any later exit — a
         // dropped write-back here is what let a params round-trip A→B→A
         // resume a stale countdown.
-        let fingerprint =
-            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored);
+        let Ok(fingerprint) =
+            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored)
+        else {
+            queue_pending_cancellation(&mut updates, *oid, eval_state_supported, &mut eval_state);
+            continue;
+        };
         if eval_state
             .pending
             .as_ref()
@@ -553,7 +578,7 @@ pub fn evaluate_event_enrollments(
                 list_of_values,
                 time_delay,
             } => {
-                let Some(val) = extract_enumerated(&monitored_value) else {
+                let Some(val) = extract_property_state_value(&monitored_value) else {
                     queue_pending_cancellation(
                         &mut updates,
                         *oid,

@@ -32,7 +32,7 @@ fn extended_algorithm_produces_no_transition() {
     ee.set_event_parameters(BACnetEventParameter::Extended {
         vendor_id: 42,
         extended_event_type: 99,
-        parameters: vec![0xDE, 0xAD],
+        parameters: vec![0x21, 0x07],
     });
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();

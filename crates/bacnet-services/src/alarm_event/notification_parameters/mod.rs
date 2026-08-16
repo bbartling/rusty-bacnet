@@ -75,14 +75,14 @@ pub enum NotificationParameters {
         status_flags: u8,
         exceeded_limit: u64,
     },
-    /// [13] Access event. `authentication_factor` contains encoded BACnet TLVs.
+    /// [13] Access event. `authentication_factor` is `None` when context [5] is absent.
     AccessEvent {
         access_event: u32,
         status_flags: u8,
         access_event_tag: u32,
         access_event_time: (Date, Time),
         access_credential: BACnetDeviceObjectPropertyReference,
-        authentication_factor: Vec<u8>,
+        authentication_factor: Option<Vec<u8>>,
     },
     /// [14] Double out of range.
     DoubleOutOfRange {
@@ -111,9 +111,9 @@ pub enum NotificationParameters {
         status_flags: u8,
         alarm_value: String,
     },
-    /// [18] Change of status flags. `present_value` contains encoded BACnet TLVs.
+    /// [18] Change of status flags. `present_value` preserves absent and present-empty context [0].
     ChangeOfStatusFlags {
-        present_value: Vec<u8>,
+        present_value: Option<Vec<u8>>,
         referenced_flags: u8,
     },
     /// [19] Change of reliability. `property_values` contains encoded BACnet TLVs.

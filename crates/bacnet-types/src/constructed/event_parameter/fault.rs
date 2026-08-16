@@ -157,7 +157,8 @@ impl crate::constructed::FaultParameters {
                 let fault_values = inner
                     .iter()
                     .map(|v| match v {
-                        PropertyValue::Unsigned(u) => Ok(*u as u32),
+                        PropertyValue::Unsigned(u) => u32::try_from(*u)
+                            .map_err(|_| Error::decoding(idx, "life-safety value exceeds u32")),
                         _ => Err(Error::decoding(idx, "life-safety value not unsigned")),
                     })
                     .collect::<Result<Vec<u32>, Error>>()?;
