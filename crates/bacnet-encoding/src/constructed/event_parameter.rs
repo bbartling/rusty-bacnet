@@ -56,7 +56,13 @@ use super::{
 const RESERVED_EVENT_TAGS: [u8; 4] = [6, 7, 12, 19];
 
 /// Encode a [`BACnetEventParameter`] as its full CHOICE framing.
-pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) {
+///
+/// A ChangeOfState value with a malformed constructed proprietary state is
+/// rejected before its alternative is written to `buf`.
+pub fn encode_event_parameter(
+    buf: &mut BytesMut,
+    value: &BACnetEventParameter,
+) -> Result<(), Error> {
     match value {
         BACnetEventParameter::ChangeOfBitstring {
             time_delay,
@@ -77,12 +83,14 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             time_delay,
             list_of_values,
         } => {
+            let mut encoded_states = BytesMut::new();
+            for state in list_of_values {
+                encode_property_state(&mut encoded_states, state)?;
+            }
             tags::encode_opening_tag(buf, 1);
             primitives::encode_ctx_unsigned(buf, 0, *time_delay as u64);
             tags::encode_opening_tag(buf, 1);
-            for state in list_of_values {
-                encode_property_state(buf, state);
-            }
+            buf.extend_from_slice(&encoded_states);
             tags::encode_closing_tag(buf, 1);
             tags::encode_closing_tag(buf, 1);
         }
@@ -167,6 +175,7 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             tags::encode_closing_tag(buf, *tag);
         }
     }
+    Ok(())
 }
 
 /// Decode one framed [`BACnetEventParameter`] CHOICE alternative at `offset`.

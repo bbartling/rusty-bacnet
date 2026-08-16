@@ -242,7 +242,7 @@ fn source_write_failure_allows_one_immediate_change_of_state_transition() {
         .inner
         .set_event_parameters(BACnetEventParameter::ChangeOfState {
             time_delay: 0,
-            list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
+            list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
         });
     enrollment.source_writable.store(false, Ordering::SeqCst);
     db.add(Box::new(enrollment)).unwrap();

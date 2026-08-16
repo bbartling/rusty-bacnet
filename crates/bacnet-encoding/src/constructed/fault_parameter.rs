@@ -84,11 +84,13 @@ pub fn encode_fault_parameters(buf: &mut BytesMut, value: &FaultParameters) -> R
             tags::encode_closing_tag(buf, 3);
         }
         F::FaultState { fault_values } => {
+            let mut encoded_states = BytesMut::new();
+            for state in fault_values {
+                encode_property_state(&mut encoded_states, state)?;
+            }
             tags::encode_opening_tag(buf, 4);
             tags::encode_opening_tag(buf, 0);
-            for state in fault_values {
-                encode_property_state(buf, state);
-            }
+            buf.extend_from_slice(&encoded_states);
             tags::encode_closing_tag(buf, 0);
             tags::encode_closing_tag(buf, 4);
         }

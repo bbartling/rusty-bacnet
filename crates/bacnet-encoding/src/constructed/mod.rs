@@ -216,8 +216,30 @@ fn decode_app_character_string(
 // ---------------------------------------------------------------------------
 
 /// Encode a [`BACnetPropertyStates`] using the Standard 135-2020 Clause 21 tags.
-pub fn encode_property_state(buf: &mut BytesMut, state: &BACnetPropertyStates) {
+///
+/// Returns an error without modifying `buf` when a constructed proprietary
+/// value does not contain a BACnet TLV sequence.
+pub fn encode_property_state(
+    buf: &mut BytesMut,
+    state: &BACnetPropertyStates,
+) -> Result<(), Error> {
     use BACnetPropertyStates as S;
+    if let S::Other(value) = state {
+        if value.is_constructed() {
+            let mut framed = BytesMut::new();
+            tags::encode_opening_tag(&mut framed, value.tag());
+            let (_, body_start) = tags::decode_tag(&framed, 0)?;
+            framed.extend_from_slice(value.data());
+            tags::encode_closing_tag(&mut framed, value.tag());
+            let (_, end) = tags::extract_context_value(&framed, body_start, value.tag())?;
+            if end != framed.len() {
+                return Err(Error::decoding(
+                    end,
+                    "proprietary property-state body has trailing data",
+                ));
+            }
+        }
+    }
     match state {
         S::BooleanValue(v) => primitives::encode_ctx_boolean(buf, 0, *v),
         S::BinaryValue(v) => primitives::encode_ctx_enumerated(buf, 1, *v),
@@ -285,6 +307,7 @@ pub fn encode_property_state(buf: &mut BytesMut, state: &BACnetPropertyStates) {
         }
         S::Other(v) => primitives::encode_ctx_octet_string(buf, v.tag(), v.data()),
     }
+    Ok(())
 }
 
 /// Decode one [`BACnetPropertyStates`] CHOICE element at `offset`.

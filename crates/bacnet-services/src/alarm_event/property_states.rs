@@ -3,8 +3,11 @@ use crate::common::{decode_context, decode_context_u32};
 use bacnet_encoding::constructed::{decode_property_state, encode_property_state};
 
 /// Encode a BACnetPropertyStates value.
-pub(super) fn encode_property_states(buf: &mut BytesMut, state: &BACnetPropertyStates) {
-    encode_property_state(buf, state);
+pub(super) fn encode_property_states(
+    buf: &mut BytesMut,
+    state: &BACnetPropertyStates,
+) -> Result<(), Error> {
+    encode_property_state(buf, state)
 }
 
 /// Decode BACnetPropertyStates from the current position. Advances `pos`.

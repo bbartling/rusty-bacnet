@@ -83,10 +83,10 @@ pub(crate) struct Indication {
     /// monitored bytes. Algorithms whose delay gates a threshold condition
     /// (OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`.
     pub condition: u64,
-    /// CHANGE_OF_STATE only: the matched alarm value, recorded as the value
-    /// that caused the transition to OFFNORMAL when the transition *fires*
-    /// (drives condition (c) on later passes).
-    pub offnormal_value: Option<u32>,
+    /// CHANGE_OF_STATE only: the matched alarm value's domain-tagged identity,
+    /// recorded when the transition to OFFNORMAL fires and used by condition
+    /// (c) on later passes.
+    pub offnormal_value: Option<u64>,
     /// CHANGE_OF_VALUE only: the sample installed as the new detection
     /// baseline when the transition *fires* — Clause 13.3.3: "the value of
     /// the monitored value when a transition to NORMAL is indicated shall be
@@ -406,8 +406,9 @@ fn property_state_matches(state: &BACnetPropertyStates, value: PropertyStateValu
     match (state, value) {
         (S::BooleanValue(expected), PropertyStateValue::Boolean(actual)) => *expected == actual,
         (S::IntegerValue(expected), PropertyStateValue::Signed(actual)) => *expected == actual,
-        (S::BooleanValue(_) | S::IntegerValue(_), _) => false,
-        (_, PropertyStateValue::Unsigned(actual)) => state.as_u32() == Some(actual),
+        (S::UnsignedValue(expected), PropertyStateValue::Unsigned(actual)) => *expected == actual,
+        (S::BooleanValue(_) | S::IntegerValue(_) | S::UnsignedValue(_), _) => false,
+        (_, PropertyStateValue::Enumerated(actual)) => state.as_u32() == Some(actual),
         _ => false,
     }
 }
@@ -418,14 +419,16 @@ pub(crate) enum PropertyStateValue {
     Boolean(bool),
     Signed(i32),
     Unsigned(u32),
+    Enumerated(u32),
 }
 
 impl PropertyStateValue {
-    fn identity(self) -> u32 {
+    fn identity(self) -> u64 {
         match self {
-            Self::Boolean(value) => u32::from(value),
-            Self::Signed(value) => value as u32,
-            Self::Unsigned(value) => value,
+            Self::Boolean(value) => u64::from(value),
+            Self::Signed(value) => (1u64 << 32) | value as u32 as u64,
+            Self::Unsigned(value) => (2u64 << 32) | value as u64,
+            Self::Enumerated(value) => (3u64 << 32) | value as u64,
         }
     }
 }
@@ -458,7 +461,7 @@ pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: PropertyStateValue,
     current: EventState,
-    last_offnormal_value: Option<u32>,
+    last_offnormal_value: Option<u64>,
 ) -> ArmEvaluation {
     let matched = alarm_values
         .iter()
@@ -466,7 +469,7 @@ pub(crate) fn eval_change_of_state_struct(
     let identity = value.identity();
     let offnormal = || Indication {
         target: EventState::OFFNORMAL,
-        condition: identity as u64,
+        condition: identity,
         offnormal_value: Some(identity),
         new_baseline: None,
     };
@@ -763,7 +766,7 @@ pub(crate) fn extract_property_state_value(pv: &PropertyValue) -> Option<Propert
     match pv {
         PropertyValue::Boolean(value) => Some(PropertyStateValue::Boolean(*value)),
         PropertyValue::Signed(value) => Some(PropertyStateValue::Signed(*value)),
-        PropertyValue::Enumerated(value) => Some(PropertyStateValue::Unsigned(*value)),
+        PropertyValue::Enumerated(value) => Some(PropertyStateValue::Enumerated(*value)),
         PropertyValue::Unsigned(value) => {
             u32::try_from(*value).ok().map(PropertyStateValue::Unsigned)
         }

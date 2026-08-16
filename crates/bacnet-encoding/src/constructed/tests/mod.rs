@@ -103,7 +103,7 @@ fn raw_property_state(tag: u8, content: &[u8]) -> BytesMut {
 fn property_state_clause_21_tag_table_and_round_trips() {
     for (tag, state) in modeled_property_states() {
         let mut encoded = BytesMut::new();
-        encode_property_state(&mut encoded, &state);
+        encode_property_state(&mut encoded, &state).unwrap();
         let expected = if let BACnetPropertyStates::ExtendedValue(value) = state {
             let mut expected = vec![0xfc, 63];
             expected.extend_from_slice(&value.encoded().to_be_bytes());
@@ -166,7 +166,7 @@ fn property_state_validates_boolean_integer_and_tag_forms() {
 
     for value in [i32::MIN, -1, 0, i32::MAX] {
         let mut encoded = BytesMut::new();
-        encode_property_state(&mut encoded, &BACnetPropertyStates::IntegerValue(value));
+        encode_property_state(&mut encoded, &BACnetPropertyStates::IntegerValue(value)).unwrap();
         assert_eq!(
             decode_property_state(&encoded, 0).unwrap().0,
             BACnetPropertyStates::IntegerValue(value)
@@ -207,7 +207,7 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
             decode_property_state(&raw_property_state(tag, &[0xde, 0xad]), 0).unwrap();
         assert_eq!(decoded, expected);
         let mut encoded = BytesMut::new();
-        encode_property_state(&mut encoded, &expected);
+        encode_property_state(&mut encoded, &expected).unwrap();
         assert_eq!(decode_property_state(&encoded, 0).unwrap().0, expected);
     }
 
@@ -215,7 +215,7 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
         BACnetProprietaryPropertyState::constructed(64, vec![0x21, 0x07]).unwrap(),
     );
     let mut encoded = BytesMut::new();
-    encode_property_state(&mut encoded, &expected);
+    encode_property_state(&mut encoded, &expected).unwrap();
     assert_eq!(encoded.as_ref(), &[0xfe, 64, 0x21, 0x07, 0xff, 64]);
     assert_eq!(decode_property_state(&encoded, 0).unwrap().0, expected);
 
@@ -235,6 +235,13 @@ fn property_state_rejects_reserved_tags_and_preserves_proprietary_tags() {
         BACnetExtendedPropertyState::from_encoded(extended.encoded()).unwrap(),
         extended
     );
+
+    let malformed = BACnetPropertyStates::Other(
+        BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+    );
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_property_state(&mut untouched, &malformed).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
 }
 
 // --- DOPR body codec --------------------------------------------------------

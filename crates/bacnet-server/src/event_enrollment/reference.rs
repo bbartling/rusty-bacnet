@@ -83,9 +83,9 @@ pub(super) fn params_fingerprint(
     normal_delay: u64,
     event_type_raw: u32,
     monitored: &MonitoredReference,
-) -> u64 {
+) -> Result<u64, bacnet_types::error::Error> {
     let mut buf = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, params)?;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in buf
         .iter()
@@ -100,5 +100,5 @@ pub(super) fn params_fingerprint(
     {
         h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
-    h
+    Ok(h)
 }

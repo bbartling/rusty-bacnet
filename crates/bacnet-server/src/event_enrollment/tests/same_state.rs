@@ -52,7 +52,7 @@ fn setup_cos(
         time_delay,
         list_of_values: alarm_values
             .iter()
-            .map(|v| BACnetPropertyStates::UnsignedValue(*v))
+            .map(|v| BACnetPropertyStates::BinaryValue(*v))
             .collect(),
     });
     ee.set_event_enable(0x07);

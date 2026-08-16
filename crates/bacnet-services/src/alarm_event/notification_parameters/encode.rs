@@ -25,10 +25,12 @@ impl NotificationParameters {
                 new_state,
                 status_flags,
             } => {
+                let mut encoded_state = BytesMut::new();
+                encode_property_states(&mut encoded_state, new_state)?;
                 tags::encode_opening_tag(buf, 1);
                 // [0] new-state: BACnetPropertyStates — wrapped in opening/closing [0]
                 tags::encode_opening_tag(buf, 0);
-                encode_property_states(buf, new_state);
+                buf.extend_from_slice(&encoded_state);
                 tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
                 primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);

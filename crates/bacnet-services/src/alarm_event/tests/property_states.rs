@@ -123,4 +123,14 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
             ..
         } if value.tag() == 65 && value.data() == [0x21, 0x07] && value.is_constructed()
     ));
+
+    let malformed = NotificationParameters::ChangeOfState {
+        new_state: BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        ),
+        status_flags: 0,
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(malformed.encode(&mut untouched).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
 }

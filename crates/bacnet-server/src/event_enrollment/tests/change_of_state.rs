@@ -119,13 +119,13 @@ fn change_of_state_matches_boolean_extended_and_proprietary_values() {
         ),
         (
             BACnetPropertyStates::ExtendedValue(BACnetExtendedPropertyState::new(256, 7).unwrap()),
-            algorithms::PropertyStateValue::Unsigned(7),
+            algorithms::PropertyStateValue::Enumerated(7),
         ),
         (
             BACnetPropertyStates::Other(
                 BACnetProprietaryPropertyState::primitive(64, vec![7]).unwrap(),
             ),
-            algorithms::PropertyStateValue::Unsigned(7),
+            algorithms::PropertyStateValue::Enumerated(7),
         ),
     ];
 
@@ -134,4 +134,75 @@ fn change_of_state_matches_boolean_extended_and_proprietary_values() {
             algorithms::eval_change_of_state_struct(&[state], value, EventState::NORMAL, None);
         assert_eq!(evaluation.indication.unwrap().target, EventState::OFFNORMAL);
     }
+}
+
+#[test]
+fn change_of_state_keeps_discrete_datatypes_distinct() {
+    let cases = [
+        (
+            BACnetPropertyStates::BooleanValue(true),
+            algorithms::PropertyStateValue::Boolean(true),
+        ),
+        (
+            BACnetPropertyStates::IntegerValue(1),
+            algorithms::PropertyStateValue::Signed(1),
+        ),
+        (
+            BACnetPropertyStates::UnsignedValue(1),
+            algorithms::PropertyStateValue::Unsigned(1),
+        ),
+        (
+            BACnetPropertyStates::BinaryValue(1),
+            algorithms::PropertyStateValue::Enumerated(1),
+        ),
+    ];
+
+    let mut conditions = Vec::new();
+    for (state, value) in cases {
+        let evaluation =
+            algorithms::eval_change_of_state_struct(&[state], value, EventState::NORMAL, None);
+        conditions.push(evaluation.indication.unwrap().condition);
+    }
+    conditions.sort_unstable();
+    conditions.dedup();
+    assert_eq!(conditions.len(), 4);
+
+    assert!(algorithms::eval_change_of_state_struct(
+        &[BACnetPropertyStates::BinaryValue(1)],
+        algorithms::PropertyStateValue::Unsigned(1),
+        EventState::NORMAL,
+        None,
+    )
+    .indication
+    .is_none());
+    assert!(algorithms::eval_change_of_state_struct(
+        &[BACnetPropertyStates::UnsignedValue(1)],
+        algorithms::PropertyStateValue::Enumerated(1),
+        EventState::NORMAL,
+        None,
+    )
+    .indication
+    .is_none());
+
+    let alarm_values = [
+        BACnetPropertyStates::BooleanValue(true),
+        BACnetPropertyStates::UnsignedValue(1),
+    ];
+    let first = algorithms::eval_change_of_state_struct(
+        &alarm_values,
+        algorithms::PropertyStateValue::Boolean(true),
+        EventState::NORMAL,
+        None,
+    )
+    .indication
+    .unwrap();
+    let second = algorithms::eval_change_of_state_struct(
+        &alarm_values,
+        algorithms::PropertyStateValue::Unsigned(1),
+        EventState::OFFNORMAL,
+        first.offnormal_value,
+    )
+    .indication
+    .unwrap();
+    assert_ne!(first.condition, second.condition);
 }

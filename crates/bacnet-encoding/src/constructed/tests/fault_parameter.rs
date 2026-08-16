@@ -81,6 +81,18 @@ fn fault_state_golden() {
 }
 
 #[test]
+fn fault_state_encode_rejects_malformed_proprietary_body_atomically() {
+    let value = FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}
+
+#[test]
 fn fault_character_string_golden() {
     let value = FaultParameters::FaultCharacterString {
         fault_values: vec!["alarm".to_string()],

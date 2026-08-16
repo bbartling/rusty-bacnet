@@ -18,7 +18,7 @@ fn framed_event_parameters() -> Vec<u8> {
         deadband: 1.0,
     };
     let mut buf = BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params).unwrap();
     buf.to_vec()
 }
 

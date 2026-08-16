@@ -246,7 +246,7 @@ fn write_event_parameters_framed_round_trip() {
     };
     // Framed wire form write: exactly what a conformant peer sends.
     let mut buf = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut buf, &params).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_PARAMETERS,
         None,
@@ -281,7 +281,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
         deadband: 1.0,
     };
     let mut good = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut good, &params);
+    bacnet_encoding::constructed::encode_event_parameter(&mut good, &params).unwrap();
     for extra in 1..=4usize {
         let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
         let mut bytes = good.to_vec();

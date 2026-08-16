@@ -437,8 +437,12 @@ pub fn evaluate_event_enrollments(
         // resumed. The cancellation is flushed BEFORE any later exit — a
         // dropped write-back here is what let a params round-trip A→B→A
         // resume a stale countdown.
-        let fingerprint =
-            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored);
+        let Ok(fingerprint) =
+            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored)
+        else {
+            queue_pending_cancellation(&mut updates, *oid, eval_state_supported, &mut eval_state);
+            continue;
+        };
         if eval_state
             .pending
             .as_ref()

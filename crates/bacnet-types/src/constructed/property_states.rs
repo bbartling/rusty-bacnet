@@ -86,6 +86,8 @@ impl BACnetProprietaryPropertyState {
     }
 
     /// Preserve the body of a constructed vendor-defined alternative.
+    ///
+    /// The wire encoder rejects bodies that are not BACnet TLV sequences.
     pub fn constructed(tag: u8, data: Vec<u8>) -> Result<Self, Error> {
         Self::new(tag, data, true)
     }

@@ -58,9 +58,9 @@ pub struct EventEnrollmentObject {
     monitored_reference: Option<EventEnrollmentMonitoredSource>,
     /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3). In-memory only.
     cov_baseline: Option<PropertyValue>,
-    /// Monitored value that caused the last OFFNORMAL transition (Clause
-    /// 13.3.2 condition (c)). In-memory only.
-    last_offnormal_value: Option<u32>,
+    /// Domain-tagged monitored value that caused the last OFFNORMAL transition
+    /// (Clause 13.3.2 condition (c)). In-memory only.
+    last_offnormal_value: Option<u64>,
 }
 
 impl EventEnrollmentObject {
@@ -260,7 +260,7 @@ impl BACnetObject for EventEnrollmentObject {
                 bacnet_encoding::constructed::encode_event_parameter(
                     &mut buf,
                     &self.event_parameters,
-                );
+                )?;
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {

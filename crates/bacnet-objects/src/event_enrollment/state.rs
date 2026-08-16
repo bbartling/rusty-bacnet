@@ -70,12 +70,11 @@ pub struct EventEnrollmentEvalState {
     /// the value used in evaluation before the first transition to NORMAL is
     /// indicated is a local matter" — the policy chosen here).
     pub cov_baseline: Option<PropertyValue>,
-    /// The monitored value that caused the last transition to OFFNORMAL, for
-    /// CHANGE_OF_STATE condition (c) (Clause 13.3.2: a re-indication is
-    /// indicated only when the monitored value equals an alarm value
-    /// "different from the value that caused the last transition to
-    /// OFFNORMAL").
-    pub last_offnormal_value: Option<u32>,
+    /// Domain-tagged identity of the monitored value that caused the last
+    /// transition to OFFNORMAL. CHANGE_OF_STATE condition (c) requires a
+    /// re-indication only for a different alarm value; retaining the BACnet
+    /// datatype keeps equal numeric values from different domains distinct.
+    pub last_offnormal_value: Option<u64>,
 }
 
 pub(super) enum EventEnrollmentWriteRollback {

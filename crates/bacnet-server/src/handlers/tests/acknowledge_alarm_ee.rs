@@ -34,7 +34,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     )));
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
-        list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
+        list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
     ee.set_event_enable(0x07);
     ee.set_notification_class(7);

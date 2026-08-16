@@ -385,7 +385,7 @@ fn change_of_state_delays_both_directions() {
     )));
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 2,
-        list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
+        list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
     ee.set_event_enable(0x07);
     let ee_oid = ee.object_identifier();
@@ -555,7 +555,8 @@ fn fingerprint_covers_monitored_reference() {
         2,
         EventType::OUT_OF_RANGE.to_raw(),
         &monitored(ai1, pv, None),
-    );
+    )
+    .unwrap();
     assert_ne!(
         base,
         super::super::params_fingerprint(
@@ -563,7 +564,8 @@ fn fingerprint_covers_monitored_reference() {
             2,
             EventType::OUT_OF_RANGE.to_raw(),
             &monitored(ai2, pv, None),
-        ),
+        )
+        .unwrap(),
         "different monitored object must fingerprint differently"
     );
     assert_ne!(
@@ -573,7 +575,8 @@ fn fingerprint_covers_monitored_reference() {
             2,
             EventType::OUT_OF_RANGE.to_raw(),
             &monitored(ai1, cf, None),
-        ),
+        )
+        .unwrap(),
         "different monitored property must fingerprint differently"
     );
     assert_ne!(
@@ -583,7 +586,8 @@ fn fingerprint_covers_monitored_reference() {
             2,
             EventType::OUT_OF_RANGE.to_raw(),
             &monitored(ai1, pv, Some(0)),
-        ),
+        )
+        .unwrap(),
         "an omitted index must differ from index zero"
     );
     assert_ne!(
@@ -592,13 +596,15 @@ fn fingerprint_covers_monitored_reference() {
             2,
             EventType::OUT_OF_RANGE.to_raw(),
             &monitored(ai1, pv, Some(0)),
-        ),
+        )
+        .unwrap(),
         super::super::params_fingerprint(
             &params,
             2,
             EventType::OUT_OF_RANGE.to_raw(),
             &monitored(ai1, pv, Some(1)),
-        ),
+        )
+        .unwrap(),
         "different array indexes must fingerprint differently"
     );
     assert_eq!(
@@ -608,7 +614,8 @@ fn fingerprint_covers_monitored_reference() {
             2,
             EventType::OUT_OF_RANGE.to_raw(),
             &monitored(ai1, pv, None),
-        ),
+        )
+        .unwrap(),
         "same configuration fingerprints stably"
     );
 }

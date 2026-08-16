@@ -5,7 +5,7 @@ use super::*;
 
 fn round_trip(value: &BACnetEventParameter) {
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, value);
+    encode_event_parameter(&mut buf, value).unwrap();
     let (decoded, end) = decode_event_parameter(&buf, 0).unwrap();
     assert_eq!(&decoded, value);
     assert_eq!(end, buf.len());
@@ -25,7 +25,7 @@ fn change_of_state_golden() {
         ],
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -44,6 +44,19 @@ fn change_of_state_golden() {
 }
 
 #[test]
+fn change_of_state_encode_rejects_malformed_proprietary_body_atomically() {
+    let value = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
+        )],
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_event_parameter(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}
+
+#[test]
 fn change_of_value_increment_golden() {
     let value = BACnetEventParameter::ChangeOfValue {
         time_delay: 2,
@@ -52,7 +65,7 @@ fn change_of_value_increment_golden() {
         ),
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -79,7 +92,7 @@ fn change_of_value_bitmask_golden() {
         },
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -104,7 +117,7 @@ fn floating_limit_golden() {
         deadband: 0.5,
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -134,7 +147,7 @@ fn out_of_range_golden() {
         deadband: 2.0,
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -159,7 +172,7 @@ fn extended_golden() {
         parameters: vec![0xDE, 0xAD],
     };
     let mut buf = BytesMut::new();
-    encode_event_parameter(&mut buf, &value);
+    encode_event_parameter(&mut buf, &value).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -251,7 +264,7 @@ fn opaque_unmodeled_alternatives_preserved() {
         }
     );
     let mut reencoded = BytesMut::new();
-    encode_event_parameter(&mut reencoded, &decoded);
+    encode_event_parameter(&mut reencoded, &decoded).unwrap();
     assert_eq!(
         reencoded.as_ref(),
         wire.as_slice(),
@@ -274,7 +287,7 @@ fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
         data: vec![0xFF, 0x01, 0x02],
     };
     let mut encoded = BytesMut::new();
-    encode_event_parameter(&mut encoded, &value);
+    encode_event_parameter(&mut encoded, &value).unwrap();
 
     let (tag, _) = tags::decode_tag(&encoded, 0).unwrap();
     assert_eq!(tag.class, tags::TagClass::Application);
