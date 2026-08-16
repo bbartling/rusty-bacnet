@@ -370,11 +370,10 @@ pub fn extract_context_value(
 ///
 /// [`extract_context_value`] walks the content as well-formed TLVs, which is
 /// the correct way to skip an unknown *conformant* constructed value (Clause
-/// 20.2.1.6 rule (d)); but some fields hold payloads that are not guaranteed
-/// to be well-formed TLVs at all — vendor-defined `parameters [2]` bodies and
-/// `Opaque`-preserved legacy payloads are stored and re-emitted verbatim.
-/// Those are walked here by scanning for the closing tag's raw octet(s) of
-/// `tag_number`, balancing nested opening octet(s) of the same tag number.
+/// 20.2.1.6 rule (d)). This raw scanner is only for compatibility payloads
+/// whose contract explicitly permits non-TLV bytes. It is not safe for a
+/// `SEQUENCE OF CHOICE`: a primitive value can contain a closing-tag octet.
+/// The scan balances raw opening/closing octets for `tag_number`.
 ///
 /// `offset` points just past the opening tag for `tag_number`. Returns the
 /// enclosed bytes and the offset past the closing tag octet(s).

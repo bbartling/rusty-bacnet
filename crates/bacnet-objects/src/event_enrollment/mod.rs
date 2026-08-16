@@ -549,7 +549,13 @@ impl BACnetObject for EventEnrollmentObject {
                 },
             )),
             PropertyIdentifier::EVENT_PARAMETERS => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::EventParameters(self.pending.clone()),
+                EventEnrollmentWriteRollback::EventParameters {
+                    value: self.event_parameters.clone(),
+                    pending: self.pending.clone(),
+                },
+            )),
+            PropertyIdentifier::FAULT_PARAMETERS => Some(WritePropertyRollback::new(
+                EventEnrollmentWriteRollback::FaultParameters(self.fault_parameters.clone()),
             )),
             PropertyIdentifier::TIME_DELAY_NORMAL => Some(WritePropertyRollback::new(
                 EventEnrollmentWriteRollback::TimeDelayNormal {
@@ -582,8 +588,13 @@ impl BACnetObject for EventEnrollmentObject {
                 self.last_offnormal_value = evaluation.last_offnormal_value;
                 Ok(())
             }
-            EventEnrollmentWriteRollback::EventParameters(pending) => {
+            EventEnrollmentWriteRollback::EventParameters { value, pending } => {
+                self.event_parameters = value;
                 self.pending = pending;
+                Ok(())
+            }
+            EventEnrollmentWriteRollback::FaultParameters(value) => {
+                self.fault_parameters = value;
                 Ok(())
             }
             EventEnrollmentWriteRollback::TimeDelayNormal { value, pending } => {

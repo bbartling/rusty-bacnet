@@ -201,10 +201,10 @@ pub(super) fn take_dopr(
         ));
     };
     *idx += 1;
-    if inner.len() < 4 {
+    if inner.len() != 4 {
         return Err(Error::decoding(
             *idx,
-            "device object property reference too short",
+            "device object property reference must contain exactly four values",
         ));
     }
     let object_identifier = match &inner[0] {
@@ -212,11 +212,15 @@ pub(super) fn take_dopr(
         _ => return Err(Error::decoding(0, "reference object id missing")),
     };
     let property_identifier = match &inner[1] {
-        PropertyValue::Unsigned(v) => *v as u32,
+        PropertyValue::Unsigned(v) => u32::try_from(*v)
+            .map_err(|_| Error::decoding(1, "reference property id exceeds u32"))?,
         _ => return Err(Error::decoding(1, "reference property id missing")),
     };
     let property_array_index = match &inner[2] {
-        PropertyValue::Unsigned(v) => Some(*v as u32),
+        PropertyValue::Unsigned(v) => Some(
+            u32::try_from(*v)
+                .map_err(|_| Error::decoding(2, "reference array index exceeds u32"))?,
+        ),
         PropertyValue::Null => None,
         _ => return Err(Error::decoding(2, "reference array index invalid")),
     };

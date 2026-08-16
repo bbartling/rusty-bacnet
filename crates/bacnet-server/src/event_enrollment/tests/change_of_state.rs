@@ -4,6 +4,7 @@
 
 use super::super::*;
 use super::*;
+use bacnet_objects::accumulator::AccumulatorObject;
 use bacnet_objects::value_types::IntegerValueObject;
 use bacnet_types::constructed::{BACnetExtendedPropertyState, BACnetProprietaryPropertyState};
 
@@ -91,6 +92,57 @@ fn change_of_state_back_to_normal() {
 }
 
 #[test]
+fn change_of_state_large_unsigned_is_a_delayed_nonmatch() {
+    let mut db = ObjectDatabase::new();
+    let mut accumulator = AccumulatorObject::new(1, "ACC-1", 0).unwrap();
+    accumulator
+        .write_property(
+            PropertyIdentifier::MAX_PRES_VALUE,
+            None,
+            PropertyValue::Unsigned(1),
+            None,
+        )
+        .unwrap();
+    let accumulator_oid = accumulator.object_identifier();
+    db.add(Box::new(accumulator)).unwrap();
+
+    let mut enrollment =
+        EventEnrollmentObject::new(3, "EE-COS-U", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        accumulator_oid,
+        PropertyIdentifier::MAX_PRES_VALUE.to_raw(),
+    )));
+    enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
+    });
+    enrollment.set_time_delay_normal(Some(2));
+    enrollment.set_event_enable(0x07);
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::OFFNORMAL
+    );
+    db.get_mut(&accumulator_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::MAX_PRES_VALUE,
+            None,
+            PropertyValue::Unsigned(u64::from(u32::MAX) + 1),
+            None,
+        )
+        .unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::NORMAL
+    );
+}
+
+#[test]
 fn change_of_state_multiple_alarm_values() {
     // Alarm on values 1, 3, 5
     let (mut db, _ee_oid, _bi_oid) = setup_change_of_state(3, &[1, 3, 5]);
@@ -112,13 +164,14 @@ fn change_of_state_matches_signed_integer_values_end_to_end() {
 
 #[test]
 fn change_of_state_matches_boolean_extended_and_proprietary_values() {
+    let extended = BACnetExtendedPropertyState::new(256, 7).unwrap();
     let cases = [
         (
             BACnetPropertyStates::BooleanValue(true),
             algorithms::PropertyStateValue::Boolean(true),
         ),
         (
-            BACnetPropertyStates::ExtendedValue(BACnetExtendedPropertyState::new(256, 7).unwrap()),
+            BACnetPropertyStates::ExtendedValue(extended),
             algorithms::PropertyStateValue::Enumerated(7),
         ),
         (
@@ -134,6 +187,17 @@ fn change_of_state_matches_boolean_extended_and_proprietary_values() {
             algorithms::eval_change_of_state_struct(&[state], value, EventState::NORMAL, None);
         assert_eq!(evaluation.indication.unwrap().target, EventState::OFFNORMAL);
     }
+
+    // Context [63] packs the choice discriminator for transport; the
+    // referenced property's semantic value remains Enumerated(7).
+    assert!(algorithms::eval_change_of_state_struct(
+        &[BACnetPropertyStates::ExtendedValue(extended)],
+        algorithms::PropertyStateValue::Unsigned(u64::from(extended.encoded())),
+        EventState::NORMAL,
+        None,
+    )
+    .indication
+    .is_none());
 }
 
 #[test]

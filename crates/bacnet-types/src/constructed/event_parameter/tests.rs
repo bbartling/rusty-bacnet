@@ -116,7 +116,7 @@ fn extended_round_trip() {
     let p = BACnetEventParameter::Extended {
         vendor_id: 42,
         extended_event_type: 99,
-        parameters: vec![0xDE, 0xAD],
+        parameters: vec![0x21, 0x07],
     };
     assert_eq!(p.tag(), event_parameter_tag::EXTENDED);
     assert_eq!(BACnetEventParameter::decode(&p.encode()).unwrap(), p);
@@ -127,7 +127,7 @@ fn opaque_unknown_tag_preserved() {
     // An unknown algorithm tag round-trips through the Opaque catch-all.
     let p = BACnetEventParameter::Opaque {
         tag: 0x6F,
-        data: vec![1, 2, 3],
+        data: vec![0x21, 0x03],
     };
     assert_eq!(p.tag(), 0x6F);
     assert_eq!(BACnetEventParameter::decode(&p.encode()).unwrap(), p);
@@ -186,6 +186,52 @@ fn decode_rejects_out_of_range_tags_and_trailing_values() {
 }
 
 #[test]
+fn flat_references_reject_overflow_and_extra_members() {
+    let PropertyValue::List(items) = (BACnetEventParameter::FloatingLimit {
+        time_delay: 1,
+        setpoint_reference: dopr(1),
+        low_diff_limit: 1.0,
+        high_diff_limit: 2.0,
+        deadband: 0.5,
+    })
+    .encode() else {
+        unreachable!();
+    };
+
+    for field in [1, 2] {
+        let mut malformed = items.clone();
+        let PropertyValue::List(reference) = &mut malformed[2] else {
+            unreachable!();
+        };
+        reference[field] = PropertyValue::Unsigned(u64::MAX);
+        assert!(BACnetEventParameter::decode(&PropertyValue::List(malformed)).is_err());
+    }
+
+    let mut malformed = items;
+    let PropertyValue::List(reference) = &mut malformed[2] else {
+        unreachable!();
+    };
+    reference.push(PropertyValue::Boolean(true));
+    assert!(BACnetEventParameter::decode(&PropertyValue::List(malformed)).is_err());
+}
+
+#[test]
+fn flat_fault_life_safety_values_reject_u32_overflow() {
+    let PropertyValue::List(mut items) = (FaultParameters::FaultLifeSafety {
+        fault_values: vec![1],
+        mode_for_reference: dopr(1),
+    })
+    .encode_property_value() else {
+        unreachable!();
+    };
+    let PropertyValue::List(values) = &mut items[1] else {
+        unreachable!();
+    };
+    values[0] = PropertyValue::Unsigned(u64::from(u32::MAX) + 1);
+    assert!(FaultParameters::decode_property_value(&PropertyValue::List(items)).is_err());
+}
+
+#[test]
 fn fault_parameters_round_trip() {
     let fp = FaultParameters::FaultOutOfRange {
         min_normal: 10.0,
@@ -229,7 +275,7 @@ fn fault_parameters_legacy_alternatives_require_exact_members() {
         FaultParameters::FaultExtended {
             vendor_id: 1,
             extended_fault_type: 2,
-            parameters: vec![3],
+            parameters: vec![0x21, 0x03],
         },
         FaultParameters::FaultLifeSafety {
             fault_values: vec![1],

@@ -544,5 +544,53 @@ pub(crate) fn decode_dopr_body(
     ))
 }
 
+/// Validate a preserved SEQUENCE body without normalizing its encoded values.
+pub(crate) fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error> {
+    let mut offset = 0;
+    let mut count = 0;
+    while offset < data.len() {
+        if count >= MAX_FRAMED_ITEMS {
+            return Err(Error::decoding(
+                offset,
+                format!("{what}: sequence exceeds item limit"),
+            ));
+        }
+        let (_, next) = primitives::decode_application_value(data, offset)?;
+        offset = next;
+        count += 1;
+    }
+    Ok(())
+}
+
+/// Validate the shared Extended Event/Fault `parameters` production.
+pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<(), Error> {
+    let mut offset = 0;
+    let mut count = 0;
+    while offset < data.len() {
+        if count >= MAX_FRAMED_ITEMS {
+            return Err(Error::decoding(
+                offset,
+                format!("{what}: parameters exceed item limit"),
+            ));
+        }
+        let (tag, content) = tags::decode_tag(data, offset)?;
+        if tag.class == TagClass::Context {
+            if !tag.is_opening_tag(0) {
+                return Err(Error::decoding(
+                    offset,
+                    format!("{what}: expected reference opening tag [0]"),
+                ));
+            }
+            let (_, after_reference) = decode_dopr_body(data, content, what)?;
+            offset = expect_closing(data, after_reference, 0, what)?;
+        } else {
+            let (_, next) = primitives::decode_application_value(data, offset)?;
+            offset = next;
+        }
+        count += 1;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

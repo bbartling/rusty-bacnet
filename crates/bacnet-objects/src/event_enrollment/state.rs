@@ -1,3 +1,4 @@
+use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
 use bacnet_types::enums::{EventState, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -33,12 +34,11 @@ pub struct EventEnrollmentPending {
     /// seconds by the evaluator as `ceil(delay_secs / interval_secs)`.
     pub remaining: u32,
     /// Identity of the indicating condition, per algorithm. CHANGE_OF_STATE
-    /// discriminates by the matched alarm value because Clause 13.3.2
-    /// conditions (a)/(c) key on *which* value the monitored value equals
-    /// ("remains equal to that value for pTimeDelay"); CHANGE_OF_BITSTRING by
-    /// the masked monitored bytes. Algorithms whose delay applies to the
-    /// threshold condition itself (OUT_OF_RANGE, FLOATING_LIMIT,
-    /// CHANGE_OF_VALUE) use `0` — the target alone identifies them.
+    /// uses one identity for condition (a)'s "any" alarm value and a
+    /// value-specific identity for condition (c)'s "that" value.
+    /// CHANGE_OF_BITSTRING uses the masked monitored bytes. Algorithms whose
+    /// delay applies to the threshold condition itself (OUT_OF_RANGE,
+    /// FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`; the target identifies them.
     pub condition: u64,
     /// Fingerprint of the `Event_Parameters` (framed encoding) plus the
     /// effective `Time_Delay_Normal` in force when this countdown was seeded.
@@ -85,7 +85,11 @@ pub(super) enum EventEnrollmentWriteRollback {
         monitored_reference: Option<EventEnrollmentMonitoredSource>,
         evaluation: EventEnrollmentEvalState,
     },
-    EventParameters(Option<EventEnrollmentPending>),
+    EventParameters {
+        value: BACnetEventParameter,
+        pending: Option<EventEnrollmentPending>,
+    },
+    FaultParameters(Option<FaultParameters>),
     TimeDelayNormal {
         value: Option<u32>,
         pending: Option<EventEnrollmentPending>,

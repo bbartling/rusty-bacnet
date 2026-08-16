@@ -372,6 +372,55 @@ fn write_event_parameters_flat_malformed_proprietary_body_rejected() {
 }
 
 #[test]
+fn write_event_parameters_flat_reference_malformed_rejected() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    let PropertyValue::List(base) = (BACnetEventParameter::FloatingLimit {
+        time_delay: 1,
+        setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ),
+        low_diff_limit: 1.0,
+        high_diff_limit: 2.0,
+        deadband: 0.5,
+    })
+    .encode() else {
+        unreachable!();
+    };
+
+    let mut overflow = base.clone();
+    let PropertyValue::List(reference) = &mut overflow[2] else {
+        unreachable!();
+    };
+    reference[1] = PropertyValue::Unsigned(u64::MAX);
+
+    let mut trailing = base;
+    let PropertyValue::List(reference) = &mut trailing[2] else {
+        unreachable!();
+    };
+    reference.push(PropertyValue::Null);
+
+    for malformed in [overflow, trailing] {
+        assert!(ee
+            .write_property(
+                PropertyIdentifier::EVENT_PARAMETERS,
+                None,
+                PropertyValue::List(malformed),
+                None,
+            )
+            .is_err());
+        assert_eq!(
+            ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+                .unwrap(),
+            before
+        );
+    }
+}
+
+#[test]
 fn write_event_parameters_opaque_octets_preserved() {
     use bacnet_types::constructed::BACnetEventParameter;
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();

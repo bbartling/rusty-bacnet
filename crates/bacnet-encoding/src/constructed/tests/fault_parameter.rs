@@ -118,7 +118,8 @@ fn fault_extended_golden() {
     let value = FaultParameters::FaultExtended {
         vendor_id: 42,
         extended_fault_type: 7,
-        parameters: vec![0x01, 0x02],
+        // Application OCTET STRING containing a byte that resembles closing [2].
+        parameters: vec![0x61, 0x2F],
     };
     let mut buf = BytesMut::new();
     encode_fault_parameters(&mut buf, &value).unwrap();
@@ -128,13 +129,25 @@ fn fault_extended_golden() {
             0x2E, // opening [2]
             0x09, 0x2A, // vendor-id [0] Unsigned 42
             0x19, 0x07, // extended-fault-type [1] Unsigned 7
-            0x2E, 0x01, 0x02, 0x2F, // parameters [2]
+            0x2E, 0x61, 0x2F, 0x2F, // parameters [2]
             0x2F, // closing
         ]
     );
     let (decoded, end) = decode_fault_parameters(&buf, 0).unwrap();
     assert_eq!(decoded, value);
     assert_eq!(end, buf.len());
+}
+
+#[test]
+fn fault_extended_rejects_malformed_parameters_atomically() {
+    let value = FaultParameters::FaultExtended {
+        vendor_id: 42,
+        extended_fault_type: 7,
+        parameters: vec![0xde],
+    };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
 }
 
 #[test]

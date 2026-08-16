@@ -128,6 +128,35 @@ fn event_parameters_framed_wire_round_trip() {
 }
 
 #[test]
+fn opaque_event_parameters_with_tag_like_payload_round_trip() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let mut framed = BytesMut::new();
+    bacnet_encoding::constructed::encode_event_parameter(
+        &mut framed,
+        &BACnetEventParameter::Opaque {
+            tag: 200,
+            data: vec![0x61, 0x2f],
+        },
+    )
+    .unwrap();
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::EVENT_PARAMETERS,
+        framed.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::EVENT_PARAMETERS),
+        framed.to_vec()
+    );
+}
+
+#[test]
 fn legacy_event_parameters_wire_write_is_canonicalized() {
     let mut db = ObjectDatabase::new();
     let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
@@ -172,6 +201,36 @@ fn fault_parameters_framed_wire_round_trip() {
     assert_eq!(
         read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
         framed
+    );
+}
+
+#[test]
+fn extended_fault_parameters_with_tag_like_payload_round_trip() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let mut framed = BytesMut::new();
+    bacnet_encoding::constructed::encode_fault_parameters(
+        &mut framed,
+        &FaultParameters::FaultExtended {
+            vendor_id: 1,
+            extended_fault_type: 2,
+            parameters: vec![0x61, 0x2f],
+        },
+    )
+    .unwrap();
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        framed.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        framed.to_vec()
     );
 }
 

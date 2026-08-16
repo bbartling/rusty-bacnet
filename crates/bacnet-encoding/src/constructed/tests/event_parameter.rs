@@ -169,7 +169,8 @@ fn extended_golden() {
     let value = BACnetEventParameter::Extended {
         vendor_id: 42,
         extended_event_type: 99,
-        parameters: vec![0xDE, 0xAD],
+        // Application OCTET STRING containing a byte that resembles closing [2].
+        parameters: vec![0x61, 0x2F],
     };
     let mut buf = BytesMut::new();
     encode_event_parameter(&mut buf, &value).unwrap();
@@ -180,7 +181,7 @@ fn extended_golden() {
             0x09, 0x2A, // vendor-id [0] Unsigned 42
             0x19, 0x63, // extended-event-type [1] Unsigned 99
             0x2E, // parameters [2] opening
-            0xDE, 0xAD, 0x2F, // parameters closing
+            0x61, 0x2F, 0x2F, // OCTET STRING 0x2F, parameters closing
             0x9F, // extended closing
         ]
     );
@@ -275,7 +276,7 @@ fn opaque_unmodeled_alternatives_preserved() {
     for tag in [10u8, 22, 200] {
         round_trip(&BACnetEventParameter::Opaque {
             tag,
-            data: vec![1, 2, 3],
+            data: vec![0x21, 0x03],
         });
     }
 }
@@ -358,6 +359,15 @@ fn event_parameter_choice_tag_forms_are_enforced() {
         BACnetEventParameter::Opaque {
             tag: 20,
             data: vec![0],
+        },
+        BACnetEventParameter::Extended {
+            vendor_id: 1,
+            extended_event_type: 2,
+            parameters: vec![0xde],
+        },
+        BACnetEventParameter::Opaque {
+            tag: 200,
+            data: vec![0xde],
         },
     ] {
         let mut untouched = BytesMut::from(&[0xaa][..]);

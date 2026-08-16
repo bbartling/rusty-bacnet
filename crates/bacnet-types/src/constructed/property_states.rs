@@ -237,7 +237,7 @@ pub enum BACnetPropertyStates {
 }
 
 impl BACnetPropertyStates {
-    /// Return the value projected into the event evaluator's unsigned domain.
+    /// Return the semantic scalar used for enum-like event comparisons.
     pub fn as_u32(&self) -> Option<u32> {
         use BACnetPropertyStates as S;
 

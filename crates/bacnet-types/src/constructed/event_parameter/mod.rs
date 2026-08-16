@@ -133,7 +133,8 @@ pub enum BACnetEventParameter {
         vendor_id: u16,
         /// `extended-event-type [1] Unsigned`.
         extended_event_type: u32,
-        /// `parameters [2] SEQUENCE OF CHOICE` — raw, vendor-specific.
+        /// Encoded `parameters [2] SEQUENCE OF CHOICE` items, without the
+        /// enclosing tag pair.
         parameters: Vec<u8>,
     },
     /// Preserves an unmodeled constructed alternative or `none [20] NULL`.

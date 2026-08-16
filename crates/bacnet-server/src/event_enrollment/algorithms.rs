@@ -406,7 +406,9 @@ fn property_state_matches(state: &BACnetPropertyStates, value: PropertyStateValu
     match (state, value) {
         (S::BooleanValue(expected), PropertyStateValue::Boolean(actual)) => *expected == actual,
         (S::IntegerValue(expected), PropertyStateValue::Signed(actual)) => *expected == actual,
-        (S::UnsignedValue(expected), PropertyStateValue::Unsigned(actual)) => *expected == actual,
+        (S::UnsignedValue(expected), PropertyStateValue::Unsigned(actual)) => {
+            u64::from(*expected) == actual
+        }
         (S::BooleanValue(_) | S::IntegerValue(_) | S::UnsignedValue(_), _) => false,
         (_, PropertyStateValue::Enumerated(actual)) => state.as_u32() == Some(actual),
         _ => false,
@@ -418,7 +420,7 @@ fn property_state_matches(state: &BACnetPropertyStates, value: PropertyStateValu
 pub(crate) enum PropertyStateValue {
     Boolean(bool),
     Signed(i32),
-    Unsigned(u32),
+    Unsigned(u64),
     Enumerated(u32),
 }
 
@@ -427,7 +429,9 @@ impl PropertyStateValue {
         match self {
             Self::Boolean(value) => u64::from(value),
             Self::Signed(value) => (1u64 << 32) | value as u32 as u64,
-            Self::Unsigned(value) => (2u64 << 32) | value as u64,
+            // Values above u32 cannot match a BACnetPropertyStates
+            // UnsignedValue, so their identity is never persisted.
+            Self::Unsigned(value) => (2u64 << 32) | value,
             Self::Enumerated(value) => (3u64 << 32) | value as u64,
         }
     }
@@ -764,9 +768,7 @@ pub(crate) fn extract_property_state_value(pv: &PropertyValue) -> Option<Propert
         PropertyValue::Boolean(value) => Some(PropertyStateValue::Boolean(*value)),
         PropertyValue::Signed(value) => Some(PropertyStateValue::Signed(*value)),
         PropertyValue::Enumerated(value) => Some(PropertyStateValue::Enumerated(*value)),
-        PropertyValue::Unsigned(value) => {
-            u32::try_from(*value).ok().map(PropertyStateValue::Unsigned)
-        }
+        PropertyValue::Unsigned(value) => Some(PropertyStateValue::Unsigned(*value)),
         _ => None,
     }
 }

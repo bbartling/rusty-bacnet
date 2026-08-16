@@ -47,7 +47,8 @@ use crate::tags;
 use super::{
     decode_app_bit_string, decode_ctx_bit_string, decode_ctx_real, decode_ctx_unsigned,
     decode_dopr_body, decode_property_state, encode_dopr_body, encode_property_state,
-    expect_closing, expect_opening, MAX_FRAMED_ITEMS,
+    expect_closing, expect_opening, validate_extended_parameters, validate_tlv_sequence,
+    MAX_FRAMED_ITEMS,
 };
 
 /// Context tags the Clause 21 production omits, deprecates, or reserves.
@@ -151,6 +152,8 @@ pub fn encode_event_parameter(
             extended_event_type,
             parameters,
         } => {
+            validate_extended_parameters(parameters, "extended")
+                .map_err(|error| Error::Encoding(error.to_string()))?;
             tags::encode_opening_tag(buf, 9);
             primitives::encode_ctx_unsigned(buf, 0, *vendor_id as u64);
             primitives::encode_ctx_unsigned(buf, 1, *extended_event_type as u64);
@@ -178,6 +181,8 @@ pub fn encode_event_parameter(
             )));
         }
         BACnetEventParameter::Opaque { tag, data } => {
+            validate_tlv_sequence(data, "opaque event parameters")
+                .map_err(|error| Error::Encoding(error.to_string()))?;
             // Preserved alternative: its captured bytes are the complete
             // SEQUENCE body, re-emitted under its own opening/closing pair.
             tags::encode_opening_tag(buf, *tag);
@@ -458,10 +463,8 @@ pub fn decode_event_parameter(
                 .map_err(|_| Error::decoding(pos, "extended: extended-event-type exceeds u32"))?;
             pos = p;
             pos = expect_opening(data, pos, 2, what)?;
-            // parameters [2] SEQUENCE OF CHOICE — preserved as raw bytes;
-            // vendor-defined content is not guaranteed to be well-formed
-            // TLVs, so skip it with the raw scanner rather than tag-parsing.
-            let (raw_params, p) = tags::extract_raw_context(data, pos, 2)?;
+            let (raw_params, p) = tags::extract_context_value(data, pos, 2)?;
+            validate_extended_parameters(raw_params, "extended")?;
             pos = p;
             pos = expect_closing(data, pos, 9, what)?;
             (
@@ -475,11 +478,9 @@ pub fn decode_event_parameter(
         }
         n => {
             // Unmodeled constructed alternative: preserve the SEQUENCE body
-            // verbatim and consume through the matching closing tag. The body
-            // may be vendor bytes that are not well-formed TLVs (and for
-            // legacy Opaque payloads, actively are not), so use the raw
-            // scanner rather than tag-parsing.
-            let (body, p) = tags::extract_raw_context(data, pos, n)?;
+            // verbatim after validating its nested tag structure.
+            let (body, p) = tags::extract_context_value(data, pos, n)?;
+            validate_tlv_sequence(body, "opaque event parameters")?;
             (
                 EP::Opaque {
                     tag: n,
