@@ -132,6 +132,20 @@ pub(super) fn extract_raw_context(
     ))
 }
 
+/// Extract a required encoded BACnet value from a constructed context field.
+pub(super) fn extract_required_raw_context(
+    data: &[u8],
+    start: usize,
+    tag_number: u8,
+    field: &str,
+) -> Result<(Vec<u8>, usize), Error> {
+    let (value, end) = extract_raw_context(data, start, tag_number)?;
+    if value.is_empty() {
+        return Err(Error::decoding(start, format!("{field} is empty")));
+    }
+    Ok((value, end))
+}
+
 /// Decode status flags from a bit-string content slice.
 /// Returns the 4-bit status flags value.
 pub(super) fn decode_status_flags(data: &[u8]) -> u8 {

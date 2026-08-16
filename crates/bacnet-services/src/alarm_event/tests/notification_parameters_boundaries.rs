@@ -550,6 +550,75 @@ fn raw_fields_require_encoded_bacnet_values() {
 }
 
 #[test]
+fn required_raw_values_reject_empty_while_optional_values_are_omitted() {
+    let encoded_value = encoded_octet_string(&[1]);
+    let invalid = [
+        NotificationParameters::CommandFailure {
+            command_value: Vec::new(),
+            status_flags: 0,
+            feedback_value: encoded_value.clone(),
+        },
+        NotificationParameters::CommandFailure {
+            command_value: encoded_value.clone(),
+            status_flags: 0,
+            feedback_value: Vec::new(),
+        },
+        NotificationParameters::ChangeOfDiscreteValue {
+            new_value: Vec::new(),
+            status_flags: 0,
+        },
+    ];
+    for value in invalid {
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(value.encode(&mut untouched).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
+
+    let mut empty_command = BytesMut::new();
+    tags::encode_opening_tag(&mut empty_command, 3);
+    tags::encode_opening_tag(&mut empty_command, 0);
+    tags::encode_closing_tag(&mut empty_command, 0);
+    primitives::encode_ctx_bit_string(&mut empty_command, 1, 4, &[0]);
+    tags::encode_opening_tag(&mut empty_command, 2);
+    empty_command.extend_from_slice(&encoded_value);
+    tags::encode_closing_tag(&mut empty_command, 2);
+    tags::encode_closing_tag(&mut empty_command, 3);
+
+    let mut empty_feedback = BytesMut::new();
+    tags::encode_opening_tag(&mut empty_feedback, 3);
+    tags::encode_opening_tag(&mut empty_feedback, 0);
+    empty_feedback.extend_from_slice(&encoded_value);
+    tags::encode_closing_tag(&mut empty_feedback, 0);
+    primitives::encode_ctx_bit_string(&mut empty_feedback, 1, 4, &[0]);
+    tags::encode_opening_tag(&mut empty_feedback, 2);
+    tags::encode_closing_tag(&mut empty_feedback, 2);
+    tags::encode_closing_tag(&mut empty_feedback, 3);
+
+    let mut empty_discrete_value = BytesMut::new();
+    tags::encode_opening_tag(&mut empty_discrete_value, 21);
+    tags::encode_opening_tag(&mut empty_discrete_value, 0);
+    tags::encode_closing_tag(&mut empty_discrete_value, 0);
+    primitives::encode_ctx_bit_string(&mut empty_discrete_value, 1, 4, &[0]);
+    tags::encode_closing_tag(&mut empty_discrete_value, 21);
+
+    for raw in [empty_command, empty_feedback, empty_discrete_value] {
+        assert!(decode_variant(&raw).is_err());
+    }
+
+    for expected in [
+        access_event(Vec::new()),
+        NotificationParameters::ChangeOfStatusFlags {
+            present_value: Vec::new(),
+            referenced_flags: 0,
+        },
+    ] {
+        let mut encoded = BytesMut::new();
+        expected.encode(&mut encoded).unwrap();
+        assert_eq!(decode_variant(&encoded).unwrap(), expected);
+    }
+}
+
+#[test]
 fn event_notification_enforces_total_nesting_on_encode_and_decode() {
     use bacnet_types::constructed::BACnetProprietaryPropertyState;
 

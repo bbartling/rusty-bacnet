@@ -1,5 +1,6 @@
 use super::property_states::{
-    decode_device_obj_prop_ref, decode_property_states, encode_property_states, extract_raw_context,
+    decode_device_obj_prop_ref, decode_property_states, encode_property_states,
+    extract_raw_context, extract_required_raw_context,
 };
 use super::*;
 

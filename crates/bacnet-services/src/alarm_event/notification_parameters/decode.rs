@@ -275,7 +275,8 @@ impl NotificationParameters {
                 if !t.is_opening || t.number != 0 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [0]"));
                 }
-                let (command_value, after) = extract_raw_context(data, p, 0)?;
+                let (command_value, after) =
+                    extract_required_raw_context(data, p, 0, "CommandFailure command-value")?;
                 pos = after;
                 // [1] status-flags
                 let (status_flags, pos) =
@@ -285,7 +286,8 @@ impl NotificationParameters {
                 if !t.is_opening || t.number != 2 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [2]"));
                 }
-                let (feedback_value, after) = extract_raw_context(data, p, 2)?;
+                let (feedback_value, after) =
+                    extract_required_raw_context(data, p, 2, "CommandFailure feedback-value")?;
                 finish_variant(
                     Self::CommandFailure {
                         command_value,
@@ -428,15 +430,19 @@ impl NotificationParameters {
                     return Err(Error::decoding(pos, "AccessEvent: expected closing [4]"));
                 }
                 pos = cp;
-                // [5] authentication-factor — opening/closing, raw
-                let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening_tag(5) {
-                    return Err(Error::decoding(
-                        pos,
-                        "AccessEvent: expected opening [5] for authentication-factor",
-                    ));
-                }
-                let (authentication_factor, after) = extract_raw_context(data, p, 5)?;
+                // [5] authentication-factor — opening/closing, raw, optional
+                let (authentication_factor, after) = if pos < variant_body_end {
+                    let (t, p) = tags::decode_tag(data, pos)?;
+                    if !t.is_opening_tag(5) {
+                        return Err(Error::decoding(
+                            pos,
+                            "AccessEvent: expected opening [5] for authentication-factor",
+                        ));
+                    }
+                    extract_raw_context(data, p, 5)?
+                } else {
+                    (Vec::new(), pos)
+                };
                 finish_variant(
                     Self::AccessEvent {
                         access_event,
@@ -611,16 +617,15 @@ impl NotificationParameters {
             // [18] Change of status flags
             18 => {
                 let mut pos = inner_start;
-                // [0] present-value — opening/closing, raw
+                // [0] present-value — opening/closing, raw, optional
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 0 {
-                    return Err(Error::decoding(
-                        pos,
-                        "ChangeOfStatusFlags: expected opening [0]",
-                    ));
-                }
-                let (present_value, after) = extract_raw_context(data, p, 0)?;
-                pos = after;
+                let present_value = if t.is_opening_tag(0) {
+                    let (value, after) = extract_raw_context(data, p, 0)?;
+                    pos = after;
+                    value
+                } else {
+                    Vec::new()
+                };
                 // [1] referenced-flags
                 let (referenced_flags, pos) = decode_context_status_flags(
                     data,
