@@ -162,6 +162,30 @@ fn decode_rejects_truncated_out_of_range() {
 }
 
 #[test]
+fn decode_rejects_out_of_range_tags_and_trailing_values() {
+    let valid = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
+    }
+    .encode();
+    let PropertyValue::List(mut items) = valid else {
+        unreachable!();
+    };
+    items[0] = PropertyValue::Unsigned(257);
+    assert!(BACnetEventParameter::decode(&PropertyValue::List(items)).is_err());
+
+    let PropertyValue::List(mut items) = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
+    }
+    .encode() else {
+        unreachable!();
+    };
+    items.push(PropertyValue::Boolean(true));
+    assert!(BACnetEventParameter::decode(&PropertyValue::List(items)).is_err());
+}
+
+#[test]
 fn fault_parameters_round_trip() {
     let fp = FaultParameters::FaultOutOfRange {
         min_normal: 10.0,

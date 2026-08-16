@@ -510,6 +510,25 @@ fn params_round_trip_does_not_resume_stale_countdown() {
     let _ = ee_oid;
 }
 
+#[test]
+fn back_to_back_params_round_trip_cancels_stale_countdown() {
+    let (mut db, ee_oid, _ai_oid) = setup_oor(85.0, 80.0, 20.0, 2.0, 2, None);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    // No evaluator pass observes B; each successful write must invalidate the
+    // old countdown rather than relying only on the next-pass fingerprint.
+    set_oor_params(&mut db, &ee_oid, 3, 21.0, 81.0);
+    set_oor_params(&mut db, &ee_oid, 2, 20.0, 80.0);
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::HIGH_LIMIT
+    );
+}
+
 /// Rewrite the EE's Event_Parameters (framed, as a config client would).
 fn set_oor_params(
     db: &mut ObjectDatabase,

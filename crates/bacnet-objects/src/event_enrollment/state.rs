@@ -85,5 +85,9 @@ pub(super) enum EventEnrollmentWriteRollback {
         monitored_reference: Option<EventEnrollmentMonitoredSource>,
         evaluation: EventEnrollmentEvalState,
     },
-    TimeDelayNormal(Option<u32>),
+    EventParameters(Option<EventEnrollmentPending>),
+    TimeDelayNormal {
+        value: Option<u32>,
+        pending: Option<EventEnrollmentPending>,
+    },
 }

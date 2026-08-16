@@ -326,14 +326,19 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
 #[test]
 fn write_event_parameters_framed_malformed_rejected() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    // Truncated framed value: out-of-range opening with no closing.
-    let result = ee.write_property(
-        PropertyIdentifier::EVENT_PARAMETERS,
-        None,
-        PropertyValue::ApplicationData(vec![0x5E, 0x09, 0x07]),
-        None,
-    );
-    assert!(result.is_err());
+    for malformed in [
+        vec![0x5E, 0x09, 0x07], // out-of-range opening with no closing
+        vec![0x58],             // out-of-range encoded as a primitive tag
+    ] {
+        assert!(ee
+            .write_property(
+                PropertyIdentifier::EVENT_PARAMETERS,
+                None,
+                PropertyValue::ApplicationData(malformed),
+                None,
+            )
+            .is_err());
+    }
 }
 
 #[test]

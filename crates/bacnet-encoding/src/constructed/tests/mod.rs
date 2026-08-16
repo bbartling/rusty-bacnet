@@ -286,4 +286,7 @@ fn event_parameter_opaque_primitive_form_decodes() {
         }
     );
     assert_eq!(end, data.len());
+    let mut encoded = BytesMut::new();
+    encode_event_parameter(&mut encoded, &decoded).unwrap();
+    assert_eq!(encoded.as_ref(), data);
 }

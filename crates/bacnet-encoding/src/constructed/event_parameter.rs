@@ -54,6 +54,7 @@ use super::{
 /// Decoding one means the peer is speaking something other than the 135-2020
 /// production, so these are hard errors rather than Opaque shadows.
 const RESERVED_EVENT_TAGS: [u8; 4] = [6, 7, 12, 19];
+const MODELED_EVENT_TAGS: [u8; 6] = [0, 1, 2, 4, 5, 9];
 
 /// Encode a [`BACnetEventParameter`] as its full CHOICE framing.
 ///
@@ -163,13 +164,22 @@ pub fn encode_event_parameter(
             // Legacy pre-framing EventEnrollment values used an Octet String.
             primitives::encode_app_octet_string(buf, data);
         }
+        BACnetEventParameter::Opaque { tag: 20, data } if data.is_empty() => {
+            // Clause 21 defines none [20] as context NULL, not an empty SEQUENCE.
+            tags::encode_tag(buf, 20, tags::TagClass::Context, 0);
+        }
+        BACnetEventParameter::Opaque { tag, .. }
+            if *tag == 20
+                || MODELED_EVENT_TAGS.contains(tag)
+                || RESERVED_EVENT_TAGS.contains(tag) =>
+        {
+            return Err(Error::Encoding(format!(
+                "BACnetEventParameter: tag [{tag}] cannot use an opaque constructed body"
+            )));
+        }
         BACnetEventParameter::Opaque { tag, data } => {
             // Preserved alternative: its captured bytes are the complete
             // SEQUENCE body, re-emitted under its own opening/closing pair.
-            // (A `none [20] NULL` captured as a zero-length primitive tag
-            // decodes to `Opaque { tag: 20, data: [] }` and re-encodes in the
-            // constructed form — same value, different but self-consistent
-            // tag form.)
             tags::encode_opening_tag(buf, *tag);
             buf.extend_from_slice(data);
             tags::encode_closing_tag(buf, *tag);
@@ -231,6 +241,13 @@ pub fn decode_event_parameter(
         ));
     }
 
+    if tag.class != tags::TagClass::Context {
+        return Err(Error::decoding(
+            offset,
+            "BACnetEventParameter: expected a context tag",
+        ));
+    }
+
     if RESERVED_EVENT_TAGS.contains(&tag.number) {
         return Err(Error::decoding(
             offset,
@@ -241,21 +258,20 @@ pub fn decode_event_parameter(
         ));
     }
 
-    // Primitive alternatives: only none [20] NULL (zero-length). Any other
-    // primitive ctx tag is preserved as opaque contents.
+    // `none [20] NULL` is the only primitive alternative in this CHOICE.
     if !tag.is_opening && !tag.is_closing {
-        let end = pos
-            .checked_add(tag.length as usize)
-            .ok_or_else(|| Error::decoding(pos, "BACnetEventParameter: length overflow"))?;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
+        if tag.number == 20 && tag.length == 0 {
+            return Ok((
+                EP::Opaque {
+                    tag: 20,
+                    data: Vec::new(),
+                },
+                pos,
+            ));
         }
-        return Ok((
-            EP::Opaque {
-                tag: tag.number,
-                data: data[pos..end].to_vec(),
-            },
-            end,
+        return Err(Error::decoding(
+            offset,
+            "BACnetEventParameter: invalid primitive alternative",
         ));
     }
 
@@ -263,6 +279,12 @@ pub fn decode_event_parameter(
         return Err(Error::decoding(
             offset,
             "BACnetEventParameter: unexpected closing tag",
+        ));
+    }
+    if tag.number == 20 {
+        return Err(Error::decoding(
+            offset,
+            "BACnetEventParameter: none [20] must use primitive NULL form",
         ));
     }
 

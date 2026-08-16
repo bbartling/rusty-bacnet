@@ -136,12 +136,11 @@ pub enum BACnetEventParameter {
         /// `parameters [2] SEQUENCE OF CHOICE` — raw, vendor-specific.
         parameters: Vec<u8>,
     },
-    /// Catch-all preserving an unknown algorithm tag and its raw bytes.
+    /// Preserves an unmodeled constructed alternative or `none [20] NULL`.
     ///
-    /// This keeps values for algorithms the library does not evaluate (e.g.
-    /// `command-failure [3]`, `change-of-life-safety [8]`, `buffer-ready [10]`,
-    /// the reserved slots, or genuinely unknown tags) intact across a property
-    /// round trip.
+    /// For constructed alternatives, `data` is the complete SEQUENCE body.
+    /// `Opaque { tag: 20, data: [] }` represents the primitive `none` value.
+    /// The framed encoder rejects modeled and reserved tags in this variant.
     Opaque {
         /// The unrecognized algorithm tag.
         tag: u8,
@@ -271,8 +270,10 @@ impl BACnetEventParameter {
         let PropertyValue::Unsigned(tag) = tag_pv else {
             return Err(Error::decoding(0, "Event_Parameters tag is not Unsigned"));
         };
+        let tag = u8::try_from(*tag)
+            .map_err(|_| Error::decoding(0, "Event_Parameters tag exceeds 255"))?;
         let mut idx = 0;
-        Ok(match *tag as u8 {
+        let parameters = match tag {
             event_parameter_tag::OUT_OF_RANGE => {
                 let time_delay = take_u32(rest, &mut idx)?;
                 let low_limit = take_real(rest, &mut idx)?;
@@ -357,7 +358,11 @@ impl BACnetEventParameter {
                 };
                 Self::Opaque { tag, data }
             }
-        })
+        };
+        if idx != rest.len() {
+            return Err(Error::decoding(idx, "Event_Parameters has trailing values"));
+        }
+        Ok(parameters)
     }
 }
 

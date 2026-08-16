@@ -341,6 +341,32 @@ fn reserved_and_deprecated_tags_rejected() {
 }
 
 #[test]
+fn event_parameter_choice_tag_forms_are_enforced() {
+    // Sequence alternatives cannot use primitive context tags.
+    assert!(decode_event_parameter(&[0x58], 0).is_err());
+    assert!(decode_event_parameter(&[0x88], 0).is_err());
+
+    // none [20] is primitive NULL only: no contents and no constructed form.
+    assert!(decode_event_parameter(&[0xF9, 20, 0], 0).is_err());
+    assert!(decode_event_parameter(&[0xFE, 20, 0xFF, 20], 0).is_err());
+
+    for value in [
+        BACnetEventParameter::Opaque {
+            tag: 5,
+            data: Vec::new(),
+        },
+        BACnetEventParameter::Opaque {
+            tag: 20,
+            data: vec![0],
+        },
+    ] {
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_event_parameter(&mut untouched, &value).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
+    }
+}
+
+#[test]
 fn truncated_and_unbalanced_rejected() {
     // Opening [5] without its closing tag.
     let data = [0x5E, 0x09, 0x07, 0x1C, 0x41, 0x20, 0x00, 0x00];

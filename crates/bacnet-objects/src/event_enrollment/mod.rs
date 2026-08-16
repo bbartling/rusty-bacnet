@@ -150,11 +150,13 @@ impl EventEnrollmentObject {
         reference: Option<BACnetDeviceObjectPropertyReference>,
     ) {
         self.object_property_reference = reference;
+        self.pending = None;
     }
 
     /// Set the structured event parameters.
     pub fn set_event_parameters(&mut self, params: BACnetEventParameter) {
         self.event_parameters = params;
+        self.pending = None;
     }
 
     /// Set the fault parameters for this event enrollment.
@@ -192,6 +194,7 @@ impl EventEnrollmentObject {
     /// `Event_Parameters` `Time_Delay` value (Clause 13.3 fallback).
     pub fn set_time_delay_normal(&mut self, delay: Option<u32>) {
         self.time_delay_normal = delay;
+        self.pending = None;
     }
 
     /// The pTimeDelay the stored `Event_Parameters` supply: the `time_delay`
@@ -388,7 +391,7 @@ impl BACnetObject for EventEnrollmentObject {
         // network route and the internal lifecycle path no longer share an
         // access path (issue #130).
         if property == PropertyIdentifier::EVENT_PARAMETERS {
-            self.event_parameters = parameters::decode_event_parameters(value)?;
+            self.set_event_parameters(parameters::decode_event_parameters(value)?);
             return Ok(());
         }
         if property == PropertyIdentifier::FAULT_PARAMETERS {
@@ -401,7 +404,7 @@ impl BACnetObject for EventEnrollmentObject {
             // already exercise, and is what makes the Clause 13.3 delay
             // asymmetry commissionable on an enrollment at all.
             if let PropertyValue::Unsigned(v) = value {
-                self.time_delay_normal = Some(common::u64_to_u32(v)?);
+                self.set_time_delay_normal(Some(common::u64_to_u32(v)?));
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -545,8 +548,14 @@ impl BACnetObject for EventEnrollmentObject {
                     },
                 },
             )),
+            PropertyIdentifier::EVENT_PARAMETERS => Some(WritePropertyRollback::new(
+                EventEnrollmentWriteRollback::EventParameters(self.pending.clone()),
+            )),
             PropertyIdentifier::TIME_DELAY_NORMAL => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::TimeDelayNormal(self.time_delay_normal),
+                EventEnrollmentWriteRollback::TimeDelayNormal {
+                    value: self.time_delay_normal,
+                    pending: self.pending.clone(),
+                },
             )),
             _ => None,
         }
@@ -573,8 +582,13 @@ impl BACnetObject for EventEnrollmentObject {
                 self.last_offnormal_value = evaluation.last_offnormal_value;
                 Ok(())
             }
-            EventEnrollmentWriteRollback::TimeDelayNormal(value) => {
+            EventEnrollmentWriteRollback::EventParameters(pending) => {
+                self.pending = pending;
+                Ok(())
+            }
+            EventEnrollmentWriteRollback::TimeDelayNormal { value, pending } => {
                 self.time_delay_normal = value;
+                self.pending = pending;
                 Ok(())
             }
         }

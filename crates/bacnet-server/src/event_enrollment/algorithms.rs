@@ -450,13 +450,10 @@ impl PropertyStateValue {
 /// the test/setup helper rather than by evaluation), (c) declines to
 /// indicate rather than fabricating a re-entry every pass.
 ///
-/// The pending-condition identity discriminates by matched value. The driver
-/// for that strictness is (c)'s text — "remains equal to THAT value for
-/// pTimeDelay"; (a) says only "equal to ANY of the values contained in
-/// pAlarmValues for pTimeDelay" and does not, by its letter, require the same
-/// value to persist. Applying the identity to (a) too is the deliberate
-/// stricter-than-required choice: a value flapping between listed alarm
-/// values restarts its countdown instead of accumulating one.
+/// Condition (a)'s pending identity is shared by every listed alarm value:
+/// the clause requires the monitored value to equal "any" pAlarmValues entry
+/// for pTimeDelay. Condition (c) retains the matched-value identity because it
+/// requires the value to remain equal to "that" different value.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: PropertyStateValue,
@@ -467,9 +464,9 @@ pub(crate) fn eval_change_of_state_struct(
         .iter()
         .any(|s| property_state_matches(s, value));
     let identity = value.identity();
-    let offnormal = || Indication {
+    let offnormal = |condition| Indication {
         target: EventState::OFFNORMAL,
-        condition: identity,
+        condition,
         offnormal_value: Some(identity),
         new_baseline: None,
     };
@@ -478,20 +475,20 @@ pub(crate) fn eval_change_of_state_struct(
     // otherwise the algorithm settles at NORMAL.
     if reachable_or_normal(current, &[EventState::NORMAL, EventState::OFFNORMAL]) != current {
         return ArmEvaluation::simple(Some(if matched {
-            offnormal()
+            offnormal(0)
         } else {
             Indication::plain(EventState::NORMAL, 0)
         }));
     }
     let indication = if current == EventState::NORMAL && matched {
-        Some(offnormal())
+        Some(offnormal(0))
     } else if current == EventState::OFFNORMAL && !matched {
         Some(Indication::plain(EventState::NORMAL, 0))
     } else if current == EventState::OFFNORMAL
         && matched
         && last_offnormal_value.is_some_and(|caused| caused != identity)
     {
-        Some(offnormal())
+        Some(offnormal(identity))
     } else {
         None
     };

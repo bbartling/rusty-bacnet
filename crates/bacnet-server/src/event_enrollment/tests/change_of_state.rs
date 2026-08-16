@@ -157,15 +157,11 @@ fn change_of_state_keeps_discrete_datatypes_distinct() {
         ),
     ];
 
-    let mut conditions = Vec::new();
     for (state, value) in cases {
         let evaluation =
             algorithms::eval_change_of_state_struct(&[state], value, EventState::NORMAL, None);
-        conditions.push(evaluation.indication.unwrap().condition);
+        assert_eq!(evaluation.indication.unwrap().condition, 0);
     }
-    conditions.sort_unstable();
-    conditions.dedup();
-    assert_eq!(conditions.len(), 4);
 
     assert!(algorithms::eval_change_of_state_struct(
         &[BACnetPropertyStates::BinaryValue(1)],
