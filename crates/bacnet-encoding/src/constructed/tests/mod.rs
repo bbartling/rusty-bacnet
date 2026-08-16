@@ -173,6 +173,9 @@ fn property_state_validates_boolean_integer_and_tag_forms() {
         );
     }
     assert!(decode_property_state(&raw_property_state(41, &[0; 5]), 0).is_err());
+    for content in [&[0x00, 0x01][..], &[0xFF, 0x80]] {
+        assert!(decode_property_state(&raw_property_state(41, content), 0).is_err());
+    }
 
     let mut application = BytesMut::new();
     primitives::encode_app_unsigned(&mut application, 1);

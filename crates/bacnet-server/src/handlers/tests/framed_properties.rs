@@ -235,6 +235,60 @@ fn extended_fault_parameters_with_tag_like_payload_round_trip() {
 }
 
 #[test]
+fn defined_preserved_character_sets_round_trip_over_wire() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+    let ucs4_a = vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41];
+
+    for (property, value) in [
+        (
+            PropertyIdentifier::EVENT_PARAMETERS,
+            BACnetEventParameter::Extended {
+                vendor_id: 1,
+                extended_event_type: 2,
+                parameters: ucs4_a.clone(),
+            },
+        ),
+        (
+            PropertyIdentifier::EVENT_PARAMETERS,
+            BACnetEventParameter::Opaque {
+                tag: 200,
+                data: ucs4_a.clone(),
+            },
+        ),
+    ] {
+        let mut framed = BytesMut::new();
+        bacnet_encoding::constructed::encode_event_parameter(&mut framed, &value).unwrap();
+        write_framed(&mut db, oid, property, framed.to_vec()).unwrap();
+        assert_eq!(read_raw(&db, oid, property), framed.to_vec());
+    }
+
+    let mut framed = BytesMut::new();
+    bacnet_encoding::constructed::encode_fault_parameters(
+        &mut framed,
+        &FaultParameters::FaultExtended {
+            vendor_id: 1,
+            extended_fault_type: 2,
+            parameters: ucs4_a,
+        },
+    )
+    .unwrap();
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        framed.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        framed.to_vec()
+    );
+}
+
+#[test]
 fn malformed_legacy_fault_parameters_preserve_existing_value() {
     let mut db = ObjectDatabase::new();
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();

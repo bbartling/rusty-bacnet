@@ -39,6 +39,15 @@ use super::{
 
 /// Encode a [`FaultParameters`] as its full CHOICE framing.
 pub fn encode_fault_parameters(buf: &mut BytesMut, value: &FaultParameters) -> Result<(), Error> {
+    let mut encoded = BytesMut::new();
+    encode_fault_parameters_into(&mut encoded, value)?;
+    super::validate_tlv_sequence(&encoded, "FaultParameters")
+        .map_err(|error| Error::Encoding(error.to_string()))?;
+    buf.extend_from_slice(&encoded);
+    Ok(())
+}
+
+fn encode_fault_parameters_into(buf: &mut BytesMut, value: &FaultParameters) -> Result<(), Error> {
     use FaultParameters as F;
     match value {
         F::FaultNone => {

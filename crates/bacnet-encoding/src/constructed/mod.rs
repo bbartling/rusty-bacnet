@@ -414,7 +414,7 @@ pub fn decode_property_state(
         38 => S::LightingInProgress(unsigned()?),
         39 => S::LightingOperation(unsigned()?),
         40 => S::LightingTransition(unsigned()?),
-        41 => S::IntegerValue(primitives::decode_signed(content)?),
+        41 => S::IntegerValue(primitives::decode_signed_canonical(content)?),
         42 => S::BinaryLightingValue(unsigned()?),
         43 => S::TimerState(unsigned()?),
         44 => S::TimerTransition(unsigned()?),
@@ -562,6 +562,8 @@ pub(crate) fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error
             let (inner, next) = tags::extract_context_value(data, content, tag.number)?;
             validate_tlv_sequence(inner, what)?;
             offset = next;
+        } else if tag.class == TagClass::Application {
+            offset = primitives::validate_application_value(data, offset)?;
         } else {
             let (_, next) = primitives::decode_application_value(data, offset)?;
             offset = next;
@@ -596,8 +598,7 @@ pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<()
             let (_, after_reference) = decode_dopr_body(data, content, what)?;
             offset = expect_closing(data, after_reference, 0, what)?;
         } else {
-            let (_, next) = primitives::decode_application_value(data, offset)?;
-            offset = next;
+            offset = primitives::validate_application_value(data, offset)?;
         }
         count += 1;
     }

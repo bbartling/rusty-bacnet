@@ -79,6 +79,34 @@ fn change_of_state_legacy_form_preserves_corrected_property_states() {
 }
 
 #[test]
+fn change_of_state_accepts_base_flat_integer_state() {
+    let legacy = PropertyValue::List(vec![
+        PropertyValue::Unsigned(event_parameter_tag::CHANGE_OF_STATE as u64),
+        PropertyValue::Unsigned(0),
+        PropertyValue::List(vec![PropertyValue::List(vec![
+            PropertyValue::Unsigned(41),
+            PropertyValue::OctetString(vec![0xFD]),
+        ])]),
+    ]);
+    let expected = BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::IntegerValue(-3)],
+    };
+
+    assert_eq!(BACnetEventParameter::decode(&legacy).unwrap(), expected);
+    let PropertyValue::List(encoded) = expected.encode() else {
+        unreachable!();
+    };
+    let PropertyValue::List(states) = &encoded[2] else {
+        unreachable!();
+    };
+    let PropertyValue::List(integer) = &states[0] else {
+        unreachable!();
+    };
+    assert_eq!(integer.last(), Some(&PropertyValue::Boolean(false)));
+}
+
+#[test]
 fn change_of_bitstring_round_trip() {
     let p = BACnetEventParameter::ChangeOfBitstring {
         time_delay: 4,

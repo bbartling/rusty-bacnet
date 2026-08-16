@@ -190,6 +190,25 @@ fn extended_golden() {
     assert_eq!(end, buf.len());
 }
 
+#[test]
+fn preserved_event_parameters_accept_defined_character_sets() {
+    for character_string in [
+        vec![0x73, 0x01, 0x03, 0x52],
+        vec![0x71, 0x02],
+        vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41],
+    ] {
+        round_trip(&BACnetEventParameter::Extended {
+            vendor_id: 42,
+            extended_event_type: 99,
+            parameters: character_string.clone(),
+        });
+        round_trip(&BACnetEventParameter::Opaque {
+            tag: 200,
+            data: character_string,
+        });
+    }
+}
+
 // --- Per-modeled-alternative round-trips -------------------------------------
 
 #[test]
@@ -409,6 +428,33 @@ fn event_parameter_choice_tag_forms_are_enforced() {
             assert!(encode_event_parameter(&mut untouched, &value).is_err());
             assert_eq!(untouched.as_ref(), &[0xaa]);
         }
+    }
+}
+
+#[test]
+fn event_parameter_encoder_accounts_for_outer_nesting_atomically() {
+    let mut deepest_opaque_body = vec![0x0e; tags::MAX_CONTEXT_NESTING_DEPTH];
+    deepest_opaque_body.extend(vec![0x0f; tags::MAX_CONTEXT_NESTING_DEPTH]);
+
+    let property_body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
+    let mut deepest_property_body = vec![0x0e; property_body_depth];
+    deepest_property_body.extend(vec![0x0f; property_body_depth]);
+
+    for value in [
+        BACnetEventParameter::Opaque {
+            tag: 200,
+            data: deepest_opaque_body,
+        },
+        BACnetEventParameter::ChangeOfState {
+            time_delay: 0,
+            list_of_values: vec![BACnetPropertyStates::Other(
+                BACnetProprietaryPropertyState::constructed(64, deepest_property_body).unwrap(),
+            )],
+        },
+    ] {
+        let mut untouched = BytesMut::from(&[0xaa][..]);
+        assert!(encode_event_parameter(&mut untouched, &value).is_err());
+        assert_eq!(untouched.as_ref(), &[0xaa]);
     }
 }
 

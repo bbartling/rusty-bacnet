@@ -134,3 +134,20 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
     assert!(malformed.encode(&mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa]);
 }
+
+#[test]
+fn change_of_state_encoder_accounts_for_outer_nesting_atomically() {
+    let body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
+    let mut body = vec![0x0e; body_depth];
+    body.extend(vec![0x0f; body_depth]);
+    let value = NotificationParameters::ChangeOfState {
+        new_state: BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
+        ),
+        status_flags: 0,
+    };
+
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(value.encode(&mut untouched).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}

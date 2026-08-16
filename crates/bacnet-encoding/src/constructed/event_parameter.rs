@@ -59,9 +59,21 @@ const MODELED_EVENT_TAGS: [u8; 6] = [0, 1, 2, 4, 5, 9];
 
 /// Encode a [`BACnetEventParameter`] as its full CHOICE framing.
 ///
-/// A ChangeOfState value with a malformed constructed proprietary state is
-/// rejected before its alternative is written to `buf`.
+/// Validation includes the complete framing depth. Errors leave `buf`
+/// unchanged.
 pub fn encode_event_parameter(
+    buf: &mut BytesMut,
+    value: &BACnetEventParameter,
+) -> Result<(), Error> {
+    let mut encoded = BytesMut::new();
+    encode_event_parameter_into(&mut encoded, value)?;
+    validate_tlv_sequence(&encoded, "BACnetEventParameter")
+        .map_err(|error| Error::Encoding(error.to_string()))?;
+    buf.extend_from_slice(&encoded);
+    Ok(())
+}
+
+fn encode_event_parameter_into(
     buf: &mut BytesMut,
     value: &BACnetEventParameter,
 ) -> Result<(), Error> {

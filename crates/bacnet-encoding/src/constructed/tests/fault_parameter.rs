@@ -93,6 +93,22 @@ fn fault_state_encode_rejects_malformed_proprietary_body_atomically() {
 }
 
 #[test]
+fn fault_state_encoder_accounts_for_outer_nesting_atomically() {
+    let body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
+    let mut body = vec![0x0e; body_depth];
+    body.extend(vec![0x0f; body_depth]);
+    let value = FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
+        )],
+    };
+
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(encode_fault_parameters(&mut untouched, &value).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+}
+
+#[test]
 fn fault_character_string_golden() {
     let value = FaultParameters::FaultCharacterString {
         fault_values: vec!["alarm".to_string()],
@@ -160,6 +176,15 @@ fn fault_extended_reference_parameter_round_trip() {
         vendor_id: 42,
         extended_fault_type: 7,
         parameters: parameters.to_vec(),
+    });
+}
+
+#[test]
+fn fault_extended_accepts_ucs4_character_strings() {
+    round_trip(&FaultParameters::FaultExtended {
+        vendor_id: 42,
+        extended_fault_type: 7,
+        parameters: vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41],
     });
 }
 

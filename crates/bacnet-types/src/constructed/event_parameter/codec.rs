@@ -16,16 +16,23 @@ pub(super) fn bitstring_pv((unused_bits, data): (u8, Vec<u8>)) -> PropertyValue 
 ///
 /// `BACnetPropertyStates` is itself a CHOICE; absent full context-tagged
 /// framing we carry its discriminant as the low byte and the raw payload as an
-/// octet string. Constructed proprietary values add a trailing `Boolean(true)`
-/// marker so the flat compatibility form retains their tag form.
+/// octet string. A trailing Boolean distinguishes newly typed alternatives
+/// from their old raw form and primitive from constructed proprietary values.
 pub(super) fn property_state_pv(state: &BACnetPropertyStates) -> PropertyValue {
     let (tag, data) = property_state_parts(state);
     let mut items = vec![
         PropertyValue::Unsigned(tag as u64),
         PropertyValue::OctetString(data),
     ];
-    if matches!(state, BACnetPropertyStates::Other(value) if value.is_constructed()) {
-        items.push(PropertyValue::Boolean(true));
+    match state {
+        BACnetPropertyStates::Other(value) if value.is_constructed() => {
+            items.push(PropertyValue::Boolean(true));
+        }
+        BACnetPropertyStates::Other(_) => {}
+        _ if !matches!(tag, 0..=18 | 38..=40 | 42) => {
+            items.push(PropertyValue::Boolean(false));
+        }
+        _ => {}
     }
     PropertyValue::List(items)
 }
@@ -260,29 +267,62 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
     let PropertyValue::Unsigned(tag) = tag_pv else {
         return Err(Error::decoding(0, "property state tag not Unsigned"));
     };
-    let (data, constructed) = match rest {
-        [PropertyValue::OctetString(data)] => (data.clone(), false),
-        [PropertyValue::OctetString(data), PropertyValue::Boolean(true)] => (data.clone(), true),
+    let (data, marker) = match rest {
+        [PropertyValue::OctetString(data)] => (data.clone(), None),
+        [PropertyValue::OctetString(data), PropertyValue::Boolean(marker)] => {
+            (data.clone(), Some(*marker))
+        }
         _ => return Err(Error::decoding(1, "property state data not octets")),
-    };
-    let read_u32 = |data: &[u8]| -> Result<u32, Error> {
-        data.try_into()
-            .map(u32::from_le_bytes)
-            .map_err(|_| Error::decoding(1, "property state data wrong length"))
-    };
-    let read_i32 = |data: &[u8]| -> Result<i32, Error> {
-        data.try_into()
-            .map(i32::from_le_bytes)
-            .map_err(|_| Error::decoding(1, "property state data wrong length"))
     };
     let tag =
         u8::try_from(*tag).map_err(|_| Error::decoding(0, "property state tag exceeds u8"))?;
+    let constructed = marker == Some(true);
+    let typed_marker = marker == Some(false);
+    let old_typed_tag = matches!(tag, 0..=18 | 38..=40 | 42);
+    if typed_marker && (old_typed_tag || tag >= 64) {
+        return Err(Error::decoding(1, "unexpected typed property state marker"));
+    }
     if constructed && !(64..=254).contains(&tag) {
         return Err(Error::decoding(
             0,
             "constructed property state requires a proprietary tag",
         ));
     }
+    let legacy_wire = marker.is_none() && !old_typed_tag && tag < 64;
+    let read_u32 = |data: &[u8]| -> Result<u32, Error> {
+        if legacy_wire {
+            if data.is_empty() || data.len() > 4 {
+                return Err(Error::decoding(1, "property state data wrong length"));
+            }
+            return Ok(data
+                .iter()
+                .fold(0u32, |value, octet| (value << 8) | u32::from(*octet)));
+        }
+        data.try_into()
+            .map(u32::from_le_bytes)
+            .map_err(|_| Error::decoding(1, "property state data wrong length"))
+    };
+    let read_i32 = |data: &[u8]| -> Result<i32, Error> {
+        if legacy_wire {
+            if data.is_empty()
+                || data.len() > 4
+                || (data.len() > 1
+                    && ((data[0] == 0 && data[1] & 0x80 == 0)
+                        || (data[0] == 0xFF && data[1] & 0x80 != 0)))
+            {
+                return Err(Error::decoding(
+                    1,
+                    "property state signed data is not canonical",
+                ));
+            }
+            let mut bytes = [if data[0] & 0x80 == 0 { 0 } else { 0xFF }; 4];
+            bytes[4 - data.len()..].copy_from_slice(data);
+            return Ok(i32::from_be_bytes(bytes));
+        }
+        data.try_into()
+            .map(i32::from_le_bytes)
+            .map_err(|_| Error::decoding(1, "property state data wrong length"))
+    };
     Ok(match tag {
         0 => match data.as_slice() {
             [0] => BACnetPropertyStates::BooleanValue(false),

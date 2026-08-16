@@ -27,14 +27,24 @@ impl NotificationParameters {
             } => {
                 let mut encoded_state = BytesMut::new();
                 encode_property_states(&mut encoded_state, new_state)?;
-                tags::encode_opening_tag(buf, 1);
+                let mut framed = BytesMut::new();
+                tags::encode_opening_tag(&mut framed, 1);
+                let body_start = framed.len();
                 // [0] new-state: BACnetPropertyStates — wrapped in opening/closing [0]
-                tags::encode_opening_tag(buf, 0);
-                buf.extend_from_slice(&encoded_state);
-                tags::encode_closing_tag(buf, 0);
+                tags::encode_opening_tag(&mut framed, 0);
+                framed.extend_from_slice(&encoded_state);
+                tags::encode_closing_tag(&mut framed, 0);
                 // [1] status-flags
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
-                tags::encode_closing_tag(buf, 1);
+                primitives::encode_ctx_bit_string(&mut framed, 1, 4, &[*status_flags << 4]);
+                tags::encode_closing_tag(&mut framed, 1);
+                let (_, end) = tags::extract_context_value(&framed, body_start, 1)?;
+                if end != framed.len() {
+                    return Err(Error::decoding(
+                        end,
+                        "change-of-state notification has trailing data",
+                    ));
+                }
+                buf.extend_from_slice(&framed);
             }
             Self::ChangeOfValue {
                 new_value,
