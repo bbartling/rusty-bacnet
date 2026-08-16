@@ -534,9 +534,59 @@ fn raw_fields_require_encoded_bacnet_values() {
         extended_event_type: 7,
         parameters: vec![0x9f],
     };
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(invalid.encode(&mut untouched).is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 9);
+    primitives::encode_ctx_unsigned(&mut raw, 0, 42);
+    primitives::encode_ctx_unsigned(&mut raw, 1, 7);
+    tags::encode_opening_tag(&mut raw, 2);
+    raw.extend_from_slice(&[0x9f]);
+    tags::encode_closing_tag(&mut raw, 2);
+    tags::encode_closing_tag(&mut raw, 9);
+    assert!(decode_variant(&raw).is_err());
+}
+
+#[test]
+fn event_notification_enforces_total_nesting_on_encode_and_decode() {
+    use bacnet_types::constructed::BACnetProprietaryPropertyState;
+
+    let change_of_state = |body_depth| {
+        let mut body = vec![0x0e; body_depth];
+        body.extend(vec![0x0f; body_depth]);
+        NotificationParameters::ChangeOfState {
+            new_state: BACnetPropertyStates::Other(
+                BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
+            ),
+            status_flags: 0,
+        }
+    };
+
+    let accepted = event_request(change_of_state(tags::MAX_CONTEXT_NESTING_DEPTH - 4));
     let mut encoded = BytesMut::new();
-    invalid.encode(&mut encoded).unwrap();
-    assert!(decode_variant(&encoded).is_err());
+    accepted.encode(&mut encoded).unwrap();
+    assert!(EventNotificationRequest::decode(&encoded).is_ok());
+
+    let too_deep_parameters = change_of_state(tags::MAX_CONTEXT_NESTING_DEPTH - 3);
+    let mut parameters = BytesMut::new();
+    too_deep_parameters.encode(&mut parameters).unwrap();
+
+    let mut untouched = BytesMut::from(&[0xaa][..]);
+    assert!(event_request(too_deep_parameters.clone())
+        .encode(&mut untouched)
+        .is_err());
+    assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut without_values = event_request(too_deep_parameters);
+    without_values.event_values = None;
+    let mut raw = BytesMut::new();
+    without_values.encode(&mut raw).unwrap();
+    tags::encode_opening_tag(&mut raw, 12);
+    raw.extend_from_slice(&parameters);
+    tags::encode_closing_tag(&mut raw, 12);
+    assert!(EventNotificationRequest::decode(&raw).is_err());
 }
 
 #[test]

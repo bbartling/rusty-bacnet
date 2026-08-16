@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::validate_tlv_sequence;
 
 impl NotificationParameters {
     /// Encode notification parameters into the buffer.
@@ -6,6 +7,15 @@ impl NotificationParameters {
     /// Each variant is wrapped in its own opening/closing tag pair
     /// matching the variant's context tag number.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let mut encoded = BytesMut::new();
+        self.encode_into(&mut encoded)?;
+        validate_tlv_sequence(&encoded, "NotificationParameters")
+            .map_err(|error| Error::Encoding(error.to_string()))?;
+        buf.extend_from_slice(&encoded);
+        Ok(())
+    }
+
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
         match self {
             Self::ChangeOfBitstring {
                 referenced_bitstring,
@@ -25,26 +35,14 @@ impl NotificationParameters {
                 new_state,
                 status_flags,
             } => {
-                let mut encoded_state = BytesMut::new();
-                encode_property_states(&mut encoded_state, new_state)?;
-                let mut framed = BytesMut::new();
-                tags::encode_opening_tag(&mut framed, 1);
-                let body_start = framed.len();
+                tags::encode_opening_tag(buf, 1);
                 // [0] new-state: BACnetPropertyStates — wrapped in opening/closing [0]
-                tags::encode_opening_tag(&mut framed, 0);
-                framed.extend_from_slice(&encoded_state);
-                tags::encode_closing_tag(&mut framed, 0);
+                tags::encode_opening_tag(buf, 0);
+                encode_property_states(buf, new_state)?;
+                tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
-                primitives::encode_ctx_bit_string(&mut framed, 1, 4, &[*status_flags << 4]);
-                tags::encode_closing_tag(&mut framed, 1);
-                let (_, end) = tags::extract_context_value(&framed, body_start, 1)?;
-                if end != framed.len() {
-                    return Err(Error::decoding(
-                        end,
-                        "change-of-state notification has trailing data",
-                    ));
-                }
-                buf.extend_from_slice(&framed);
+                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                tags::encode_closing_tag(buf, 1);
             }
             Self::ChangeOfValue {
                 new_value,

@@ -546,8 +546,11 @@ pub(crate) fn decode_dopr_body(
     ))
 }
 
-/// Validate a preserved SEQUENCE body without normalizing its encoded values.
-pub(crate) fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error> {
+/// Validate a BACnet TLV sequence without normalizing its encoded values.
+///
+/// This checks matching context tags, the context nesting limit, and
+/// application-value forms while preserving defined CharacterString encodings.
+pub fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error> {
     let mut offset = 0;
     let mut count = 0;
     while offset < data.len() {

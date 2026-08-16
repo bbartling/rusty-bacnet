@@ -433,12 +433,32 @@ fn event_parameter_choice_tag_forms_are_enforced() {
 
 #[test]
 fn event_parameter_encoder_accounts_for_outer_nesting_atomically() {
+    let mut accepted_opaque_body = vec![0x0e; tags::MAX_CONTEXT_NESTING_DEPTH - 1];
+    accepted_opaque_body.extend(vec![0x0f; tags::MAX_CONTEXT_NESTING_DEPTH - 1]);
+    round_trip(&BACnetEventParameter::Opaque {
+        tag: 200,
+        data: accepted_opaque_body,
+    });
+
+    let accepted_property_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 3;
+    let mut accepted_property_body = vec![0x0e; accepted_property_depth];
+    accepted_property_body.extend(vec![0x0f; accepted_property_depth]);
+    round_trip(&BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, accepted_property_body).unwrap(),
+        )],
+    });
+
     let mut deepest_opaque_body = vec![0x0e; tags::MAX_CONTEXT_NESTING_DEPTH];
     deepest_opaque_body.extend(vec![0x0f; tags::MAX_CONTEXT_NESTING_DEPTH]);
 
     let property_body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
     let mut deepest_property_body = vec![0x0e; property_body_depth];
     deepest_property_body.extend(vec![0x0f; property_body_depth]);
+    let too_deep_property_state = BACnetPropertyStates::Other(
+        BACnetProprietaryPropertyState::constructed(64, deepest_property_body).unwrap(),
+    );
 
     for value in [
         BACnetEventParameter::Opaque {
@@ -447,15 +467,22 @@ fn event_parameter_encoder_accounts_for_outer_nesting_atomically() {
         },
         BACnetEventParameter::ChangeOfState {
             time_delay: 0,
-            list_of_values: vec![BACnetPropertyStates::Other(
-                BACnetProprietaryPropertyState::constructed(64, deepest_property_body).unwrap(),
-            )],
+            list_of_values: vec![too_deep_property_state.clone()],
         },
     ] {
         let mut untouched = BytesMut::from(&[0xaa][..]);
         assert!(encode_event_parameter(&mut untouched, &value).is_err());
         assert_eq!(untouched.as_ref(), &[0xaa]);
     }
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 1);
+    primitives::encode_ctx_unsigned(&mut raw, 0, 0);
+    tags::encode_opening_tag(&mut raw, 1);
+    encode_property_state(&mut raw, &too_deep_property_state).unwrap();
+    tags::encode_closing_tag(&mut raw, 1);
+    tags::encode_closing_tag(&mut raw, 1);
+    assert!(decode_event_parameter(&raw, 0).is_err());
 }
 
 #[test]

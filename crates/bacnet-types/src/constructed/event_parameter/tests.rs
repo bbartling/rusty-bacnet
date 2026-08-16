@@ -53,11 +53,20 @@ fn change_of_state_legacy_form_preserves_corrected_property_states() {
     let states = vec![
         BACnetPropertyStates::RestartReason(1),
         BACnetPropertyStates::DoorAlarmState(2),
-        BACnetPropertyStates::LightingTransition(3),
-        BACnetPropertyStates::IntegerValue(-4),
-        BACnetPropertyStates::TimerState(5),
-        BACnetPropertyStates::LiftCarDirection(6),
-        BACnetPropertyStates::AuditOperation(7),
+        BACnetPropertyStates::Action(3),
+        BACnetPropertyStates::DoorSecuredStatus(4),
+        BACnetPropertyStates::DoorStatus(5),
+        BACnetPropertyStates::DoorValue(6),
+        BACnetPropertyStates::LightingInProgress(7),
+        BACnetPropertyStates::LightingOperation(8),
+        BACnetPropertyStates::LightingTransition(9),
+        BACnetPropertyStates::IntegerValue(-10),
+        BACnetPropertyStates::BinaryLightingValue(11),
+        BACnetPropertyStates::TimerState(12),
+        BACnetPropertyStates::TimerTransition(13),
+        BACnetPropertyStates::LiftCarDirection(14),
+        BACnetPropertyStates::LiftCarDoorCommand(15),
+        BACnetPropertyStates::AuditOperation(16),
         BACnetPropertyStates::ExtendedValue(
             BACnetExtendedPropertyState::from_encoded(25_500_008).unwrap(),
         ),
@@ -76,6 +85,48 @@ fn change_of_state_legacy_form_preserves_corrected_property_states() {
         BACnetEventParameter::decode(&parameters.encode()).unwrap(),
         parameters
     );
+}
+
+#[test]
+fn change_of_state_accepts_every_base_flat_property_state() {
+    let base_states = [
+        (0, BACnetPropertyStates::BooleanValue(true)),
+        (1, BACnetPropertyStates::BinaryValue(7)),
+        (2, BACnetPropertyStates::EventType(7)),
+        (3, BACnetPropertyStates::Polarity(7)),
+        (4, BACnetPropertyStates::ProgramChange(7)),
+        (5, BACnetPropertyStates::ProgramState(7)),
+        (6, BACnetPropertyStates::ReasonForHalt(7)),
+        (7, BACnetPropertyStates::Reliability(7)),
+        (8, BACnetPropertyStates::State(7)),
+        (9, BACnetPropertyStates::SystemStatus(7)),
+        (10, BACnetPropertyStates::Units(7)),
+        (11, BACnetPropertyStates::UnsignedValue(7)),
+        (12, BACnetPropertyStates::LifeSafetyMode(7)),
+        (13, BACnetPropertyStates::LifeSafetyState(7)),
+        (14, BACnetPropertyStates::DoorAlarmState(7)),
+        (15, BACnetPropertyStates::Action(7)),
+        (16, BACnetPropertyStates::DoorSecuredStatus(7)),
+        (17, BACnetPropertyStates::DoorStatus(7)),
+        (18, BACnetPropertyStates::DoorValue(7)),
+        (38, BACnetPropertyStates::TimerState(7)),
+        (39, BACnetPropertyStates::TimerTransition(7)),
+        (40, BACnetPropertyStates::LiftCarDirection(7)),
+        (42, BACnetPropertyStates::LiftCarDoorCommand(7)),
+    ];
+
+    for (tag, expected) in base_states {
+        let data = if tag == 0 {
+            vec![1]
+        } else {
+            7u32.to_le_bytes().to_vec()
+        };
+        let flat = PropertyValue::List(vec![
+            PropertyValue::Unsigned(tag),
+            PropertyValue::OctetString(data),
+        ]);
+        assert_eq!(property_state_from_pv(&flat).unwrap(), expected);
+    }
 }
 
 #[test]

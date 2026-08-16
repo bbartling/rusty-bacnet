@@ -16,8 +16,8 @@ pub(super) fn bitstring_pv((unused_bits, data): (u8, Vec<u8>)) -> PropertyValue 
 ///
 /// `BACnetPropertyStates` is itself a CHOICE; absent full context-tagged
 /// framing we carry its discriminant as the low byte and the raw payload as an
-/// octet string. A trailing Boolean distinguishes newly typed alternatives
-/// from their old raw form and primitive from constructed proprietary values.
+/// octet string. A trailing Boolean distinguishes current alternatives whose
+/// tags had different legacy meanings and marks constructed proprietary values.
 pub(super) fn property_state_pv(state: &BACnetPropertyStates) -> PropertyValue {
     let (tag, data) = property_state_parts(state);
     let mut items = vec![
@@ -29,7 +29,7 @@ pub(super) fn property_state_pv(state: &BACnetPropertyStates) -> PropertyValue {
             items.push(PropertyValue::Boolean(true));
         }
         BACnetPropertyStates::Other(_) => {}
-        _ if !matches!(tag, 0..=18 | 38..=40 | 42) => {
+        _ if tag >= 14 => {
             items.push(PropertyValue::Boolean(false));
         }
         _ => {}
@@ -279,7 +279,7 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
     let constructed = marker == Some(true);
     let typed_marker = marker == Some(false);
     let old_typed_tag = matches!(tag, 0..=18 | 38..=40 | 42);
-    if typed_marker && (old_typed_tag || tag >= 64) {
+    if typed_marker && !(14..64).contains(&tag) {
         return Err(Error::decoding(1, "unexpected typed property state marker"));
     }
     if constructed && !(64..=254).contains(&tag) {
@@ -323,6 +323,23 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
             .map(i32::from_le_bytes)
             .map_err(|_| Error::decoding(1, "property state data wrong length"))
     };
+    if marker.is_none() {
+        let legacy = match tag {
+            14 => Some(BACnetPropertyStates::DoorAlarmState(read_u32(&data)?)),
+            15 => Some(BACnetPropertyStates::Action(read_u32(&data)?)),
+            16 => Some(BACnetPropertyStates::DoorSecuredStatus(read_u32(&data)?)),
+            17 => Some(BACnetPropertyStates::DoorStatus(read_u32(&data)?)),
+            18 => Some(BACnetPropertyStates::DoorValue(read_u32(&data)?)),
+            38 => Some(BACnetPropertyStates::TimerState(read_u32(&data)?)),
+            39 => Some(BACnetPropertyStates::TimerTransition(read_u32(&data)?)),
+            40 => Some(BACnetPropertyStates::LiftCarDirection(read_u32(&data)?)),
+            42 => Some(BACnetPropertyStates::LiftCarDoorCommand(read_u32(&data)?)),
+            _ => None,
+        };
+        if let Some(state) = legacy {
+            return Ok(state);
+        }
+    }
     Ok(match tag {
         0 => match data.as_slice() {
             [0] => BACnetPropertyStates::BooleanValue(false),

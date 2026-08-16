@@ -5,6 +5,7 @@ use super::decode_helpers::{
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::*;
 use crate::common::{decode_context, decode_context_u32};
+use bacnet_encoding::constructed::validate_tlv_sequence;
 
 impl NotificationParameters {
     /// Decode one notification-parameter choice, with an optional enclosing `[12]` close.
@@ -22,6 +23,10 @@ impl NotificationParameters {
         let data = data
             .get(..end)
             .ok_or_else(|| Error::decoding(end, "NotificationParameters boundary exceeds input"))?;
+        let framed = data.get(offset..).ok_or_else(|| {
+            Error::decoding(offset, "NotificationParameters offset exceeds input")
+        })?;
+        validate_tlv_sequence(framed, "NotificationParameters")?;
         // Peek the inner opening tag to determine the variant
         if offset >= data.len() {
             return Err(Error::decoding(

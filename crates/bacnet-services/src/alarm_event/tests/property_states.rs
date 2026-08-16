@@ -137,17 +137,42 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
 
 #[test]
 fn change_of_state_encoder_accounts_for_outer_nesting_atomically() {
+    let accepted_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 3;
+    let mut accepted_body = vec![0x0e; accepted_depth];
+    accepted_body.extend(vec![0x0f; accepted_depth]);
+    let accepted = NotificationParameters::ChangeOfState {
+        new_state: BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, accepted_body).unwrap(),
+        ),
+        status_flags: 0,
+    };
+    let mut encoded = BytesMut::new();
+    accepted.encode(&mut encoded).unwrap();
+    assert_eq!(
+        NotificationParameters::decode(&encoded, 0).unwrap(),
+        accepted
+    );
+
     let body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
     let mut body = vec![0x0e; body_depth];
     body.extend(vec![0x0f; body_depth]);
+    let too_deep_state =
+        BACnetPropertyStates::Other(BACnetProprietaryPropertyState::constructed(64, body).unwrap());
     let value = NotificationParameters::ChangeOfState {
-        new_state: BACnetPropertyStates::Other(
-            BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
-        ),
+        new_state: too_deep_state.clone(),
         status_flags: 0,
     };
 
     let mut untouched = BytesMut::from(&[0xaa][..]);
     assert!(value.encode(&mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 1);
+    tags::encode_opening_tag(&mut raw, 0);
+    bacnet_encoding::constructed::encode_property_state(&mut raw, &too_deep_state).unwrap();
+    tags::encode_closing_tag(&mut raw, 0);
+    primitives::encode_ctx_bit_string(&mut raw, 1, 4, &[0]);
+    tags::encode_closing_tag(&mut raw, 1);
+    assert!(NotificationParameters::decode(&raw, 0).is_err());
 }

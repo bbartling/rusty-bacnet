@@ -349,5 +349,7 @@ pub fn decode_fault_parameters(
             ));
         }
     };
-    Ok(value)
+    let (value, end) = value;
+    super::validate_tlv_sequence(&data[offset..end], what)?;
+    Ok((value, end))
 }

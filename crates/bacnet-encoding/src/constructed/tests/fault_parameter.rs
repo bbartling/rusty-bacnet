@@ -94,18 +94,35 @@ fn fault_state_encode_rejects_malformed_proprietary_body_atomically() {
 
 #[test]
 fn fault_state_encoder_accounts_for_outer_nesting_atomically() {
+    let accepted_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 3;
+    let mut accepted_body = vec![0x0e; accepted_depth];
+    accepted_body.extend(vec![0x0f; accepted_depth]);
+    round_trip(&FaultParameters::FaultState {
+        fault_values: vec![BACnetPropertyStates::Other(
+            BACnetProprietaryPropertyState::constructed(64, accepted_body).unwrap(),
+        )],
+    });
+
     let body_depth = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
     let mut body = vec![0x0e; body_depth];
     body.extend(vec![0x0f; body_depth]);
+    let too_deep_state =
+        BACnetPropertyStates::Other(BACnetProprietaryPropertyState::constructed(64, body).unwrap());
     let value = FaultParameters::FaultState {
-        fault_values: vec![BACnetPropertyStates::Other(
-            BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
-        )],
+        fault_values: vec![too_deep_state.clone()],
     };
 
     let mut untouched = BytesMut::from(&[0xaa][..]);
     assert!(encode_fault_parameters(&mut untouched, &value).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa]);
+
+    let mut raw = BytesMut::new();
+    tags::encode_opening_tag(&mut raw, 4);
+    tags::encode_opening_tag(&mut raw, 0);
+    encode_property_state(&mut raw, &too_deep_state).unwrap();
+    tags::encode_closing_tag(&mut raw, 0);
+    tags::encode_closing_tag(&mut raw, 4);
+    assert!(decode_fault_parameters(&raw, 0).is_err());
 }
 
 #[test]

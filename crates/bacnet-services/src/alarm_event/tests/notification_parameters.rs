@@ -570,7 +570,7 @@ fn notification_params_change_of_reliability_round_trip() {
     let params = NotificationParameters::ChangeOfReliability {
         reliability: 7,
         status_flags: 0b0100,
-        property_values: vec![0x01, 0x02],
+        property_values: vec![0x21, 0x02],
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -585,7 +585,7 @@ fn notification_params_change_of_reliability_round_trip() {
         } => {
             assert_eq!(reliability, 7);
             assert_eq!(status_flags, 0b0100);
-            assert_eq!(property_values, vec![0x01, 0x02]);
+            assert_eq!(property_values, vec![0x21, 0x02]);
         }
         other => panic!("expected ChangeOfReliability, got {:?}", other),
     }

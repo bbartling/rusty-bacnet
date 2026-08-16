@@ -502,5 +502,7 @@ pub fn decode_event_parameter(
             )
         }
     };
-    Ok(value)
+    let (value, end) = value;
+    validate_tlv_sequence(&data[offset..end], what)?;
+    Ok((value, end))
 }
