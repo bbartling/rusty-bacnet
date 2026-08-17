@@ -785,6 +785,8 @@ mod event_enrollment_task_tests;
 #[cfg(test)]
 mod event_notifications_tests;
 #[cfg(test)]
+mod event_recipient_routing_tests;
+#[cfg(test)]
 mod segmentation_tests;
 #[cfg(test)]
 mod tests;
