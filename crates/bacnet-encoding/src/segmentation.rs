@@ -32,15 +32,19 @@ pub fn max_segment_payload(max_apdu_length: u16, pdu_type: SegmentedPduType) -> 
 
 /// Split a payload into segments of at most `max_segment_size` bytes.
 ///
-/// Always returns at least one segment (possibly empty).
+/// Returns at least one segment (possibly empty) whenever `max_segment_size`
+/// leaves room for one. A zero segment size is an error even for an empty
+/// payload: a segment still costs its PDU header, so a peer whose maximum APDU
+/// cannot hold that header cannot receive a segment at all. Returning a single
+/// empty segment there produced a frame larger than the peer had advertised.
 pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Result<Vec<Bytes>, Error> {
-    if payload.is_empty() {
-        return Ok(vec![Bytes::new()]);
-    }
     if max_segment_size == 0 {
         return Err(Error::Segmentation(
-            "non-empty payload cannot be segmented with max segment size 0".into(),
+            "payload cannot be segmented with max segment size 0".into(),
         ));
+    }
+    if payload.is_empty() {
+        return Ok(vec![Bytes::new()]);
     }
     let segments: Vec<Bytes> = payload
         .chunks(max_segment_size)
@@ -189,6 +193,16 @@ mod tests {
         let segments = split_payload(&[], 100).unwrap();
         assert_eq!(segments.len(), 1);
         assert!(segments[0].is_empty());
+    }
+
+    /// An empty payload is still a segment, and a segment still costs a PDU
+    /// header, so zero capacity cannot carry one. This used to return a single
+    /// empty segment because the empty-payload shortcut ran before the
+    /// zero-size check — which let the client emit a six-octet segmented
+    /// Confirmed-Request to a peer whose advertised maximum was smaller.
+    #[test]
+    fn split_empty_payload_zero_segment_size_errors() {
+        assert!(split_payload(&[], 0).is_err());
     }
 
     #[test]

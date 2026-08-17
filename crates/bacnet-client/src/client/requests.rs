@@ -1,5 +1,40 @@
 use super::*;
 
+/// MinimumMessageSize: the smallest APDU any BACnet device accepts.
+///
+/// Clause 20.1.2.5 spells the max-APDU-length-accepted field's lowest code,
+/// `B'0000'`, as "Up to MinimumMessageSize (50 octets)", and Clause 12.11.18
+/// requires `Max_APDU_Length_Accepted` to be "greater than or equal to 50".
+const MINIMUM_MESSAGE_SIZE: u16 = 50;
+
+/// Reject a maximum transmittable length that no conformant peer could accept.
+///
+/// Clause 5.2.1.2 derives this length as the smallest of the local capability,
+/// the internetwork limit, and "(c) the maximum APDU size accepted by the
+/// remote peer device, which must be at least 50 octets". Below that floor no
+/// conformant APDU can be formed at all.
+///
+/// The check is a floor, not membership of the six values Clause 20.1.2.5
+/// encodes. A discovered peer's length comes from I-Am's `Max APDU Length
+/// Accepted`, which is an Unsigned octet count rather than the four-bit code,
+/// and Clause 5.2.1.2 notes the true value "may be larger than indicated in
+/// this parameter" — so 600 or 1500 are legitimate and must not be rejected.
+///
+/// Failing here rather than clamping up to 50 keeps the client from inventing
+/// a capability the peer never claimed: a device advertising less than 50 is
+/// already non-conformant, and a typed error names that, where a silent clamp
+/// would send it frames it said it cannot hold.
+fn check_transmittable_length(max_apdu: u16) -> Result<(), Error> {
+    if max_apdu < MINIMUM_MESSAGE_SIZE {
+        return Err(Error::Segmentation(format!(
+            "maximum transmittable length {max_apdu} is below the {MINIMUM_MESSAGE_SIZE}-octet \
+             minimum every BACnet device accepts (Clause 5.2.1.2); the peer's advertised \
+             Max APDU Length Accepted is non-conformant"
+        )));
+    }
+    Ok(())
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send a confirmed request and wait for the response.
     ///
@@ -67,6 +102,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     let max_seg = device.and_then(|d| d.max_segments_accepted);
                     (max_apdu.min(target_transport_max_apdu), max_seg)
                 };
+                check_transmittable_length(remote_max_apdu)?;
                 if unsegmented_apdu_size > remote_max_apdu as usize {
                     return self
                         .segmented_confirmed_request(
@@ -81,6 +117,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             ConfirmedTarget::Routed { .. } => {
                 let remote_max_apdu = self.config.max_apdu_length.min(target_transport_max_apdu);
+                check_transmittable_length(remote_max_apdu)?;
                 if unsegmented_apdu_size > remote_max_apdu as usize {
                     return self
                         .segmented_confirmed_request(
