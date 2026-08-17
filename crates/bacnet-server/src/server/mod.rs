@@ -115,13 +115,24 @@ pub struct ServerTsm {
     /// Oneshot senders keyed by peer MAC and invoke ID. When a result arrives
     /// from the dispatch loop, we send it directly — no polling needed.
     pending: HashMap<TsmKey, oneshot::Sender<CovAckResult>>,
+    /// Router MACs learned per remote network, Clause 6.5.3 method 4: "using
+    /// the local broadcast MAC address in the initial transmission to a device
+    /// on a remote DNET and noting the SA associated with any subsequent
+    /// responses from the remote device" (#375). Consulted so later confirmed
+    /// sends to that DNET can unicast to the router instead of broadcasting.
+    routers: HashMap<u16, MacAddr>,
 }
+
+/// Cap on learned router entries; a full cache just means later networks keep
+/// using the (always-correct) broadcast form of Clause 6.5.3.
+const MAX_LEARNED_ROUTERS: usize = 64;
 
 impl ServerTsm {
     fn new() -> Self {
         Self {
             next_invoke_id: 0,
             pending: HashMap::new(),
+            routers: HashMap::new(),
         }
     }
 
@@ -173,6 +184,57 @@ impl ServerTsm {
     fn remove(&mut self, peer: &TsmPeer, invoke_id: u8) {
         self.pending
             .remove(&(peer.0.clone(), peer.1.clone(), invoke_id));
+    }
+
+    /// Correlate an inbound response with the transaction awaiting it (#375).
+    ///
+    /// Three key shapes are tried, most specific first:
+    /// 1. exactly as the sender registered it — the immediate MAC plus any
+    ///    routed identity;
+    /// 2. the router-unknown form — an empty local half with the routed
+    ///    identity, used when the request went out via the Clause 6.5.3
+    ///    broadcast DA and the delivering router's MAC was unknowable at
+    ///    registration;
+    /// 3. the legacy wildcard `(empty, None)`, which nothing registers today
+    ///    but which older callers may still expect.
+    ///
+    /// A hit that carries a routed identity also teaches the router cache:
+    /// the response's immediate MAC is "the SA associated with [a] subsequent
+    /// response from the remote device" (Clause 6.5.3 method 4).
+    fn record_result_correlated(
+        &mut self,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+        invoke_id: u8,
+        result: CovAckResult,
+    ) -> bool {
+        let hit = self.record_result(source_mac, source_network, invoke_id, result)
+            || (source_network.is_some()
+                && self.record_result(&MacAddr::new(), source_network, invoke_id, result))
+            || self.record_result(&MacAddr::new(), None, invoke_id, result);
+        if hit {
+            if let Some(address) = source_network {
+                self.learn_router(address.network, source_mac);
+            }
+        }
+        hit
+    }
+
+    /// Cache `router` as the way to reach `network`, bounded by
+    /// [`MAX_LEARNED_ROUTERS`].
+    fn learn_router(&mut self, network: u16, router: &MacAddr) {
+        if router.is_empty() {
+            return;
+        }
+        if self.routers.len() >= MAX_LEARNED_ROUTERS && !self.routers.contains_key(&network) {
+            return;
+        }
+        self.routers.insert(network, router.clone());
+    }
+
+    /// The learned router MAC for `network`, if any.
+    fn cached_router(&self, network: u16) -> Option<MacAddr> {
+        self.routers.get(&network).cloned()
     }
 }
 
@@ -843,6 +905,8 @@ mod segmentation;
 mod cov_notifications_tests;
 #[cfg(test)]
 mod dcc_event_detection_tests;
+#[cfg(test)]
+mod event_confirmed_routing_tests;
 #[cfg(test)]
 mod event_enable_distribution_tests;
 #[cfg(test)]
