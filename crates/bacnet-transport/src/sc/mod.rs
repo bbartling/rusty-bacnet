@@ -774,6 +774,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     fn max_apdu_length(&self) -> u16 {
         self.effective_max_apdu_length.load(Ordering::Relaxed)
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        mac == BROADCAST_VMAC
+    }
 }
 
 impl<W: WebSocketPort> Drop for ScTransport<W> {

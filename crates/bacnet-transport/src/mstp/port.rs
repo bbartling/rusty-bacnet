@@ -428,6 +428,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
     fn max_apdu_length(&self) -> u16 {
         480
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        mac == [BROADCAST_MAC]
+    }
 }
 
 // ---------------------------------------------------------------------------

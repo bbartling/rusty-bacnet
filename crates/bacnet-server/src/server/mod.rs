@@ -783,6 +783,8 @@ mod event_enable_distribution_tests;
 #[cfg(test)]
 mod event_enrollment_task_tests;
 #[cfg(test)]
+mod event_network_priority_tests;
+#[cfg(test)]
 mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;

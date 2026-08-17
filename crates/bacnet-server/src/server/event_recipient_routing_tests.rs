@@ -59,11 +59,18 @@ impl TransportPort for RoutingTransport {
     fn local_mac(&self) -> &[u8] {
         &[127, 0, 0, 1, 0xBA, 0xC0]
     }
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        mac == LITERAL_BROADCAST_MAC
+    }
 }
+
+/// This test link's literal broadcast MAC — the data-link spelling of a
+/// broadcast (#360), as distinct from the zero-length network-layer form.
+pub(super) const LITERAL_BROADCAST_MAC: &[u8] = &[255, 255, 255, 255, 0xBA, 0xC0];
 
 /// A destination carrying `recipient`, active on every day at every time for
 /// every transition, so only the address shape under test decides the outcome.
-fn destination_for(recipient: BACnetRecipient, confirmed: bool) -> BACnetDestination {
+pub(super) fn destination_for(recipient: BACnetRecipient, confirmed: bool) -> BACnetDestination {
     BACnetDestination {
         recipient,
         issue_confirmed_notifications: confirmed,
@@ -71,7 +78,7 @@ fn destination_for(recipient: BACnetRecipient, confirmed: bool) -> BACnetDestina
     }
 }
 
-fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipient {
+pub(super) fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipient {
     BACnetRecipient::Address(BACnetAddress {
         network_number,
         mac_address: MacAddr::from_slice(mac),
@@ -83,6 +90,15 @@ fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipient {
 async fn distribute_to(
     destinations: Vec<BACnetDestination>,
 ) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+    distribute_with_priority([255, 255, 255], destinations).await
+}
+
+/// [`distribute_to`] with the Notification Class's per-transition Priority
+/// array set, for tests that pin the Table 13-6 NPDU-priority projection.
+pub(super) async fn distribute_with_priority(
+    priority: [u8; 3],
+    destinations: Vec<BACnetDestination>,
+) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
     let transport = RoutingTransport::default();
     let broadcasts = StdArc::clone(&transport.broadcasts);
     let unicasts = StdArc::clone(&transport.unicasts);
@@ -92,6 +108,7 @@ async fn distribute_to(
 
     let mut db = ObjectDatabase::new();
     let mut nc = NotificationClass::new(0, "NC-0").unwrap();
+    nc.priority = priority;
     for destination in destinations {
         nc.add_destination(destination);
     }
@@ -148,9 +165,10 @@ async fn distribute_to(
 
 /// The NPDU destination (DNET/DADR) of a captured frame, or `None` when the
 /// destination specifier bit is clear.
-fn npdu_destination(frame: &Bytes) -> Option<(u16, usize)> {
+pub(super) fn npdu_destination(frame: &Bytes) -> Option<(u16, Vec<u8>)> {
     let npdu = bacnet_encoding::npdu::decode_npdu(frame.clone()).expect("decode NPDU");
-    npdu.destination.map(|d| (d.network, d.mac_address.len()))
+    npdu.destination
+        .map(|d| (d.network, d.mac_address.to_vec()))
 }
 
 /// #185: Clause 12.21 requires a device whose `Recipient_List` is not writable
@@ -193,7 +211,7 @@ async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
     assert!(unicasts.is_empty());
     assert_eq!(
         npdu_destination(&broadcasts[0]),
-        Some((1000, 0)),
+        Some((1000, vec![])),
         "DNET names the remote network and DLEN is zero"
     );
 }
@@ -215,7 +233,7 @@ async fn zero_length_mac_on_network_65535_is_a_global_broadcast() {
     assert!(unicasts.is_empty());
     assert_eq!(
         npdu_destination(&broadcasts[0]),
-        Some((0xFFFF, 0)),
+        Some((0xFFFF, vec![])),
         "DNET is the global broadcast address and DLEN is zero"
     );
 }
@@ -232,23 +250,78 @@ async fn global_broadcast_network_with_a_mac_is_skipped() {
     assert!(unicasts.is_empty());
 }
 
-/// #186: a unicast MAC on a remote network needs a next-hop router, and no
-/// router table is reachable from the server. The recipient is skipped.
+/// #186: a unicast MAC on a remote network goes out as a routed NPDU whose
+/// DNET/DADR name the recipient, sent with a broadcast link DA — Clause
+/// 6.5.3's form for when "the address of the router is initially unknown"
+/// (this non-routing device keeps no router table).
 ///
-/// The point of the test is the second assertion. Sending it as a plain local
-/// unicast — the previous behavior, which discarded `network_number` entirely —
-/// delivers the alarm to whichever device holds that MAC on the *local* link.
+/// The unicast assertion still matters most: the pre-#357 behavior discarded
+/// `network_number` entirely and delivered the alarm to whichever device held
+/// that MAC on the *local* link.
 #[tokio::test]
-async fn remote_unicast_recipient_is_skipped_not_sent_locally() {
+async fn remote_unicast_recipient_routes_via_broadcast_link_da() {
     let mac = [0x0A, 0x00, 0x00, 0x64, 0xBA, 0xC0];
     let (broadcasts, unicasts) =
         distribute_to(vec![destination_for(address_recipient(1000, &mac), false)]).await;
 
-    assert!(broadcasts.is_empty(), "must not fall back to a broadcast");
     assert!(
         unicasts.is_empty(),
         "must not deliver a remote recipient to that MAC on the local link"
     );
+    assert_eq!(broadcasts.len(), 1, "one routed frame on the broadcast DA");
+    assert_eq!(
+        npdu_destination(&broadcasts[0]),
+        Some((1000, mac.to_vec())),
+        "DNET names the remote network and DADR carries the recipient's MAC"
+    );
+}
+
+/// #186/#375: a *confirmed* recipient on a remote network is spec-legal to
+/// send (Clause 6.3's single-device parenthetical) but the server TSM cannot
+/// correlate a routed acknowledgment yet, so it is skipped rather than sent
+/// and mis-retried into duplicate deliveries.
+#[tokio::test]
+async fn confirmed_remote_unicast_recipient_is_skipped() {
+    let mac = [0x0A, 0x00, 0x00, 0x64, 0xBA, 0xC0];
+    let (broadcasts, unicasts) =
+        distribute_to(vec![destination_for(address_recipient(1000, &mac), true)]).await;
+
+    assert!(broadcasts.is_empty());
+    assert!(unicasts.is_empty());
+}
+
+/// #360: a confirmed recipient spelled with the data link's *literal*
+/// broadcast MAC is the same unsatisfiable ask as the zero-length form —
+/// Clause 6.3 permits only unconfirmed PDUs at a broadcast — and must be
+/// skipped, not unicast to the broadcast address.
+#[tokio::test]
+async fn confirmed_recipient_at_literal_broadcast_mac_is_skipped() {
+    let (broadcasts, unicasts) = distribute_to(vec![destination_for(
+        address_recipient(0, LITERAL_BROADCAST_MAC),
+        true,
+    )])
+    .await;
+
+    assert!(
+        unicasts.is_empty(),
+        "a literal broadcast MAC must not be offered to a confirmed unicast send"
+    );
+    assert!(broadcasts.is_empty(), "and must not be broadcast confirmed");
+}
+
+/// #360, the deliverable half: an *unconfirmed* recipient at the literal
+/// broadcast MAC resolves to the same broadcast route as the zero-length
+/// spelling.
+#[tokio::test]
+async fn unconfirmed_recipient_at_literal_broadcast_mac_broadcasts() {
+    let (broadcasts, unicasts) = distribute_to(vec![destination_for(
+        address_recipient(0, LITERAL_BROADCAST_MAC),
+        false,
+    )])
+    .await;
+
+    assert_eq!(broadcasts.len(), 1, "delivered via the broadcast path");
+    assert!(unicasts.is_empty());
 }
 
 /// #125: a device-instance recipient needs a device-to-address binding this

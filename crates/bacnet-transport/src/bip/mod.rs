@@ -613,6 +613,16 @@ impl TransportPort for BipTransport {
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        // Clause J.1.2's B/IP broadcast address is the configured broadcast
+        // IP ("all 1's in the host portion") together with this port's UDP
+        // port — a broadcast IP at a different port belongs to a different
+        // B/IP network and must not be folded into this link's broadcast.
+        mac.len() == 6
+            && mac[..4] == self.broadcast_address.octets()
+            && mac[4..] == self.port.to_be_bytes()
+    }
 }
 
 impl Drop for BipTransport {
