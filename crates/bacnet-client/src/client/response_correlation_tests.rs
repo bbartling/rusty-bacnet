@@ -440,6 +440,47 @@ async fn segmented_ack_for_an_unknown_invoke_id_is_aborted_not_reassembled() {
     link.transport.stop().await.expect("peer transport stops");
 }
 
+/// A stale SegmentACK must not abort a live request that reused its invoke ID.
+///
+/// `release_invoke_id` drops a peer's allocator once every ID is free, so the
+/// next request to an idle peer reuses invoke ID 0. A duplicated SegmentACK
+/// from a finished segmented transfer then lands on a live *unsegmented*
+/// request, which has no `seg_ack_senders` entry — and Clause 5.4.4.3
+/// `SegmentACK_Received` says to "discard the PDU as a duplicate", precisely
+/// so that this client does not abort its own healthy request at the peer.
+#[tokio::test]
+async fn segment_ack_during_an_outstanding_request_is_discarded_not_aborted() {
+    let mut link =
+        PeerLink::issuing(config(), ConfirmedServiceChoice::READ_PROPERTY, vec![0x01]).await;
+    let invoke_id = link.request_invoke_id().await;
+
+    link.send(Apdu::SegmentAck(SegmentAck {
+        negative_ack: false,
+        sent_by_server: true,
+        invoke_id,
+        sequence_number: 0,
+        actual_window_size: 1,
+    }))
+    .await;
+    link.expect_silence("stale SegmentACK during AWAIT_CONFIRMATION")
+        .await;
+
+    // The request must still be alive and answerable.
+    link.send(Apdu::ComplexAck(ComplexAck {
+        segmented: false,
+        more_follows: false,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_ack: Bytes::from_static(b"genuine"),
+    }))
+    .await;
+
+    let payload = link.finish().await.expect("request survives the stale ack");
+    assert_eq!(payload.as_ref(), b"genuine");
+}
+
 #[tokio::test]
 async fn segment_ack_for_an_unknown_invoke_id_is_aborted() {
     let (mut link, mut client) = PeerLink::idle(config()).await;

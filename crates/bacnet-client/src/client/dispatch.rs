@@ -256,8 +256,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     return;
                 }
+                // Which state this client is in for `invoke_id` decides the
+                // answer, and Clause 5.4 gives a different one for each.
                 let invoke_id = sa.invoke_id;
-                let key = (tsm_mac, invoke_id);
+                let key = (tsm_mac.clone(), invoke_id);
                 let delivered = {
                     let senders = seg_ack_senders.lock().await;
                     match senders.get(&key) {
@@ -268,22 +270,50 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         None => false,
                     }
                 };
-                if !delivered {
-                    // The other half of Clause 5.4.4.1
-                    // UnexpectedSegmentInfoReceived: a "BACnet-SegmentACK-PDU
-                    // with 'server' = TRUE" for which this device has no
-                    // outstanding segmented send is the same unexpected
-                    // evidence of an active server TSM, and gets the same
-                    // Abort ('server' = FALSE, INVALID_APDU_IN_THIS_STATE).
-                    debug!(invoke_id, "Aborting SegmentAck for unknown transaction");
-                    Self::send_client_abort(
-                        network,
-                        source_mac,
-                        invoke_id,
-                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
-                    )
-                    .await;
+                if delivered {
+                    // SEGMENTED_REQUEST (5.4.4.2): still sending, so this is
+                    // the flow control the send loop is waiting on.
+                    return;
                 }
+
+                // AWAIT_CONFIRMATION (5.4.4.3) `SegmentACK_Received`: a
+                // transaction is outstanding but its send phase is over, so
+                // the Standard is explicit — "discard the PDU as a duplicate,
+                // and re-enter the current state."
+                //
+                // This case is not hypothetical. `release_invoke_id` drops a
+                // peer's allocator once every ID is free, so the next request
+                // to an idle peer reuses invoke ID 0. A duplicated SegmentACK
+                // from a finished segmented transfer therefore lands on a live
+                // unsegmented request — which has no `seg_ack_senders` entry —
+                // and aborting here would kill this client's own healthy
+                // request at the peer.
+                if tsm
+                    .lock()
+                    .await
+                    .expected_service_choice(&tsm_mac, invoke_id)
+                    .is_some()
+                {
+                    debug!(
+                        invoke_id,
+                        "Discarding duplicate SegmentAck for an outstanding transaction"
+                    );
+                    return;
+                }
+
+                // IDLE (5.4.4.1) `UnexpectedSegmentInfoReceived`: nothing is
+                // outstanding, so a "BACnet-SegmentACK-PDU with 'server' =
+                // TRUE" is unexpected evidence of an active server TSM and
+                // earns the Abort ('server' = FALSE,
+                // INVALID_APDU_IN_THIS_STATE).
+                debug!(invoke_id, "Aborting SegmentAck received while idle");
+                Self::send_client_abort(
+                    network,
+                    source_mac,
+                    invoke_id,
+                    bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                )
+                .await;
             }
         }
     }
