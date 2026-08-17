@@ -126,6 +126,12 @@ impl Fixture {
             .unwrap(),
         ))
         .unwrap();
+        // These objects leave Notification_Class at its default of 0, so class
+        // 0 has to exist and name a recipient for anything to be distributed.
+        db.add(Box::new(
+            super::event_notifications_tests::notification_class_0_broadcasting(),
+        ))
+        .unwrap();
 
         let sent = StdArc::new(StdMutex::new(Vec::new()));
         Self {

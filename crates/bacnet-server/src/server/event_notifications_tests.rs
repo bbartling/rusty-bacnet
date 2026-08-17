@@ -69,6 +69,11 @@ async fn dcc_suppresses_periodic_event_send() {
         .unwrap(),
     ))
     .unwrap();
+    // A recipient that WOULD be broadcast to, so the empty assertion below can
+    // only be satisfied by the DCC gate. Without this the test passes because
+    // no recipient was named, and it stays green even with the gate removed.
+    db.add(Box::new(notification_class_0_broadcasting()))
+        .unwrap();
     let db = Arc::new(tokio::sync::RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
@@ -124,8 +129,52 @@ fn decode_broadcast_notification(sent: &StdMutex<Vec<Bytes>>) -> EventNotificati
     }
 }
 
-/// Build a server fixture: a Device, a NotificationClass (instance `nc`,
-/// empty recipient list so notifications broadcast) with the given
+/// The `Recipient_List` entry Clause 12.21 prescribes for a device whose list
+/// is not writable: a local broadcast (network 0, zero-length MAC), all days,
+/// the full daily window, process identifier 0, unconfirmed, all transitions.
+///
+/// Notifications reach the recording transport's broadcast wire *because this
+/// entry asks them to*. An empty `Recipient_List` names no notification-clients
+/// and so distributes nothing (Clause 13.2.5).
+pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnetDestination {
+    use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
+    use bacnet_types::primitives::Time;
+    BACnetDestination {
+        valid_days: 0b0111_1111,
+        from_time: Time {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            hundredths: 0,
+        },
+        to_time: Time {
+            hour: 23,
+            minute: 59,
+            second: 59,
+            hundredths: 99,
+        },
+        recipient: BACnetRecipient::Address(BACnetAddress {
+            network_number: 0,
+            mac_address: MacAddr::new(),
+        }),
+        process_identifier: 0,
+        issue_confirmed_notifications: false,
+        transitions: 0b0000_0111,
+    }
+}
+
+/// Notification Class instance 0 — the class an object points at when its
+/// `Notification_Class` property is left at its default — carrying the single
+/// local-broadcast recipient from [`local_broadcast_destination`].
+pub(super) fn notification_class_0_broadcasting(
+) -> bacnet_objects::notification_class::NotificationClass {
+    let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
+    nc.add_destination(local_broadcast_destination());
+    nc
+}
+
+/// Build a server fixture: a Device, a NotificationClass (instance `nc`, whose
+/// recipient list holds the Clause 12.21 local-broadcast entry) with the given
 /// per-transition `priority` / `ack_required`, and an AnalogInput whose
 /// `Notification_Class` points at it with `Notify_Type = ALARM`.
 async fn fixture_with_commanded_nc(
@@ -150,12 +199,13 @@ async fn fixture_with_commanded_nc(
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
 
     let mut db = ObjectDatabase::new();
-    // NotificationClass with the configured per-transition arrays and an
-    // empty recipient list, so the notification is broadcast (not per-recipient).
+    // NotificationClass with the configured per-transition arrays and a single
+    // local-broadcast recipient, so the notification lands on the broadcast wire.
     let mut notification_class =
         bacnet_objects::notification_class::NotificationClass::new(nc, "NC").unwrap();
     notification_class.priority = priority;
     notification_class.ack_required = ack_required;
+    notification_class.add_destination(local_broadcast_destination());
     db.add(Box::new(notification_class)).unwrap();
 
     db.add(Box::new(
@@ -327,10 +377,21 @@ async fn event_notification_projects_normal_priority_from_class() {
     );
 }
 
-/// Missing NotificationClass falls back to Priority 255 and no ack, and
-/// the notification is still delivered (not silently dropped).
+/// A `Notification_Class` naming an object that does not exist distributes
+/// nothing.
+///
+/// The Standard does not say what a `Notification_Class` naming a nonexistent
+/// object should do — Clause 13.2.5 governs distribution given a Recipient_List,
+/// and Clause 12 defines the property without a missing-object rule. So this is
+/// a deliberate choice for an undefined configuration, not a mandate.
+///
+/// Silence is the defensible reading: a class that does not exist supplies no
+/// Recipient_List, and 13.2.5 distributes only "to the notification-clients
+/// specified by the Recipient_List input". The alternative was the previous
+/// behavior, where a misconfigured `Notification_Class` broadcast the alarm to
+/// every device on the link.
 #[tokio::test]
-async fn event_notification_missing_class_falls_back_to_defaults() {
+async fn event_notification_missing_class_distributes_nothing() {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let transport = RecordingTransport {
         sent_broadcast: StdArc::clone(&sent),
@@ -385,14 +446,10 @@ async fn event_notification_missing_class_falls_back_to_defaults() {
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
-    assert_eq!(
-        notif.priority, 255,
-        "missing class falls back to lowest priority"
-    );
     assert!(
-        !notif.ack_required,
-        "missing class falls back to no acknowledgement"
+        sent.lock().unwrap().is_empty(),
+        "a Notification_Class that does not exist names no recipients, so \
+         nothing may be distributed"
     );
 }
 
@@ -493,6 +550,10 @@ pub(super) fn db_with_high_limit_transition(
         .unwrap(),
     ))
     .unwrap();
+    // The AnalogInput's Notification_Class defaults to 0, so class 0 has to
+    // exist and name a recipient for anything to be distributed.
+    db.add(Box::new(notification_class_0_broadcasting()))
+        .unwrap();
     Arc::new(tokio::sync::RwLock::new(db))
 }
 
@@ -649,6 +710,10 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
         .unwrap(),
     ))
     .unwrap();
+    // A recipient that WOULD be broadcast to, so both assertions below can only
+    // be satisfied by the Event_Enable gate rather than by an unnamed recipient.
+    db.add(Box::new(notification_class_0_broadcasting()))
+        .unwrap();
 
     let server = BACnetServer::start(ServerConfig::default(), db, transport)
         .await
@@ -750,6 +815,8 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
         .unwrap(),
     ))
     .unwrap();
+    db.add(Box::new(notification_class_0_broadcasting()))
+        .unwrap();
     let server = BACnetServer::start(ServerConfig::default(), db, transport)
         .await
         .expect("server should start");

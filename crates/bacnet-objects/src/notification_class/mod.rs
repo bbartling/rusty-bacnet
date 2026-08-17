@@ -363,9 +363,12 @@ fn find_notification_class(
 /// When no NotificationClass matches the given number (the object's
 /// `Notification_Class` was never configured or points at a missing class),
 /// the spec leaves the projection undefined; we fall back to the BACnet
-/// defaults — `Priority = 255` (lowest) and `Ack_Required = false` — so the
-/// notification is still delivered with a benign priority and no
-/// acknowledgement demand rather than dropped silently.
+/// defaults — `Priority = 255` (lowest) and `Ack_Required = false`.
+///
+/// Those defaults no longer reach the wire on the server's send path. A class
+/// that does not exist also names no recipients, and the sender distributes
+/// nothing when the recipient set is empty, so the fallback survives only for
+/// direct callers of this function.
 pub fn resolve_transition_priority_ack(
     db: &ObjectDatabase,
     notification_class: u32,
@@ -440,9 +443,8 @@ pub fn get_notification_recipients(
 ///   was found and its `Recipient_List` decoded; `list` may be empty after
 ///   filtering (no recipient viable right now).
 /// - `None` — a NotificationClass matched but its stored `Recipient_List`
-///   FAILED to decode: the configured recipients are unknown, and
-///   delivering to a decodable prefix (or falling back to the
-///   no-recipients broadcast path) would notify the wrong set of devices.
+///   FAILED to decode: the configured recipients are unknown, and delivering
+///   to a decodable prefix would notify the wrong set of devices.
 pub fn get_notification_recipients_strict(
     db: &ObjectDatabase,
     notification_class: u32,
