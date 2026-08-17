@@ -249,6 +249,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // A SegmentACK this client sent while receiving a segmented
                 // response carries server=FALSE and must not be fed back into
                 // its own segmented send.
+                //
+                // This check must stay ahead of the Abort below. A client
+                // emits SegmentACKs with 'server' = FALSE, so if the order
+                // were reversed, two of these clients exchanging a segmented
+                // ConfirmedCOVNotification would answer each other's
+                // SegmentACKs with Aborts indefinitely. Dropping them here is
+                // what keeps the Abort reachable only by a *server's* PDU.
                 if !sa.sent_by_server {
                     debug!(
                         invoke_id = sa.invoke_id,
