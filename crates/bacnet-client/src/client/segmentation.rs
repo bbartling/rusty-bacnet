@@ -48,6 +48,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub(super) async fn send_client_abort(
         network: &Arc<NetworkLayer<T>>,
         reply_mac: &[u8],
+        reply_network: &Option<NpduAddress>,
         invoke_id: u8,
         abort_reason: bacnet_types::enums::AbortReason,
     ) {
@@ -61,10 +62,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, reason = abort_reason.to_raw(), "Failed to encode Abort");
             return;
         }
-        if let Err(e) = network
-            .send_apdu(&buf, reply_mac, false, NetworkPriority::NORMAL)
-            .await
-        {
+        if let Err(e) = Self::send_reply_apdu(network, &buf, reply_mac, reply_network).await {
             warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
         }
     }
@@ -87,10 +85,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         network: &Arc<NetworkLayer<T>>,
         tsm_mac: &MacAddr,
         reply_mac: &MacAddr,
+        reply_network: &Option<NpduAddress>,
         invoke_id: u8,
         reason: bacnet_types::enums::AbortReason,
     ) {
-        Self::send_client_abort(network, reply_mac, invoke_id, reason).await;
+        Self::send_client_abort(network, reply_mac, reply_network, invoke_id, reason).await;
         tsm.lock().await.complete_transaction(
             tsm_mac,
             invoke_id,
@@ -123,7 +122,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Received segmented ComplexAck"
         );
 
-        // If client doesn't support segmented reception, send Abort per Clause 5.4.4.2
+        // A segmented ComplexACK when this device does not support
+        // segmentation is Clause 5.4.4.3's UnexpectedPDU_Received, which
+        // requires an Abort with 'server' = FALSE. The transmitted reason
+        // follows Clause 18.10, which names SEGMENTATION_NOT_SUPPORTED for
+        // exactly this case.
         if !limits.segmented_response_accepted {
             let abort = Apdu::Abort(AbortPdu {
                 sent_by_server: false,
@@ -135,9 +138,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 warn!(error = %e, "Failed to encode segmentation-not-supported Abort");
                 return;
             }
-            let _ = network
-                .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-                .await;
+            let _ = Self::send_reply_apdu(network, &buf, source_mac, source_network).await;
             return;
         }
 
@@ -183,6 +184,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::send_client_abort(
                 network,
                 source_mac,
+                source_network,
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
             )
@@ -196,6 +198,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .or_insert_with(|| SegmentedReceiveState {
                 receiver: SegmentReceiver::new(),
                 reply_mac: MacAddr::from_slice(source_mac),
+                reply_network: source_network.clone(),
                 expected_next_seq: 0,
                 last_activity: Instant::now(),
                 window_position: 0,
@@ -239,10 +242,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 warn!(error = %e, "Failed to encode negative SegmentAck");
                 return;
             }
-            if let Err(e) = network
-                .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-                .await
-            {
+            if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
                 warn!(error = %e, "Failed to send SegmentAck");
             }
             return;
@@ -261,12 +261,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 "Segmented response exceeds reassembly capacity, aborting"
             );
             let reply_mac = state.reply_mac.clone();
+            let reply_network = state.reply_network.clone();
             seg_state.remove(&key);
             Self::abort_reassembly(
                 tsm,
                 network,
                 &tsm_mac,
                 &reply_mac,
+                &reply_network,
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -280,12 +282,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // caller to time out on a session that can no longer complete.
             warn!(error = %e, "Rejecting oversized segment");
             let reply_mac = state.reply_mac.clone();
+            let reply_network = state.reply_network.clone();
             seg_state.remove(&key);
             Self::abort_reassembly(
                 tsm,
                 network,
                 &tsm_mac,
                 &reply_mac,
+                &reply_network,
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -313,10 +317,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 warn!(error = %e, "Failed to encode SegmentAck");
                 return;
             }
-            if let Err(e) = network
-                .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-                .await
-            {
+            if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
                 warn!(error = %e, "Failed to send SegmentAck");
             }
         }
