@@ -198,6 +198,40 @@ async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
     );
 }
 
+/// Network 65535 with a zero-length MAC is a *global* broadcast, not a remote
+/// network that happens to be numbered 65535. Clause 6.3: "A global broadcast,
+/// indicated by a DNET of X'FFFF', is sent to all networks through all routers."
+///
+/// It needs its own send: `NetworkLayer::broadcast_to_network` rejects 0xFFFF
+/// ("reserved for global broadcasts; use broadcast_global_apdu instead"), so
+/// routing it as an ordinary remote broadcast turns the notification into a
+/// logged send error and delivers nothing.
+#[tokio::test]
+async fn zero_length_mac_on_network_65535_is_a_global_broadcast() {
+    let (broadcasts, unicasts) =
+        distribute_to(vec![destination_for(address_recipient(65535, &[]), false)]).await;
+
+    assert_eq!(broadcasts.len(), 1, "global broadcast goes out");
+    assert!(unicasts.is_empty());
+    assert_eq!(
+        npdu_destination(&broadcasts[0]),
+        Some((0xFFFF, 0)),
+        "DNET is the global broadcast address and DLEN is zero"
+    );
+}
+
+/// Network 65535 with a unicast MAC is self-contradictory — a broadcast
+/// requires DLEN zero — so it is skipped rather than guessed at.
+#[tokio::test]
+async fn global_broadcast_network_with_a_mac_is_skipped() {
+    let mac = [0x0A, 0x00, 0x00, 0x64, 0xBA, 0xC0];
+    let (broadcasts, unicasts) =
+        distribute_to(vec![destination_for(address_recipient(65535, &mac), false)]).await;
+
+    assert!(broadcasts.is_empty());
+    assert!(unicasts.is_empty());
+}
+
 /// #186: a unicast MAC on a remote network needs a next-hop router, and no
 /// router table is reachable from the server. The recipient is skipped.
 ///

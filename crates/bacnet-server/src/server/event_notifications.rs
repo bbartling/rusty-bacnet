@@ -13,6 +13,9 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
     }
 }
 
+/// The DNET reserved for a global broadcast (Clause 6.3).
+const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
+
 /// The network destination a Notification Class recipient resolves to.
 ///
 /// Clause 21's `BACnetAddress` gives a recipient two independent knobs —
@@ -31,6 +34,12 @@ enum RecipientRoute {
     /// A zero-length MAC on a remote network. Clause 6.3: "DNET shall specify
     /// the network number of the remote network and DLEN shall be set to zero".
     RemoteBroadcast(u16),
+    /// A zero-length MAC on network 65535. Clause 6.3: "A global broadcast,
+    /// indicated by a DNET of X'FFFF', is sent to all networks through all
+    /// routers" — a destination of its own, not a remote network that happens
+    /// to be numbered 65535. `broadcast_to_network` rejects 0xFFFF outright,
+    /// so routing it as one would drop the notification.
+    GlobalBroadcast,
     /// A unicast MAC on a remote network. Delivering it needs the MAC of a
     /// next-hop router, and no router table is reachable from the server, so
     /// the destination cannot be resolved. Tracked by #186.
@@ -48,7 +57,10 @@ impl RecipientRoute {
                 match (addr.network_number, addr.mac_address.is_empty()) {
                     (0, true) => Self::LocalBroadcast,
                     (0, false) => Self::LocalUnicast(addr.mac_address.clone()),
+                    (GLOBAL_BROADCAST_NETWORK, true) => Self::GlobalBroadcast,
                     (net, true) => Self::RemoteBroadcast(net),
+                    // Includes a MAC alongside network 65535, which is
+                    // self-contradictory: a broadcast requires DLEN zero.
                     (net, false) => Self::UnresolvedRoute(net),
                 }
             }
@@ -71,7 +83,10 @@ impl RecipientRoute {
     /// device cannot address at all.
     fn is_deliverable(&self, notification_class: u32) -> bool {
         match self {
-            Self::LocalUnicast(_) | Self::LocalBroadcast | Self::RemoteBroadcast(_) => true,
+            Self::LocalUnicast(_)
+            | Self::LocalBroadcast
+            | Self::RemoteBroadcast(_)
+            | Self::GlobalBroadcast => true,
             Self::UnresolvedRoute(network) => {
                 warn!(
                     notification_class,
@@ -456,7 +471,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             .broadcast_to_network(&buf, *net, false, NetworkPriority::NORMAL)
                             .await
                     }
-                    // Filtered out by `undeliverable_reason` above.
+                    // Carries DNET 0xFFFF, which routers forward to every
+                    // reachable network. `broadcast_to_network` rejects that
+                    // DNET, so it needs its own send.
+                    RecipientRoute::GlobalBroadcast => {
+                        network
+                            .broadcast_global_apdu(&buf, false, NetworkPriority::NORMAL)
+                            .await
+                    }
+                    // Filtered out by `is_deliverable` above.
                     RecipientRoute::UnresolvedRoute(_) | RecipientRoute::UnresolvedDevice(_) => {
                         continue
                     }
