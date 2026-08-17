@@ -142,41 +142,37 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
-        const MAX_CONCURRENT_SEG_SESSIONS: usize = 64;
-        if !seg_state.contains_key(&key) && seg_state.len() >= MAX_CONCURRENT_SEG_SESSIONS {
-            warn!(
-                invoke_id = ack.invoke_id,
-                sessions = seg_state.len(),
-                "Max concurrent segmented sessions reached, dropping segment"
-            );
-            return;
-        }
-
-        // Only a request this client actually issued may open a reassembly
-        // session. Without this, an unsolicited peer can occupy all 64 slots
-        // with invoke IDs nobody is waiting on and starve real responses until
-        // the reaper runs. Clause 5.4.4.1's IDLE state has no transition into
-        // SEGMENTED_CONF: it is entered only from SEGMENTED_REQUEST (5.4.4.2)
-        // or AWAIT_CONFIRMATION (5.4.4.3), both of which mean this device has
-        // a request outstanding.
+        // A reassembly session lives exactly as long as its transaction, so
+        // the TSM is consulted for EVERY segment, not only at session open.
+        // Clause 5.4's SEGMENTED_CONF is a state of the transaction itself:
+        // once the transaction ends — peer Abort/Error/Reject, or the caller
+        // cancelling on timeout — this device is in IDLE for that invoke ID,
+        // and 5.4.4.1 UnexpectedSegmentInfoReceived names this exact PDU as
+        // "an unexpected PDU indicating the existence of an active server
+        // TSM", prescribing an answer, not silence: "transmit a
+        // BACnet-Abort-PDU with 'server' = FALSE and 'abort-reason' =
+        // INVALID_APDU_IN_THIS_STATE and enter the IDLE state." A session
+        // whose transaction is gone is removed here rather than lingering to
+        // ack segments nobody is waiting on (#367). The per-open version of
+        // this gate also kept an unsolicited peer from occupying all 64
+        // session slots; requiring it per-segment keeps that property.
+        //
+        // Residual, deliberate: `release_invoke_id` drops a peer's allocator
+        // once every ID is free, so the caller's next request to this peer
+        // reuses the same invoke ID and a stale segment stream can alias
+        // onto the new pending transaction. This gate removes the orphaned
+        // session; it cannot tell that aliased stream from a genuine one.
         //
         // Bind the guard so its scope is obvious: it must not be held across
         // the send below, and an `if let` here would extend it silently.
         let transaction_pending = {
-            seg_state.contains_key(&key)
-                || tsm
-                    .lock()
-                    .await
-                    .expected_service_choice(&tsm_mac, ack.invoke_id)
-                    .is_some()
+            tsm.lock()
+                .await
+                .expected_service_choice(&tsm_mac, ack.invoke_id)
+                .is_some()
         };
         if !transaction_pending {
-            // Clause 5.4.4.1 UnexpectedSegmentInfoReceived names this exact
-            // PDU — "an unexpected PDU indicating the existence of an active
-            // server TSM (BACnet-ComplexACK-PDU with 'segmented-message' =
-            // TRUE ...)" — and prescribes an answer, not silence: "transmit a
-            // BACnet-Abort-PDU with 'server' = FALSE and 'abort-reason' =
-            // INVALID_APDU_IN_THIS_STATE and enter the IDLE state."
+            seg_state.remove(&key);
             debug!(
                 invoke_id = ack.invoke_id,
                 "Aborting segmented ComplexAck for a transaction that is not pending"
@@ -189,6 +185,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
             )
             .await;
+            return;
+        }
+
+        // Below the pending gate: a non-pending segment must draw the 5.4.4.1
+        // Abort above even when every session slot is occupied.
+        const MAX_CONCURRENT_SEG_SESSIONS: usize = 64;
+        if !seg_state.contains_key(&key) && seg_state.len() >= MAX_CONCURRENT_SEG_SESSIONS {
+            warn!(
+                invoke_id = ack.invoke_id,
+                sessions = seg_state.len(),
+                "Max concurrent segmented sessions reached, dropping segment"
+            );
             return;
         }
 
@@ -410,6 +418,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut window_size = self.config.proposed_window_size.max(1) as usize;
         let mut next_seq: usize = 0;
         let mut neg_ack_retries: u32 = 0;
+        // A local livelock bound with no counterpart in Clause 5.4.4.2, which
+        // bounds SEGMENTED_REQUEST only by SegmentTimer/Nretry and resets
+        // SegmentRetryCount on every in-window ack. Ten in-window NAKs in a
+        // row means a peer that keeps asking for the same window; cutting the
+        // transfer off is a local matter, like every bounded resource here.
         const MAX_NEG_ACK_RETRIES: u32 = 10;
 
         let result = async {
@@ -450,23 +463,35 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         match timeout(timeout_duration, seg_ack_rx.recv()).await {
                             Ok(Some(ack)) => {
                                 let ack_seq = ack.sequence_number as usize;
-                                if ack_seq >= total_segments {
-                                    return Err(Error::Segmentation(format!(
-                                        "SegmentAck sequence {} out of range (total {})",
-                                        ack_seq, total_segments
-                                    )));
-                                }
 
-                                let ack_in_current_window = if ack.negative_ack {
-                                    let resend_seq = if ack_seq == 0 && window_start == 0 {
-                                        0
-                                    } else {
-                                        ack_seq + 1
-                                    };
-                                    resend_seq >= window_start && resend_seq < window_end
-                                } else {
-                                    ack_seq >= window_start && ack_seq < window_end
-                                };
+                                // The sole gate on an inbound SegmentACK,
+                                // standing in for Clause 5.4.2.1's
+                                // InWindow(seqA, seqB). The 5.4.4.2 ack
+                                // transitions apply it without regard to the
+                                // 'negative-ack' flag: either flavor names
+                                // the last segment the peer accepted, and
+                                // either advances this side past it — a NAK
+                                // differs only in asking again for what
+                                // follows. (A NAK spelled as "resend from
+                                // here" has no source in 5.4.4.2; treating
+                                // sequence 0 that way made a lost first ack
+                                // unrecoverable: the retransmitted segment 0
+                                // draws NAK(0) from a live session, and
+                                // "resend segment 0" loops it forever.)
+                                // A sequence number outside the window —
+                                // including one at or past this request's
+                                // segment count, e.g. a duplicated ack from
+                                // an earlier transfer aliased onto a reused
+                                // invoke ID — is 5.4.4.2
+                                // DuplicateACK_Received: "restart
+                                // SegmentTimer and enter the
+                                // SEGMENTED_REQUEST state to await an
+                                // acknowledgment" — discard and keep
+                                // waiting, never a failure (#368). The
+                                // `continue` below re-enters the timeout
+                                // call, which is the SegmentTimer restart.
+                                let ack_in_current_window =
+                                    ack_seq >= window_start && ack_seq < window_end;
 
                                 if !ack_in_current_window {
                                     debug!(
@@ -535,6 +560,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
                 window_size = ack.actual_window_size.max(1) as usize;
 
+                // Clause 5.4.4.2 gives positive and negative acks the same
+                // effect on the window: 'sequence-number' is the last segment
+                // the peer accepted, and this side continues from the one
+                // after it. The NAK counter is the only difference — a local
+                // livelock bound on a peer that keeps re-asking for the same
+                // window.
                 let ack_seq = ack.sequence_number as usize;
                 if ack.negative_ack {
                     neg_ack_retries += 1;
@@ -543,20 +574,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             "too many negative SegmentAck retransmissions".into(),
                         ));
                     }
-                    // A first-window negative SegmentACK with sequence 0 is
-                    // ambiguous: it can mean segment 0 was the last accepted
-                    // segment, or that no segment has been accepted yet. Later
-                    // NAK 0 frames are stale for this window and are ignored
-                    // before reaching this branch.
-                    next_seq = if ack_seq == 0 && window_start == 0 {
-                        0
-                    } else {
-                        ack_seq + 1
-                    };
                 } else {
                     neg_ack_retries = 0;
-                    next_seq = ack_seq + 1;
                 }
+                next_seq = ack_seq + 1;
             }
 
             timeout(timeout_duration, rx)

@@ -55,6 +55,21 @@ use crate::handlers;
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
 
+/// Hard per-request reassembly ceiling: the sequence-number space (#364).
+///
+/// A local storage bound, not a protocol one. Clause 20.1.2.7 makes the
+/// request sequence number modulo 256, so a longer request is entirely
+/// representable on the wire — this server simply keys its segment store by
+/// that `u8` and cannot tell segment 256 from segment 0. The Device object
+/// does publish a tighter advertisement — its `Max_Segments_Accepted`
+/// (Clause 12.11) defaults to `Unsigned(65)` — but enforcing it here is
+/// deliberately not done: accepting more segments than advertised is
+/// permissive, not a violation, while the sequence space is the line past
+/// which acceptance silently corrupts. Exactly 256 segments reassemble
+/// correctly and must keep working; 257 is the first that would corrupt the
+/// payload.
+const MAX_REQUEST_SEGMENTS: usize = 256;
+
 /// Maximum number of concurrent segmented response send sessions.
 const MAX_SEG_SENDERS: usize = 128;
 
@@ -182,6 +197,14 @@ pub struct ServerConfig {
     /// Maximum APDU length accepted.
     pub max_apdu_length: u32,
     /// Segmentation support level.
+    ///
+    /// Enforced, not just advertised: the dispatch loop reassembles inbound
+    /// segmented requests only under `BOTH`/`RECEIVE` and transmits
+    /// segmented responses only under `BOTH`/`TRANSMIT` (Clauses 5.4.5.1 and
+    /// 5.4.5.3); anything else draws a SEGMENTATION_NOT_SUPPORTED Abort. The
+    /// default is `NONE`, so a default-configured server refuses segmented
+    /// traffic in both directions — set this to what the device should
+    /// actually honor.
     pub segmentation_supported: Segmentation,
     /// Vendor identifier.
     pub vendor_id: u16,
@@ -345,6 +368,17 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
+    /// Set the segmentation support this device advertises and enforces.
+    ///
+    /// The dispatch loop honors the advertisement (Clause 5.4.5.1): inbound
+    /// segmented requests are reassembled only under `BOTH` or `RECEIVE`, and
+    /// draw a SEGMENTATION_NOT_SUPPORTED Abort otherwise. The default is
+    /// `NONE`.
+    pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation_supported = segmentation;
+        self
+    }
+
     /// Set the vendor identifier (used in IAm responses and protocol operations).
     pub fn vendor_id(mut self, id: u16) -> Self {
         self.config.vendor_id = id;
@@ -422,6 +456,17 @@ impl BipServerBuilder {
     /// (default 10).
     pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
         self.config.event_enrollment_interval_secs = secs;
+        self
+    }
+
+    /// Set the segmentation support this device advertises and enforces.
+    ///
+    /// The dispatch loop honors the advertisement (Clause 5.4.5.1): inbound
+    /// segmented requests are reassembled only under `BOTH` or `RECEIVE`, and
+    /// draw a SEGMENTATION_NOT_SUPPORTED Abort otherwise. The default is
+    /// `NONE`.
+    pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation_supported = segmentation;
         self
     }
 
@@ -537,6 +582,15 @@ struct SegmentedRequestState {
     last_acked_seq: u8,
     window_pos: u8,
     actual_window_size: u8,
+    /// Monotonic count of segments accepted in order (#364).
+    ///
+    /// The reassembly total. `expected_seq` cannot serve: Clause 20.1.2.7
+    /// makes the sequence number modulo 256, so a 260-segment request ends at
+    /// sequence 3 and `seq + 1` names a four-segment total. This counter also
+    /// carries the overrun cap — acceptance is strictly in order, so it
+    /// reaches [`MAX_REQUEST_SEGMENTS`] exactly when the sequence number is
+    /// about to wrap onto stored segment 0.
+    accepted_segments: usize,
 }
 
 /// BACnet server with APDU dispatch and service handling.
@@ -650,6 +704,17 @@ impl ScServerBuilder {
     /// Set the hub WebSocket URL (e.g. `wss://hub.example.com/bacnet`).
     pub fn hub_url(mut self, url: &str) -> Self {
         self.hub_url = url.to_string();
+        self
+    }
+
+    /// Set the segmentation support this device advertises and enforces.
+    ///
+    /// The dispatch loop honors the advertisement (Clause 5.4.5.1): inbound
+    /// segmented requests are reassembled only under `BOTH` or `RECEIVE`, and
+    /// draw a SEGMENTATION_NOT_SUPPORTED Abort otherwise. The default is
+    /// `NONE`.
+    pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation_supported = segmentation;
         self
     }
 

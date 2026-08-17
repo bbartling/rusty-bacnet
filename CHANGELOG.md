@@ -87,6 +87,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Server-side segmented request reassembly is bounded by the sequence-number
+  space instead of silently corrupting past it (#364). The reassembly total
+  came from the last wire sequence number plus one — but Clause 20.1.2.7
+  makes that number modulo 256, so a 260-segment request "reassembled" as
+  its own last four segments and was decoded as the peer's request with no
+  error anywhere. Worse, the wrapped segment 256 arrives as another
+  `seq == 0` and the open path ran before the live-session check, so it
+  silently replaced the session. The session is now consulted first, the
+  total is a monotonic accepted-segment count, and the 257th in-order
+  segment ends the transfer with a `'server' = TRUE` BUFFER_OVERFLOW Abort —
+  Clause 5.4.5.2 has no overflow transition, so its generic `SendAbort`
+  escape (reason a local matter) carries Clause 18.10's closest reason.
+  Exactly 256 segments still reassemble, byte-exact. The companion defect is
+  fixed the same way: a segment the receiver cannot store used to be dropped
+  with only a warning, leaving the session dangling and the peer waiting out
+  its own timer; it now ends the session with the same Abort. A duplicate
+  segment 0 mid-session — a retransmission after a lost ack — now draws the
+  out-of-order negative SegmentAck instead of resetting the session.
+
+- A client-side reassembly session now lives exactly as long as its
+  transaction (#367). The peer ending a transaction with an Abort, Error or
+  Reject — or the caller giving up on timeout — completed the TSM entry but
+  left the reassembly session in place, and the client kept acking segments
+  of a transaction that no longer existed, indefinitely. Sessions are now
+  removed where transactions end: the Abort arm removes the session per
+  Clause 5.4.4.4 `AbortPDU_Received` (no reply PDU — and only for
+  `'server' = TRUE`, so an echoed copy of this client's own Abort cannot
+  tear down a healthy reassembly); the Error and Reject arms mid-reassembly
+  follow `UnexpectedPDU_Received`, whose list names both PDUs — as do a
+  SimpleAck and an unsegmented ComplexAck arriving mid-reassembly, which
+  previously completed the transaction as if they answered it and left the
+  session dangling; all four now abort the reassembly the same way. The
+  peer gets an Abort, the caller gets INVALID_APDU_IN_THIS_STATE rather
+  than the misdirected PDU's content, and an ordinary
+  SimpleAck/ComplexAck/Error/Reject with no session in flight still
+  surfaces as itself. The caller-timeout route has no arm to hook, so
+  the pending-transaction gate now runs per segment instead of only at
+  session open (also moved ahead of the session-count cap, so a non-pending
+  segment draws the Clause 5.4.4.1 Abort even with every slot full).
+
+- A stale SegmentAck no longer kills a healthy segmented request (#368). A
+  SegmentAck whose sequence number was at or past the request's segment
+  count — most ordinarily a duplicated ack from an earlier transfer aliased
+  onto an immediately-reused invoke ID — was a fatal error checked before
+  the window filter could see it. Clause 5.4.4.2 `DuplicateACK_Received`
+  prescribes the opposite: "restart SegmentTimer and enter the
+  SEGMENTED_REQUEST state to await an acknowledgment" — discard and keep
+  waiting. The check is gone; out-of-range acks, positive and negative
+  alike, now fall through to the in-window filter and are discarded like
+  any other stale ack. In the same path, negative acks now take Clause
+  5.4.4.2's ack transitions literally, which never branch on the
+  'negative-ack' flag: either flavor names the last segment the peer
+  accepted and the sender continues after it. The old reading mapped a NAK
+  to "resend from here", which discarded a NAK naming the last segment of
+  the current window (the transfer stalled into a timeout) and treated
+  first-window NAK 0 as "resend segment 0" — making a lost first ack
+  unrecoverable, since the retransmitted segment 0 draws NAK(0) from the
+  peer's live session and the loop never advances.
+
+- The server honors its segmentation advertisement in both directions
+  instead of reassembling or segmenting regardless (#381). A device whose
+  configuration advertises NO_SEGMENTATION or SEGMENTED_TRANSMIT reassembled
+  inbound segmented requests anyway; it now sends the Clause 5.4.5.1
+  `ConfirmedSegmentedReceivedNotSupported` Abort. Symmetrically, a device
+  advertising NO_SEGMENTATION or SEGMENTED_RECEIVE transmitted segmented
+  ComplexACKs anyway; an oversized response now draws the Clause 5.4.5.3
+  `CannotSendSegmentedComplexACK` case (a) Abort. **Behavior change for
+  default configurations**: `ServerConfig::default()` advertises
+  NO_SEGMENTATION, so a default-configured server now refuses segmented
+  traffic in both directions where it previously (wrongly) accepted and
+  produced it — set `segmentation_supported` (a new builder method on the
+  generic, BIP and SC builders) to `BOTH` to restore the old behavior
+  honestly. A peer's own Abort now also ends the server-side reassembly
+  session per Clause 5.4.5.2 `AbortPDU_Received` — as a side effect that
+  still lets the PDU reach dispatch, which routes segmented-send
+  cancellation (#377).
+
 - Event notifications carry the Table 13-6 network priority (#187). Every
   transmit site — confirmed unicast including each retry, and the four
   unconfirmed sends — hardcoded a Normal-priority NPDU, so a life-safety

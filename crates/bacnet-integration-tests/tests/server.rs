@@ -12,6 +12,7 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
+    Segmentation,
 };
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -56,6 +57,13 @@ async fn make_server() -> BACnetServer<BipTransport> {
         .interface(Ipv4Addr::LOCALHOST)
         .port(0) // ephemeral
         .broadcast_address(Ipv4Addr::LOCALHOST)
+        // The segmentation_rx/segmentation_tx suites in this harness
+        // exercise segmented reception and transmission, and the dispatch
+        // loop now enforces the advertisement (Clause 5.4.5.1/5.4.5.3), so
+        // this shared fixture advertises both. The other suites are
+        // indifferent to it beyond the I-Am/Device property now saying
+        // SEGMENTED_BOTH.
+        .segmentation_supported(Segmentation::BOTH)
         .database(db)
         .build()
         .await

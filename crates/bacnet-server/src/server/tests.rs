@@ -45,6 +45,27 @@ fn event_enrollment_period_passes_through_nonzero() {
 }
 
 #[test]
+fn all_builders_assign_segmentation_supported() {
+    // Same copy-paste hazard as the enrollment test below: the setter targets
+    // one ServerConfig field among look-alikes, and the dispatch loop now
+    // enforces it (Clause 5.4.5.1), so a mis-assignment silently turns
+    // segmented reception off.
+    let generic = BACnetServer::<BipTransport>::generic_builder()
+        .segmentation_supported(Segmentation::RECEIVE);
+    assert_eq!(generic.config.segmentation_supported, Segmentation::RECEIVE);
+
+    let bip =
+        BACnetServer::<BipTransport>::bip_builder().segmentation_supported(Segmentation::BOTH);
+    assert_eq!(bip.config.segmentation_supported, Segmentation::BOTH);
+
+    #[cfg(feature = "sc-tls")]
+    {
+        let sc = BACnetServer::sc_builder().segmentation_supported(Segmentation::RECEIVE);
+        assert_eq!(sc.config.segmentation_supported, Segmentation::RECEIVE);
+    }
+}
+
+#[test]
 fn all_builders_assign_event_enrollment_config() {
     // Six near-identical assignments across three builders. Every neighbouring
     // ServerConfig field is a bool or u64, so a copy-paste targeting the wrong one

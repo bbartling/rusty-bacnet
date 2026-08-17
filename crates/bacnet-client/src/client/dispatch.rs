@@ -42,6 +42,29 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let tsm_mac = response_tsm_mac(source_mac, source_network);
         match apdu {
             Apdu::SimpleAck(ack) => {
+                // Mid-reassembly, a SimpleACK is in Clause 5.4.4.4
+                // UnexpectedPDU_Received's list, exactly like the Error and
+                // Reject arms below — the segmented response under
+                // reassembly IS this transaction's acknowledgment, so a
+                // second one is not answering it. Checked before the TSM
+                // lock: `abort_reassembly` takes that lock itself (#367).
+                if let Some(state) = seg_state.remove(&(tsm_mac.clone(), ack.invoke_id)) {
+                    debug!(
+                        invoke_id = ack.invoke_id,
+                        "Aborting reassembly on a SimpleAck"
+                    );
+                    Self::abort_reassembly(
+                        tsm,
+                        network,
+                        &tsm_mac,
+                        &state.reply_mac,
+                        &state.reply_network,
+                        ack.invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
+                    return;
+                }
                 debug!(invoke_id = ack.invoke_id, "Received SimpleAck");
                 let mut tsm = tsm.lock().await;
                 let outcome = tsm.complete_transaction(
@@ -65,6 +88,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 } else {
+                    // "BACnet-ComplexACK-PDU with 'segmented-message' =
+                    // FALSE" is in the same Clause 5.4.4.4
+                    // UnexpectedPDU_Received list: the transaction's answer
+                    // is the segmented ComplexACK already under reassembly.
+                    if let Some(state) = seg_state.remove(&(tsm_mac.clone(), ack.invoke_id)) {
+                        debug!(
+                            invoke_id = ack.invoke_id,
+                            "Aborting reassembly on an unsegmented ComplexAck"
+                        );
+                        Self::abort_reassembly(
+                            tsm,
+                            network,
+                            &tsm_mac,
+                            &state.reply_mac,
+                            &state.reply_network,
+                            ack.invoke_id,
+                            bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                        )
+                        .await;
+                        return;
+                    }
                     debug!(invoke_id = ack.invoke_id, "Received ComplexAck");
                     let mut tsm = tsm.lock().await;
                     let outcome = tsm.complete_transaction(
@@ -79,6 +123,33 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
             Apdu::Error(err) => {
+                // Mid-reassembly, an Error PDU is Clause 5.4.4.4
+                // UnexpectedPDU_Received — "BACnet-Error-PDU" is in its list —
+                // so the local surface is an ABORT.indication with
+                // INVALID_APDU_IN_THIS_STATE, not the error content (#367).
+                // Checked before the TSM lock below: `abort_reassembly` takes
+                // that lock itself, and tokio's Mutex is not reentrant. Keyed
+                // on `seg_state` only — an Error answering an *outgoing*
+                // segmented request can be legitimate (5.4.4.2 surfaces it
+                // once SentAllSegments is TRUE, a flag this client does not
+                // track), so a `seg_ack_senders` entry must not divert here.
+                if let Some(state) = seg_state.remove(&(tsm_mac.clone(), err.invoke_id)) {
+                    debug!(
+                        invoke_id = err.invoke_id,
+                        "Aborting reassembly on an Error PDU"
+                    );
+                    Self::abort_reassembly(
+                        tsm,
+                        network,
+                        &tsm_mac,
+                        &state.reply_mac,
+                        &state.reply_network,
+                        err.invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
+                    return;
+                }
                 debug!(invoke_id = err.invoke_id, "Received Error PDU");
                 let mut tsm = tsm.lock().await;
                 // Correlated by invoke ID alone. Unlike 20.1.4.2 and 20.1.5.6,
@@ -99,6 +170,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
             }
             Apdu::Reject(rej) => {
+                // Same Clause 5.4.4.4 UnexpectedPDU_Received diversion as the
+                // Error arm above ("BACnet-Reject-PDU" is in the same list),
+                // with the same lock-ordering constraint (#367).
+                if let Some(state) = seg_state.remove(&(tsm_mac.clone(), rej.invoke_id)) {
+                    debug!(
+                        invoke_id = rej.invoke_id,
+                        "Aborting reassembly on a Reject PDU"
+                    );
+                    Self::abort_reassembly(
+                        tsm,
+                        network,
+                        &tsm_mac,
+                        &state.reply_mac,
+                        &state.reply_network,
+                        rej.invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
+                    return;
+                }
                 debug!(invoke_id = rej.invoke_id, "Received Reject PDU");
                 let mut tsm = tsm.lock().await;
                 // Carries no service choice (Clause 20.1.8); invoke ID is the
@@ -125,6 +216,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     return;
                 }
+                // Clause 5.4.4.4 AbortPDU_Received: "send ABORT.indication to
+                // the local application program; and enter the IDLE state" —
+                // ending the reassembly session is the IDLE half, and no
+                // reply PDU is prescribed (#367). This removal must stay
+                // below the server=FALSE guard above, or an echoed copy of
+                // this client's own Abort would tear down a healthy
+                // reassembly. Behaviorally redundant with the per-segment
+                // pending gate in `handle_segmented_complex_ack` — a later
+                // segment would find no transaction and clear the session
+                // anyway — so no test can pin this line alone; it is kept so
+                // the slot frees at the Abort, not at the peer's next move
+                // or the reaper.
+                seg_state.remove(&(tsm_mac.clone(), abt.invoke_id));
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 let mut tsm = tsm.lock().await;
                 // Carries no service choice (Clause 20.1.9).
