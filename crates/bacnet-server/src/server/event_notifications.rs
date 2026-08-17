@@ -72,6 +72,13 @@ impl RecipientRoute {
     /// Clause 6.3: "Of the BACnet APDUs, only the BACnet-Unconfirmed-Request-PDU
     /// may be transmitted using a multicast or broadcast network layer address".
     /// A confirmed notification also has nowhere to return its SimpleACK from.
+    ///
+    /// This recognizes only the *network-layer* spelling of a broadcast, the
+    /// zero-length `mac-address`. A recipient carrying its data link's literal
+    /// broadcast MAC — `X'FFFFFFFFFFFF'` on Ethernet, an all-ones host portion
+    /// on BACnet/IP, `X'FF'` on MS/TP — reads as `LocalUnicast` here and is
+    /// still sent confirmed. Recognizing those needs the transport's broadcast
+    /// address, which this layer does not have.
     fn permits_confirmed(&self) -> bool {
         matches!(self, Self::LocalUnicast(_))
     }
@@ -108,7 +115,7 @@ impl RecipientRoute {
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
-    /// to NotificationClass recipients (or broadcast if none configured).
+    /// to the recipients the object's NotificationClass names.
     /// DCC gates network-message initiation (Clause 16.1), not the local
     /// transition actions in Clause 13.2.2.1.4. The outbound sender below
     /// suppresses distribution while communications are disabled.
@@ -165,7 +172,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Build an `EventNotificationRequest` for a pre-computed transition and
-    /// send it to NotificationClass recipients (or broadcast if none).
+    /// send it to the recipients the object's NotificationClass names.
     ///
     /// Shared by the per-write path ([`fire_event_notifications`]) and the
     /// periodic `Time_Delay` confirmation path, so both emit identical
@@ -289,7 +296,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // closed (consistent with the encode-failure branches
                     // below): deliver this notification to NO ONE rather
                     // than to a silently-truncated prefix of the configured
-                    // destinations or the no-recipients broadcast fallback.
+                    // destinations.
                     warn!(
                         notification_class,
                         "Recipient_List failed to decode; skipping event notification delivery"
@@ -479,7 +486,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             .broadcast_global_apdu(&buf, false, NetworkPriority::NORMAL)
                             .await
                     }
-                    // Filtered out by `is_deliverable` above.
+                    // Filtered out by `RecipientRoute::is_deliverable` above.
                     RecipientRoute::UnresolvedRoute(_) | RecipientRoute::UnresolvedDevice(_) => {
                         continue
                     }

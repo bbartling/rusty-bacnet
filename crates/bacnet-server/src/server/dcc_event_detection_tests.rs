@@ -97,6 +97,12 @@ async fn dcc_states_preserve_delayed_detection_but_suppress_distribution() {
             .unwrap(),
         ))
         .unwrap();
+        // A recipient that WOULD be broadcast to, so the empty assertion can
+        // only be satisfied by the DCC gate rather than by an unnamed recipient.
+        db.add(Box::new(
+            super::event_notifications_tests::notification_class_0_broadcasting(),
+        ))
+        .unwrap();
 
         let mut server = BACnetServer::start(ServerConfig::default(), db, transport)
             .await

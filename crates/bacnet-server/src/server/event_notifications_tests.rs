@@ -69,6 +69,11 @@ async fn dcc_suppresses_periodic_event_send() {
         .unwrap(),
     ))
     .unwrap();
+    // A recipient that WOULD be broadcast to, so the empty assertion below can
+    // only be satisfied by the DCC gate. Without this the test passes because
+    // no recipient was named, and it stays green even with the gate removed.
+    db.add(Box::new(notification_class_0_broadcasting()))
+        .unwrap();
     let db = Arc::new(tokio::sync::RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
@@ -375,11 +380,16 @@ async fn event_notification_projects_normal_priority_from_class() {
 /// A `Notification_Class` naming an object that does not exist distributes
 /// nothing.
 ///
-/// Clause 13.2.5 sends notifications "to the notification-clients specified by
-/// the Recipient_List input", and a class that does not exist supplies no such
-/// input. This previously broadcast the notification to the whole link, which
-/// is how a misconfigured `Notification_Class` turned into an alarm every
-/// device on the network received.
+/// The Standard does not say what a `Notification_Class` naming a nonexistent
+/// object should do — Clause 13.2.5 governs distribution given a Recipient_List,
+/// and Clause 12 defines the property without a missing-object rule. So this is
+/// a deliberate choice for an undefined configuration, not a mandate.
+///
+/// Silence is the defensible reading: a class that does not exist supplies no
+/// Recipient_List, and 13.2.5 distributes only "to the notification-clients
+/// specified by the Recipient_List input". The alternative was the previous
+/// behavior, where a misconfigured `Notification_Class` broadcast the alarm to
+/// every device on the link.
 #[tokio::test]
 async fn event_notification_missing_class_distributes_nothing() {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
