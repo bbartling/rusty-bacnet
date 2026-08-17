@@ -5,9 +5,6 @@
 //! without panicking. Every type provides `from_raw` / `to_raw` for
 //! wire-level conversion and a human-readable `Display` impl.
 
-#[cfg(not(feature = "std"))]
-use alloc::format;
-
 // ---------------------------------------------------------------------------
 // Macro to reduce boilerplate for newtype enum wrappers
 // ---------------------------------------------------------------------------

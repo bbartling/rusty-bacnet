@@ -5,7 +5,7 @@
 //! All types follow the same `no_std`-compatible pattern used in `primitives.rs`.
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::{string::String, vec::Vec};
 
 use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, Time};
