@@ -443,9 +443,8 @@ pub fn get_notification_recipients(
 ///   was found and its `Recipient_List` decoded; `list` may be empty after
 ///   filtering (no recipient viable right now).
 /// - `None` — a NotificationClass matched but its stored `Recipient_List`
-///   FAILED to decode: the configured recipients are unknown, and
-///   delivering to a decodable prefix (or falling back to the
-///   would notify the wrong set of devices.
+///   FAILED to decode: the configured recipients are unknown, and delivering
+///   to a decodable prefix would notify the wrong set of devices.
 pub fn get_notification_recipients_strict(
     db: &ObjectDatabase,
     notification_class: u32,

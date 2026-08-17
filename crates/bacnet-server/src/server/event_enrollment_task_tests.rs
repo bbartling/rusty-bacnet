@@ -94,6 +94,14 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
         .unwrap(),
     ))
     .unwrap();
+    // A recipient that WOULD be broadcast to. The Event Enrollment path has no
+    // send call today, so this changes nothing now — it makes the assertion
+    // below a live tripwire: when #127 gives that path a sender, this test goes
+    // red and asks to be updated instead of quietly staying green.
+    db.add(Box::new(
+        super::event_notifications_tests::notification_class_0_broadcasting(),
+    ))
+    .unwrap();
 
     let config = ServerConfig {
         event_enrollment_interval_secs: 1,
