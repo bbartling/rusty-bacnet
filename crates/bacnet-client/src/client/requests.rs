@@ -1,38 +1,126 @@
 use super::*;
+use bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE;
 
-/// MinimumMessageSize: the smallest APDU any BACnet device accepts.
+/// Which term of Clause 5.2.1.2's minimum bound the transmittable length down.
 ///
-/// Clause 20.1.2.5 spells the max-APDU-length-accepted field's lowest code,
-/// `B'0000'`, as "Up to MinimumMessageSize (50 octets)", and Clause 12.11.18
-/// requires `Max_APDU_Length_Accepted` to be "greater than or equal to 50".
-const MINIMUM_MESSAGE_SIZE: u16 = 50;
+/// Named separately so the error blames the right one. The checked value is a
+/// minimum over several terms, and the peer is only sometimes the binding one:
+/// BACnet/SC recomputes its own limit from the hub's Connect-Accept, so a
+/// transport can fall below the floor while the peer is perfectly conformant.
+enum LengthBoundedBy {
+    /// A length advertised by a discovered peer, from I-Am.
+    DiscoveredPeer(u16),
+    /// This client's own configured maximum.
+    LocalConfig(u16),
+    /// The data link, after any routed NPDU header.
+    Transport(u16),
+}
 
-/// Reject a maximum transmittable length that no conformant peer could accept.
+impl core::fmt::Display for LengthBoundedBy {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DiscoveredPeer(v) => {
+                write!(f, "the peer's advertised Max APDU Length Accepted of {v}")
+            }
+            Self::LocalConfig(v) => write!(f, "this client's configured maximum of {v}"),
+            Self::Transport(v) => write!(f, "the transport's limit of {v}"),
+        }
+    }
+}
+
+/// Reject a maximum transmittable length no conformant device could accept.
 ///
 /// Clause 5.2.1.2 derives this length as the smallest of the local capability,
 /// the internetwork limit, and "(c) the maximum APDU size accepted by the
 /// remote peer device, which must be at least 50 octets". Below that floor no
-/// conformant APDU can be formed at all.
+/// conformant APDU can be formed at all. Clause 20.1.2.5 gives the same number
+/// a name, spelling the lowest max-APDU-length-accepted code `B'0000'` as "Up
+/// to MinimumMessageSize (50 octets)".
 ///
 /// The check is a floor, not membership of the six values Clause 20.1.2.5
 /// encodes. A discovered peer's length comes from I-Am's `Max APDU Length
-/// Accepted`, which is an Unsigned octet count rather than the four-bit code,
-/// and Clause 5.2.1.2 notes the true value "may be larger than indicated in
-/// this parameter" — so 600 or 1500 are legitimate and must not be rejected.
+/// Accepted`, an Unsigned octet count rather than the four-bit code, and
+/// Clause 20.1.2.5 notes the true value "may be larger than indicated in this
+/// parameter" — so 600 and 1500 are legitimate and must not be rejected.
 ///
-/// Failing here rather than clamping up to 50 keeps the client from inventing
-/// a capability the peer never claimed: a device advertising less than 50 is
-/// already non-conformant, and a typed error names that, where a silent clamp
+/// Failing rather than clamping up to 50 keeps the client from inventing a
+/// capability the peer never claimed: a device advertising less than 50 is
+/// already non-conformant, and a typed error names that where a silent clamp
 /// would send it frames it said it cannot hold.
-fn check_transmittable_length(max_apdu: u16) -> Result<(), Error> {
-    if max_apdu < MINIMUM_MESSAGE_SIZE {
-        return Err(Error::Segmentation(format!(
-            "maximum transmittable length {max_apdu} is below the {MINIMUM_MESSAGE_SIZE}-octet \
-             minimum every BACnet device accepts (Clause 5.2.1.2); the peer's advertised \
-             Max APDU Length Accepted is non-conformant"
-        )));
+fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) -> Result<(), Error> {
+    let advertised = match peer_or_local {
+        LengthBoundedBy::DiscoveredPeer(v) | LengthBoundedBy::LocalConfig(v) => v,
+        LengthBoundedBy::Transport(v) => v,
+    };
+    let combined = advertised.min(transport);
+    if combined >= MINIMUM_MESSAGE_SIZE {
+        return Ok(());
     }
-    Ok(())
+    let binding = if transport < advertised {
+        LengthBoundedBy::Transport(transport)
+    } else {
+        peer_or_local
+    };
+    Err(Error::Encoding(format!(
+        "maximum transmittable length {combined} is below the {MINIMUM_MESSAGE_SIZE}-octet \
+         MinimumMessageSize every BACnet device accepts (Clause 5.2.1.2); the binding limit is \
+         {binding}"
+    )))
+}
+
+#[cfg(test)]
+mod transmittable_length_tests {
+    use super::{check_transmittable_length, LengthBoundedBy};
+
+    #[test]
+    fn conformant_lengths_pass() {
+        for advertised in [50u16, 128, 206, 480, 1024, 1476] {
+            assert!(
+                check_transmittable_length(LengthBoundedBy::DiscoveredPeer(advertised), 1476)
+                    .is_ok(),
+                "{advertised} is at or above MinimumMessageSize"
+            );
+        }
+    }
+
+    /// I-Am carries an Unsigned octet count, not the four-bit code, and Clause
+    /// 20.1.2.5 says the true value "may be larger than indicated in this
+    /// parameter" — so values outside the six encodings are legitimate.
+    #[test]
+    fn lengths_outside_the_encoded_set_are_not_rejected() {
+        for advertised in [51u16, 600, 1500, u16::MAX] {
+            assert!(
+                check_transmittable_length(LengthBoundedBy::DiscoveredPeer(advertised), u16::MAX)
+                    .is_ok(),
+                "{advertised} is conformant even though it is not one of the six encodings"
+            );
+        }
+    }
+
+    /// The error must blame whichever term actually bound the minimum. The peer
+    /// is only sometimes that term: BACnet/SC recomputes its own limit from the
+    /// hub's Connect-Accept, so a transport can fall below the floor while the
+    /// peer is entirely conformant.
+    #[test]
+    fn the_error_names_the_binding_term() {
+        let peer_bound =
+            check_transmittable_length(LengthBoundedBy::DiscoveredPeer(3), 1476).unwrap_err();
+        assert!(
+            peer_bound.to_string().contains("peer's advertised"),
+            "peer is the binding term here, got: {peer_bound}"
+        );
+
+        let transport_bound =
+            check_transmittable_length(LengthBoundedBy::DiscoveredPeer(1476), 48).unwrap_err();
+        assert!(
+            transport_bound.to_string().contains("transport's limit"),
+            "transport is the binding term here and the peer is conformant, got: {transport_bound}"
+        );
+        assert!(
+            !transport_bound.to_string().contains("peer's advertised"),
+            "must not blame a conformant peer for the transport's limit"
+        );
+    }
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -93,16 +181,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         match target {
             ConfirmedTarget::Local { mac } => {
-                let (remote_max_apdu, remote_max_segments) = {
+                let (remote_max_apdu, remote_max_segments, advertised) = {
                     let dt = self.device_table.lock().await;
                     let device = dt.get_by_mac(mac);
                     let max_apdu = device
                         .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
                         .unwrap_or(self.config.max_apdu_length);
                     let max_seg = device.and_then(|d| d.max_segments_accepted);
-                    (max_apdu.min(target_transport_max_apdu), max_seg)
+                    let advertised = if device.is_some() {
+                        LengthBoundedBy::DiscoveredPeer(max_apdu)
+                    } else {
+                        LengthBoundedBy::LocalConfig(max_apdu)
+                    };
+                    (max_apdu.min(target_transport_max_apdu), max_seg, advertised)
                 };
-                check_transmittable_length(remote_max_apdu)?;
+                check_transmittable_length(advertised, target_transport_max_apdu)?;
                 if unsegmented_apdu_size > remote_max_apdu as usize {
                     return self
                         .segmented_confirmed_request(
@@ -117,7 +210,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             ConfirmedTarget::Routed { .. } => {
                 let remote_max_apdu = self.config.max_apdu_length.min(target_transport_max_apdu);
-                check_transmittable_length(remote_max_apdu)?;
+                // Deliberately the local configuration, not a peer value: this
+                // branch never consults the device table, so a routed peer's
+                // own advertised limit is still unenforced. Tracked separately.
+                check_transmittable_length(
+                    LengthBoundedBy::LocalConfig(self.config.max_apdu_length),
+                    target_transport_max_apdu,
+                )?;
                 if unsegmented_apdu_size > remote_max_apdu as usize {
                     return self
                         .segmented_confirmed_request(
