@@ -382,7 +382,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             encode_apdu(&mut full_buf, &response).expect("valid APDU encoding");
 
             if full_buf.len() > client_max_apdu as usize {
-                if !client_accepts_segmented {
+                // Clause 5.4.5.3 CannotSendSegmentedComplexACK reads both
+                // sides of the exchange: case (a) — "this device does not
+                // support the transmission of segmented messages" — and case
+                // (b), the client not accepting one. Either way the response
+                // "cannot be sent as one PDU or multiple PDUs" and draws the
+                // same Abort; SendSegmentedComplexACK is available only when
+                // the device supports transmitting segments (#381).
+                let device_transmits_segments = config.segmentation_supported == Segmentation::BOTH
+                    || config.segmentation_supported == Segmentation::TRANSMIT;
+                if !client_accepts_segmented || !device_transmits_segments {
                     let abort = Apdu::Abort(AbortPdu {
                         sent_by_server: true,
                         invoke_id,

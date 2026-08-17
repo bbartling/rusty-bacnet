@@ -802,6 +802,8 @@ mod sc_max_apdu_tests;
 #[cfg(test)]
 mod segmentation_retransmit_tests;
 #[cfg(test)]
+mod segmented_receive_lifecycle_tests;
+#[cfg(test)]
 mod tests;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
