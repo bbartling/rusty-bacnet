@@ -20,10 +20,11 @@ const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 ///
 /// Clause 21's `BACnetAddress` gives a recipient two independent knobs —
 /// `network-number`, where "A value of 0 indicates the local network", and
-/// `mac-address`, where "A string of length 0 indicates a broadcast". Their
-/// four combinations are four different sends, not one unicast with edge
-/// cases, which is why this is resolved once up front rather than decided at
-/// each send site.
+/// `mac-address`, where "A string of length 0 indicates a broadcast" — and
+/// Clause 6.3 reserves network 65535 for the global broadcast. Their
+/// combinations are distinct sends rather than one unicast with edge cases,
+/// which is why this is resolved once up front rather than decided at each
+/// send site.
 enum RecipientRoute {
     /// Network 0 with an explicit MAC: unicast on the local network.
     LocalUnicast(MacAddr),
@@ -78,7 +79,7 @@ impl RecipientRoute {
     /// broadcast MAC — `X'FFFFFFFFFFFF'` on Ethernet, an all-ones host portion
     /// on BACnet/IP, `X'FF'` on MS/TP — reads as `LocalUnicast` here and is
     /// still sent confirmed. Recognizing those needs the transport's broadcast
-    /// address, which this layer does not have.
+    /// address, which this layer does not have. Tracked by #360.
     fn permits_confirmed(&self) -> bool {
         matches!(self, Self::LocalUnicast(_))
     }
