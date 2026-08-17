@@ -4,7 +4,7 @@
 //! [`Time`], and the [`PropertyValue`] sum type.
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 
 use crate::enums::ObjectType;
 use crate::error::Error;

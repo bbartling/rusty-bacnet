@@ -5,7 +5,7 @@
 //! and timeouts.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::{format, string::String};
 #[cfg(feature = "std")]
 use std::time::Duration;
 
