@@ -6,6 +6,7 @@
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use tokio::sync::oneshot;
 
@@ -235,16 +236,18 @@ impl Tsm {
         response: TsmResponse,
     ) -> CompletionOutcome {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
-        let Some(pending) = self.pending.get(&key) else {
+        let Entry::Occupied(entry) = self.pending.entry(key) else {
             return CompletionOutcome::NoTransaction;
         };
-        let expected = pending.expected_service_choice;
+        let expected = entry.get().expected_service_choice;
         if let Some(observed) = observed_service_choice {
             if observed != expected {
                 return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
             }
         }
-        let pending = self.pending.remove(&key).expect("presence just checked");
+        // Taking the entry ends the borrow of `pending`, so the invoke ID can
+        // be released without a second lookup that would have to be `expect`ed.
+        let pending = entry.remove();
         self.release_invoke_id(source_mac, invoke_id);
         let _ = pending.responder.send(response);
         CompletionOutcome::Delivered
