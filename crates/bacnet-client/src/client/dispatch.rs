@@ -81,12 +81,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Apdu::Error(err) => {
                 debug!(invoke_id = err.invoke_id, "Received Error PDU");
                 let mut tsm = tsm.lock().await;
-                // Correlated by invoke ID alone. Clause 20.1.7.2 words the
-                // Error PDU's service choice differently from the ACK clauses
-                // — "the tag value of the BACnet-Error choice" — and Clause 21
-                // defines `BACnet-Error ::= CHOICE { other [127] Error, ... }`,
-                // so a conformant peer may answer any service with choice 127.
-                // Requiring an exact match would reject those.
+                // Correlated by invoke ID alone. Unlike 20.1.4.2 and 20.1.5.6,
+                // Clause 20.1.7.2 imposes no correspondence to the requested
+                // service: error-choice is "the tag value of the BACnet-Error
+                // choice", and Clause 21 opens that production with
+                // `other [127] Error`. Nothing in the Standard forbids a peer
+                // from answering through that tag, so an exact-match gate here
+                // would reject conformant responses.
                 tsm.complete_transaction(
                     &tsm_mac,
                     err.invoke_id,
@@ -255,15 +256,33 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     return;
                 }
-                let key = (tsm_mac, sa.invoke_id);
-                let senders = seg_ack_senders.lock().await;
-                if let Some(tx) = senders.get(&key) {
-                    let _ = tx.try_send(sa);
-                } else {
-                    debug!(
-                        invoke_id = sa.invoke_id,
-                        "Ignoring SegmentAck for unknown transaction"
-                    );
+                let invoke_id = sa.invoke_id;
+                let key = (tsm_mac, invoke_id);
+                let delivered = {
+                    let senders = seg_ack_senders.lock().await;
+                    match senders.get(&key) {
+                        Some(tx) => {
+                            let _ = tx.try_send(sa);
+                            true
+                        }
+                        None => false,
+                    }
+                };
+                if !delivered {
+                    // The other half of Clause 5.4.4.1
+                    // UnexpectedSegmentInfoReceived: a "BACnet-SegmentACK-PDU
+                    // with 'server' = TRUE" for which this device has no
+                    // outstanding segmented send is the same unexpected
+                    // evidence of an active server TSM, and gets the same
+                    // Abort ('server' = FALSE, INVALID_APDU_IN_THIS_STATE).
+                    debug!(invoke_id, "Aborting SegmentAck for unknown transaction");
+                    Self::send_client_abort(
+                        network,
+                        source_mac,
+                        invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
                 }
             }
         }

@@ -1,11 +1,12 @@
 //! Correlating inbound responses with the request that is actually waiting.
 //!
 //! Two independent ways a peer's PDU can be mistaken for this client's answer:
-//! it can name a different confirmed service (Clause 20.1.4.2 / 20.1.5.6), or it
-//! can carry `'server' = FALSE`, which Clause 5.4.4.2 and 5.4.4.3 use to mark a
-//! PDU as travelling the other way. A third failure needs no misbehaving peer at
-//! all: Clause 20.1.5.4 numbers segments modulo 256, so a long enough response
-//! wraps onto segments already stored.
+//! it can name a different confirmed service (Clause 20.1.4.2 / 20.1.5.6), or
+//! it can carry `'server' = FALSE`, which Clause 20.1.6.2 and 20.1.9.1 define
+//! as marking the sender's role and which Clause 5.4.4.2 and 5.4.4.3 then test
+//! before accepting the PDU. A third failure needs no misbehaving peer at all:
+//! Clause 20.1.5.4 numbers segments modulo 256, so a long enough response wraps
+//! onto segments already stored.
 
 use bacnet_encoding::apdu::{self, encode_apdu, AbortPdu, Apdu, ComplexAck, SegmentAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
@@ -401,12 +402,13 @@ async fn segment_ack_with_server_false_does_not_advance_the_send_window() {
 }
 
 #[tokio::test]
-async fn segmented_ack_for_an_unknown_invoke_id_opens_no_session() {
+async fn segmented_ack_for_an_unknown_invoke_id_is_aborted_not_reassembled() {
     let (mut link, mut client) = PeerLink::idle(config()).await;
 
-    // Clause 5.4.4.3 reaches SEGMENTED_CONF only from AWAIT_CONFIRMATION, so a
-    // segment for a transaction nobody issued is not owed a SegmentACK — and
-    // answering it would let a peer occupy reassembly slots at will.
+    // Clause 5.4.4.1's IDLE state has no transition into SEGMENTED_CONF, so a
+    // segment for a transaction nobody issued must not open a reassembly
+    // session — that is how a peer would occupy every slot at will. What it
+    // gets instead is UnexpectedSegmentInfoReceived's Abort, not silence.
     link.send(Apdu::ComplexAck(ComplexAck {
         segmented: true,
         more_follows: true,
@@ -418,7 +420,50 @@ async fn segmented_ack_for_an_unknown_invoke_id_opens_no_session() {
     }))
     .await;
 
-    link.expect_silence("unsolicited segment").await;
+    match link.recv("unsolicited segment").await {
+        Apdu::Abort(abort) => {
+            assert_eq!(abort.invoke_id, 42);
+            assert!(!abort.sent_by_server, "this client is not the server");
+            assert_eq!(
+                abort.abort_reason,
+                AbortReason::INVALID_APDU_IN_THIS_STATE,
+                "Clause 5.4.4.1 names this reason specifically"
+            );
+        }
+        other => panic!("expected Abort, got {other:?}"),
+    }
+    // And crucially not a SegmentACK, which would mean a session was opened.
+    link.expect_silence("after the unsolicited-segment Abort")
+        .await;
+
+    client.stop().await.expect("client stops");
+    link.transport.stop().await.expect("peer transport stops");
+}
+
+#[tokio::test]
+async fn segment_ack_for_an_unknown_invoke_id_is_aborted() {
+    let (mut link, mut client) = PeerLink::idle(config()).await;
+
+    // The other half of Clause 5.4.4.1 UnexpectedSegmentInfoReceived: a
+    // SegmentACK with 'server' = TRUE that answers no outstanding send.
+    link.send(Apdu::SegmentAck(SegmentAck {
+        negative_ack: false,
+        sent_by_server: true,
+        invoke_id: 7,
+        sequence_number: 0,
+        actual_window_size: 1,
+    }))
+    .await;
+
+    match link.recv("unsolicited SegmentACK").await {
+        Apdu::Abort(abort) => {
+            assert_eq!(abort.invoke_id, 7);
+            assert!(!abort.sent_by_server);
+            assert_eq!(abort.abort_reason, AbortReason::INVALID_APDU_IN_THIS_STATE);
+        }
+        other => panic!("expected Abort, got {other:?}"),
+    }
+
     client.stop().await.expect("client stops");
     link.transport.stop().await.expect("peer transport stops");
 }
@@ -538,7 +583,7 @@ async fn advertised_max_segments_bounds_reassembly() {
 
 #[tokio::test]
 async fn max_segments_above_the_encodable_rungs_advertises_no_bound() {
-    // Clause 20.1.2.4 has no rung for 100; it encodes as B'111', "greater than
+    // Clause 20.1.2.4 has no rung for 100; it encodes as B'111', "Greater than
     // 64 segments accepted", which promises the peer nothing. Capping
     // reassembly at 100 would enforce a limit that was never advertised.
     assert_eq!(apdu::advertised_max_segments(Some(100)), None);

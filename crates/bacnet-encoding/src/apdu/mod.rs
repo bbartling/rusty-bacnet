@@ -65,11 +65,12 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 ///
 /// This deliberately round-trips through the wire encoding rather than reading
 /// `configured` directly: a value such as `Some(100)` encodes as B'111', so the
-/// peer was told "greater than 64", not "100". Answering from the configured
-/// number would claim a promise that was never sent.
+/// peer was told "Greater than 64 segments accepted", not "100". Answering
+/// from the configured number would claim a promise that was never sent.
 pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
     match decode_max_segments(encode_max_segments(configured)) {
-        // The B'111' sentinel — an open-ended "more than 64", not a bound.
+        // The B'111' sentinel — "Greater than 64 segments accepted", which is
+        // open-ended rather than a bound.
         Some(255) => None,
         decoded => decoded,
     }
