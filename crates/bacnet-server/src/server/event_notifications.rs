@@ -104,12 +104,12 @@ impl RecipientRoute {
     /// broadcast MAC, which `resolve` folds into `LocalBroadcast` via the
     /// transport's own knowledge of its spelling.
     ///
-    /// `RemoteUnicast` is excluded for a different reason: Clause 6.3 permits
-    /// sending it confirmed (the DNET/DADR restricts the destination to one
-    /// device), but the server TSM cannot yet correlate an acknowledgment
-    /// that arrives through a router (#375).
+    /// `RemoteUnicast` is admitted: Clause 6.3 permits sending it confirmed
+    /// (the DNET/DADR restricts the destination to one device), and the
+    /// server TSM correlates the acknowledgment by routed identity even when
+    /// it arrives through a router whose MAC was unknown at send time (#375).
     fn permits_confirmed(&self) -> bool {
-        matches!(self, Self::LocalUnicast(_))
+        matches!(self, Self::LocalUnicast(_) | Self::RemoteUnicast { .. })
     }
 
     /// Whether this destination can be sent to at all, logging why not when it
@@ -369,24 +369,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // Downgrading to unconfirmed would drop the acknowledgment the
             // recipient was configured to require, so both cases are skips.
             if *confirmed && !route.permits_confirmed() {
-                match &route {
-                    // Clause 6.3 permits sending this (the DNET/DADR restricts
-                    // the destination to one device), but the server TSM
-                    // cannot yet correlate an acknowledgment that arrives
-                    // through a router. Tracked by #375.
-                    RecipientRoute::RemoteUnicast { network, .. } => warn!(
-                        notification_class,
-                        network,
-                        "Recipient requests confirmed notifications on a remote network; \
-                         routed acknowledgment correlation is unimplemented (#375), skipping"
-                    ),
-                    // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs.
-                    _ => warn!(
-                        notification_class,
-                        "Recipient requests confirmed notifications at a broadcast address; \
-                         Clause 6.3 permits only unconfirmed PDUs there, skipping"
-                    ),
-                }
+                // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs.
+                warn!(
+                    notification_class,
+                    "Recipient requests confirmed notifications at a broadcast address; \
+                     Clause 6.3 permits only unconfirmed PDUs there, skipping"
+                );
                 continue;
             }
 
@@ -402,20 +390,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let service_bytes = service_buf.freeze();
 
             if *confirmed {
-                // `permits_confirmed` above admits only `LocalUnicast`. If
-                // that predicate ever widens without this arm learning the
-                // new route, fail loudly instead of dropping the
-                // notification with no diagnostic.
-                let RecipientRoute::LocalUnicast(target_mac) = &route else {
-                    warn!(
-                        notification_class,
-                        "Confirmed notification reached the send path on a \
-                         non-unicast route; dropping"
-                    );
-                    continue;
+                // `permits_confirmed` above admits exactly these two route
+                // shapes. If that predicate ever widens without this arm
+                // learning the new route, fail loudly instead of dropping
+                // the notification with no diagnostic.
+                //
+                // A remote recipient's transaction is keyed by routed
+                // identity with an empty local half: the ack will arrive
+                // from whichever router delivers it, and that MAC is
+                // unknowable when the send goes out via the Clause 6.5.3
+                // broadcast DA (#375).
+                let (peer_key, remote): (TsmPeer, Option<(u16, MacAddr)>) = match &route {
+                    RecipientRoute::LocalUnicast(target_mac) => ((target_mac.clone(), None), None),
+                    RecipientRoute::RemoteUnicast { network, mac } => (
+                        (
+                            MacAddr::new(),
+                            Some(NpduAddress {
+                                network: *network,
+                                mac_address: mac.clone(),
+                            }),
+                        ),
+                        Some((*network, mac.clone())),
+                    ),
+                    _ => {
+                        warn!(
+                            notification_class,
+                            "Confirmed notification reached the send path on a \
+                             non-unicast route; dropping"
+                        );
+                        continue;
+                    }
                 };
-                let target_mac = target_mac.clone();
-                let peer_key = (target_mac.clone(), None);
                 let (id, result_rx) = match {
                     let mut tsm = server_tsm.lock().await;
                     tsm.allocate(peer_key.clone())
@@ -451,9 +456,54 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> = Some(result_rx);
 
                     for attempt in 0..=apdu_retries {
-                        let send_result = network
-                            .send_apdu(&buf, &target_mac, true, network_priority)
-                            .await;
+                        let send_result = match &remote {
+                            None => {
+                                // Local unicast: the peer key's MAC half is
+                                // the destination.
+                                network
+                                    .send_apdu(&buf, &peer_key.0, true, network_priority)
+                                    .await
+                            }
+                            Some((dnet, dadr)) => {
+                                // Clause 6.5.3 method 4: the first attempt
+                                // may unicast to a router learned from an
+                                // earlier response; a retry after silence
+                                // falls back to the broadcast DA in case
+                                // that router is gone. With nothing learned,
+                                // every attempt uses the broadcast form the
+                                // clause prescribes for an unknown router.
+                                let router = if attempt == 0 {
+                                    tsm.lock().await.cached_router(*dnet)
+                                } else {
+                                    None
+                                };
+                                match router {
+                                    Some(router_mac) => {
+                                        network
+                                            .send_apdu_routed(
+                                                &buf,
+                                                *dnet,
+                                                dadr,
+                                                &router_mac,
+                                                true,
+                                                network_priority,
+                                            )
+                                            .await
+                                    }
+                                    None => {
+                                        network
+                                            .send_apdu_routed_via_local_broadcast(
+                                                &buf,
+                                                *dnet,
+                                                dadr,
+                                                true,
+                                                network_priority,
+                                            )
+                                            .await
+                                    }
+                                }
+                            }
+                        };
 
                         if let Err(e) = send_result {
                             warn!(error = %e, attempt, "Confirmed EventNotification send failed");

@@ -276,20 +276,6 @@ async fn remote_unicast_recipient_routes_via_broadcast_link_da() {
     );
 }
 
-/// #186/#375: a *confirmed* recipient on a remote network is spec-legal to
-/// send (Clause 6.3's single-device parenthetical) but the server TSM cannot
-/// correlate a routed acknowledgment yet, so it is skipped rather than sent
-/// and mis-retried into duplicate deliveries.
-#[tokio::test]
-async fn confirmed_remote_unicast_recipient_is_skipped() {
-    let mac = [0x0A, 0x00, 0x00, 0x64, 0xBA, 0xC0];
-    let (broadcasts, unicasts) =
-        distribute_to(vec![destination_for(address_recipient(1000, &mac), true)]).await;
-
-    assert!(broadcasts.is_empty());
-    assert!(unicasts.is_empty());
-}
-
 /// #360: a confirmed recipient spelled with the data link's *literal*
 /// broadcast MAC is the same unsatisfiable ask as the zero-length form —
 /// Clause 6.3 permits only unconfirmed PDUs at a broadcast — and must be

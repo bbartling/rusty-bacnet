@@ -87,6 +87,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Confirmed event notifications reach remote-network recipients (#375). The
+  #186 fix delivered the unconfirmed half and left confirmed recipients
+  skipped, because the server TSM keyed the pending acknowledgment by the
+  target's MAC while a routed recipient's ack arrives from whichever router
+  delivers it — a MAC unknowable when the send goes out on Clause 6.5.3's
+  broadcast DA. The transaction is now keyed by routed identity (DNET/DADR)
+  with an empty local half, inbound correlation tries the exact key, then
+  the router-unknown routed key, then the legacy wildcard, and a hit that
+  carries a routed identity teaches a bounded router cache — Clause 6.5.3
+  method 4, "noting the SA associated with any subsequent responses from
+  the remote device" — so the next confirmed send to that network unicasts
+  to the learned router (first attempt only; a retry after silence falls
+  back to the always-correct broadcast DA in case the router is gone).
+  Confirmed recipients at broadcast addresses stay skipped: that
+  restriction is Clause 6.3's, not a TSM limitation.
+
 - Server-side segmented request reassembly is bounded by the sequence-number
   space instead of silently corrupting past it (#364). The reassembly total
   came from the last wire sequence number plus one — but Clause 20.1.2.7

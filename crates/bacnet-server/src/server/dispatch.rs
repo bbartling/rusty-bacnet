@@ -130,14 +130,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::SimpleAck(sa) => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(
+                tsm.record_result_correlated(
                     &peer,
                     received.source_network.as_ref(),
                     sa.invoke_id,
                     CovAckResult::Ack,
-                ) {
-                    tsm.record_result(&MacAddr::new(), None, sa.invoke_id, CovAckResult::Ack);
-                }
+                );
                 debug!(
                     invoke_id = sa.invoke_id,
                     "SimpleAck received for outgoing confirmed notification"
@@ -146,14 +144,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::Error(err) => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(
+                tsm.record_result_correlated(
                     &peer,
                     received.source_network.as_ref(),
                     err.invoke_id,
                     CovAckResult::Error,
-                ) {
-                    tsm.record_result(&MacAddr::new(), None, err.invoke_id, CovAckResult::Error);
-                }
+                );
                 debug!(
                     invoke_id = err.invoke_id,
                     error_class = err.error_class.to_raw(),
@@ -164,14 +160,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::Reject(rej) => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(
+                tsm.record_result_correlated(
                     &peer,
                     received.source_network.as_ref(),
                     rej.invoke_id,
                     CovAckResult::Error,
-                ) {
-                    tsm.record_result(&MacAddr::new(), None, rej.invoke_id, CovAckResult::Error);
-                }
+                );
                 debug!(
                     invoke_id = rej.invoke_id,
                     "Reject received for outgoing confirmed notification"
@@ -192,14 +186,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(
+                tsm.record_result_correlated(
                     &peer,
                     received.source_network.as_ref(),
                     abort.invoke_id,
                     CovAckResult::Error,
-                ) {
-                    tsm.record_result(&MacAddr::new(), None, abort.invoke_id, CovAckResult::Error);
-                }
+                );
                 debug!(
                     invoke_id = abort.invoke_id,
                     routed_segmented,
