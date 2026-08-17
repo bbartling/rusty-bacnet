@@ -366,6 +366,13 @@ pub struct BACnetClient<T: TransportPort> {
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
     dispatch_task: Option<JoinHandle<()>>,
+    /// Channels feeding SegmentACKs to in-flight segmented sends.
+    ///
+    /// Lock invariant: never hold this and [`Self::tsm`] at the same time.
+    /// They are acquired in both orders by design — setup registers the
+    /// transaction and then inserts the sender, while teardown and inbound
+    /// dispatch go the other way — so the pair is deadlock-free only because
+    /// neither is ever held across the other's acquisition.
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
     local_mac: MacAddr,
 }

@@ -481,6 +481,56 @@ async fn segment_ack_during_an_outstanding_request_is_discarded_not_aborted() {
     assert_eq!(payload.as_ref(), b"genuine");
 }
 
+/// Mid-reassembly, an unexpected SegmentACK aborts rather than being discarded.
+///
+/// SEGMENTED_CONF and AWAIT_CONFIRMATION both have a transaction outstanding,
+/// so "is a transaction pending" cannot tell them apart — but Clause 5.4.4.4
+/// `UnexpectedPDU_Received` and Clause 5.4.4.3 `SegmentACK_Received` give them
+/// opposite answers. Reassembly in progress is the distinguishing fact.
+#[tokio::test]
+async fn segment_ack_during_reassembly_aborts_the_transaction() {
+    let mut link =
+        PeerLink::issuing(config(), ConfirmedServiceChoice::READ_PROPERTY, vec![0x01]).await;
+    let invoke_id = link.request_invoke_id().await;
+
+    // One segment in, so the client is reassembling: SEGMENTED_CONF.
+    feed_segments(
+        &mut link,
+        invoke_id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+        1,
+        false,
+    )
+    .await;
+
+    link.send(Apdu::SegmentAck(SegmentAck {
+        negative_ack: false,
+        sent_by_server: true,
+        invoke_id,
+        sequence_number: 0,
+        actual_window_size: 1,
+    }))
+    .await;
+
+    match link.recv("unexpected SegmentACK during reassembly").await {
+        Apdu::Abort(abort) => {
+            assert_eq!(abort.invoke_id, invoke_id);
+            assert!(!abort.sent_by_server);
+            assert_eq!(abort.abort_reason, AbortReason::INVALID_APDU_IN_THIS_STATE);
+        }
+        other => panic!("expected Abort, got {other:?}"),
+    }
+
+    // "send ABORT.indication ... to the local application program": the
+    // caller must be told, not left waiting for a reassembly that is over.
+    match link.finish().await {
+        Err(Error::Abort { reason }) => {
+            assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw());
+        }
+        other => panic!("expected the caller to be aborted, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn segment_ack_for_an_unknown_invoke_id_is_aborted() {
     let (mut link, mut client) = PeerLink::idle(config()).await;

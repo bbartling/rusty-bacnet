@@ -69,21 +69,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Abort a reassembly this client has no room to finish.
+    /// Abort a reassembly in progress, telling both the peer and the caller.
     ///
-    /// Clause 5.4.4.4 `NewSegmentReceived_NoSpace`: "transmit a
-    /// BACnet-Abort-PDU with 'server' = FALSE and 'abort-reason' =
-    /// BUFFER_OVERFLOW; send ABORT.indication ...; and enter the IDLE state."
-    /// The local ABORT.indication is the waiting caller, so the transaction is
-    /// completed with the same reason rather than left to time out.
-    async fn abort_reassembly(
+    /// Clause 5.4.4.4 gives this same shape to every way SEGMENTED_CONF can
+    /// end badly — `NewSegmentReceived_NoSpace` for a segment that "cannot be
+    /// saved due to local conditions" and `UnexpectedPDU_Received` for a PDU
+    /// that does not belong in the state. Both "transmit a BACnet-Abort-PDU
+    /// with 'server' = FALSE", "send ABORT.indication ... to the local
+    /// application program", and "enter the IDLE state"; only `abort-reason`
+    /// differs. The local ABORT.indication is the waiting caller, so the
+    /// transaction is completed rather than left to time out.
+    ///
+    /// The caller is responsible for having removed the `seg_state` entry —
+    /// that is the "enter the IDLE state" half.
+    pub(super) async fn abort_reassembly(
         tsm: &Arc<Mutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
         tsm_mac: &MacAddr,
         reply_mac: &MacAddr,
         invoke_id: u8,
+        reason: bacnet_types::enums::AbortReason,
     ) {
-        let reason = bacnet_types::enums::AbortReason::BUFFER_OVERFLOW;
         Self::send_client_abort(network, reply_mac, invoke_id, reason).await;
         tsm.lock().await.complete_transaction(
             tsm_mac,
@@ -256,7 +262,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             );
             let reply_mac = state.reply_mac.clone();
             seg_state.remove(&key);
-            Self::abort_reassembly(tsm, network, &tsm_mac, &reply_mac, ack.invoke_id).await;
+            Self::abort_reassembly(
+                tsm,
+                network,
+                &tsm_mac,
+                &reply_mac,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+            )
+            .await;
             return;
         }
 
@@ -267,7 +281,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, "Rejecting oversized segment");
             let reply_mac = state.reply_mac.clone();
             seg_state.remove(&key);
-            Self::abort_reassembly(tsm, network, &tsm_mac, &reply_mac, ack.invoke_id).await;
+            Self::abort_reassembly(
+                tsm,
+                network,
+                &tsm_mac,
+                &reply_mac,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+            )
+            .await;
             return;
         }
         state.accepted_segments += 1;

@@ -263,10 +263,42 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     return;
                 }
-                // Which state this client is in for `invoke_id` decides the
-                // answer, and Clause 5.4 gives a different one for each.
+                // Which of Clause 5.4's four client states this device is in
+                // for `invoke_id` decides the answer, and each gives a
+                // different one. The predicates below are what distinguishes
+                // them: a `seg_state` entry means a segmented response is
+                // being reassembled, a `seg_ack_senders` entry means a
+                // segmented request is still being sent, and a pending TSM
+                // transaction without either means the send is done.
                 let invoke_id = sa.invoke_id;
                 let key = (tsm_mac.clone(), invoke_id);
+
+                // SEGMENTED_CONF (5.4.4.4) `UnexpectedPDU_Received` lists
+                // "BACnet-SegmentACK-PDU with 'server' = TRUE" among the PDUs
+                // that do not belong in this state, and requires all three of:
+                // "transmit a BACnet-Abort-PDU with 'server' = FALSE; send
+                // ABORT.indication with 'server' = FALSE and 'abort-reason' =
+                // INVALID_APDU_IN_THIS_STATE to the local application program;
+                // and enter the IDLE state."
+                //
+                // Checked first because it is the narrower state: reassembly
+                // only starts once the request has been sent in full, so a
+                // `seg_state` entry means any `seg_ack_senders` entry that
+                // still lingers belongs to a send that is already finished.
+                if let Some(state) = seg_state.remove(&key) {
+                    debug!(invoke_id, "Aborting reassembly on an unexpected SegmentAck");
+                    Self::abort_reassembly(
+                        tsm,
+                        network,
+                        &tsm_mac,
+                        &state.reply_mac,
+                        invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
+                    return;
+                }
+
                 let delivered = {
                     let senders = seg_ack_senders.lock().await;
                     match senders.get(&key) {
