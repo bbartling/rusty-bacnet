@@ -60,8 +60,17 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 // Max-APDU-length encoding
 // ---------------------------------------------------------------------------
 
+/// MinimumMessageSize: the smallest APDU any BACnet device accepts.
+///
+/// Clause 20.1.2.5 spells the lowest max-APDU-length-accepted code, `B'0000'`,
+/// as "Up to MinimumMessageSize (50 octets)"; Clause 12.11.18 requires
+/// `Max_APDU_Length_Accepted` to be "greater than or equal to 50"; and Clause
+/// 5.2.1.2 requires the size accepted by a remote peer to be "at least 50
+/// octets".
+pub const MINIMUM_MESSAGE_SIZE: u16 = 50;
+
 /// Decoded max-APDU-length values indexed by the 4-bit field.
-const MAX_APDU_DECODE: [u16; 6] = [50, 128, 206, 480, 1024, 1476];
+const MAX_APDU_DECODE: [u16; 6] = [MINIMUM_MESSAGE_SIZE, 128, 206, 480, 1024, 1476];
 
 /// Return true when `value` is one of the BACnet max-APDU-length encodings
 /// defined by ASHRAE 135-2020 Clause 20.1.2.5.

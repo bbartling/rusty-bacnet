@@ -755,6 +755,8 @@ mod cov_renewal_tests;
 mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
+#[cfg(test)]
+mod peer_max_apdu_tests;
 #[cfg(all(test, feature = "sc-tls"))]
 mod sc_builder_tests;
 #[cfg(test)]
