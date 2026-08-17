@@ -1,6 +1,106 @@
 use super::*;
+use crate::tsm::CompletionOutcome;
+use bacnet_encoding::apdu::advertised_max_segments;
+
+/// Size of the sequence-number space, and so the hard reassembly ceiling.
+///
+/// A local storage bound, not a protocol one. Clause 20.1.5.4 makes the
+/// sequence number modulo 256, so a longer response is entirely representable —
+/// this client simply keys its segment store by that `u8` and cannot tell
+/// segment 257 from segment 1. Clause 5.4.4.4 names this exact situation
+/// (`NewSegmentReceived_NoSpace`, "the segment cannot be saved due to local
+/// conditions") and prescribes the Abort below.
+///
+/// Exactly 256 segments reassemble correctly and must keep working; 257 is the
+/// first that would corrupt the payload.
+const SEQUENCE_NUMBER_SPACE: usize = 256;
+
+impl ResponseLimits {
+    /// The receive-side limits `config` puts on the wire.
+    pub(super) fn from_config(config: &ClientConfig) -> Self {
+        // Clause 20.1.2.4 defines max-segments-accepted as "the maximum number
+        // of segments that the device will accept"; Clause 5.2.1.3 makes it
+        // binding, requiring the segment count to be the smallest of the
+        // sender's own limit and "(b) the maximum number of segments accepted
+        // by the remote peer device" — which, for a ComplexACK, is "the 'Max
+        // Segments Accepted' parameter of the BACnet-Confirmed-Request-PDU for
+        // which this is a response". A peer that overruns it is therefore
+        // non-conformant, not merely unusual.
+        //
+        // Only the rungs B'001'..B'110' name a number; B'000' and B'111'
+        // promise nothing, and `advertised_max_segments` reports those as
+        // `None`.
+        let advertised =
+            advertised_max_segments(config.max_segments).map_or(usize::MAX, usize::from);
+        Self {
+            segmented_response_accepted: config.segmented_response_accepted,
+            max_reassembly_segments: advertised.min(SEQUENCE_NUMBER_SPACE),
+        }
+    }
+}
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
+    /// Transmit an Abort this client originates.
+    ///
+    /// Every Abort a requesting BACnet-user sends carries `'server' = FALSE` —
+    /// Clauses 5.4.4.1, 5.4.4.3 and 5.4.4.4 each spell it out — because the
+    /// flag names the sender's role, not the error.
+    pub(super) async fn send_client_abort(
+        network: &Arc<NetworkLayer<T>>,
+        reply_mac: &[u8],
+        invoke_id: u8,
+        abort_reason: bacnet_types::enums::AbortReason,
+    ) {
+        let abort = Apdu::Abort(AbortPdu {
+            sent_by_server: false,
+            invoke_id,
+            abort_reason,
+        });
+        let mut buf = BytesMut::with_capacity(4);
+        if let Err(e) = encode_apdu(&mut buf, &abort) {
+            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to encode Abort");
+            return;
+        }
+        if let Err(e) = network
+            .send_apdu(&buf, reply_mac, false, NetworkPriority::NORMAL)
+            .await
+        {
+            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
+        }
+    }
+
+    /// Abort a reassembly in progress, telling both the peer and the caller.
+    ///
+    /// Clause 5.4.4.4 gives this same shape to every way SEGMENTED_CONF can
+    /// end badly — `NewSegmentReceived_NoSpace` for a segment that "cannot be
+    /// saved due to local conditions" and `UnexpectedPDU_Received` for a PDU
+    /// that does not belong in the state. Both "transmit a BACnet-Abort-PDU
+    /// with 'server' = FALSE", "send ABORT.indication ... to the local
+    /// application program", and "enter the IDLE state"; only `abort-reason`
+    /// differs. The local ABORT.indication is the waiting caller, so the
+    /// transaction is completed rather than left to time out.
+    ///
+    /// The caller is responsible for having removed the `seg_state` entry —
+    /// that is the "enter the IDLE state" half.
+    pub(super) async fn abort_reassembly(
+        tsm: &Arc<Mutex<Tsm>>,
+        network: &Arc<NetworkLayer<T>>,
+        tsm_mac: &MacAddr,
+        reply_mac: &MacAddr,
+        invoke_id: u8,
+        reason: bacnet_types::enums::AbortReason,
+    ) {
+        Self::send_client_abort(network, reply_mac, invoke_id, reason).await;
+        tsm.lock().await.complete_transaction(
+            tsm_mac,
+            invoke_id,
+            None,
+            TsmResponse::Abort {
+                reason: reason.to_raw(),
+            },
+        );
+    }
+
     /// Handle a segmented ComplexAck: accumulate segments, send SegmentAcks,
     /// and reassemble when all segments are received.
     pub(super) async fn handle_segmented_complex_ack(
@@ -10,7 +110,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
         ack: bacnet_encoding::apdu::ComplexAck,
-        segmented_response_accepted: bool,
+        limits: ResponseLimits,
     ) {
         let seq = ack.sequence_number.unwrap_or(0);
         let tsm_mac = response_tsm_mac(source_mac, source_network);
@@ -24,7 +124,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
 
         // If client doesn't support segmented reception, send Abort per Clause 5.4.4.2
-        if !segmented_response_accepted {
+        if !limits.segmented_response_accepted {
             let abort = Apdu::Abort(AbortPdu {
                 sent_by_server: false,
                 invoke_id: ack.invoke_id,
@@ -51,6 +151,45 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
+        // Only a request this client actually issued may open a reassembly
+        // session. Without this, an unsolicited peer can occupy all 64 slots
+        // with invoke IDs nobody is waiting on and starve real responses until
+        // the reaper runs. Clause 5.4.4.1's IDLE state has no transition into
+        // SEGMENTED_CONF: it is entered only from SEGMENTED_REQUEST (5.4.4.2)
+        // or AWAIT_CONFIRMATION (5.4.4.3), both of which mean this device has
+        // a request outstanding.
+        //
+        // Bind the guard so its scope is obvious: it must not be held across
+        // the send below, and an `if let` here would extend it silently.
+        let transaction_pending = {
+            seg_state.contains_key(&key)
+                || tsm
+                    .lock()
+                    .await
+                    .expected_service_choice(&tsm_mac, ack.invoke_id)
+                    .is_some()
+        };
+        if !transaction_pending {
+            // Clause 5.4.4.1 UnexpectedSegmentInfoReceived names this exact
+            // PDU — "an unexpected PDU indicating the existence of an active
+            // server TSM (BACnet-ComplexACK-PDU with 'segmented-message' =
+            // TRUE ...)" — and prescribes an answer, not silence: "transmit a
+            // BACnet-Abort-PDU with 'server' = FALSE and 'abort-reason' =
+            // INVALID_APDU_IN_THIS_STATE and enter the IDLE state."
+            debug!(
+                invoke_id = ack.invoke_id,
+                "Aborting segmented ComplexAck for a transaction that is not pending"
+            );
+            Self::send_client_abort(
+                network,
+                source_mac,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+            )
+            .await;
+            return;
+        }
+
         let proposed_ws = ack.proposed_window_size.unwrap_or(1);
         let state = seg_state
             .entry(key.clone())
@@ -61,6 +200,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 last_activity: Instant::now(),
                 window_position: 0,
                 proposed_window_size: proposed_ws,
+                accepted_segments: 0,
             });
 
         state.last_activity = Instant::now();
@@ -108,10 +248,51 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
-        if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
-            warn!(error = %e, "Rejecting oversized segment");
+        // Reached only by an in-order NEW segment: every duplicate and every
+        // out-of-order segment returned above. That placement is the whole
+        // point — Clause 5.4.4.4 requires a duplicate to be discarded, not
+        // treated as an error, so a cap that duplicates could trip would abort
+        // healthy transfers on retransmission.
+        if state.accepted_segments >= limits.max_reassembly_segments {
+            warn!(
+                invoke_id = ack.invoke_id,
+                accepted = state.accepted_segments,
+                limit = limits.max_reassembly_segments,
+                "Segmented response exceeds reassembly capacity, aborting"
+            );
+            let reply_mac = state.reply_mac.clone();
+            seg_state.remove(&key);
+            Self::abort_reassembly(
+                tsm,
+                network,
+                &tsm_mac,
+                &reply_mac,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+            )
+            .await;
             return;
         }
+
+        if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
+            // Also "the segment cannot be saved due to local conditions", so
+            // Clause 5.4.4.4 wants the same Abort rather than leaving the
+            // caller to time out on a session that can no longer complete.
+            warn!(error = %e, "Rejecting oversized segment");
+            let reply_mac = state.reply_mac.clone();
+            seg_state.remove(&key);
+            Self::abort_reassembly(
+                tsm,
+                network,
+                &tsm_mac,
+                &reply_mac,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+            )
+            .await;
+            return;
+        }
+        state.accepted_segments += 1;
         state.expected_next_seq = seq.wrapping_add(1);
         state.window_position += 1;
 
@@ -152,13 +333,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         "Reassembled segmented ComplexAck"
                     );
                     let mut tsm = tsm.lock().await;
-                    tsm.complete_transaction(
+                    let outcome = tsm.complete_transaction(
                         &tsm_mac,
                         ack.invoke_id,
+                        Some(ack.service_choice),
                         TsmResponse::ComplexAck {
                             service_data: Bytes::from(service_data),
                         },
                     );
+                    if let CompletionOutcome::ServiceChoiceMismatch { expected, observed } = outcome
+                    {
+                        warn!(
+                            invoke_id = ack.invoke_id,
+                            expected = expected.to_raw(),
+                            observed = observed.to_raw(),
+                            "Discarding reassembled ComplexAck labelled for a different service"
+                        );
+                    }
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to reassemble segmented ComplexAck");
@@ -202,7 +393,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id);
+            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id, service_choice);
             (invoke_id, rx)
         };
 

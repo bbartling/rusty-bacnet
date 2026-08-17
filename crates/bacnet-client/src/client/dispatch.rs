@@ -1,4 +1,26 @@
 use super::*;
+use crate::tsm::CompletionOutcome;
+
+/// Report an acknowledgment that named a different confirmed service.
+///
+/// Clauses 20.1.4.2 and 20.1.5.6 both require an acknowledgment's
+/// service-ack-choice to carry "the value of the BACnetConfirmedServiceChoice
+/// corresponding to the service contained in the previous
+/// BACnet-Confirmed-Service-Request that has resulted in this
+/// acknowledgment", so a mismatch means the peer is not answering this
+/// request. The transaction stays pending; nothing else is needed here beyond
+/// making the peer's misbehavior visible.
+fn log_mismatch(outcome: CompletionOutcome, invoke_id: u8, pdu: &str) {
+    if let CompletionOutcome::ServiceChoiceMismatch { expected, observed } = outcome {
+        warn!(
+            invoke_id,
+            pdu,
+            expected = expected.to_raw(),
+            observed = observed.to_raw(),
+            "Ignoring acknowledgment labelled for a different confirmed service"
+        );
+    }
+}
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
@@ -15,14 +37,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
         apdu: Apdu,
-        segmented_response_accepted: bool,
+        limits: ResponseLimits,
     ) {
         let tsm_mac = response_tsm_mac(source_mac, source_network);
         match apdu {
             Apdu::SimpleAck(ack) => {
                 debug!(invoke_id = ack.invoke_id, "Received SimpleAck");
                 let mut tsm = tsm.lock().await;
-                tsm.complete_transaction(&tsm_mac, ack.invoke_id, TsmResponse::SimpleAck);
+                let outcome = tsm.complete_transaction(
+                    &tsm_mac,
+                    ack.invoke_id,
+                    Some(ack.service_choice),
+                    TsmResponse::SimpleAck,
+                );
+                log_mismatch(outcome, ack.invoke_id, "SimpleAck");
             }
             Apdu::ComplexAck(ack) => {
                 if ack.segmented {
@@ -33,27 +61,37 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         source_mac,
                         source_network,
                         ack,
-                        segmented_response_accepted,
+                        limits,
                     )
                     .await;
                 } else {
                     debug!(invoke_id = ack.invoke_id, "Received ComplexAck");
                     let mut tsm = tsm.lock().await;
-                    tsm.complete_transaction(
+                    let outcome = tsm.complete_transaction(
                         &tsm_mac,
                         ack.invoke_id,
+                        Some(ack.service_choice),
                         TsmResponse::ComplexAck {
                             service_data: ack.service_ack,
                         },
                     );
+                    log_mismatch(outcome, ack.invoke_id, "ComplexAck");
                 }
             }
             Apdu::Error(err) => {
                 debug!(invoke_id = err.invoke_id, "Received Error PDU");
                 let mut tsm = tsm.lock().await;
+                // Correlated by invoke ID alone. Unlike 20.1.4.2 and 20.1.5.6,
+                // Clause 20.1.7.2 imposes no correspondence to the requested
+                // service: error-choice is "the tag value of the BACnet-Error
+                // choice", and Clause 21 opens that production with
+                // `other [127] Error`. Nothing in the Standard forbids a peer
+                // from answering through that tag, so an exact-match gate here
+                // would reject conformant responses.
                 tsm.complete_transaction(
                     &tsm_mac,
                     err.invoke_id,
+                    None,
                     TsmResponse::Error {
                         class: err.error_class.to_raw() as u32,
                         code: err.error_code.to_raw() as u32,
@@ -63,20 +101,37 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Apdu::Reject(rej) => {
                 debug!(invoke_id = rej.invoke_id, "Received Reject PDU");
                 let mut tsm = tsm.lock().await;
+                // Carries no service choice (Clause 20.1.8); invoke ID is the
+                // only correlation the Standard provides.
                 tsm.complete_transaction(
                     &tsm_mac,
                     rej.invoke_id,
+                    None,
                     TsmResponse::Reject {
                         reason: rej.reject_reason.to_raw(),
                     },
                 );
             }
             Apdu::Abort(abt) => {
+                // Clause 5.4.4.3 AbortPDU_Received fires only for an Abort
+                // "whose 'server' parameter is TRUE". An Abort this client
+                // itself sent — 5.4.4.4 emits them with 'server' = FALSE —
+                // must not, echoed back or spoofed, complete the very
+                // transaction it was trying to abort.
+                if !abt.sent_by_server {
+                    debug!(
+                        invoke_id = abt.invoke_id,
+                        "Ignoring Abort PDU with server=FALSE"
+                    );
+                    return;
+                }
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 let mut tsm = tsm.lock().await;
+                // Carries no service choice (Clause 20.1.9).
                 tsm.complete_transaction(
                     &tsm_mac,
                     abt.invoke_id,
+                    None,
                     TsmResponse::Abort {
                         reason: abt.abort_reason.to_raw(),
                     },
@@ -189,16 +244,115 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
             Apdu::SegmentAck(sa) => {
-                let key = (tsm_mac, sa.invoke_id);
-                let senders = seg_ack_senders.lock().await;
-                if let Some(tx) = senders.get(&key) {
-                    let _ = tx.try_send(sa);
-                } else {
+                // Clause 5.4.4.2 gates DuplicateACK_Received, NewACK_Received
+                // and FinalACK_Received on the 'server' parameter being TRUE.
+                // A SegmentACK this client sent while receiving a segmented
+                // response carries server=FALSE and must not be fed back into
+                // its own segmented send.
+                //
+                // This check must stay ahead of the Abort below. A client
+                // emits SegmentACKs with 'server' = FALSE, so if the order
+                // were reversed, two of these clients exchanging a segmented
+                // ConfirmedCOVNotification would answer each other's
+                // SegmentACKs with Aborts indefinitely. Dropping them here is
+                // what keeps the Abort reachable only by a *server's* PDU.
+                if !sa.sent_by_server {
                     debug!(
                         invoke_id = sa.invoke_id,
-                        "Ignoring SegmentAck for unknown transaction"
+                        "Ignoring SegmentAck with server=FALSE"
                     );
+                    return;
                 }
+                // Which of Clause 5.4's four client states this device is in
+                // for `invoke_id` decides the answer, and each gives a
+                // different one. The predicates below are what distinguishes
+                // them: a `seg_state` entry means a segmented response is
+                // being reassembled, a `seg_ack_senders` entry means a
+                // segmented request is still being sent, and a pending TSM
+                // transaction without either means the send is done.
+                let invoke_id = sa.invoke_id;
+                let key = (tsm_mac.clone(), invoke_id);
+
+                // SEGMENTED_CONF (5.4.4.4) `UnexpectedPDU_Received` lists
+                // "BACnet-SegmentACK-PDU with 'server' = TRUE" among the PDUs
+                // that do not belong in this state, and requires all three of:
+                // "transmit a BACnet-Abort-PDU with 'server' = FALSE; send
+                // ABORT.indication with 'server' = FALSE and 'abort-reason' =
+                // INVALID_APDU_IN_THIS_STATE to the local application program;
+                // and enter the IDLE state."
+                //
+                // Checked first because it is the narrower state: reassembly
+                // only starts once the request has been sent in full, so a
+                // `seg_state` entry means any `seg_ack_senders` entry that
+                // still lingers belongs to a send that is already finished.
+                if let Some(state) = seg_state.remove(&key) {
+                    debug!(invoke_id, "Aborting reassembly on an unexpected SegmentAck");
+                    Self::abort_reassembly(
+                        tsm,
+                        network,
+                        &tsm_mac,
+                        &state.reply_mac,
+                        invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
+                    return;
+                }
+
+                let delivered = {
+                    let senders = seg_ack_senders.lock().await;
+                    match senders.get(&key) {
+                        Some(tx) => {
+                            let _ = tx.try_send(sa);
+                            true
+                        }
+                        None => false,
+                    }
+                };
+                if delivered {
+                    // SEGMENTED_REQUEST (5.4.4.2): still sending, so this is
+                    // the flow control the send loop is waiting on.
+                    return;
+                }
+
+                // AWAIT_CONFIRMATION (5.4.4.3) `SegmentACK_Received`: a
+                // transaction is outstanding but its send phase is over, so
+                // the Standard is explicit — "discard the PDU as a duplicate,
+                // and re-enter the current state."
+                //
+                // This case is not hypothetical. `release_invoke_id` drops a
+                // peer's allocator once every ID is free, so the next request
+                // to an idle peer reuses invoke ID 0. A duplicated SegmentACK
+                // from a finished segmented transfer therefore lands on a live
+                // unsegmented request — which has no `seg_ack_senders` entry —
+                // and aborting here would kill this client's own healthy
+                // request at the peer.
+                if tsm
+                    .lock()
+                    .await
+                    .expected_service_choice(&tsm_mac, invoke_id)
+                    .is_some()
+                {
+                    debug!(
+                        invoke_id,
+                        "Discarding duplicate SegmentAck for an outstanding transaction"
+                    );
+                    return;
+                }
+
+                // IDLE (5.4.4.1) `UnexpectedSegmentInfoReceived`: nothing is
+                // outstanding, so a "BACnet-SegmentACK-PDU with 'server' =
+                // TRUE" is unexpected evidence of an active server TSM and
+                // earns the Abort ('server' = FALSE,
+                // INVALID_APDU_IN_THIS_STATE).
+                debug!(invoke_id, "Aborting SegmentAck received while idle");
+                Self::send_client_abort(
+                    network,
+                    source_mac,
+                    invoke_id,
+                    bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                )
+                .await;
             }
         }
     }
