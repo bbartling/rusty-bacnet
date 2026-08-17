@@ -93,6 +93,33 @@ impl DeviceTable {
             .find(|d| d.mac_address.as_slice() == mac)
     }
 
+    /// Look up a routed device by its remote network number and MAC address.
+    ///
+    /// A routed device's `mac_address` holds the router it was heard through,
+    /// which every device behind that router shares; its own identity is the
+    /// SNET/SADR of the NPDU that carried its I-Am, stored as
+    /// `source_network` and `source_address`.
+    ///
+    /// The table is keyed by device instance, so two rows can share one
+    /// SNET/SADR (a re-commissioned instance survives until the stale purge).
+    /// The freshest `last_seen` wins: it holds what the device most recently
+    /// advertised.
+    pub fn get_by_network_address(
+        &self,
+        network: u16,
+        address: &[u8],
+    ) -> Option<&DiscoveredDevice> {
+        self.devices
+            .values()
+            .filter(|d| {
+                d.source_network == Some(network)
+                    && d.source_address
+                        .as_ref()
+                        .is_some_and(|a| a.as_slice() == address)
+            })
+            .max_by_key(|d| d.last_seen)
+    }
+
     /// Clear all entries.
     pub fn clear(&mut self) {
         self.devices.clear();
@@ -219,6 +246,62 @@ mod tests {
         let mut table = DeviceTable::new();
         table.upsert(make_device(1234));
         assert!(table.get_by_mac(&[10, 0, 0, 1, 0xBA, 0xC0]).is_none());
+    }
+
+    fn make_routed_device(instance: u32, network: u16, address: &[u8]) -> DiscoveredDevice {
+        let mut device = make_device(instance);
+        device.source_network = Some(network);
+        device.source_address = Some(MacAddr::from_slice(address));
+        device
+    }
+
+    #[test]
+    fn get_by_network_address_finds_routed_device() {
+        let mut table = DeviceTable::new();
+        table.upsert(make_routed_device(1, 100, &[0x03]));
+        table.upsert(make_routed_device(2, 200, &[0x03]));
+        let dev = table.get_by_network_address(200, &[0x03]).unwrap();
+        assert_eq!(dev.object_identifier.instance_number(), 2);
+    }
+
+    /// A local device whose MAC happens to equal the queried remote address
+    /// lives in a different address space and must not match.
+    #[test]
+    fn get_by_network_address_ignores_local_devices() {
+        let mut table = DeviceTable::new();
+        let mut local = make_device(1);
+        local.mac_address = MacAddr::from_slice(&[0x03]);
+        table.upsert(local);
+        assert!(table.get_by_network_address(100, &[0x03]).is_none());
+    }
+
+    #[test]
+    fn get_by_network_address_requires_both_terms() {
+        let mut table = DeviceTable::new();
+        table.upsert(make_routed_device(1, 100, &[0x03]));
+        assert!(table.get_by_network_address(100, &[0x04]).is_none());
+        assert!(table.get_by_network_address(101, &[0x03]).is_none());
+    }
+
+    /// A re-commissioned device instance leaves two rows at one SNET/SADR
+    /// until the stale purge; the freshest advertisement must win, not an
+    /// arbitrary hash-order pick.
+    #[test]
+    fn get_by_network_address_prefers_freshest_entry() {
+        let mut table = DeviceTable::new();
+        let now = Instant::now();
+        let mut stale = make_routed_device(1, 100, &[0x03]);
+        stale.max_apdu_length = 1476;
+        stale.last_seen = now;
+        let mut fresh = make_routed_device(2, 100, &[0x03]);
+        fresh.max_apdu_length = 128;
+        fresh.last_seen = now + Duration::from_secs(60);
+        table.upsert(stale);
+        table.upsert(fresh);
+
+        let dev = table.get_by_network_address(100, &[0x03]).unwrap();
+        assert_eq!(dev.object_identifier.instance_number(), 2);
+        assert_eq!(dev.max_apdu_length, 128);
     }
 
     #[test]

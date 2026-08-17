@@ -179,56 +179,42 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let unsegmented_apdu_size = 4 + service_data.len();
         let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
-        match target {
-            ConfirmedTarget::Local { mac } => {
-                let (remote_max_apdu, remote_max_segments, advertised) = {
-                    let dt = self.device_table.lock().await;
-                    let device = dt.get_by_mac(mac);
-                    let max_apdu = device
-                        .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
-                        .unwrap_or(self.config.max_apdu_length);
-                    let max_seg = device.and_then(|d| d.max_segments_accepted);
-                    let advertised = if device.is_some() {
-                        LengthBoundedBy::DiscoveredPeer(max_apdu)
-                    } else {
-                        LengthBoundedBy::LocalConfig(max_apdu)
-                    };
-                    (max_apdu.min(target_transport_max_apdu), max_seg, advertised)
-                };
-                check_transmittable_length(advertised, target_transport_max_apdu)?;
-                if unsegmented_apdu_size > remote_max_apdu as usize {
-                    return self
-                        .segmented_confirmed_request(
-                            target,
-                            service_choice,
-                            service_data,
-                            remote_max_apdu,
-                            remote_max_segments,
-                        )
-                        .await;
-                }
-            }
-            ConfirmedTarget::Routed { .. } => {
-                let remote_max_apdu = self.config.max_apdu_length.min(target_transport_max_apdu);
-                // Deliberately the local configuration, not a peer value: this
-                // branch never consults the device table, so a routed peer's
-                // own advertised limit is still unenforced. Tracked separately.
-                check_transmittable_length(
-                    LengthBoundedBy::LocalConfig(self.config.max_apdu_length),
-                    target_transport_max_apdu,
-                )?;
-                if unsegmented_apdu_size > remote_max_apdu as usize {
-                    return self
-                        .segmented_confirmed_request(
-                            target,
-                            service_choice,
-                            service_data,
-                            remote_max_apdu,
-                            None,
-                        )
-                        .await;
-                }
-            }
+        let (remote_max_apdu, remote_max_segments, advertised) = {
+            let dt = self.device_table.lock().await;
+            // A routed peer is recorded under the router's MAC, so only the
+            // SNET/SADR of the NPDU that carried its I-Am identifies it
+            // (Clause 5.2.1.2 term (c) binds the peer's Max APDU Length
+            // Accepted regardless of how the peer is reached).
+            let device = match target {
+                ConfirmedTarget::Local { mac } => dt.get_by_mac(mac),
+                ConfirmedTarget::Routed {
+                    dest_network,
+                    dest_mac,
+                    ..
+                } => dt.get_by_network_address(dest_network, dest_mac),
+            };
+            let max_apdu = device
+                .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
+                .unwrap_or(self.config.max_apdu_length);
+            let max_seg = device.and_then(|d| d.max_segments_accepted);
+            let advertised = if device.is_some() {
+                LengthBoundedBy::DiscoveredPeer(max_apdu)
+            } else {
+                LengthBoundedBy::LocalConfig(max_apdu)
+            };
+            (max_apdu.min(target_transport_max_apdu), max_seg, advertised)
+        };
+        check_transmittable_length(advertised, target_transport_max_apdu)?;
+        if unsegmented_apdu_size > remote_max_apdu as usize {
+            return self
+                .segmented_confirmed_request(
+                    target,
+                    service_choice,
+                    service_data,
+                    remote_max_apdu,
+                    remote_max_segments,
+                )
+                .await;
         }
 
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
