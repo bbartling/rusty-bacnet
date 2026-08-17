@@ -710,6 +710,10 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
         .unwrap(),
     ))
     .unwrap();
+    // A recipient that WOULD be broadcast to, so both assertions below can only
+    // be satisfied by the Event_Enable gate rather than by an unnamed recipient.
+    db.add(Box::new(notification_class_0_broadcasting()))
+        .unwrap();
 
     let server = BACnetServer::start(ServerConfig::default(), db, transport)
         .await
