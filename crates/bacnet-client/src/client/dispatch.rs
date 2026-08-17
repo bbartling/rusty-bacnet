@@ -287,11 +287,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // still lingers belongs to a send that is already finished.
                 if let Some(state) = seg_state.remove(&key) {
                     debug!(invoke_id, "Aborting reassembly on an unexpected SegmentAck");
+                    // The stored identity, not this PDU's source. A key match
+                    // already forces the inbound SNET/SADR to equal the
+                    // stored pair (the key is derived from it), but the
+                    // immediate MAC can diverge — a second router to the same
+                    // peer — and reading both from the state keeps the
+                    // (reply_mac, reply_network) pair consistent.
                     Self::abort_reassembly(
                         tsm,
                         network,
                         &tsm_mac,
                         &state.reply_mac,
+                        &state.reply_network,
                         invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -349,6 +356,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Self::send_client_abort(
                     network,
                     source_mac,
+                    source_network,
                     invoke_id,
                     bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                 )
@@ -382,14 +390,32 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, "Failed to encode response for COV notification");
             return;
         }
-        let send_result = match source_network {
+        if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
+            warn!(error = %e, "Failed to send response for COV notification");
+        }
+    }
+
+    /// Send a reply back along the path its trigger arrived on.
+    ///
+    /// A PDU from a routed peer carries the peer's SNET/SADR; the reply must
+    /// carry that pair as DNET/DADR, unicast to the router that delivered the
+    /// original, or the router treats it as locally addressed and never
+    /// forwards it. Every PDU answering an inbound one goes through here so
+    /// no reply site can drop the routing half of the address again.
+    pub(super) async fn send_reply_apdu(
+        network: &Arc<NetworkLayer<T>>,
+        buf: &[u8],
+        reply_mac: &[u8],
+        reply_network: &Option<NpduAddress>,
+    ) -> Result<(), Error> {
+        match reply_network {
             Some(address) if !address.mac_address.is_empty() => {
                 network
                     .send_apdu_routed(
-                        &buf,
+                        buf,
                         address.network,
                         &address.mac_address,
-                        source_mac,
+                        reply_mac,
                         false,
                         NetworkPriority::NORMAL,
                     )
@@ -397,12 +423,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             _ => {
                 network
-                    .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
+                    .send_apdu(buf, reply_mac, false, NetworkPriority::NORMAL)
                     .await
             }
-        };
-        if let Err(e) = send_result {
-            warn!(error = %e, "Failed to send response for COV notification");
         }
     }
 }

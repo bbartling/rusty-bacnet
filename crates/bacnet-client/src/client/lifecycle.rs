@@ -118,9 +118,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     warn!(error = %e, "Failed to encode segmented receive timeout Abort");
                                     continue;
                                 }
-                                let _ = network_dispatch
-                                    .send_apdu(&buf, &state.reply_mac, false, NetworkPriority::NORMAL)
-                                    .await;
+                                let _ = Self::send_reply_apdu(
+                                    &network_dispatch,
+                                    &buf,
+                                    &state.reply_mac,
+                                    &state.reply_network,
+                                )
+                                .await;
                             }
                         }
 

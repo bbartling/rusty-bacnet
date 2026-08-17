@@ -334,6 +334,10 @@ struct SegmentedReceiveState {
     receiver: SegmentReceiver,
     /// Immediate MAC used to send SegmentAck/Abort PDUs.
     reply_mac: MacAddr,
+    /// The peer's SNET/SADR when the segments arrive through a router; the
+    /// reply's DNET/DADR, or the router takes the reply for itself instead
+    /// of forwarding it (Clause 6.5.2.1).
+    reply_network: Option<NpduAddress>,
     /// Next expected sequence number (for gap detection).
     expected_next_seq: u8,
     /// Timestamp of last received segment (for reaping stale sessions).
@@ -789,6 +793,8 @@ mod peer_max_apdu_tests;
 mod response_correlation_tests;
 #[cfg(test)]
 mod routed_max_apdu_tests;
+#[cfg(test)]
+mod routed_reply_tests;
 #[cfg(all(test, feature = "sc-tls"))]
 mod sc_builder_tests;
 #[cfg(test)]

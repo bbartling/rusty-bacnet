@@ -87,6 +87,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Replies to a routed peer retrace the request's path (#366). Every
+  SegmentACK and Abort the client sends while receiving a segmented
+  ComplexACK — the per-window and negative (gap) SegmentACKs, the
+  SEGMENTATION_NOT_SUPPORTED and BUFFER_OVERFLOW Aborts, the Abort for
+  an unsolicited segmented ComplexACK, the INVALID_APDU_IN_THIS_STATE
+  Aborts from the four-state SegmentACK dispatch, and the reaper's
+  TSM_TIMEOUT Abort — was unicast to the immediate source MAC with no
+  DNET/DADR, so a router had no reason to forward it and a routed peer's
+  segment timer simply expired. The duty is compositional in the
+  Standard: Clause 5.4 identifies a transaction by the peer's
+  BACnetAddress (network number plus MAC), Clause 6.5.1 makes an absent
+  DNET an assertion that the destination is local, Clause 6.5.2.1 has a
+  router deliver such an NPDU to its own application entity rather than
+  forward it, and Clause 6.5.3 prefers that a device "note the SA
+  associated with the original request and reuse that SA in the
+  response". All reply sites now go through one shared `send_reply_apdu`
+  helper that carries the inbound SNET/SADR back as DNET/DADR (the
+  pattern the confirmed-COV response path already used and now shares),
+  and `SegmentedReceiveState` records the peer's routed identity
+  alongside the reply MAC so deferred Aborts (reassembly overflow,
+  session reaping) route too.
+
 - Routed confirmed requests honor the routed peer's advertised
   `Max APDU Length Accepted` (#362). The routed path computed the maximum
   transmittable length from local configuration and the transport alone,
