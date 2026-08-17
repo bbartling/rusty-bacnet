@@ -213,6 +213,20 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Loopback(t) => t.max_apdu_length(),
         }
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        match self {
+            Self::Bip(t) => t.is_broadcast_mac(mac),
+            Self::Mstp(t) => t.is_broadcast_mac(mac),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.is_broadcast_mac(mac),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.is_broadcast_mac(mac),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.is_broadcast_mac(mac),
+            Self::Loopback(t) => t.is_broadcast_mac(mac),
+        }
+    }
 }
 
 impl<S: SerialPort> From<BipTransport> for AnyTransport<S> {

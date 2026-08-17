@@ -16,6 +16,21 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
 /// The DNET reserved for a global broadcast (Clause 6.3).
 const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 
+/// Project an alarm/event priority onto the NPDU Network Priority.
+///
+/// Clause 13.2.5.4: "the Network Priority as defined in Clause 6.2.2 shall be
+/// set as a function of the alarm and event priority as defined in Table
+/// 13-6". Lower event priority is more urgent: 00–63 is a Life Safety
+/// message, 64–127 Critical Equipment, 128–191 Urgent, 192–255 Normal.
+pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
+    match priority {
+        0..=63 => NetworkPriority::LIFE_SAFETY,
+        64..=127 => NetworkPriority::CRITICAL_EQUIPMENT,
+        128..=191 => NetworkPriority::URGENT,
+        192..=255 => NetworkPriority::NORMAL,
+    }
+}
+
 /// The network destination a Notification Class recipient resolves to.
 ///
 /// Clause 21's `BACnetAddress` gives a recipient two independent knobs —
@@ -41,28 +56,38 @@ enum RecipientRoute {
     /// to be numbered 65535. `broadcast_to_network` rejects 0xFFFF outright,
     /// so routing it as one would drop the notification.
     GlobalBroadcast,
-    /// A unicast MAC on a remote network. Delivering it needs the MAC of a
-    /// next-hop router, and no router table is reachable from the server, so
-    /// the destination cannot be resolved. Tracked by #186.
-    UnresolvedRoute(u16),
+    /// A unicast MAC on a remote network. The NPDU names the recipient via
+    /// DNET/DADR; with no router table in this non-routing device, the link
+    /// DA is the local broadcast, exactly as Clause 6.5.3 prescribes when
+    /// "the address of the router is initially unknown".
+    RemoteUnicast { network: u16, mac: MacAddr },
+    /// A unicast MAC alongside network 65535, which is self-contradictory: a
+    /// global broadcast requires DLEN zero.
+    ContradictoryGlobal,
     /// A device-instance recipient. Resolving it needs a device-to-address
     /// binding this device does not maintain. Tracked by #125.
     UnresolvedDevice(ObjectIdentifier),
 }
 
 impl RecipientRoute {
-    fn resolve(recipient: &BACnetRecipient) -> Self {
+    fn resolve(recipient: &BACnetRecipient, is_link_broadcast: impl Fn(&[u8]) -> bool) -> Self {
         match recipient {
             BACnetRecipient::Device(oid) => Self::UnresolvedDevice(*oid),
             BACnetRecipient::Address(addr) => {
                 match (addr.network_number, addr.mac_address.is_empty()) {
                     (0, true) => Self::LocalBroadcast,
+                    // The data-link spelling of a broadcast (#360): Clause 6.3
+                    // names the medium's literal broadcast MAC alongside the
+                    // zero-length form, and both name the same destination.
+                    (0, false) if is_link_broadcast(&addr.mac_address) => Self::LocalBroadcast,
                     (0, false) => Self::LocalUnicast(addr.mac_address.clone()),
                     (GLOBAL_BROADCAST_NETWORK, true) => Self::GlobalBroadcast,
                     (net, true) => Self::RemoteBroadcast(net),
-                    // Includes a MAC alongside network 65535, which is
-                    // self-contradictory: a broadcast requires DLEN zero.
-                    (net, false) => Self::UnresolvedRoute(net),
+                    (GLOBAL_BROADCAST_NETWORK, false) => Self::ContradictoryGlobal,
+                    (net, false) => Self::RemoteUnicast {
+                        network: net,
+                        mac: addr.mac_address.clone(),
+                    },
                 }
             }
         }
@@ -74,31 +99,36 @@ impl RecipientRoute {
     /// may be transmitted using a multicast or broadcast network layer address".
     /// A confirmed notification also has nowhere to return its SimpleACK from.
     ///
-    /// This recognizes only the *network-layer* spelling of a broadcast, the
-    /// zero-length `mac-address`. A recipient carrying its data link's literal
-    /// broadcast MAC — `X'FFFFFFFFFFFF'` on Ethernet, an all-ones host portion
-    /// on BACnet/IP, `X'FF'` on MS/TP — reads as `LocalUnicast` here and is
-    /// still sent confirmed. Recognizing those needs the transport's broadcast
-    /// address, which this layer does not have. Tracked by #360.
+    /// Both spellings of a broadcast land here as non-unicast routes: the
+    /// zero-length `mac-address` (Clause 21), and the data link's literal
+    /// broadcast MAC, which `resolve` folds into `LocalBroadcast` via the
+    /// transport's own knowledge of its spelling.
+    ///
+    /// `RemoteUnicast` is excluded for a different reason: Clause 6.3 permits
+    /// sending it confirmed (the DNET/DADR restricts the destination to one
+    /// device), but the server TSM cannot yet correlate an acknowledgment
+    /// that arrives through a router (#375).
     fn permits_confirmed(&self) -> bool {
         matches!(self, Self::LocalUnicast(_))
     }
 
     /// Whether this destination can be sent to at all, logging why not when it
     /// cannot. The two failures are reported separately because they are
-    /// separate operator problems: an unreachable network is a routing
-    /// configuration gap, while an unbound device instance is a recipient this
-    /// device cannot address at all.
+    /// separate operator problems: a self-contradictory address is a
+    /// configuration error, while an unbound device instance is a recipient
+    /// this device cannot address at all.
     fn is_deliverable(&self, notification_class: u32) -> bool {
         match self {
             Self::LocalUnicast(_)
             | Self::LocalBroadcast
             | Self::RemoteBroadcast(_)
-            | Self::GlobalBroadcast => true,
-            Self::UnresolvedRoute(network) => {
+            | Self::GlobalBroadcast
+            | Self::RemoteUnicast { .. } => true,
+            Self::ContradictoryGlobal => {
                 warn!(
                     notification_class,
-                    network, "Skipping recipient: no known route to its network"
+                    "Skipping recipient: network 65535 with a unicast MAC is \
+                     self-contradictory (a global broadcast requires DLEN zero)"
                 );
                 false
             }
@@ -310,6 +340,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let notification_class = notification.notification_class;
+        // Clause 13.2.5.4 sets the NPDU priority from the notification's
+        // event priority, on every send of this notification — retries too.
+        let network_priority = network_priority_for_event(notification.priority);
 
         // Clause 13.2.5: "notifications are distributed to the notification-
         // clients specified by the Recipient_List input". The Recipient_List is
@@ -326,21 +359,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         for (recipient, process_id, confirmed) in &recipients {
-            let route = RecipientRoute::resolve(recipient);
+            let route =
+                RecipientRoute::resolve(recipient, |mac| network.transport().is_broadcast_mac(mac));
 
             if !route.is_deliverable(notification_class) {
                 continue;
             }
 
-            // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs.
             // Downgrading to unconfirmed would drop the acknowledgment the
-            // recipient was configured to require, so this is a skip.
+            // recipient was configured to require, so both cases are skips.
             if *confirmed && !route.permits_confirmed() {
-                warn!(
-                    notification_class,
-                    "Recipient requests confirmed notifications at a broadcast address; \
-                     Clause 6.3 permits only unconfirmed PDUs there, skipping"
-                );
+                match &route {
+                    // Clause 6.3 permits sending this (the DNET/DADR restricts
+                    // the destination to one device), but the server TSM
+                    // cannot yet correlate an acknowledgment that arrives
+                    // through a router. Tracked by #375.
+                    RecipientRoute::RemoteUnicast { network, .. } => warn!(
+                        notification_class,
+                        network,
+                        "Recipient requests confirmed notifications on a remote network; \
+                         routed acknowledgment correlation is unimplemented (#375), skipping"
+                    ),
+                    // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs.
+                    _ => warn!(
+                        notification_class,
+                        "Recipient requests confirmed notifications at a broadcast address; \
+                         Clause 6.3 permits only unconfirmed PDUs there, skipping"
+                    ),
+                }
                 continue;
             }
 
@@ -356,8 +402,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let service_bytes = service_buf.freeze();
 
             if *confirmed {
-                // `permits_confirmed` above admits only `LocalUnicast`.
+                // `permits_confirmed` above admits only `LocalUnicast`. If
+                // that predicate ever widens without this arm learning the
+                // new route, fail loudly instead of dropping the
+                // notification with no diagnostic.
                 let RecipientRoute::LocalUnicast(target_mac) = &route else {
+                    warn!(
+                        notification_class,
+                        "Confirmed notification reached the send path on a \
+                         non-unicast route; dropping"
+                    );
                     continue;
                 };
                 let target_mac = target_mac.clone();
@@ -398,7 +452,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                     for attempt in 0..=apdu_retries {
                         let send_result = network
-                            .send_apdu(&buf, &target_mac, true, NetworkPriority::NORMAL)
+                            .send_apdu(&buf, &target_mac, true, network_priority)
                             .await;
 
                         if let Err(e) = send_result {
@@ -463,20 +517,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 let send_result = match &route {
                     RecipientRoute::LocalUnicast(mac) => {
-                        network
-                            .send_apdu(&buf, mac, false, NetworkPriority::NORMAL)
-                            .await
+                        network.send_apdu(&buf, mac, false, network_priority).await
                     }
                     RecipientRoute::LocalBroadcast => {
-                        network
-                            .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
-                            .await
+                        network.broadcast_apdu(&buf, false, network_priority).await
                     }
                     // Carries DNET with DLEN zero, so routers forward it
                     // onto the remote network as a broadcast there.
                     RecipientRoute::RemoteBroadcast(net) => {
                         network
-                            .broadcast_to_network(&buf, *net, false, NetworkPriority::NORMAL)
+                            .broadcast_to_network(&buf, *net, false, network_priority)
                             .await
                     }
                     // Carries DNET 0xFFFF, which routers forward to every
@@ -484,11 +534,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // DNET, so it needs its own send.
                     RecipientRoute::GlobalBroadcast => {
                         network
-                            .broadcast_global_apdu(&buf, false, NetworkPriority::NORMAL)
+                            .broadcast_global_apdu(&buf, false, network_priority)
+                            .await
+                    }
+                    // DNET/DADR name the recipient; the link DA is the local
+                    // broadcast because this non-routing device keeps no
+                    // router table (Clause 6.5.3's unknown-router form).
+                    RecipientRoute::RemoteUnicast { network: net, mac } => {
+                        network
+                            .send_apdu_routed_via_local_broadcast(
+                                &buf,
+                                *net,
+                                mac,
+                                false,
+                                network_priority,
+                            )
                             .await
                     }
                     // Filtered out by `RecipientRoute::is_deliverable` above.
-                    RecipientRoute::UnresolvedRoute(_) | RecipientRoute::UnresolvedDevice(_) => {
+                    RecipientRoute::ContradictoryGlobal | RecipientRoute::UnresolvedDevice(_) => {
                         continue
                     }
                 };

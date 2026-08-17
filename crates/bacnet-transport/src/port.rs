@@ -130,4 +130,18 @@ pub trait TransportPort: Send + Sync {
     fn max_apdu_length(&self) -> u16 {
         1476
     }
+
+    /// Whether `mac` is this data link's broadcast address.
+    ///
+    /// A destination can spell a broadcast two ways: the network-layer form
+    /// (a zero-length MAC) or the medium's literal broadcast MAC — Clause 6.3
+    /// names `X'FFFFFFFFFFFF'` for Ethernet, `X'FF'` for MS/TP, an IP address
+    /// with all ones in the host portion for BACnet/IP. Only the transport
+    /// knows its own literal spelling, so senders that must not unicast to a
+    /// broadcast (Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs)
+    /// ask here. The default recognizes nothing, which leaves such a MAC
+    /// treated as a unicast.
+    fn is_broadcast_mac(&self, _mac: &[u8]) -> bool {
+        false
+    }
 }

@@ -344,26 +344,34 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        let npdu = Npdu {
-            is_network_message: false,
-            expecting_reply,
-            priority,
-            destination: Some(NpduAddress {
-                network: dest_network,
-                mac_address: MacAddr::from_slice(dest_mac),
-            }),
-            source: None,
-            hop_count: 255,
-            payload: Bytes::copy_from_slice(apdu),
-            ..Npdu::default()
-        };
-
-        let mut buf = BytesMut::with_capacity(8 + dest_mac.len() + apdu.len());
-        encode_npdu(&mut buf, &npdu)?;
-
+        let buf =
+            Self::encode_routed_npdu_buf(apdu, dest_network, dest_mac, expecting_reply, priority)?;
         self.transport
             .send_unicast_with_data_attributes(&buf, router_mac, data_attributes)
             .await
+    }
+
+    /// Send a routed APDU with a broadcast link DA, for when the next-hop
+    /// router's MAC is unknown.
+    ///
+    /// Clause 6.5.3: the data link DA "shall be the MAC address of the BACnet
+    /// router corresponding to the DNET parameter or the appropriate
+    /// broadcast DA if the address of the router is initially unknown". The
+    /// NPDU still addresses one device via DNET/DADR, which is why Clause
+    /// 6.3's broadcast restriction does not bite: "a MAC layer multicast or
+    /// broadcast address may be used for other PDU types when the network
+    /// layer address restricts the destination to a single device".
+    pub async fn send_apdu_routed_via_local_broadcast(
+        &self,
+        apdu: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        let buf =
+            Self::encode_routed_npdu_buf(apdu, dest_network, dest_mac, expecting_reply, priority)?;
+        self.transport.send_broadcast(&buf).await
     }
 
     /// Access the underlying transport.
@@ -377,6 +385,33 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// Get the transport's local MAC address.
     pub fn local_mac(&self) -> &[u8] {
         self.transport.local_mac()
+    }
+
+    /// Encode an APDU into an NPDU whose destination is `dest_network` /
+    /// `dest_mac`, ready for whichever link send the caller chooses.
+    fn encode_routed_npdu_buf(
+        apdu: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<BytesMut, Error> {
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply,
+            priority,
+            destination: Some(NpduAddress {
+                network: dest_network,
+                mac_address: MacAddr::from_slice(dest_mac),
+            }),
+            source: None,
+            hop_count: 255,
+            payload: Bytes::copy_from_slice(apdu),
+            ..Npdu::default()
+        };
+        let mut buf = BytesMut::with_capacity(8 + dest_mac.len() + apdu.len());
+        encode_npdu(&mut buf, &npdu)?;
+        Ok(buf)
     }
 
     /// Stop the network layer and underlying transport.

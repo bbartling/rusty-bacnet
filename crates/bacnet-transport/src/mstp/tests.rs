@@ -810,3 +810,19 @@ fn t_slot_stored_on_master_node() {
     let node = MasterNode::new(config).unwrap();
     assert_eq!(node.t_slot_ms, 10);
 }
+
+/// #360: X'FF' is the MS/TP broadcast spelling; anything else is a station.
+#[test]
+fn is_broadcast_mac_is_xff() {
+    let (serial_a, _serial_b) = LoopbackSerial::pair();
+    let config = MstpConfig {
+        this_station: 42,
+        max_master: 127,
+        max_info_frames: 1,
+        baud_rate: 9600,
+    };
+    let transport = MstpTransport::new(serial_a, config);
+    assert!(transport.is_broadcast_mac(&[0xFF]));
+    assert!(!transport.is_broadcast_mac(&[42]));
+    assert!(!transport.is_broadcast_mac(&[0xFF, 0xFF]));
+}

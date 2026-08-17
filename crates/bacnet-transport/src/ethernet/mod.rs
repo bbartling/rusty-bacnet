@@ -803,6 +803,10 @@ mod transport {
             &self.local_mac
         }
 
+        fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+            mac == ETHERNET_BROADCAST
+        }
+
         fn max_apdu_length(&self) -> u16 {
             1476
         }

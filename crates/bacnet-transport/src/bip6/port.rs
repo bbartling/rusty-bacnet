@@ -732,4 +732,20 @@ impl TransportPort for Bip6Transport {
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        // A B/IPv6 MAC is 16 address octets + 2 port octets. The broadcast
+        // spelling is any of the well-known BACnet multicast groups
+        // (Clause U.4); the port octets do not decide broadcast-ness.
+        if mac.len() != 18 {
+            return false;
+        }
+        [
+            BACNET_IPV6_MULTICAST_LINK_LOCAL,
+            BACNET_IPV6_MULTICAST_SITE_LOCAL,
+            BACNET_IPV6_MULTICAST_ORG_LOCAL,
+        ]
+        .iter()
+        .any(|group| mac[..16] == group.octets())
+    }
 }

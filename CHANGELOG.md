@@ -87,6 +87,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Event notifications carry the Table 13-6 network priority (#187). Every
+  transmit site — confirmed unicast including each retry, and the four
+  unconfirmed sends — hardcoded a Normal-priority NPDU, so a life-safety
+  alarm received no preferential queueing anywhere on the network. Clause
+  13.2.5.4 makes the mapping mandatory ("the Network Priority as defined
+  in Clause 6.2.2 shall be set as a function of the alarm and event
+  priority as defined in Table 13-6"): 00–63 is a Life Safety message,
+  64–127 Critical Equipment, 128–191 Urgent, 192–255 Normal. The
+  priority is now projected once per notification and threaded through
+  all six sends — the four pre-existing unconfirmed paths, the
+  remote-unicast path the #186 fix below introduces, and the confirmed
+  path. The mapping is scoped to event notifications, as the Standard
+  scopes it — COV notifications carry no priority parameter at all and
+  are unchanged. Tests assert the encoded NPDU control octet at every
+  band boundary, not the APDU field, which was always correct.
+
+- Notifications to a remote-network unicast recipient are delivered
+  instead of skipped (#186). What remained of the issue after the #357
+  rework was the remote-unicast arm: with no router table in this
+  non-routing device it resolved to an unresolved route and was dropped
+  with a warning — but Clause 6.5.3 prescribes exactly this situation's
+  send form: the NPDU names the recipient via DNET/DADR and the link DA
+  "shall be ... the appropriate broadcast DA if the address of the
+  router is initially unknown". The new
+  `NetworkLayer::send_apdu_routed_via_local_broadcast` implements that
+  form, and Clause 6.3's broadcast restriction does not bite because its
+  own parenthetical permits a broadcast MAC "when the network layer
+  address restricts the destination to a single device". Confirmed
+  notifications to remote recipients remain skipped — sending them would
+  mis-retry into duplicate deliveries until the server TSM can correlate
+  a routed acknowledgment (#375) — and the skip now says so instead of
+  claiming no route exists.
+
+- A recipient spelled with the data link's literal broadcast MAC resolves
+  as the broadcast it is (#360). A broadcast destination has two
+  spellings — the zero-length MAC of Clause 21's `BACnetAddress`
+  production and the medium's literal form named by Clause 6.3
+  (`X'FFFFFFFFFFFF'` on Ethernet, `X'FF'` on MS/TP, the subnet's
+  all-ones-host address on B/IP) — but only the first was recognized, so
+  a confirmed notification could still be unicast to a broadcast address
+  and burn its retries against Clause 5.4.5.1's silent receiver-side
+  discard. The new `TransportPort::is_broadcast_mac` lets each transport
+  report its own spelling (BIP consults its configured broadcast IP
+  together with its UDP port, the two components of Clause J.1.2's B/IP
+  broadcast address; MS/TP `X'FF'`; Ethernet all-ones; SC the Local
+  Broadcast VMAC; B/IPv6 the Clause U.4 multicast groups), and recipient
+  resolution folds a matching MAC on network 0 into the same broadcast
+  route as the zero-length form. The check is scoped to network 0
+  because that is where the MAC names an address on this port's own
+  link — a remote recipient's DADR is spelled in the remote network's
+  medium, about which this port's broadcast spelling proves nothing.
+
 - Replies to a routed peer retrace the request's path (#366). Every
   SegmentACK and Abort the client sends while receiving a segmented
   ComplexACK — the per-window and negative (gap) SegmentACKs, the
