@@ -315,6 +315,20 @@ pub struct DeviceWriteResult {
     pub result: Result<(), Error>,
 }
 
+/// The receive-side promises this client puts in every confirmed request.
+///
+/// Clause 20.1.2.3 and Clause 20.1.2.4 exist "so that the responding device may
+/// determine how to convey its response", so the same values must bound what
+/// the dispatch loop is willing to take back. Keeping the pair together stops
+/// the two halves from drifting as they are threaded through dispatch.
+#[derive(Debug, Clone, Copy)]
+struct ResponseLimits {
+    /// Clause 20.1.2.3 'segmented-response-accepted'.
+    segmented_response_accepted: bool,
+    /// Most segments this client will hold for one reassembly.
+    max_reassembly_segments: usize,
+}
+
 /// In-progress segmented receive state.
 struct SegmentedReceiveState {
     receiver: SegmentReceiver,
@@ -328,6 +342,13 @@ struct SegmentedReceiveState {
     window_position: u8,
     /// Proposed window size from the server.
     proposed_window_size: u8,
+    /// How many distinct segments have been stored.
+    ///
+    /// Monotonic, and deliberately not derived from `expected_next_seq`, which
+    /// is a `u8` and wraps: Clause 20.1.5.4 makes sequence numbers modulo 256,
+    /// so after 256 segments the counter returns to a slot already occupied.
+    /// This is the only value that can tell 257 segments from 1.
+    accepted_segments: usize,
 }
 
 /// Timeout for idle segmented reassembly sessions.
@@ -757,6 +778,8 @@ mod cov_tests;
 mod device_events_tests;
 #[cfg(test)]
 mod peer_max_apdu_tests;
+#[cfg(test)]
+mod response_correlation_tests;
 #[cfg(all(test, feature = "sc-tls"))]
 mod sc_builder_tests;
 #[cfg(test)]

@@ -69,7 +69,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
-        let segmented_response_accepted = config.segmented_response_accepted;
+        let response_limits = ResponseLimits::from_config(&config);
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
@@ -138,7 +138,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &received.source_mac,
                                     &received.source_network,
                                     decoded,
-                                    segmented_response_accepted,
+                                    response_limits,
                                 )
                                 .await;
                             }

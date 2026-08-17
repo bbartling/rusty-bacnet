@@ -237,7 +237,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id);
+            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id, service_choice);
             (invoke_id, rx)
         };
 

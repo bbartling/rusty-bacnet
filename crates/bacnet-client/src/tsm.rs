@@ -3,6 +3,7 @@
 //! Tracks in-flight confirmed requests. Each request gets a unique invoke_id
 //! (0-255) scoped per destination MAC. Responses are delivered via oneshot channels.
 
+use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -30,7 +31,11 @@ impl Default for TsmConfig {
 }
 
 /// Response types that complete a transaction.
+///
+/// Non-exhaustive: the TSM gains completion reasons as more of Clause 5.4's
+/// state machine is implemented, and those should be additive for callers.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TsmResponse {
     /// SimpleACK — confirmed service completed with no return data.
     SimpleAck,
@@ -86,14 +91,46 @@ impl InvokeIdAllocator {
 /// Prevents unbounded memory growth from spoofed source addresses.
 const MAX_TSM_DESTINATIONS: usize = 1024;
 
+/// What `complete_transaction` did with a response.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompletionOutcome {
+    /// The response matched a pending transaction and was delivered.
+    Delivered,
+    /// No transaction was pending for this source and invoke ID.
+    NoTransaction,
+    /// A transaction was pending, but the response was labelled for a
+    /// different confirmed service. The transaction is left pending and the
+    /// invoke ID stays allocated, so the legitimate response can still arrive.
+    ServiceChoiceMismatch {
+        /// The service the pending request asked for.
+        expected: ConfirmedServiceChoice,
+        /// The service the response claimed to answer.
+        observed: ConfirmedServiceChoice,
+    },
+}
+
+/// A confirmed request awaiting its response.
+struct PendingTransaction {
+    responder: oneshot::Sender<TsmResponse>,
+    /// The service this request asked for. Clause 20.1.4.2 and 20.1.5.6 both
+    /// require an acknowledgment's service-ack-choice to "contain the value of
+    /// the BACnetConfirmedServiceChoice corresponding to the service contained
+    /// in the previous BACnet-Confirmed-Service-Request that has resulted in
+    /// this acknowledgment", so anything else is not this transaction's
+    /// response.
+    expected_service_choice: ConfirmedServiceChoice,
+}
+
 /// Transaction State Machine.
 ///
 /// Tracks pending confirmed requests and correlates responses by
-/// `(destination_mac, invoke_id)`.
+/// `(destination_mac, invoke_id)` and by the confirmed service each request
+/// asked for.
 pub struct Tsm {
     config: TsmConfig,
     allocators: HashMap<MacAddr, InvokeIdAllocator>,
-    pending: HashMap<(MacAddr, u8), oneshot::Sender<TsmResponse>>,
+    pending: HashMap<(MacAddr, u8), PendingTransaction>,
 }
 
 impl Tsm {
@@ -138,10 +175,14 @@ impl Tsm {
 
     /// Register a pending transaction. Returns a receiver that will deliver
     /// the response when it arrives.
+    ///
+    /// `service_choice` is the confirmed service being requested; a response
+    /// labelled for any other service will not complete this transaction.
     pub fn register_transaction(
         &mut self,
         destination_mac: MacAddr,
         invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
     ) -> oneshot::Receiver<TsmResponse> {
         let (tx, rx) = oneshot::channel();
         debug_assert!(
@@ -151,25 +192,62 @@ impl Tsm {
             "duplicate TSM registration for invoke_id {}",
             invoke_id
         );
-        self.pending.insert((destination_mac, invoke_id), tx);
+        self.pending.insert(
+            (destination_mac, invoke_id),
+            PendingTransaction {
+                responder: tx,
+                expected_service_choice: service_choice,
+            },
+        );
         rx
     }
 
-    /// Deliver a response to a pending transaction. Returns `true` if found.
+    /// The confirmed service a pending transaction is waiting on, if any.
+    ///
+    /// Doubles as the "is a transaction pending" predicate: an inbound
+    /// segmented response for an invoke ID nobody is waiting on should not be
+    /// allocated a reassembly session.
+    pub fn expected_service_choice(
+        &self,
+        source_mac: &[u8],
+        invoke_id: u8,
+    ) -> Option<ConfirmedServiceChoice> {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        self.pending.get(&key).map(|p| p.expected_service_choice)
+    }
+
+    /// Deliver a response to a pending transaction.
+    ///
+    /// `observed_service_choice` is the service the response claims to answer,
+    /// or `None` for PDUs that carry no service choice at all — Reject and
+    /// Abort (Clauses 20.1.8 and 20.1.9), which can only be correlated by
+    /// invoke ID.
+    ///
+    /// A mismatch leaves the transaction pending and the invoke ID allocated.
+    /// Completing it would hand the caller a payload belonging to a different
+    /// service and free the ID for reuse while the real response is still in
+    /// flight.
     pub fn complete_transaction(
         &mut self,
         source_mac: &[u8],
         invoke_id: u8,
+        observed_service_choice: Option<ConfirmedServiceChoice>,
         response: TsmResponse,
-    ) -> bool {
+    ) -> CompletionOutcome {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
-        if let Some(tx) = self.pending.remove(&key) {
-            self.release_invoke_id(source_mac, invoke_id);
-            let _ = tx.send(response);
-            true
-        } else {
-            false
+        let Some(pending) = self.pending.get(&key) else {
+            return CompletionOutcome::NoTransaction;
+        };
+        let expected = pending.expected_service_choice;
+        if let Some(observed) = observed_service_choice {
+            if observed != expected {
+                return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
+            }
         }
+        let pending = self.pending.remove(&key).expect("presence just checked");
+        self.release_invoke_id(source_mac, invoke_id);
+        let _ = pending.responder.send(response);
+        CompletionOutcome::Delivered
     }
 
     /// Cancel a pending transaction. Returns `true` if found.
@@ -287,13 +365,22 @@ mod tests {
         let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
         let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
 
-        let rx = tsm.register_transaction(mac.clone(), invoke_id);
+        let rx = tsm.register_transaction(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
 
         let response = TsmResponse::ComplexAck {
             service_data: Bytes::from_static(&[0xDE, 0xAD]),
         };
-        let completed = tsm.complete_transaction(&mac, invoke_id, response);
-        assert!(completed);
+        let outcome = tsm.complete_transaction(
+            &mac,
+            invoke_id,
+            Some(ConfirmedServiceChoice::READ_PROPERTY),
+            response,
+        );
+        assert_eq!(outcome, CompletionOutcome::Delivered);
 
         let result = rx.await.unwrap();
         match result {
@@ -305,11 +392,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn complete_unknown_transaction_returns_false() {
+    async fn mismatched_service_choice_leaves_the_transaction_pending() {
         let mut tsm = Tsm::new(TsmConfig::default());
         let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let completed = tsm.complete_transaction(&mac, 42, TsmResponse::SimpleAck);
-        assert!(!completed);
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let rx = tsm.register_transaction(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+
+        let outcome = tsm.complete_transaction(
+            &mac,
+            invoke_id,
+            Some(ConfirmedServiceChoice::WRITE_PROPERTY),
+            TsmResponse::ComplexAck {
+                service_data: Bytes::from_static(&[0xBA, 0xD0]),
+            },
+        );
+        assert_eq!(
+            outcome,
+            CompletionOutcome::ServiceChoiceMismatch {
+                expected: ConfirmedServiceChoice::READ_PROPERTY,
+                observed: ConfirmedServiceChoice::WRITE_PROPERTY,
+            }
+        );
+        assert_eq!(tsm.pending_count(), 1, "transaction must stay pending");
+        assert_eq!(
+            tsm.allocate_invoke_id(&mac),
+            Some(invoke_id.wrapping_add(1)),
+            "the invoke ID must not have been handed back for reuse"
+        );
+
+        // The genuine response still completes it.
+        let outcome = tsm.complete_transaction(
+            &mac,
+            invoke_id,
+            Some(ConfirmedServiceChoice::READ_PROPERTY),
+            TsmResponse::ComplexAck {
+                service_data: Bytes::from_static(&[0xDE, 0xAD]),
+            },
+        );
+        assert_eq!(outcome, CompletionOutcome::Delivered);
+        match rx.await.unwrap() {
+            TsmResponse::ComplexAck { service_data } => {
+                assert_eq!(service_data.as_ref(), &[0xDE, 0xAD]);
+            }
+            other => panic!("expected ComplexAck, got {other:?}"),
+        }
+    }
+
+    /// Reject and Abort carry no service choice (Clauses 20.1.8, 20.1.9), and
+    /// Clause 20.1.7.2 lets an Error PDU answer any service with the
+    /// `BACnet-Error` `other [127]` choice. All three correlate by invoke ID
+    /// alone.
+    #[tokio::test]
+    async fn a_response_without_a_service_choice_completes_any_transaction() {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let rx = tsm.register_transaction(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+
+        let outcome =
+            tsm.complete_transaction(&mac, invoke_id, None, TsmResponse::Reject { reason: 9 });
+        assert_eq!(outcome, CompletionOutcome::Delivered);
+        assert!(matches!(
+            rx.await.unwrap(),
+            TsmResponse::Reject { reason: 9 }
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_unknown_transaction_reports_no_transaction() {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+        let outcome = tsm.complete_transaction(
+            &mac,
+            42,
+            Some(ConfirmedServiceChoice::READ_PROPERTY),
+            TsmResponse::SimpleAck,
+        );
+        assert_eq!(outcome, CompletionOutcome::NoTransaction);
     }
 
     #[test]
@@ -317,7 +484,11 @@ mod tests {
         let mut tsm = Tsm::new(TsmConfig::default());
         let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
         let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-        let _rx = tsm.register_transaction(mac.clone(), invoke_id);
+        let _rx = tsm.register_transaction(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
         assert_eq!(tsm.pending_count(), 1);
 
         let cancelled = tsm.cancel_transaction(&mac, invoke_id);
