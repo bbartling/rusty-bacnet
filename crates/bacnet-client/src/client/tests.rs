@@ -84,7 +84,7 @@ async fn assert_sc_socket_closed_after_drop(ws_hub: &LoopbackWebSocket, context:
     );
 }
 
-async fn send_routed_response<T: TransportPort>(
+pub(super) async fn send_routed_response<T: TransportPort>(
     transport: &T,
     client_mac: &[u8],
     source_network: u16,

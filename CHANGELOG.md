@@ -87,6 +87,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Routed confirmed requests honor the routed peer's advertised
+  `Max APDU Length Accepted` (#362). The routed path computed the maximum
+  transmittable length from local configuration and the transport alone,
+  so a routed peer advertising 128 octets was sent requests bounded only
+  by the transport — 1471 octets after the routed NPDU header on a
+  1476-octet link — while Clause 5.2.1.2(c) binds the remote peer's limit
+  with no exemption for destinations reached through a router. The Local
+  and Routed length checks are now one shared block in which only the
+  device-table lookup differs — routed peers resolve through the new
+  `DeviceTable::get_by_network_address`, since a routed entry's
+  `mac_address` holds the router it was heard through and cannot identify
+  the peer. The peer's limit governs in both directions: it now sets the
+  transmit bound even when it exceeds the client's own configured
+  (receive) maximum, exactly as the Local path has always treated a
+  discovered peer. Duplicate rows at one SNET/SADR resolve to the
+  freshest `last_seen`. The shared block also names the routed peer as
+  the binding term when its limit falls below the 50-octet
+  MinimumMessageSize floor, and threads the peer's recorded
+  `Max_Segments_Accepted` through the routed segmentation path (Clause
+  5.2.1.3(b)) — structural for now, as no production path records that
+  value from a peer.
+
 - Alert Enrollment now enforces the Clause 13.2.2.1 disabled-state
   conditions (#205). The object now exposes the Table 12-61
   `Event_State` and `Acked_Transitions` properties, resets both when
