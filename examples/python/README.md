@@ -17,6 +17,7 @@ pip install rusty-bacnet
 | [`sc_secure_connect.py`](sc_secure_connect.py) | BACnet/SC with hub, TLS, and VMAC addressing |
 | [`ipv6_client_server.py`](ipv6_client_server.py) | BACnet/IPv6 client and server |
 | [`device_management.py`](device_management.py) | DeviceCommunicationControl, CreateObject, error handling |
+| [`openweather_oa_server.py`](openweather_oa_server.py) | Long-lived BACnet/IP server: OA dry-bulb / humidity / dewpoint from OpenWeather One Call 4.0 |
 
 ## Running
 
@@ -35,4 +36,7 @@ python sc_secure_connect.py
 
 # Device management
 python device_management.py
+
+# OpenWeather OA server (needs OPENWEATHER_API_KEY; optional LAT/LON)
+python openweather_oa_server.py
 ```
