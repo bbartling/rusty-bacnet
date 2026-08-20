@@ -939,6 +939,7 @@ mod dispatch;
 mod event_notifications;
 mod lifecycle;
 mod requests;
+#[cfg(test)]
 pub(crate) use requests::{EXECUTED_CONFIRMED, EXECUTED_UNCONFIRMED};
 mod responses;
 mod segmentation;

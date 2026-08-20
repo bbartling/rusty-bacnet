@@ -1,8 +1,10 @@
 use super::*;
 
 mod unconfirmed;
+#[cfg(test)]
 pub(crate) use unconfirmed::EXECUTED_UNCONFIRMED;
 
+#[cfg(test)]
 /// Every confirmed service choice with an inbound execution arm in
 /// `handle_confirmed_request` below. Keep in lockstep with the `match` —
 /// the `executed_services_match_dispatch_table` test compares this list

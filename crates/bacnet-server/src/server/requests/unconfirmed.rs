@@ -1,10 +1,11 @@
 //! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, WriteGroup,
-//! UnconfirmedTextMessage) — see [`EXECUTED_UNCONFIRMED`].
+//! UnconfirmedTextMessage) — see `EXECUTED_UNCONFIRMED`.
 //!
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
 use super::super::*;
 
+#[cfg(test)]
 /// Every unconfirmed service choice with an inbound execution arm in
 /// `handle_unconfirmed_request` below. Keep in lockstep with the dispatch
 /// chain — see `EXECUTED_CONFIRMED` in `requests/mod.rs` for the cross-check
