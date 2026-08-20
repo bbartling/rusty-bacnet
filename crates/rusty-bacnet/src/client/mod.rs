@@ -12,8 +12,6 @@ use tokio::sync::Mutex;
 use bacnet_client::client;
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
-use bacnet_services::audit::AuditLogQueryRequest;
-
 type ClientInner = Arc<Mutex<Option<Arc<client::BACnetClient<AnyTransport<NoSerial>>>>>>;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{

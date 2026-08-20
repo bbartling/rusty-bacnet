@@ -233,10 +233,18 @@ use bacnet_services::vt::{VtOpenRequest, VtCloseRequest, VtDataRequest};
 
 ```rust
 use bacnet_services::audit::{
-    ConfirmedAuditNotificationRequest, UnconfirmedAuditNotificationRequest,
-    AuditLogQueryRequest,
+    AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
+    BACnetAuditLogQueryParameters, BACnetAuditNotification,
 };
 ```
+
+These models encode the Clause 21 field and tag productions within the
+library's `u64` Unsigned implementation limit. In particular,
+`AuditLogQueryRequest::start_at_sequence_number` is `Option<u32>`, and each
+query alternative contains `successful_actions_only: bool`. Clause 13.19
+instead describes `Unsigned64` and `BACnetSuccessFilter`; that internal
+Standard conflict remains unresolved pending authoritative addendum or errata
+research, so these codecs are not an unqualified Clause 13.19 support claim.
 
 ---
 
@@ -802,10 +810,38 @@ let raw = client.vt_data(&mac, session_id, &data, data_flag).await?;
 ### Audit Services
 
 ```rust
-let raw = client.confirmed_audit_notification(&mac, service_data).await?;
-client.unconfirmed_audit_notification(&mac, service_data).await?;
-let raw = client.audit_log_query(&mac, ack_filter, query_options).await?;
+use bacnet_services::audit::{AuditLogQueryRequest, AuditNotificationRequest};
+use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bytes::BytesMut;
+
+let notification_request: AuditNotificationRequest = /* build typed request */;
+let mut service_data = BytesMut::new();
+notification_request.try_encode(&mut service_data)?;
+client.confirmed_request(
+    &mac,
+    ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+    &service_data,
+).await?;
+
+client.unconfirmed_request(
+    &mac,
+    UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
+    &service_data,
+).await?;
+
+let query_request: AuditLogQueryRequest = /* build typed request */;
+let mut query_data = BytesMut::new();
+query_request.try_encode(&mut query_data)?;
+let raw_ack = client.confirmed_request(
+    &mac,
+    ConfirmedServiceChoice::AUDIT_LOG_QUERY,
+    &query_data,
+).await?;
 ```
+
+These are codec plus generic-client examples. `raw_ack` is not yet decoded by
+an AuditLogQuery acknowledgment model, and the bundled server does not execute
+the audit notification or query services. No PICS or BIBB support is implied.
 
 ---
 

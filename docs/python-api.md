@@ -952,12 +952,15 @@ raw = await client.vt_data(
 
 ### Audit Services
 
-#### `confirmed_audit_notification(address, service_data) -> bytes`
+#### `confirmed_audit_notification(address, service_data)`
 
-Send a confirmed audit notification.
+Send a confirmed audit notification. `service_data` is a raw escape hatch: the
+caller must supply a complete AuditNotification-Request service payload encoded
+to the Standard 135-2020 Clause 21 production. The method returns `None` after
+the peer acknowledges the request.
 
 ```python
-raw = await client.confirmed_audit_notification(
+await client.confirmed_audit_notification(
     "192.168.1.100:47808",
     service_data=encoded_audit_bytes,
 )
@@ -965,7 +968,9 @@ raw = await client.confirmed_audit_notification(
 
 #### `unconfirmed_audit_notification(address, service_data)`
 
-Send an unconfirmed audit notification (fire-and-forget).
+Send an unconfirmed audit notification (fire-and-forget). `service_data` is a
+raw escape hatch and must contain the complete Clause 21
+AuditNotification-Request service payload.
 
 ```python
 await client.unconfirmed_audit_notification(
@@ -974,17 +979,23 @@ await client.unconfirmed_audit_notification(
 )
 ```
 
-#### `audit_log_query(address, acknowledgment_filter, query_options_raw) -> bytes`
+#### `audit_log_query(address, service_data) -> bytes`
 
-Query the audit log.
+Send an audit log query and return the peer's raw response service payload.
+`service_data` is a raw escape hatch and must contain the complete Clause 21
+AuditLogQuery-Request service payload.
 
 ```python
 raw = await client.audit_log_query(
     "192.168.1.100:47808",
-    acknowledgment_filter=0,
-    query_options_raw=encoded_query_bytes,
+    service_data=encoded_query_bytes,
 )
 ```
+
+These three methods are generic outbound byte paths. They do not validate the
+payload, provide structured Python audit models, or imply audit-service
+execution by the bundled server; its audit notification and query handlers
+remain unsupported.
 
 ---
 

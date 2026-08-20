@@ -87,6 +87,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Audit notification and AuditLogQuery wire models now follow the field and
+  tag shapes of the Standard 135-2020 Clause 21 productions within the
+  library's `u64` Unsigned implementation limit (#345). Audit notification
+  requests contain a non-empty sequence of typed notifications, and
+  AuditLogQuery uses typed by-target/by-source alternatives instead of the
+  obsolete `acknowledgment_filter` plus opaque query tail. This is a breaking
+  Rust API change. Python's breaking `audit_log_query` signature now accepts a
+  complete pre-encoded `service_data: bytes` payload instead of
+  `acknowledgment_filter` and `query_options_raw`; all three Audit methods are
+  explicitly raw outbound escape hatches and do not imply bundled-server
+  execution.
+
+  The query model deliberately implements Clause 21's
+  `start-at-sequence-number Unsigned32` and `successful-actions-only BOOLEAN`.
+  Clause 13.19 describes those fields as `Unsigned64` and
+  `BACnetSuccessFilter`, respectively; that internal Standard conflict remains
+  an interoperability limitation pending authoritative addendum or errata
+  resolution. Audit service handlers, persistence, query acknowledgments, and
+  PICS/BIBB support claims remain out of scope.
+
 - COV Multiple wire models now match the Clause 13.16–13.18 and Clause 21
   productions (#342). `issue_confirmed_notifications` and each reference's
   `timestamped` flag are mandatory booleans and are encoded even when false;

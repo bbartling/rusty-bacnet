@@ -112,7 +112,9 @@ impl BACnetClient {
 
     /// Send a ConfirmedAuditNotification request (raw service data).
     ///
-    /// `service_data` is the pre-encoded AuditNotification-Request payload.
+    /// `service_data` must be a complete, pre-encoded Clause 21
+    /// AuditNotification-Request payload. This is a raw escape hatch and does
+    /// not imply that the bundled server executes the service.
     #[pyo3(signature = (address, service_data))]
     fn confirmed_audit_notification<'py>(
         &self,
@@ -141,6 +143,10 @@ impl BACnetClient {
     }
 
     /// Send an UnconfirmedAuditNotification request (raw service data).
+    ///
+    /// `service_data` must be a complete, pre-encoded Clause 21
+    /// AuditNotification-Request payload. This is a raw escape hatch and does
+    /// not imply that the bundled server executes the service.
     #[pyo3(signature = (address, service_data))]
     fn unconfirmed_audit_notification<'py>(
         &self,
@@ -168,14 +174,17 @@ impl BACnetClient {
         })
     }
 
-    /// Send an AuditLogQuery request. Returns raw response bytes.
-    #[pyo3(signature = (address, acknowledgment_filter, query_options_raw=vec![]))]
+    /// Send an AuditLogQuery request (raw service data). Returns raw response bytes.
+    ///
+    /// `service_data` must be a complete, pre-encoded Clause 21
+    /// AuditLogQuery-Request payload. This is a raw escape hatch and does not
+    /// imply that the bundled server executes the service.
+    #[pyo3(signature = (address, service_data))]
     fn audit_log_query<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        acknowledgment_filter: u32,
-        query_options_raw: Vec<u8>,
+        service_data: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -186,14 +195,8 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = AuditLogQueryRequest {
-                acknowledgment_filter,
-                query_options_raw,
-            };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
             let resp = c
-                .confirmed_request(&mac, ConfirmedServiceChoice::AUDIT_LOG_QUERY, &buf)
+                .confirmed_request(&mac, ConfirmedServiceChoice::AUDIT_LOG_QUERY, &service_data)
                 .await
                 .map_err(to_py_err)?;
             Python::attach(|py| Ok(PyBytes::new(py, &resp).into_any().unbind()))
