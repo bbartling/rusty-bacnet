@@ -565,7 +565,7 @@
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::timestamp_and_time_of_change_presence_must_agree",
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::notification_rejects_legacy_timestamp_and_time_shapes",
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::notification_rejects_empty_lists_and_special_property_identifiers",
-    "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_rejects_invalid_service_parameters",
+    "crates/bacnet-server/src/handlers/tests/cov_multiple_parameters.rs::subscribe_cov_property_multiple_rejects_invalid_service_parameters",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_invalid_property_is_atomic",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_capacity_failure_is_atomic",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_unknown_object_fails",
