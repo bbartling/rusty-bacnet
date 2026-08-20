@@ -54,3 +54,26 @@ async fn builder_rejects_invalid_proposed_window_size() {
 
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn builder_rejects_max_segments_below_protocol_minimum() {
+    for invalid in [0, 1] {
+        let (transport, _peer_transport) = LoopbackTransport::pair(vec![0x10], vec![0x11]);
+        let result = BACnetClient::generic_builder()
+            .transport(transport)
+            .max_segments(Some(invalid))
+            .build()
+            .await;
+
+        match result {
+            Err(Error::Encoding(message)) => {
+                assert!(message.contains("max-segments-accepted"));
+            }
+            Err(other) => panic!("expected encoding error, got {other}"),
+            Ok(mut client) => {
+                client.stop().await.unwrap();
+                panic!("max_segments={invalid} must be rejected");
+            }
+        }
+    }
+}

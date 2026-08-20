@@ -87,6 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Confirmed-Request `max-segments-accepted` no longer maps every non-rung
+  client capacity to `B'111'` ("greater than 64"). Capacities 0 and 1 now fail
+  client startup and direct APDU encoding; finite values through 64 round down
+  to the nearest Clause 20.1.2.4 rung, so the wire header and local segmented
+  response limit never exceed the configured capacity (#365).
+
 - Confirmed event notifications reach remote-network recipients (#375). The
   #186 fix delivered the unconfirmed half and left confirmed recipients
   skipped, because the server TSM keyed the pending acknowledgment by the

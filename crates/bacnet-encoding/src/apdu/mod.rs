@@ -37,18 +37,37 @@ const MAX_SEGMENTS_DECODE: [Option<u8>; 8] = [
     Some(255), // 7 = >64 segments accepted
 ];
 
-/// Encode a max-segments value to a 3-bit field.
-fn encode_max_segments(value: Option<u8>) -> u8 {
+/// Validate a configured maximum segment count for a Confirmed-Request header.
+///
+/// Clause 20.1.2.4 has no encoding for a finite capacity below two segments.
+/// To decline segmented responses, set `segmented-response-accepted = false`
+/// and use `None` rather than `Some(1)`.
+pub fn validate_max_segments(value: Option<u8>) -> Result<(), Error> {
     match value {
-        None => 0,
-        Some(2) => 1,
-        Some(4) => 2,
-        Some(8) => 3,
-        Some(16) => 4,
-        Some(32) => 5,
-        Some(64) => 6,
-        Some(_) => 7, // >64
+        Some(value @ 0..=1) => Err(Error::Encoding(format!(
+            "invalid max-segments-accepted {value}; expected 2..=255 or unspecified"
+        ))),
+        _ => Ok(()),
     }
+}
+
+/// Encode a max-segments value to a 3-bit field.
+///
+/// Finite counts that fall between the Clause 20.1.2.4 rungs are rounded down
+/// so the wire header never promises more receive capacity than configured.
+fn encode_max_segments(value: Option<u8>) -> Result<u8, Error> {
+    validate_max_segments(value)?;
+    Ok(match value {
+        None => 0,
+        Some(2..=3) => 1,
+        Some(4..=7) => 2,
+        Some(8..=15) => 3,
+        Some(16..=31) => 4,
+        Some(32..=63) => 5,
+        Some(64) => 6,
+        Some(65..=u8::MAX) => 7, // >64
+        Some(0..=1) => unreachable!("validated above"),
+    })
 }
 
 /// Decode a 3-bit max-segments field.
@@ -67,8 +86,11 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 /// `configured` directly: a value such as `Some(100)` encodes as B'111', so the
 /// peer was told "Greater than 64 segments accepted", not "100". Answering
 /// from the configured number would claim a promise that was never sent.
+/// Invalid finite capacities below two yield `None`; APDU encoding and client
+/// startup reject those values through [`validate_max_segments`].
 pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
-    match decode_max_segments(encode_max_segments(configured)) {
+    let encoded = encode_max_segments(configured).ok()?;
+    match decode_max_segments(encoded) {
         // The B'111' sentinel — "Greater than 64 segments accepted", which is
         // open-ended rather than a bound.
         Some(255) => None,
@@ -263,6 +285,9 @@ pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
 }
 
 fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Result<(), Error> {
+    let max_segments = encode_max_segments(pdu.max_segments)?;
+    let max_apdu = encode_max_apdu(pdu.max_apdu_length)?;
+
     let mut byte0 = PduType::CONFIRMED_REQUEST.to_raw() << 4;
     if pdu.segmented {
         byte0 |= 0x08;
@@ -275,8 +300,7 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Resul
     }
     buf.put_u8(byte0);
 
-    let byte1 =
-        (encode_max_segments(pdu.max_segments) << 4) | encode_max_apdu(pdu.max_apdu_length)?;
+    let byte1 = (max_segments << 4) | max_apdu;
     buf.put_u8(byte1);
 
     buf.put_u8(pdu.invoke_id);

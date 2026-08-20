@@ -17,7 +17,7 @@ use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, validate_max_apdu_length, AbortPdu, Apdu,
+    self, encode_apdu, validate_max_apdu_length, validate_max_segments, AbortPdu, Apdu,
     ConfirmedRequest as ConfirmedRequestPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
 };
 use bacnet_encoding::npdu::NpduAddress;
@@ -83,7 +83,10 @@ pub struct ClientConfig {
     pub apdu_retries: u8,
     /// Maximum APDU length this client accepts.
     pub max_apdu_length: u16,
-    /// Maximum segments this client accepts (None = unspecified).
+    /// Maximum segments this client accepts (`None` = unspecified).
+    ///
+    /// Values 0 and 1 are invalid. Finite values between the BACnet wire
+    /// encodings are conservatively rounded down (for example, 5 advertises 4).
     pub max_segments: Option<u8>,
     /// Whether this client accepts segmented responses.
     pub segmented_response_accepted: bool,
@@ -639,6 +642,7 @@ impl ScClientBuilder {
     ) -> Result<BACnetClient<bacnet_transport::sc::ScTransport<W>>, Error> {
         self.validate_identity()?;
         self.options.validate()?;
+        validate_max_segments(self.config.max_segments)?;
         let transport = self.sc_transport(ws);
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
@@ -652,6 +656,7 @@ impl ScClientBuilder {
     > {
         self.validate_identity()?;
         self.options.validate()?;
+        validate_max_segments(self.config.max_segments)?;
         let tls_config =
             self.tls_config.as_ref().cloned().ok_or_else(|| {
                 Error::Encoding("SC client builder: tls_config is required".into())

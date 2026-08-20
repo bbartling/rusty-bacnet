@@ -1,6 +1,57 @@
 use super::*;
 
 #[tokio::test]
+async fn non_rung_request_header_conservatively_bounds_server_response() {
+    let request = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: true,
+        max_segments: Some(5),
+        max_apdu_length: 50,
+        invoke_id: 0x49,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+        service_request: Bytes::new(),
+    });
+    let mut encoded = BytesMut::new();
+    encode_apdu(&mut encoded, &request).unwrap();
+    let client_max_segments = match decode_apdu(encoded.freeze()).unwrap() {
+        Apdu::ConfirmedRequest(request) => {
+            assert_eq!(request.max_segments, Some(4));
+            request.max_segments
+        }
+        other => panic!("expected ConfirmedRequest, got {other:?}"),
+    };
+
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
+        &sent,
+    ))));
+    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
+    let source_mac = test_mac(9);
+
+    BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
+        &network,
+        &seg_ack_senders,
+        &seg_send_permits,
+        source_mac.as_slice(),
+        None,
+        0x49,
+        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+        &[0xA5; 256],
+        50,
+        client_max_segments,
+    )
+    .await;
+
+    assert_eq!(sent_count(&sent), 1);
+    assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
+    assert!(seg_ack_senders.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn client_abort_routed_by_dispatch_terminates_segmented_complex_ack() {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(

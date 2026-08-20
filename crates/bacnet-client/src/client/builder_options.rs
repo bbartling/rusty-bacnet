@@ -8,6 +8,9 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
     }
 
     /// Set the maximum number of APDU segments this client accepts.
+    ///
+    /// Values 0 and 1 fail at build time. Other finite non-rung values are
+    /// conservatively rounded down in Confirmed-Request headers.
     pub fn max_segments(mut self, max_segments: Option<u8>) -> Self {
         self.config.max_segments = max_segments;
         self
@@ -45,6 +48,9 @@ impl BipClientBuilder {
     }
 
     /// Set the maximum number of APDU segments this client accepts.
+    ///
+    /// Values 0 and 1 fail at build time. Other finite non-rung values are
+    /// conservatively rounded down in Confirmed-Request headers.
     pub fn max_segments(mut self, max_segments: Option<u8>) -> Self {
         self.config.max_segments = max_segments;
         self
@@ -83,6 +89,9 @@ impl Bip6ClientBuilder {
     }
 
     /// Set the maximum number of APDU segments this client accepts.
+    ///
+    /// Values 0 and 1 fail at build time. Other finite non-rung values are
+    /// conservatively rounded down in Confirmed-Request headers.
     pub fn max_segments(mut self, max_segments: Option<u8>) -> Self {
         self.config.max_segments = max_segments;
         self
@@ -121,6 +130,9 @@ impl ScClientBuilder {
     }
 
     /// Set the maximum number of APDU segments this client accepts.
+    ///
+    /// Values 0 and 1 fail at build time. Other finite non-rung values are
+    /// conservatively rounded down in Confirmed-Request headers.
     pub fn max_segments(mut self, max_segments: Option<u8>) -> Self {
         self.config.max_segments = max_segments;
         self

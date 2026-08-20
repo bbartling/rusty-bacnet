@@ -83,6 +83,21 @@ async fn sc_client_builder_rejects_reserved_vmac_before_connect() {
     }
 }
 
+#[tokio::test]
+async fn sc_client_builder_rejects_invalid_max_segments_before_connect() {
+    let result = BACnetClient::sc_builder()
+        .vmac([0x22, 0x01, 0x02, 0x03, 0x04, 0x05])
+        .device_uuid([0xAB; 16])
+        .max_segments(Some(1))
+        .build()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(Error::Encoding(message)) if message.contains("max-segments-accepted")
+    ));
+}
+
 #[test]
 fn sc_client_builder_rejects_broadcast_vmac_and_zero_device_uuid() {
     let broadcast = BACnetClient::sc_builder()

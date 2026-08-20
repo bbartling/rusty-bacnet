@@ -30,6 +30,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options: ClientOptions,
     ) -> Result<Self, Error> {
         validate_max_apdu_length(config.max_apdu_length)?;
+        validate_max_segments(config.max_segments)?;
         config.max_apdu_length =
             cap_max_apdu_to_transport(config.max_apdu_length, transport.max_apdu_length())?;
         if !(1..=127).contains(&config.proposed_window_size) {

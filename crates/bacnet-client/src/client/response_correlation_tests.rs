@@ -637,13 +637,20 @@ async fn segment_257_aborts_with_buffer_overflow() {
 }
 
 #[tokio::test]
-async fn advertised_max_segments_bounds_reassembly() {
+async fn non_rung_max_segments_rounds_down_in_header_and_bounds_reassembly() {
     let mut config = config();
-    // B'010' — Clause 20.1.2.4 "4 segments accepted".
-    config.max_segments = Some(4);
+    // Five has no Clause 20.1.2.4 encoding. Conservatively advertise the
+    // B'010' rung (four) and enforce the same receive bound locally.
+    config.max_segments = Some(5);
     let mut link =
         PeerLink::issuing(config, ConfirmedServiceChoice::READ_PROPERTY, vec![0x01]).await;
-    let invoke_id = link.request_invoke_id().await;
+    let invoke_id = match link.recv("initial request").await {
+        Apdu::ConfirmedRequest(req) => {
+            assert_eq!(req.max_segments, Some(4));
+            req.invoke_id
+        }
+        other => panic!("expected ConfirmedRequest, got {other:?}"),
+    };
 
     feed_segments(
         &mut link,
