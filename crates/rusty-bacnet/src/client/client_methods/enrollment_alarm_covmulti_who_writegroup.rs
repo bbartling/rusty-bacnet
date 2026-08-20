@@ -17,11 +17,11 @@ impl BACnetClient {
         py: Python<'py>,
         address: String,
         acknowledgment_filter: u32,
-        event_state_filter: Option<PyEventState>,
+        event_state_filter: Option<PyEnrollmentSummaryEventStateFilter>,
         event_type_filter: Option<PyEventType>,
         min_priority: Option<u8>,
         max_priority: Option<u8>,
-        notification_class_filter: Option<u16>,
+        notification_class_filter: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let es = event_state_filter.map(|e| e.to_rust());
@@ -51,7 +51,7 @@ impl BACnetClient {
                 notification_class_filter,
             };
             let mut buf = BytesMut::new();
-            req.encode(&mut buf);
+            req.try_encode(&mut buf).map_err(to_py_err)?;
             let resp = c
                 .confirmed_request(&mac, ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY, &buf)
                 .await

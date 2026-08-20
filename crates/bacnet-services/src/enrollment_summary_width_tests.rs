@@ -59,10 +59,16 @@ fn field_offsets(data: &[u8], count: usize) -> Vec<usize> {
 fn request_values_must_fit_public_field_widths() {
     let max_u32 = [0, 0xFF, 0xFF, 0xFF, 0xFF];
     let max_u8 = [0, 0xFF];
-    let max_u16 = [0, 0xFF, 0xFF];
+    let max_filter = [4];
     let decoded = GetEnrollmentSummaryRequest::decode(&raw_request(
         [
-            &max_u32, &max_u32, &max_u32, &max_u32, &max_u8, &max_u8, &max_u16,
+            &max_u32,
+            &max_u32,
+            &max_filter,
+            &max_u32,
+            &max_u8,
+            &max_u8,
+            &max_u32,
         ],
         true,
     ))
@@ -72,24 +78,25 @@ fn request_values_must_fit_public_field_widths() {
         decoded.enrollment_filter.unwrap().process_identifier,
         u32::MAX
     );
-    assert_eq!(decoded.event_state_filter.unwrap().to_raw(), u32::MAX);
+    assert_eq!(
+        decoded.event_state_filter,
+        Some(EnrollmentSummaryEventStateFilter::ACTIVE)
+    );
     assert_eq!(decoded.event_type_filter.unwrap().to_raw(), u32::MAX);
     assert_eq!(decoded.priority_filter.unwrap().min_priority, u8::MAX);
-    assert_eq!(decoded.notification_class_filter, Some(u16::MAX));
+    assert_eq!(decoded.notification_class_filter, Some(u32::MAX));
 
     let zero = [0];
     let base = [&zero[..]; 7];
     let overflow_u32 = (u32::MAX as u64 + 1).to_be_bytes();
     let overflow_u8 = [1, 0];
-    let overflow_u16 = [1, 0, 0];
     for (field, overflow) in [
         (0, &overflow_u32[..]),
         (1, &overflow_u32[..]),
-        (2, &overflow_u32[..]),
         (3, &overflow_u32[..]),
         (4, &overflow_u8[..]),
         (5, &overflow_u8[..]),
-        (6, &overflow_u16[..]),
+        (6, &overflow_u32[..]),
     ] {
         let mut fields = base;
         fields[field] = overflow;
@@ -188,24 +195,22 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
 fn ack_values_must_fit_public_field_widths() {
     let max_u32 = [0, 0xFF, 0xFF, 0xFF, 0xFF];
     let max_u8 = [0, 0xFF];
-    let max_u16 = [0, 0xFF, 0xFF];
     let decoded =
-        GetEnrollmentSummaryAck::decode(&raw_ack([&max_u32, &max_u32, &max_u8, &max_u16])).unwrap();
+        GetEnrollmentSummaryAck::decode(&raw_ack([&max_u32, &max_u32, &max_u8, &max_u32])).unwrap();
     assert_eq!(decoded.entries[0].event_type.to_raw(), u32::MAX);
     assert_eq!(decoded.entries[0].event_state.to_raw(), u32::MAX);
     assert_eq!(decoded.entries[0].priority, u8::MAX);
-    assert_eq!(decoded.entries[0].notification_class, u16::MAX);
+    assert_eq!(decoded.entries[0].notification_class, Some(u32::MAX));
 
     let zero = [0];
     let base = [&zero[..]; 4];
     let overflow_u32 = (u32::MAX as u64 + 1).to_be_bytes();
     let overflow_u8 = [1, 0];
-    let overflow_u16 = [1, 0, 0];
     for (field, overflow) in [
         (0, &overflow_u32[..]),
         (1, &overflow_u32[..]),
         (2, &overflow_u8[..]),
-        (3, &overflow_u16[..]),
+        (3, &overflow_u32[..]),
     ] {
         let mut fields = base;
         fields[field] = overflow;
@@ -227,7 +232,14 @@ fn ack_accepts_omitted_notification_class_between_entries() {
     let without_notification = &encoded[..notification_offset];
 
     let decoded = GetEnrollmentSummaryAck::decode(without_notification).unwrap();
-    assert_eq!(decoded.entries[0].notification_class, 0);
+    assert_eq!(decoded.entries[0].notification_class, None);
+    let mut reencoded = BytesMut::new();
+    decoded.encode(&mut reencoded);
+    assert_eq!(
+        reencoded.as_ref(),
+        without_notification,
+        "decoding and re-encoding must preserve an omitted notification class"
+    );
 
     let mut repeated = BytesMut::from(without_notification);
     repeated.extend_from_slice(without_notification);
@@ -236,7 +248,147 @@ fn ack_accepts_omitted_notification_class_between_entries() {
     assert!(decoded
         .entries
         .iter()
-        .all(|entry| entry.notification_class == 0));
+        .all(|entry| entry.notification_class.is_none()));
+}
+
+#[test]
+fn ack_preserves_absent_present_zero_and_mixed_notification_classes() {
+    let entries = vec![
+        EnrollmentSummaryEntry {
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            event_type: EventType::CHANGE_OF_STATE,
+            event_state: EventState::NORMAL,
+            priority: 1,
+            notification_class: None,
+        },
+        EnrollmentSummaryEntry {
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap(),
+            event_type: EventType::CHANGE_OF_STATE,
+            event_state: EventState::FAULT,
+            priority: 2,
+            notification_class: Some(0),
+        },
+        EnrollmentSummaryEntry {
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap(),
+            event_type: EventType::CHANGE_OF_STATE,
+            event_state: EventState::OFFNORMAL,
+            priority: u8::MAX,
+            notification_class: Some(u32::MAX),
+        },
+        EnrollmentSummaryEntry {
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 4).unwrap(),
+            event_type: EventType::CHANGE_OF_STATE,
+            event_state: EventState::NORMAL,
+            priority: 4,
+            notification_class: None,
+        },
+    ];
+    let ack = GetEnrollmentSummaryAck { entries };
+    let mut encoded = BytesMut::new();
+    ack.encode(&mut encoded);
+
+    assert_eq!(GetEnrollmentSummaryAck::decode(&encoded).unwrap(), ack);
+}
+
+#[test]
+fn ack_enforces_decoded_entry_cap() {
+    let zero = [0];
+    let entry_with_notification = raw_ack([&zero; 4]);
+    let notification_offset = field_offsets(&entry_with_notification, 5)[4];
+    let entry = &entry_with_notification[..notification_offset];
+    let mut encoded = BytesMut::with_capacity(entry.len() * (MAX_DECODED_ITEMS + 1));
+    for _ in 0..MAX_DECODED_ITEMS {
+        encoded.extend_from_slice(entry);
+    }
+    assert_eq!(
+        GetEnrollmentSummaryAck::decode(&encoded)
+            .unwrap()
+            .entries
+            .len(),
+        MAX_DECODED_ITEMS
+    );
+    encoded.extend_from_slice(entry);
+    assert!(GetEnrollmentSummaryAck::decode(&encoded).is_err());
+}
+
+#[test]
+fn request_event_state_filter_uses_service_defined_values() {
+    for (raw, expected) in [
+        (0, EnrollmentSummaryEventStateFilter::OFFNORMAL),
+        (1, EnrollmentSummaryEventStateFilter::FAULT),
+        (2, EnrollmentSummaryEventStateFilter::NORMAL),
+        (3, EnrollmentSummaryEventStateFilter::ALL),
+        (4, EnrollmentSummaryEventStateFilter::ACTIVE),
+    ] {
+        let mut encoded = BytesMut::new();
+        primitives::encode_ctx_enumerated(&mut encoded, 0, 0);
+        primitives::encode_ctx_enumerated(&mut encoded, 2, raw);
+        assert_eq!(encoded.as_ref(), &[0x09, 0, 0x29, raw as u8]);
+        assert_eq!(
+            GetEnrollmentSummaryRequest::decode(&encoded)
+                .unwrap()
+                .event_state_filter,
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn request_rejects_undefined_event_state_filter() {
+    for raw in [5, u32::MAX] {
+        let mut encoded = BytesMut::new();
+        primitives::encode_ctx_enumerated(&mut encoded, 0, 0);
+        primitives::encode_ctx_enumerated(&mut encoded, 2, raw);
+        assert!(matches!(
+            GetEnrollmentSummaryRequest::decode(&encoded),
+            Err(Error::Reject { reason })
+                if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+        ));
+    }
+    let above_u32 = [0x09, 0, 0x2D, 0x05, 1, 0, 0, 0, 0];
+    assert!(matches!(
+        GetEnrollmentSummaryRequest::decode(&above_u32),
+        Err(Error::Reject { reason })
+            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+    ));
+    let above_u64 = [0x09, 0, 0x2D, 0x09, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    assert!(matches!(
+        GetEnrollmentSummaryRequest::decode(&above_u64),
+        Err(Error::Reject { reason })
+            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+    ));
+
+    for noncanonical in [[0x09, 0, 0x28, 0, 0], [0x09, 0, 0x2A, 0, 4]] {
+        let encoded = if noncanonical[2] == 0x28 {
+            &noncanonical[..3]
+        } else {
+            &noncanonical[..]
+        };
+        assert!(matches!(
+            GetEnrollmentSummaryRequest::decode(encoded),
+            Err(Error::Reject { reason })
+                if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
+        ));
+    }
+
+    let request = GetEnrollmentSummaryRequest {
+        acknowledgment_filter: 0,
+        enrollment_filter: None,
+        event_state_filter: Some(EnrollmentSummaryEventStateFilter::from_raw(5)),
+        event_type_filter: None,
+        priority_filter: None,
+        notification_class_filter: None,
+    };
+    let mut output = BytesMut::new();
+    assert!(request.try_encode(&mut output).is_err());
+    assert!(output.is_empty());
+
+    let request = GetEnrollmentSummaryRequest {
+        event_state_filter: Some(EnrollmentSummaryEventStateFilter::from_raw(u32::MAX)),
+        ..request
+    };
+    assert!(request.try_encode(&mut output).is_err());
+    assert!(output.is_empty());
 }
 
 #[test]

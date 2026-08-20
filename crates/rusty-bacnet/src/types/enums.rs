@@ -97,6 +97,12 @@ py_bacnet_enum!(
     u32
 );
 py_bacnet_enum!("EventState", PyEventState, bacnet_enums::EventState, u32);
+py_bacnet_enum!(
+    "EnrollmentSummaryEventStateFilter",
+    PyEnrollmentSummaryEventStateFilter,
+    bacnet_enums::EnrollmentSummaryEventStateFilter,
+    u32
+);
 py_bacnet_enum!("EventType", PyEventType, bacnet_enums::EventType, u32);
 py_bacnet_enum!(
     "MessagePriority",

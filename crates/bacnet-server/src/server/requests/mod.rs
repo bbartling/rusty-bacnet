@@ -644,12 +644,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
     }
-    /// Convert an Error into an Error APDU.
-    fn error_apdu_from_error(
+    /// Convert an error into its protocol response APDU.
+    pub(super) fn error_apdu_from_error(
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
         error: &Error,
     ) -> Apdu {
+        if let Error::Reject { reason } = error {
+            return Apdu::Reject(RejectPdu {
+                invoke_id,
+                reject_reason: RejectReason::from_raw(*reason),
+            });
+        }
         let (class, code) = match error {
             Error::Protocol { class, code } => (*class, *code),
             _ => (

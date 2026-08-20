@@ -38,6 +38,7 @@ mod array_index_gating;
 mod async_dcc;
 mod detection_enable_summary;
 mod device_event;
+mod enrollment_summary_filters;
 mod framed_properties;
 mod life_safety_operation;
 mod multi_element_writes;
