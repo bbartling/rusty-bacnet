@@ -87,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Test-only server dispatch truth-chain constants are now compiled and
+  re-exported only for tests, removing their three non-test unused-code
+  warnings while preserving the PICS services-supported cross-check (#359).
+
 - Client-mode responders now return `Reject(UNRECOGNIZED_SERVICE)` for
   complete unicast ConfirmedRequest APDUs without a handler (#374), preserve
   routed reply addressing, send ready MS/TP responses immediately (or
