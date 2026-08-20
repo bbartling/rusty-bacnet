@@ -351,6 +351,25 @@ fn request_rejects_undefined_event_state_filter() {
         Err(Error::Reject { reason })
             if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
     ));
+    let above_u64 = [0x09, 0, 0x2D, 0x09, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    assert!(matches!(
+        GetEnrollmentSummaryRequest::decode(&above_u64),
+        Err(Error::Reject { reason })
+            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+    ));
+
+    for noncanonical in [[0x09, 0, 0x28, 0, 0], [0x09, 0, 0x2A, 0, 4]] {
+        let encoded = if noncanonical[2] == 0x28 {
+            &noncanonical[..3]
+        } else {
+            &noncanonical[..]
+        };
+        assert!(matches!(
+            GetEnrollmentSummaryRequest::decode(encoded),
+            Err(Error::Reject { reason })
+                if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
+        ));
+    }
 
     let request = GetEnrollmentSummaryRequest {
         acknowledgment_filter: 0,
