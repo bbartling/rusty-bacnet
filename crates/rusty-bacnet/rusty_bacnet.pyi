@@ -1406,22 +1406,33 @@ class BACnetClient:
     async def confirmed_audit_notification(
         self, address: str, service_data: bytes
     ) -> None:
-        """Send a ConfirmedAuditNotification (raw service data)."""
+        """Send a pre-encoded Clause 21 ConfirmedAuditNotification payload.
+
+        This is a raw escape hatch; the bundled server does not execute the
+        service.
+        """
         ...
 
     async def unconfirmed_audit_notification(
         self, address: str, service_data: bytes
     ) -> None:
-        """Send an UnconfirmedAuditNotification (raw service data)."""
+        """Send a pre-encoded Clause 21 UnconfirmedAuditNotification payload.
+
+        This is a raw escape hatch; the bundled server does not execute the
+        service.
+        """
         ...
 
     async def audit_log_query(
         self,
         address: str,
-        acknowledgment_filter: int,
-        query_options_raw: bytes = b"",
+        service_data: bytes,
     ) -> bytes:
-        """Send an AuditLogQuery request. Returns raw response bytes."""
+        """Send a pre-encoded Clause 21 AuditLogQuery payload.
+
+        This raw escape hatch returns the peer's response payload. The bundled
+        server does not execute the service.
+        """
         ...
 
     # --- Lifecycle ---

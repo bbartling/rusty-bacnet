@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 23 |
+| Priority | P1 | 24 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -21,7 +21,7 @@
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
-| Status | implementation-present-needs-source-review | 2 |
+| Status | implementation-present-needs-source-review | 3 |
 | Status | implementation-present-needs-state-machine-audit | 3 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
@@ -52,6 +52,7 @@
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-TIME-DELAY-NORMAL` | Clause 13.3.2 CHANGE_OF_STATE, Clause 13.3.4 COMMAND_FAILURE, Clause 13.3.6 OUT_OF_RANGE (pTimeDelayNormal definitions and condition letters); Clause 12.2 Table 12-2 (Analog Input, O5), 12.3 Table 12-3 (Analog Output, O4), 12.4 Table 12-4 (Analog Value, O6), 12.6 Table 12-6 (Binary Input, O7), 12.7 Table 12-8 (Binary Output, O6), 12.8 Table 12-10 (Binary Value, O8), 12.18 Table 12-21 (Multi-state Input, O5), 12.19 Table 12-22 (Multi-state Output, O3), 12.20 Table 12-23 (Multi-state Value, O6) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
+| `BACNET-13-AUDIT-WIRE-MODELS` | Clauses 13.19-13.21; Clause 21.2.1, Clause 21.2.3, Clause 21.3.1, BACnetAuditNotification, BACnetAuditLogQueryParameters, and BACnetAuditOperationFlags productions | P1 | implementation-present-needs-source-review | 0 |
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | supported-with-clause-evidence | 0 |

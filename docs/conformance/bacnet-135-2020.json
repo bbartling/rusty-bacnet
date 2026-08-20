@@ -576,6 +576,49 @@
    "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. Issue #342 evidence corrects both mandatory booleans, optional BACnetDateTime and primitive Time fields, nested-list cardinalities, prohibited monitored-property identifiers, cumulative decode/encode caps, pre-mutation encoder validation, local-standard-time server projection, active time-remaining projection, and duplicate-reference amplification. This row remains below supported status: ordered partial-success execution and first-failed-subscription provenance, property-specific COV eligibility/NOT_COV_PROPERTY, array-index error preservation, empty-spec context materialization, max-notification-delay queuing and timestamped change history, Daylight_Savings_Status adjustment, schema-aware ANY validation, shorter server lock hold for maximum-size requests, Active_COV_Multiple_Subscriptions synchronization, client-mode COV Multiple reception, outbound APDU size/segmentation policy, and fuller BIBB/PICS evidence remain separate work."
   },
   {
+   "id": "BACNET-13-AUDIT-WIRE-MODELS",
+   "standard_anchor": "Clauses 13.19-13.21; Clause 21.2.1, Clause 21.2.3, Clause 21.3.1, BACnetAuditNotification, BACnetAuditLogQueryParameters, and BACnetAuditOperationFlags productions",
+   "priority": "P1",
+   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative. The codecs preserve the Clause 21 field order, tags, numeric widths, Boolean encoding, recipient alternatives, and 64 operation-flag bit positions; reject trailing or malformed structure; bound notification-list allocation; and leave destination buffers unchanged when model validation fails.",
+   "status": "implementation-present-needs-source-review",
+   "code_anchors": [
+    "crates/bacnet-types/src/bitstring.rs",
+    "crates/bacnet-services/src/audit.rs",
+    "crates/bacnet-services/src/audit/notification_codec.rs",
+    "crates/bacnet-services/src/audit/query_codec.rs",
+    "crates/rusty-bacnet/src/client/client_methods/vt_audit_time_directed.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-types/src/bitstring.rs::tests::audit_operation_flags_empty_and_named_bits_use_msb_first_wire_order",
+    "crates/bacnet-types/src/bitstring.rs::tests::audit_operation_flags_preserve_proprietary_bit_63",
+    "crates/bacnet-services/src/audit/tests.rs::audit_notification_minimum_matches_clause_21_golden",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::notification_uses_literal_clause_21_tags_and_round_trips_all_fields",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::minimal_notification_has_no_per_item_sequence_wrapper",
+    "crates/bacnet-services/src/audit/tests.rs::by_target_minimum_matches_clause_21_golden",
+    "crates/bacnet-services/src/audit/tests.rs::by_source_minimum_and_sequence_number_match_clause_21_golden",
+    "crates/bacnet-services/src/audit/tests.rs::by_target_all_optional_fields_round_trip"
+   ],
+   "negative_tests": [
+    "crates/bacnet-types/src/bitstring.rs::tests::audit_operation_flags_reject_overlong_and_nonzero_padding",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::reserved_operations_fail_decode_and_encode_is_atomic",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::unsigned8_and_unsigned16_fields_reject_numeric_overflow",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::notification_rejects_noncanonical_unsigned_and_enumerated_fields",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::target_priority_enforces_inclusive_one_to_sixteen_range",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::raw_values_must_be_nonempty_structural_tlv_and_encoding_is_atomic",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::notification_list_requires_one_to_ten_thousand_items",
+    "crates/bacnet-services/src/audit/malformed_tests.rs::decoder_requires_full_service_consumption",
+    "crates/bacnet-services/src/audit/tests.rs::mandatory_boolean_is_strict_and_cannot_be_omitted",
+    "crates/bacnet-services/src/audit/tests.rs::clause_21_integer_widths_are_enforced",
+    "crates/bacnet-services/src/audit/tests.rs::nested_field_widths_and_priority_range_are_enforced",
+    "crates/bacnet-services/src/audit/tests.rs::operation_flags_reject_more_than_64_bits_and_nonzero_padding",
+    "crates/bacnet-services/src/audit/tests.rs::every_constructed_level_requires_full_consumption",
+    "crates/bacnet-services/src/audit/tests.rs::invalid_priority_encode_is_atomic"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Wire-model-only evidence for issue #345. The request models follow the literal Clause 21 productions: start-at-sequence-number is Unsigned32 and successful-actions-only is BOOLEAN. Clause 13.19 instead describes Unsigned64 and the three-state BACnetSuccessFilter, including failures-only; that internal Standard conflict remains unresolved pending authoritative addendum or errata research, so this row stays below supported status. The 10,000-notification bound is an implementation resource cap, not a Standard service cardinality. Raw target/current ANY values receive structural TLV validation only, not property-schema validation. Python exposes all three audit sends as caller-supplied, pre-encoded Clause 21 payload escape hatches. AuditLogQuery acknowledgment/record models, bundled-server execution and persistence, authorization, transport-source provenance, rate limiting, replay/merge policy, error mapping, APDU sizing/segmentation, Device service truth, PICS declarations, and BIBB claims remain unsupported or deferred."
+  },
+  {
    "id": "BACNET-15-ARRAY-INDEX-GATING",
    "standard_anchor": "Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5)",
    "priority": "P1",

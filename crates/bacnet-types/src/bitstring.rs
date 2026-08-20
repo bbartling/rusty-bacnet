@@ -18,7 +18,11 @@
 //! right-aligned representation; it is re-exported and mapped by the resolver as
 //! well.
 
-use crate::enums::{ObjectType, ServiceSupported};
+#[cfg(not(feature = "std"))]
+use alloc::{format, vec::Vec};
+
+use crate::enums::{AuditOperation, ObjectType, ServiceSupported};
+use crate::error::{Error, Result};
 
 pub use crate::primitives::StatusFlags;
 
@@ -288,6 +292,168 @@ impl core::fmt::Debug for ObjectTypesSupported {
     }
 }
 
+/// `BACnetAuditOperationFlags` — a bit string selecting audit operations
+/// (Clause 21).
+///
+/// Bit positions 0 through 15 have the same meanings as the named
+/// [`AuditOperation`] values. Positions 16 through 31 are reserved for ASHRAE
+/// and positions 32 through 63 are available for proprietary operations, so
+/// the complete 64-bit wire range is retained rather than truncating the value
+/// to the currently named operations.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct AuditOperationFlags {
+    bits: u64,
+}
+
+impl AuditOperationFlags {
+    /// An empty set of audit operations.
+    #[inline]
+    pub const fn empty() -> Self {
+        Self { bits: 0 }
+    }
+
+    /// Construct from the complete bit-position-preserving representation.
+    #[inline]
+    pub const fn from_bits(bits: u64) -> Self {
+        Self { bits }
+    }
+
+    /// Return the complete bit-position-preserving representation.
+    #[inline]
+    pub const fn bits(self) -> u64 {
+        self.bits
+    }
+
+    /// Whether no audit operation bit is set.
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.bits == 0
+    }
+
+    /// Whether `operation` is selected.
+    ///
+    /// Raw [`AuditOperation`] values above 63 are outside the production's
+    /// representable range and therefore return `false`.
+    #[inline]
+    pub const fn contains(self, operation: AuditOperation) -> bool {
+        let bit = operation.to_raw();
+        bit < 64 && self.bits & (1u64 << bit) != 0
+    }
+
+    /// Select `operation`, returning `false` without mutation when its raw
+    /// value is outside the representable range 0 through 63.
+    #[inline]
+    pub fn insert(&mut self, operation: AuditOperation) -> bool {
+        let bit = operation.to_raw();
+        if bit >= 64 {
+            return false;
+        }
+        self.bits |= 1u64 << bit;
+        true
+    }
+
+    /// Clear `operation`, returning `false` when its raw value is outside the
+    /// representable range 0 through 63.
+    #[inline]
+    pub fn remove(&mut self, operation: AuditOperation) -> bool {
+        let bit = operation.to_raw();
+        if bit >= 64 {
+            return false;
+        }
+        self.bits &= !(1u64 << bit);
+        true
+    }
+
+    /// Iterate selected operations in ascending bit-position order, including
+    /// reserved and proprietary raw values.
+    pub fn iter(self) -> impl Iterator<Item = AuditOperation> {
+        let bits = self.bits;
+        (0..64)
+            .filter(move |&bit| bits & (1u64 << bit) != 0)
+            .map(AuditOperation::from_raw)
+    }
+
+    /// Decode a Clause 20.2.10 BIT STRING payload.
+    ///
+    /// `data` excludes the initial unused-bits octet. The decoder rejects
+    /// values wider than the 64 positions allowed by
+    /// `BACnetAuditOperationFlags`, invalid unused-bit counts, and nonzero
+    /// padding in the final octet.
+    pub fn from_bacnet(unused_bits: u8, data: &[u8]) -> Result<Self> {
+        if unused_bits > 7 {
+            return Err(Error::decoding(
+                0,
+                format!("BACnetAuditOperationFlags: unused_bits must be 0-7, got {unused_bits}"),
+            ));
+        }
+        if data.is_empty() {
+            if unused_bits != 0 {
+                return Err(Error::decoding(
+                    0,
+                    "BACnetAuditOperationFlags: an empty bit string must have zero unused bits",
+                ));
+            }
+            return Ok(Self::empty());
+        }
+
+        let meaningful_bits = data.len() * 8 - usize::from(unused_bits);
+        if meaningful_bits > 64 {
+            return Err(Error::decoding(
+                0,
+                format!(
+                    "BACnetAuditOperationFlags: {meaningful_bits} bits exceeds the 64-bit limit"
+                ),
+            ));
+        }
+        if unused_bits != 0 {
+            let padding_mask = (1u8 << unused_bits) - 1;
+            if data.last().is_some_and(|last| last & padding_mask != 0) {
+                return Err(Error::decoding(
+                    0,
+                    "BACnetAuditOperationFlags: final-octet padding bits must be zero",
+                ));
+            }
+        }
+
+        let mut bits = 0u64;
+        for (index, &byte) in data.iter().enumerate() {
+            bits |= u64::from(byte.reverse_bits()) << (index * 8);
+        }
+        Ok(Self { bits })
+    }
+
+    /// Encode as a shortest-form Clause 20.2.10 BIT STRING payload.
+    ///
+    /// The returned `data` excludes the initial unused-bits octet. Bit 0 is
+    /// placed in the most-significant position of the first data octet.
+    pub fn to_bacnet(self) -> (u8, Vec<u8>) {
+        if self.bits == 0 {
+            return (0, Vec::new());
+        }
+
+        let bit_len = (u64::BITS - self.bits.leading_zeros()) as usize;
+        let byte_len = bit_len.div_ceil(8);
+        let unused_bits = (byte_len * 8 - bit_len) as u8;
+        let mut data = Vec::with_capacity(byte_len);
+        for index in 0..byte_len {
+            data.push(((self.bits >> (index * 8)) as u8).reverse_bits());
+        }
+        (unused_bits, data)
+    }
+}
+
+impl core::fmt::Display for AuditOperationFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_joined(f, self.iter())
+    }
+}
+
+impl core::fmt::Debug for AuditOperationFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +581,56 @@ mod tests {
         assert_eq!(format!("{:?}", EventTransitionBits::empty()), "()");
         assert_eq!(format!("{:?}", LimitEnable::empty()), "()");
         assert_eq!(format!("{:?}", EventTransitionBits::TO_FAULT), "TO_FAULT");
+    }
+
+    #[test]
+    fn audit_operation_flags_empty_and_named_bits_use_msb_first_wire_order() {
+        let empty = AuditOperationFlags::empty();
+        assert!(empty.is_empty());
+        assert_eq!(empty.to_bacnet(), (0, Vec::new()));
+        assert_eq!(AuditOperationFlags::from_bacnet(0, &[]).unwrap(), empty);
+
+        let mut flags = AuditOperationFlags::empty();
+        assert!(flags.insert(AuditOperation::READ));
+        assert!(flags.insert(AuditOperation::GENERAL));
+        assert!(flags.contains(AuditOperation::READ));
+        assert!(flags.contains(AuditOperation::GENERAL));
+        assert_eq!(flags.bits(), (1 << 0) | (1 << 15));
+        assert_eq!(flags.to_bacnet(), (0, vec![0x80, 0x01]));
+        assert_eq!(
+            AuditOperationFlags::from_bacnet(0, &[0x80, 0x01]).unwrap(),
+            flags
+        );
+        assert_eq!(flags.to_string(), "READ | GENERAL");
+    }
+
+    #[test]
+    fn audit_operation_flags_preserve_proprietary_bit_63() {
+        let proprietary = AuditOperation::from_raw(63);
+        let mut flags = AuditOperationFlags::from_bits(1u64 << 63);
+        assert!(flags.contains(proprietary));
+        assert_eq!(flags.to_bacnet(), (0, vec![0, 0, 0, 0, 0, 0, 0, 1]));
+        assert_eq!(
+            AuditOperationFlags::from_bacnet(0, &[0, 0, 0, 0, 0, 0, 0, 1]).unwrap(),
+            flags
+        );
+        assert!(!flags.insert(AuditOperation::from_raw(64)));
+        assert!(!flags.contains(AuditOperation::from_raw(64)));
+        assert!(flags.remove(proprietary));
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn audit_operation_flags_reject_overlong_and_nonzero_padding() {
+        assert!(AuditOperationFlags::from_bacnet(7, &[0; 9]).is_err());
+        assert!(AuditOperationFlags::from_bacnet(1, &[0x01]).is_err());
+        assert!(AuditOperationFlags::from_bacnet(1, &[]).is_err());
+        assert!(AuditOperationFlags::from_bacnet(8, &[0]).is_err());
+
+        // Zero padding is accepted; seven unused bits leaves only bit 0.
+        assert_eq!(
+            AuditOperationFlags::from_bacnet(7, &[0x80]).unwrap(),
+            AuditOperationFlags::from_bits(1)
+        );
     }
 }
