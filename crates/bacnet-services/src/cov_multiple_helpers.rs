@@ -45,10 +45,23 @@ pub(super) fn decode_required_bool(
 }
 
 fn actual_date_is_valid(date: &Date) -> bool {
-    date.year != Date::UNSPECIFIED
-        && (1..=12).contains(&date.month)
-        && (1..=31).contains(&date.day)
-        && (1..=7).contains(&date.day_of_week)
+    if date.year == Date::UNSPECIFIED
+        || !(1..=12).contains(&date.month)
+        || !(1..=7).contains(&date.day_of_week)
+    {
+        return false;
+    }
+
+    let year = 1900 + u16::from(date.year);
+    let leap_year =
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days_in_month = match date.month {
+        2 if leap_year => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=days_in_month).contains(&date.day)
 }
 
 pub(super) fn actual_time_is_valid(time: &Time) -> bool {

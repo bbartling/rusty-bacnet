@@ -292,6 +292,30 @@ fn notification_requires_specific_actual_date_and_time_values() {
     assert!(invalid_date.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 
+    invalid_date.timestamp = Some((
+        bacnet_types::primitives::Date {
+            year: 123,
+            month: 2,
+            day: 29,
+            ..valid_date
+        },
+        valid_time,
+    ));
+    assert!(invalid_date.encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
+
+    invalid_date.timestamp = Some((
+        bacnet_types::primitives::Date {
+            year: 124,
+            month: 2,
+            day: 29,
+            ..valid_date
+        },
+        valid_time,
+    ));
+    let mut leap_output = BytesMut::new();
+    invalid_date.encode(&mut leap_output).unwrap();
+
     let mut invalid_time = notification_with(PropertyIdentifier::PRESENT_VALUE);
     let invalid_actual_time = bacnet_types::primitives::Time {
         hour: 24,
@@ -310,6 +334,17 @@ fn notification_requires_specific_actual_date_and_time_values() {
     valid.encode(&mut encoded).unwrap();
     let date_tag = encoded.iter().position(|byte| *byte == 0xa4).unwrap();
     encoded[date_tag + 2] = 0;
+    assert!(matches!(
+        COVNotificationMultipleRequest::decode(&encoded),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+    ));
+
+    encoded.clear();
+    valid.encode(&mut encoded).unwrap();
+    let date_tag = encoded.iter().position(|byte| *byte == 0xa4).unwrap();
+    encoded[date_tag + 2] = 2;
+    encoded[date_tag + 3] = 30;
     assert!(matches!(
         COVNotificationMultipleRequest::decode(&encoded),
         Err(Error::Reject { reason })
