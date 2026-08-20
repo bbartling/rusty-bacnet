@@ -4,6 +4,7 @@ use bacnet_types::enums::{
     SilencedState,
 };
 
+use crate::database::ObjectDatabase;
 use crate::traits::LifeSafetyOperationEffect;
 
 fn read_enumerated(object: &dyn BACnetObject, property: PropertyIdentifier) -> u32 {
@@ -150,7 +151,7 @@ fn point_life_safety_operation_combines_silenced_components() {
 }
 
 #[test]
-fn point_replayed_silence_is_idempotently_successful() {
+fn point_replayed_silence_without_response_cache_is_invalid_state() {
     let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     point.set_operation_expected(LifeSafetyOperation::SILENCE);
     assert_eq!(
@@ -160,15 +161,49 @@ fn point_replayed_silence_is_idempotently_successful() {
         LifeSafetyOperationEffect::Applied
     );
 
-    assert_eq!(
-        point
-            .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
-            .unwrap(),
-        LifeSafetyOperationEffect::AlreadyApplied
+    let error = point
+        .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
+        .unwrap_err();
+    assert_protocol_error(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
     );
     assert_eq!(
         read_enumerated(&point, PropertyIdentifier::SILENCED),
         SilencedState::ALL_SILENCED.to_raw()
+    );
+}
+
+#[test]
+fn point_same_state_honors_and_clears_operation_expected() {
+    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    point.set_silenced(SilencedState::VISIBLE_SILENCED);
+    point.set_operation_expected(LifeSafetyOperation::UNSILENCE_VISUAL);
+
+    let error = point
+        .apply_life_safety_operation(LifeSafetyOperation::SILENCE_VISUAL)
+        .unwrap_err();
+    assert_protocol_error(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+    );
+    assert_eq!(
+        read_enumerated(&point, PropertyIdentifier::OPERATION_EXPECTED),
+        LifeSafetyOperation::UNSILENCE_VISUAL.to_raw()
+    );
+
+    point.set_operation_expected(LifeSafetyOperation::SILENCE_VISUAL);
+    assert_eq!(
+        point
+            .apply_life_safety_operation(LifeSafetyOperation::SILENCE_VISUAL)
+            .unwrap(),
+        LifeSafetyOperationEffect::Applied
+    );
+    assert_eq!(
+        read_enumerated(&point, PropertyIdentifier::OPERATION_EXPECTED),
+        LifeSafetyOperation::NONE.to_raw()
     );
 }
 
@@ -266,6 +301,42 @@ fn point_silenced_and_operation_expected_are_network_read_only() {
         assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
         assert!(!point.is_writable_property(property));
     }
+}
+
+#[test]
+fn point_can_be_rearmed_through_the_local_trait_channel() {
+    let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(LifeSafetyPointObject::new(1, "LSP-1").unwrap()))
+        .unwrap();
+
+    let object = db.get_mut(&oid).unwrap();
+    object
+        .set_life_safety_operation_expected_internal(LifeSafetyOperation::SILENCE)
+        .unwrap();
+    assert_eq!(
+        object
+            .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
+            .unwrap(),
+        LifeSafetyOperationEffect::Applied
+    );
+    object
+        .set_life_safety_operation_expected_internal(LifeSafetyOperation::UNSILENCE)
+        .unwrap();
+    assert_eq!(
+        object
+            .apply_life_safety_operation(LifeSafetyOperation::UNSILENCE)
+            .unwrap(),
+        LifeSafetyOperationEffect::Applied
+    );
+    assert_eq!(
+        read_enumerated(object.as_ref(), PropertyIdentifier::OPERATION_EXPECTED),
+        LifeSafetyOperation::NONE.to_raw()
+    );
+    assert_eq!(
+        read_enumerated(object.as_ref(), PropertyIdentifier::SILENCED),
+        SilencedState::UNSILENCED.to_raw()
+    );
 }
 
 #[test]
@@ -509,6 +580,26 @@ fn zone_life_safety_operation_unsilences_one_component() {
     assert_eq!(
         read_enumerated(&zone, PropertyIdentifier::OPERATION_EXPECTED),
         LifeSafetyOperation::NONE.to_raw()
+    );
+}
+
+#[test]
+fn zone_same_state_rejects_a_different_expected_operation() {
+    let mut zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
+    zone.set_silenced(SilencedState::ALL_SILENCED);
+    zone.set_operation_expected(LifeSafetyOperation::UNSILENCE);
+
+    let error = zone
+        .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
+        .unwrap_err();
+    assert_protocol_error(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+    );
+    assert_eq!(
+        read_enumerated(&zone, PropertyIdentifier::OPERATION_EXPECTED),
+        LifeSafetyOperation::UNSILENCE.to_raw()
     );
 }
 

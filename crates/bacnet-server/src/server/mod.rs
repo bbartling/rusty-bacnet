@@ -42,8 +42,9 @@ use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, NetworkPriority, NotifyType,
-    ObjectType, PropertyIdentifier, RejectReason, Segmentation, UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation,
+    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, RejectReason, Segmentation,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};

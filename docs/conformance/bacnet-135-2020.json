@@ -1551,13 +1551,14 @@
    "positive_tests": [
     "crates/bacnet-services/src/life_safety.rs::tests::unsupported_requesting_source_charsets_use_empty_string",
     "crates/bacnet-objects/src/life_safety/tests.rs::point_life_safety_operation_combines_silenced_components",
-    "crates/bacnet-objects/src/life_safety/tests.rs::point_replayed_silence_is_idempotently_successful",
+    "crates/bacnet-objects/src/life_safety/tests.rs::point_can_be_rearmed_through_the_local_trait_channel",
     "crates/bacnet-objects/src/life_safety/tests.rs::zone_life_safety_operation_unsilences_one_component",
     "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::life_safety_operation_without_target_attempts_every_object",
     "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_authorizer_receives_routed_identity_before_success"
    ],
    "negative_tests": [
     "crates/bacnet-services/src/life_safety.rs::tests::malformed_supported_requesting_source_still_errors",
+    "crates/bacnet-objects/src/life_safety/tests.rs::point_replayed_silence_without_response_cache_is_invalid_state",
     "crates/bacnet-objects/src/life_safety/tests.rs::point_rejects_wrong_expected_operation_and_reset_without_mutation",
     "crates/bacnet-objects/src/life_safety/tests.rs::point_silenced_and_operation_expected_are_network_read_only",
     "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::life_safety_properties_cannot_be_bypassed_through_write_property_multiple",
@@ -1569,7 +1570,7 @@
    "public_claims": [
     "README supported services (qualified silence/unsilence server support)"
    ],
-   "notes": "Partial #177 safety slice. The former decode-only unconditional SimpleACK path is removed. Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone objects implement only the six silence/unsilence operations, with idempotent replay behavior and changed-object notification fan-out. Reset, Reset Alarm, and Reset Fault return OBJECT / VALUE_OUT_OF_RANGE pending an application-owned executor or latch contract plus duplicate-response semantics. Silenced and Operation_Expected are corrected to network-read-only, including WPM rollback evidence. No AE-LS-A/AE-LS-B or life-safety profile claim is made."
+   "notes": "Partial #177 safety slice. The former decode-only unconditional SimpleACK path is removed. Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone objects implement only the six silence/unsilence operations and require an exact Operation_Expected match. Targeted Reset, Reset Alarm, and Reset Fault return OBJECT / VALUE_OUT_OF_RANGE pending an application-owned executor or latch contract plus duplicate-response semantics; targetless reset requests perform the required all-applicable attempt and return Result(+) without built-in reset mutation. A retransmission after successful state mutation returns INVALID_OPERATION_IN_THIS_STATE until confirmed-request response replay exists. Silenced and Operation_Expected are network-read-only by local safety policy, including WPM rollback evidence. LifeSafetyOperation deliberately does not enter the coarse whole-object COV/event fan-out; property-aware COV for Silenced and Operation_Expected remains follow-up #177. No AE-LS-A/AE-LS-B or life-safety profile claim is made."
   }
  ]
 }

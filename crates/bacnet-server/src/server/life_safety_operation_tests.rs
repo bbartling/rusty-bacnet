@@ -97,6 +97,59 @@ fn assert_error(apdu: Apdu, class: ErrorClass, code: ErrorCode) {
     }
 }
 
+fn assert_simple_ack(apdu: Apdu) {
+    match apdu {
+        Apdu::SimpleAck(ack) => {
+            assert_eq!(ack.invoke_id, 0x51);
+            assert_eq!(
+                ack.service_choice,
+                ConfirmedServiceChoice::LIFE_SAFETY_OPERATION
+            );
+        }
+        other => panic!("expected SimpleACK, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn local_rearm_api_supports_two_operation_cycles() {
+    let oid = point_oid(1);
+    let mut objects = ObjectDatabase::new();
+    objects
+        .add(Box::new(LifeSafetyPointObject::new(1, "point").unwrap()))
+        .unwrap();
+    let mut server = BACnetServer::<BipTransport>::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .database(objects)
+        .enable_event_enrollment(false)
+        .build()
+        .await
+        .unwrap();
+
+    for operation in [LifeSafetyOperation::SILENCE, LifeSafetyOperation::UNSILENCE] {
+        server
+            .set_life_safety_operation_expected_local(&oid, operation)
+            .await
+            .unwrap();
+        let mut db = server.db.write().await;
+        let changed =
+            handlers::handle_life_safety_operation(&mut db, &request(operation, Some(oid)))
+                .unwrap();
+        assert_eq!(changed, vec![oid]);
+    }
+
+    let db = server.db.read().await;
+    assert_eq!(
+        db.get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::SILENCED, None)
+            .unwrap(),
+        PropertyValue::Enumerated(SilencedState::UNSILENCED.to_raw())
+    );
+    drop(db);
+    server.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn life_safety_operation_default_policy_denies_without_mutation() {
     let oid = point_oid(1);
@@ -168,16 +221,7 @@ async fn life_safety_operation_authorizer_receives_routed_identity_before_succes
     )
     .await;
 
-    match apdu {
-        Apdu::SimpleAck(ack) => {
-            assert_eq!(ack.invoke_id, 0x51);
-            assert_eq!(
-                ack.service_choice,
-                ConfirmedServiceChoice::LIFE_SAFETY_OPERATION
-            );
-        }
-        other => panic!("expected SimpleACK, got {other:?}"),
-    }
+    assert_simple_ack(apdu);
     let context = seen.lock().unwrap().clone().expect("policy was invoked");
     assert_eq!(context.source_mac, source_mac);
     assert_eq!(context.source_network, Some(routed_source));
@@ -210,6 +254,16 @@ async fn life_safety_operation_dispatch_preserves_all_targeted_error_rows() {
         source.clone(),
         None,
         request(LifeSafetyOperation::SILENCE, Some(missing)),
+    )
+    .await;
+    assert_error(apdu, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+
+    let apdu = dispatch_life_safety_operation(
+        Arc::new(RwLock::new(ObjectDatabase::new())),
+        allow(),
+        source.clone(),
+        None,
+        request(LifeSafetyOperation::RESET, Some(missing)),
     )
     .await;
     assert_error(apdu, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
@@ -261,6 +315,40 @@ async fn life_safety_operation_dispatch_preserves_all_targeted_error_rows() {
         apdu,
         ErrorClass::OBJECT,
         ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+    );
+}
+
+#[tokio::test]
+async fn life_safety_operation_targetless_reset_attempt_returns_simple_ack_without_mutation() {
+    let oid = point_oid(1);
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::RESET);
+    let mut objects = ObjectDatabase::new();
+    objects.add(Box::new(point)).unwrap();
+    let db = Arc::new(RwLock::new(objects));
+    let config = ServerConfig {
+        life_safety_operation_authorizer: Some(Arc::new(|_| true)),
+        ..ServerConfig::default()
+    };
+
+    let apdu = dispatch_life_safety_operation(
+        Arc::clone(&db),
+        config,
+        MacAddr::from_slice(&[1]),
+        None,
+        request(LifeSafetyOperation::RESET, None),
+    )
+    .await;
+
+    assert_simple_ack(apdu);
+    let guard = db.read().await;
+    assert_eq!(
+        guard
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::OPERATION_EXPECTED, None)
+            .unwrap(),
+        PropertyValue::Enumerated(LifeSafetyOperation::RESET.to_raw())
     );
 }
 

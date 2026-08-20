@@ -712,6 +712,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.comm_state.load(Ordering::Acquire)
     }
 
+    /// Arm or rearm a Life Safety object from trusted local application logic.
+    ///
+    /// This uses the object-internal state channel under the database write
+    /// lock. Network WriteProperty and WritePropertyMultiple remain unable to
+    /// forge `Operation_Expected`. Property-specific COV for this local state
+    /// change remains follow-up #177; this method deliberately avoids the
+    /// coarse whole-object COV/event path used by [`write_local`](Self::write_local).
+    pub async fn set_life_safety_operation_expected_local(
+        &self,
+        oid: &ObjectIdentifier,
+        operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        let mut db = self.db.write().await;
+        let object = db.get_mut(oid).ok_or_else(|| Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        })?;
+        object.set_life_safety_operation_expected_internal(operation)
+    }
+
     /// Write a property on a local object and fire the same post-write COV
     /// and event notifications that a network [`WriteProperty`] does.
     ///

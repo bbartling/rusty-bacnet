@@ -60,7 +60,7 @@ fn life_safety_operation_targeted_silence_changes_object() {
 }
 
 #[test]
-fn life_safety_operation_replay_does_not_report_duplicate_change() {
+fn life_safety_operation_replay_without_response_cache_is_invalid_state() {
     let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_operation_expected(LifeSafetyOperation::SILENCE);
@@ -72,9 +72,12 @@ fn life_safety_operation_replay_does_not_report_duplicate_change() {
         handle_life_safety_operation(&mut db, &request).unwrap(),
         vec![oid]
     );
-    assert!(handle_life_safety_operation(&mut db, &request)
-        .unwrap()
-        .is_empty());
+    let error = handle_life_safety_operation(&mut db, &request).unwrap_err();
+    assert_protocol_error(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+    );
 }
 
 #[test]
@@ -123,16 +126,16 @@ fn life_safety_operation_rejects_reserved_and_builtin_reset() {
 }
 
 #[test]
-fn life_safety_operation_without_target_rejects_reset_before_mutation() {
+fn life_safety_operation_without_target_attempts_reset_without_mutation() {
     let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_operation_expected(LifeSafetyOperation::RESET);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(point)).unwrap();
 
-    let error = handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::RESET, None))
-        .unwrap_err();
-    assert_protocol_error(error, ErrorClass::OBJECT, ErrorCode::VALUE_OUT_OF_RANGE);
+    let changed =
+        handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::RESET, None)).unwrap();
+    assert!(changed.is_empty());
     assert_eq!(
         read_enumerated(&db, oid, PropertyIdentifier::OPERATION_EXPECTED),
         LifeSafetyOperation::RESET.to_raw()
@@ -147,13 +150,13 @@ fn life_safety_operation_without_target_attempts_every_object() {
     point.set_operation_expected(LifeSafetyOperation::SILENCE_VISUAL);
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
     zone.set_operation_expected(LifeSafetyOperation::SILENCE_VISUAL);
-    let mut already_applied = LifeSafetyPointObject::new(2, "already").unwrap();
-    already_applied.set_silenced(SilencedState::VISIBLE_SILENCED);
+    let mut already_desired = LifeSafetyPointObject::new(2, "already").unwrap();
+    already_desired.set_silenced(SilencedState::VISIBLE_SILENCED);
     let invalid_state = LifeSafetyPointObject::new(3, "invalid").unwrap();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(point)).unwrap();
     db.add(Box::new(zone)).unwrap();
-    db.add(Box::new(already_applied)).unwrap();
+    db.add(Box::new(already_desired)).unwrap();
     db.add(Box::new(invalid_state)).unwrap();
     db.add(Box::new(AnalogInputObject::new(1, "analog", 62).unwrap()))
         .unwrap();

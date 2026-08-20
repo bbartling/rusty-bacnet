@@ -53,18 +53,16 @@ pub fn handle_life_safety_operation(
     Ok(changed)
 }
 
-/// Validate the operations this safety slice can execute.
+/// Validate the standard operations accepted by the service.
 ///
-/// Clause 13.13 defines reset as a standard request, but built-in reset remains
-/// unavailable until application-executor and duplicate-response semantics are
-/// defined. It therefore receives the specified unsupported-operation error.
+/// Built-in reset execution remains unavailable until application-executor and
+/// duplicate-response semantics are defined. A targeted built-in object returns
+/// the specified unsupported-operation error from its object hook. A request
+/// without an Object Identifier still performs the Clause 13.13 all-applicable
+/// attempt and returns Result(+), even when every built-in object rejects reset.
 pub fn validate_life_safety_operation(operation: LifeSafetyOperation) -> Result<(), Error> {
-    if operation == LifeSafetyOperation::SILENCE
-        || operation == LifeSafetyOperation::SILENCE_AUDIBLE
-        || operation == LifeSafetyOperation::SILENCE_VISUAL
-        || operation == LifeSafetyOperation::UNSILENCE
-        || operation == LifeSafetyOperation::UNSILENCE_AUDIBLE
-        || operation == LifeSafetyOperation::UNSILENCE_VISUAL
+    if (LifeSafetyOperation::SILENCE.to_raw()..=LifeSafetyOperation::UNSILENCE_VISUAL.to_raw())
+        .contains(&operation.to_raw())
     {
         Ok(())
     } else {

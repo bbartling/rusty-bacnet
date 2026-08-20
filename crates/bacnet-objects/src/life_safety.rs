@@ -46,11 +46,6 @@ fn apply_silenced_operation(
         return Err(life_safety_error(ErrorCode::VALUE_OUT_OF_RANGE));
     };
 
-    // A response-loss retry is safe even though the successful operation
-    // cleared Operation_Expected. No duplicate mutation or notification occurs.
-    if desired == current {
-        return Ok(LifeSafetyOperationEffect::AlreadyApplied);
-    }
     if *operation_expected != operation.to_raw() {
         return Err(life_safety_error(
             ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
@@ -309,6 +304,14 @@ impl BACnetObject for LifeSafetyPointObject {
     ) -> Result<LifeSafetyOperationEffect, Error> {
         apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
     }
+
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        self.set_operation_expected(operation);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +512,14 @@ impl BACnetObject for LifeSafetyZoneObject {
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
         apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
+    }
+
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        self.set_operation_expected(operation);
+        Ok(())
     }
 }
 

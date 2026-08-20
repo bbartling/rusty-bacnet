@@ -389,10 +389,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         };
 
                         match execution {
-                            Ok(changed) => {
-                                written_oids.extend(changed);
-                                simple_ack()
-                            }
+                            // LifeSafetyOperation changes Silenced and
+                            // Operation_Expected, not the whole-object COV and
+                            // event inputs represented by written_oids. A
+                            // property-aware COV path remains follow-up #177.
+                            Ok(_changed) => simple_ack(),
                             Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                         }
                     }

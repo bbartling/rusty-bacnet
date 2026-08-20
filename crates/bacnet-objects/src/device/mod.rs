@@ -50,8 +50,8 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::WHO_IS,
     ServiceSupported::READ_RANGE,
     ServiceSupported::UTC_TIME_SYNCHRONIZATION,
-    // Executes authorized silence/unsilence operations. Reset operations stay
-    // explicitly unsupported pending application-executor and replay semantics.
+    // Executes authorized silence/unsilence operations. Built-in reset execution
+    // stays unsupported pending application-executor and replay semantics.
     ServiceSupported::LIFE_SAFETY_OPERATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
     ServiceSupported::GET_EVENT_INFORMATION,

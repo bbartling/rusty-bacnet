@@ -266,11 +266,28 @@ pub trait BACnetObject: Send + Sync {
     /// Apply a LifeSafetyOperation atomically to this object.
     ///
     /// Implementations must leave the object unchanged when returning `Err`.
-    /// The default reports that the object does not support this service.
+    /// They run synchronously under the object-database write lock and must be
+    /// fast, nonblocking, and panic-free. External or irreversible actuation
+    /// also needs an application-owned idempotency/replay contract. The default
+    /// reports that the object does not support this service.
     fn apply_life_safety_operation(
         &mut self,
         _operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Set the next LifeSafetyOperation expected by trusted local logic.
+    ///
+    /// This is an application-facing state channel, not a network property
+    /// write. The default reports that the object does not support the state.
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        _operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

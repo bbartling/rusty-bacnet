@@ -853,8 +853,16 @@ server.stop().await?;
 
 Inbound LifeSafetyOperation is fail-closed unless an authorizer is configured.
 The built-in Life Safety Point and Zone objects execute the six silence and
-unsilence operations. Reset variants return `OBJECT / VALUE_OUT_OF_RANGE`
-until application-executor and duplicate-response semantics are available.
+unsilence operations. Targeted reset variants return `OBJECT / VALUE_OUT_OF_RANGE`
+until application-executor and duplicate-response semantics are available;
+targetless reset requests complete the required all-applicable attempt without
+mutating built-in objects.
+
+Trusted runtime logic can arm or rearm a Life Safety object through
+`BACnetServer::set_life_safety_operation_expected_local`. The lower-level
+`BACnetObject::set_life_safety_operation_expected_internal` channel also remains
+available to custom database owners. Protocol WriteProperty and
+WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.
 
 ### Handled Services
 
@@ -869,7 +877,7 @@ The server automatically dispatches:
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage
-- LifeSafetyOperation (authorized silence/unsilence; reset is unsupported)
+- LifeSafetyOperation (authorized silence/unsilence; built-in reset is unsupported)
 - ReadRange
 - AtomicReadFile, AtomicWriteFile
 - AddListElement, RemoveListElement
