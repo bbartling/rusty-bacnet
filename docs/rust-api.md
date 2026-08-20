@@ -233,12 +233,13 @@ use bacnet_services::vt::{VtOpenRequest, VtCloseRequest, VtDataRequest};
 
 ```rust
 use bacnet_services::audit::{
-    AuditLogQueryRequest, AuditNotificationRequest, BACnetAuditLogQueryParameters,
-    BACnetAuditNotification,
+    AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
+    BACnetAuditLogQueryParameters, BACnetAuditNotification,
 };
 ```
 
-These models encode the literal Clause 21 wire productions. In particular,
+These models encode the Clause 21 field and tag productions within the
+library's `u64` Unsigned implementation limit. In particular,
 `AuditLogQueryRequest::start_at_sequence_number` is `Option<u32>`, and each
 query alternative contains `successful_actions_only: bool`. Clause 13.19
 instead describes `Unsigned64` and `BACnetSuccessFilter`; that internal

@@ -1,4 +1,7 @@
-use super::{decode_canonical_unsigned, AuditNotificationRequest, BACnetAuditNotification};
+use super::{
+    decode_canonical_unsigned, AuditNotificationRequest, AuditPropertyReference,
+    BACnetAuditNotification,
+};
 use crate::common::{decode_context, MAX_DECODED_ITEMS};
 use bacnet_encoding::constructed::{decode_recipient, encode_recipient, validate_tlv_sequence};
 use bacnet_encoding::{primitives, tags};
@@ -86,7 +89,7 @@ fn encode_notification(
     }
     if let Some(property) = &notification.target_property {
         tags::encode_opening_tag(buf, 12);
-        property.encode(buf);
+        encode_property_reference(buf, property);
         tags::encode_closing_tag(buf, 12);
     }
     if let Some(priority) = notification.target_priority {
@@ -270,7 +273,7 @@ fn decode_notification(
     };
     let target_property = if next_is_opening(data, offset, 12)? {
         let (body, next) = decode_constructed_body(data, offset, 12, "target-property")?;
-        let (property, property_end) = crate::common::PropertyReference::decode(body, 0)?;
+        let (property, property_end) = decode_property_reference(body)?;
         if property_end != body.len() {
             return Err(Error::decoding(
                 offset,
@@ -278,7 +281,7 @@ fn decode_notification(
             ));
         }
         let mut canonical = BytesMut::new();
-        property.encode(&mut canonical);
+        encode_property_reference(&mut canonical, &property);
         if canonical.as_ref() != body {
             return Err(Error::decoding(
                 offset,
@@ -354,6 +357,31 @@ fn valid_operation(value: u32) -> bool {
     (0..=15).contains(&value) || (32..=63).contains(&value)
 }
 
+fn encode_property_reference(buf: &mut BytesMut, property: &AuditPropertyReference) {
+    primitives::encode_ctx_enumerated(buf, 0, property.property_identifier.to_raw());
+    if let Some(index) = property.property_array_index {
+        primitives::encode_ctx_unsigned(buf, 1, index);
+    }
+}
+
+fn decode_property_reference(data: &[u8]) -> Result<(AuditPropertyReference, usize), Error> {
+    let (property, mut offset) = decode_context_u32(data, 0, 0, "target-property identifier")?;
+    let property_array_index = if next_is_context(data, offset, 1)? {
+        let (index, next) = decode_context_u64(data, offset, 1, "target-property array-index")?;
+        offset = next;
+        Some(index)
+    } else {
+        None
+    };
+    Ok((
+        AuditPropertyReference {
+            property_identifier: bacnet_types::enums::PropertyIdentifier::from_raw(property),
+            property_array_index,
+        },
+        offset,
+    ))
+}
+
 fn next_is_context(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
     if offset == data.len() {
         return Ok(false);
@@ -382,6 +410,17 @@ fn decode_context_u32(
     let value = u32::try_from(raw)
         .map_err(|_| Error::decoding(offset, format!("AuditNotification {field} exceeds u32")))?;
     Ok((value, next))
+}
+
+fn decode_context_u64(
+    data: &[u8],
+    offset: usize,
+    tag: u8,
+    field: &str,
+) -> Result<(u64, usize), Error> {
+    let (contents, next) =
+        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
+    Ok((decode_canonical_unsigned(contents, offset, field)?, next))
 }
 
 fn decode_context_u16(

@@ -87,15 +87,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Audit notification and AuditLogQuery wire models now follow the literal
-  Standard 135-2020 Clause 21 productions (#345). Audit notification requests
-  contain a non-empty sequence of typed notifications, and AuditLogQuery uses
-  typed by-target/by-source alternatives instead of the obsolete
-  `acknowledgment_filter` plus opaque query tail. This is a breaking Rust API
-  change. Python's `audit_log_query` now accepts a complete pre-encoded
-  `service_data: bytes` payload, matching the two notification methods; all
-  three methods are explicitly raw outbound escape hatches and do not imply
-  bundled-server execution.
+- Audit notification and AuditLogQuery wire models now follow the field and
+  tag shapes of the Standard 135-2020 Clause 21 productions within the
+  library's `u64` Unsigned implementation limit (#345). Audit notification
+  requests contain a non-empty sequence of typed notifications, and
+  AuditLogQuery uses typed by-target/by-source alternatives instead of the
+  obsolete `acknowledgment_filter` plus opaque query tail. This is a breaking
+  Rust API change. Python's breaking `audit_log_query` signature now accepts a
+  complete pre-encoded `service_data: bytes` payload instead of
+  `acknowledgment_filter` and `query_options_raw`; all three Audit methods are
+  explicitly raw outbound escape hatches and do not imply bundled-server
+  execution.
 
   The query model deliberately implements Clause 21's
   `start-at-sequence-number Unsigned32` and `successful-actions-only BOOLEAN`.

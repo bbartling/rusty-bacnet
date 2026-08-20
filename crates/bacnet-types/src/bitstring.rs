@@ -296,26 +296,35 @@ impl core::fmt::Debug for ObjectTypesSupported {
 /// (Clause 21).
 ///
 /// Bit positions 0 through 15 have the same meanings as the named
-/// [`AuditOperation`] values. Positions 16 through 31 are reserved for ASHRAE
-/// and positions 32 through 63 are available for proprietary operations, so
-/// the complete 64-bit wire range is retained rather than truncating the value
-/// to the currently named operations.
+/// [`AuditOperation`] values. Positions 16 through 31 are currently undefined
+/// and reserved for ASHRAE, so they must remain zero. Positions 32 through 63
+/// are retained for proprietary operations.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct AuditOperationFlags {
     bits: u64,
 }
 
 impl AuditOperationFlags {
+    const RESERVED_BITS: u64 = 0x0000_0000_ffff_0000;
+
     /// An empty set of audit operations.
     #[inline]
     pub const fn empty() -> Self {
         Self { bits: 0 }
     }
 
-    /// Construct from the complete bit-position-preserving representation.
+    /// Construct from the bit-position-preserving representation.
+    ///
+    /// Currently undefined ASHRAE-reserved positions 16 through 31 are
+    /// rejected rather than masked.
     #[inline]
-    pub const fn from_bits(bits: u64) -> Self {
-        Self { bits }
+    pub fn from_bits(bits: u64) -> Result<Self> {
+        if bits & Self::RESERVED_BITS != 0 {
+            return Err(Error::OutOfRange(
+                "BACnetAuditOperationFlags: reserved bits 16-31 must be zero".into(),
+            ));
+        }
+        Ok(Self { bits })
     }
 
     /// Return the complete bit-position-preserving representation.
@@ -337,7 +346,7 @@ impl AuditOperationFlags {
     #[inline]
     pub const fn contains(self, operation: AuditOperation) -> bool {
         let bit = operation.to_raw();
-        bit < 64 && self.bits & (1u64 << bit) != 0
+        Self::valid_bit(bit) && self.bits & (1u64 << bit) != 0
     }
 
     /// Select `operation`, returning `false` without mutation when its raw
@@ -345,7 +354,7 @@ impl AuditOperationFlags {
     #[inline]
     pub fn insert(&mut self, operation: AuditOperation) -> bool {
         let bit = operation.to_raw();
-        if bit >= 64 {
+        if !Self::valid_bit(bit) {
             return false;
         }
         self.bits |= 1u64 << bit;
@@ -357,7 +366,7 @@ impl AuditOperationFlags {
     #[inline]
     pub fn remove(&mut self, operation: AuditOperation) -> bool {
         let bit = operation.to_raw();
-        if bit >= 64 {
+        if !Self::valid_bit(bit) {
             return false;
         }
         self.bits &= !(1u64 << bit);
@@ -365,12 +374,16 @@ impl AuditOperationFlags {
     }
 
     /// Iterate selected operations in ascending bit-position order, including
-    /// reserved and proprietary raw values.
+    /// proprietary raw values.
     pub fn iter(self) -> impl Iterator<Item = AuditOperation> {
         let bits = self.bits;
         (0..64)
             .filter(move |&bit| bits & (1u64 << bit) != 0)
             .map(AuditOperation::from_raw)
+    }
+
+    const fn valid_bit(bit: u32) -> bool {
+        bit <= 15 || (bit >= 32 && bit <= 63)
     }
 
     /// Decode a Clause 20.2.10 BIT STRING payload.
@@ -418,6 +431,12 @@ impl AuditOperationFlags {
         let mut bits = 0u64;
         for (index, &byte) in data.iter().enumerate() {
             bits |= u64::from(byte.reverse_bits()) << (index * 8);
+        }
+        if bits & Self::RESERVED_BITS != 0 {
+            return Err(Error::decoding(
+                0,
+                "BACnetAuditOperationFlags: reserved bits 16-31 must be zero",
+            ));
         }
         Ok(Self { bits })
     }
@@ -606,16 +625,20 @@ mod tests {
 
     #[test]
     fn audit_operation_flags_preserve_proprietary_bit_63() {
+        let proprietary_32 = AuditOperation::from_raw(32);
         let proprietary = AuditOperation::from_raw(63);
-        let mut flags = AuditOperationFlags::from_bits(1u64 << 63);
+        let mut flags = AuditOperationFlags::from_bits(1u64 << 63).unwrap();
+        assert!(flags.insert(proprietary_32));
+        assert!(flags.contains(proprietary_32));
         assert!(flags.contains(proprietary));
-        assert_eq!(flags.to_bacnet(), (0, vec![0, 0, 0, 0, 0, 0, 0, 1]));
+        assert_eq!(flags.to_bacnet(), (0, vec![0, 0, 0, 0, 0x80, 0, 0, 1]));
         assert_eq!(
-            AuditOperationFlags::from_bacnet(0, &[0, 0, 0, 0, 0, 0, 0, 1]).unwrap(),
+            AuditOperationFlags::from_bacnet(0, &[0, 0, 0, 0, 0x80, 0, 0, 1]).unwrap(),
             flags
         );
         assert!(!flags.insert(AuditOperation::from_raw(64)));
         assert!(!flags.contains(AuditOperation::from_raw(64)));
+        assert!(flags.remove(proprietary_32));
         assert!(flags.remove(proprietary));
         assert!(flags.is_empty());
     }
@@ -626,11 +649,19 @@ mod tests {
         assert!(AuditOperationFlags::from_bacnet(1, &[0x01]).is_err());
         assert!(AuditOperationFlags::from_bacnet(1, &[]).is_err());
         assert!(AuditOperationFlags::from_bacnet(8, &[0]).is_err());
+        assert!(AuditOperationFlags::from_bits(1 << 16).is_err());
+        assert!(AuditOperationFlags::from_bits(1 << 31).is_err());
+        assert!(AuditOperationFlags::from_bacnet(7, &[0, 0, 0x80]).is_err());
+
+        let mut flags = AuditOperationFlags::empty();
+        assert!(!flags.insert(AuditOperation::from_raw(16)));
+        assert!(!flags.insert(AuditOperation::from_raw(31)));
+        assert!(flags.is_empty());
 
         // Zero padding is accepted; seven unused bits leaves only bit 0.
         assert_eq!(
             AuditOperationFlags::from_bacnet(7, &[0x80]).unwrap(),
-            AuditOperationFlags::from_bits(1)
+            AuditOperationFlags::from_bits(1).unwrap()
         );
     }
 }

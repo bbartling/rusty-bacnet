@@ -50,9 +50,9 @@ fn insert_before_target_device(mut encoded: Vec<u8>, field: &[u8]) -> Vec<u8> {
 
 #[test]
 fn notification_uses_literal_clause_21_tags_and_round_trips_all_fields() {
-    let property = PropertyReference {
+    let property = AuditPropertyReference {
         property_identifier: PropertyIdentifier::PRESENT_VALUE,
-        property_array_index: Some(3),
+        property_array_index: Some(u64::MAX),
     };
     let notification = BACnetAuditNotification {
         source_timestamp: Some(BACnetTimeStamp::SequenceNumber(1)),
@@ -192,7 +192,7 @@ fn notification_rejects_noncanonical_unsigned_and_enumerated_fields() {
     assert!(AuditNotificationRequest::decode(&noncanonical_address).is_err());
 
     let mut property_notification = minimal_notification(AuditOperation::WRITE);
-    property_notification.target_property = Some(PropertyReference {
+    property_notification.target_property = Some(AuditPropertyReference {
         property_identifier: PropertyIdentifier::PRESENT_VALUE,
         property_array_index: Some(1),
     });

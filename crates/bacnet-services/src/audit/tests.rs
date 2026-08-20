@@ -7,8 +7,8 @@ use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 use super::{
-    AuditLogQueryRequest, AuditNotificationRequest, BACnetAuditLogQueryParameters,
-    BACnetAuditNotification,
+    AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
+    BACnetAuditLogQueryParameters, BACnetAuditNotification,
 };
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -134,7 +134,7 @@ fn by_source_minimum_and_sequence_number_match_clause_21_golden() {
 
 #[test]
 fn by_target_all_optional_fields_round_trip() {
-    let flags = AuditOperationFlags::from_bits((1 << 0) | (1 << 8) | (1u64 << 63));
+    let flags = AuditOperationFlags::from_bits((1 << 0) | (1 << 8) | (1u64 << 63)).unwrap();
     let request = AuditLogQueryRequest {
         audit_log: oid(ObjectType::AUDIT_LOG, 44),
         query_parameters: BACnetAuditLogQueryParameters::ByTarget {
@@ -145,7 +145,7 @@ fn by_target_all_optional_fields_round_trip() {
             }),
             target_object_identifier: Some(oid(ObjectType::ANALOG_VALUE, 7)),
             target_property_identifier: Some(PropertyIdentifier::PRESENT_VALUE),
-            target_array_index: Some(u32::MAX),
+            target_array_index: Some(u64::MAX),
             target_priority: Some(16),
             operations: Some(flags),
             successful_actions_only: false,
@@ -176,7 +176,7 @@ fn by_source_address_object_and_flags_round_trip() {
                 mac_address: MacAddr::new(),
             }),
             source_object_identifier: Some(oid(ObjectType::BINARY_INPUT, 4)),
-            operations: Some(AuditOperationFlags::from_bits((1 << 0) | (1 << 8))),
+            operations: Some(AuditOperationFlags::from_bits((1 << 0) | (1 << 8)).unwrap()),
             successful_actions_only: true,
         },
         start_at_sequence_number: None,
@@ -189,6 +189,26 @@ fn by_source_address_object_and_flags_round_trip() {
     assert!(encoded
         .windows(4)
         .any(|window| window == [0x3b, 0x07, 0x80, 0x80]));
+}
+
+#[test]
+fn audit_property_reference_shared_conversion_is_checked() {
+    let shared = crate::common::PropertyReference {
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: Some(u32::MAX),
+    };
+    let audit = AuditPropertyReference::from(shared.clone());
+    assert_eq!(audit.property_array_index, Some(u64::from(u32::MAX)));
+    assert_eq!(
+        crate::common::PropertyReference::try_from(audit).unwrap(),
+        shared
+    );
+
+    let too_wide = AuditPropertyReference {
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: Some(u64::from(u32::MAX) + 1),
+    };
+    assert!(crate::common::PropertyReference::try_from(too_wide).is_err());
 }
 
 #[test]
@@ -258,7 +278,8 @@ fn nested_field_widths_and_priority_range_are_enforced() {
     let mut too_wide_array = BytesMut::new();
     encode_outer_prefix(&mut too_wide_array, 0);
     primitives::encode_ctx_object_id(&mut too_wide_array, 0, &oid(ObjectType::DEVICE, 2));
-    primitives::encode_ctx_unsigned(&mut too_wide_array, 4, 0x1_0000_0000);
+    tags::encode_tag(&mut too_wide_array, 4, tags::TagClass::Context, 9);
+    too_wide_array.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0]);
     primitives::encode_ctx_boolean(&mut too_wide_array, 7, false);
     encode_outer_suffix(&mut too_wide_array, 0);
     assert!(AuditLogQueryRequest::decode(&too_wide_array).is_err());

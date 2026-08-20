@@ -58,7 +58,7 @@ pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Resu
                 primitives::encode_ctx_enumerated(&mut encoded, 3, property.to_raw());
             }
             if let Some(index) = target_array_index {
-                primitives::encode_ctx_unsigned(&mut encoded, 4, u64::from(*index));
+                primitives::encode_ctx_unsigned(&mut encoded, 4, *index);
             }
             if let Some(priority) = target_priority {
                 primitives::encode_ctx_unsigned(&mut encoded, 5, u64::from(*priority));
@@ -212,7 +212,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut target_array_index = None;
     if next_is_context(data, offset, 4)? {
-        let (index, end) = decode_context_u32(
+        let (index, end) = decode_context_u64(
             data,
             offset,
             4,
@@ -432,6 +432,16 @@ fn decode_context_u32(
     let value = u32::try_from(value)
         .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
     Ok((value, end))
+}
+
+fn decode_context_u64(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(u64, usize), Error> {
+    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    Ok((decode_canonical_unsigned(content, offset, field)?, end))
 }
 
 fn decode_application<'a>(

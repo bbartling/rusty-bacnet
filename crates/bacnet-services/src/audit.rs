@@ -1,6 +1,7 @@
 //! Audit notification and query wire models.
 //!
-//! These codecs follow the formal Clause 21 productions in ASHRAE 135-2020.
+//! These codecs follow the formal Clause 21 field and tag productions in
+//! ASHRAE 135-2020 within the library's `u64` Unsigned implementation limit.
 //! Clause 13.19 conflicts with them by describing an `Unsigned64` start
 //! sequence and a three-state success filter. This model intentionally uses
 //! Clause 21's `Unsigned32` and strict mandatory Boolean forms.
@@ -41,7 +42,7 @@ pub struct BACnetAuditNotification {
     pub source_user_role: Option<u8>,
     pub target_device: BACnetRecipient,
     pub target_object: Option<ObjectIdentifier>,
-    pub target_property: Option<PropertyReference>,
+    pub target_property: Option<AuditPropertyReference>,
     /// Command priority, constrained to `1..=16` when present.
     pub target_priority: Option<u8>,
     /// Raw, structurally validated `ABSTRACT-SYNTAX.&Type` encoding.
@@ -59,7 +60,7 @@ pub enum BACnetAuditLogQueryParameters {
         target_device_address: Option<BACnetAddress>,
         target_object_identifier: Option<ObjectIdentifier>,
         target_property_identifier: Option<PropertyIdentifier>,
-        target_array_index: Option<u32>,
+        target_array_index: Option<u64>,
         /// Command priority filter, constrained to `1..=16` when present.
         target_priority: Option<u8>,
         operations: Option<AuditOperationFlags>,
@@ -72,6 +73,48 @@ pub enum BACnetAuditLogQueryParameters {
         operations: Option<AuditOperationFlags>,
         successful_actions_only: bool,
     },
+}
+
+/// Audit-local wire-equivalent of `BACnetPropertyReference`.
+///
+/// The shared service [`PropertyReference`] predates these codecs and narrows
+/// the optional array index to `u32`. Clause 21 defines it as unconstrained
+/// Unsigned, so Audit preserves every value supported by the primitive layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditPropertyReference {
+    /// Property selected by the Audit notification.
+    pub property_identifier: PropertyIdentifier,
+    /// Optional array index, within the primitive layer's `u64` domain.
+    pub property_array_index: Option<u64>,
+}
+
+impl From<PropertyReference> for AuditPropertyReference {
+    fn from(value: PropertyReference) -> Self {
+        Self {
+            property_identifier: value.property_identifier,
+            property_array_index: value.property_array_index.map(u64::from),
+        }
+    }
+}
+
+impl TryFrom<AuditPropertyReference> for PropertyReference {
+    type Error = Error;
+
+    fn try_from(value: AuditPropertyReference) -> Result<Self, Self::Error> {
+        Ok(Self {
+            property_identifier: value.property_identifier,
+            property_array_index: value
+                .property_array_index
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| {
+                    Error::OutOfRange(
+                        "Audit property-array-index exceeds shared PropertyReference u32 limit"
+                            .into(),
+                    )
+                })?,
+        })
+    }
 }
 
 /// AuditLogQuery-Request service parameters.
