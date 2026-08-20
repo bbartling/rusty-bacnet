@@ -265,7 +265,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 if req.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION {
-                    match COVNotificationRequest::decode(&req.service_request) {
+                    match COVNotificationRequest::decode_detailed(&req.service_request) {
                         Ok(notification) => {
                             debug!(
                                 object = ?notification.monitored_object_identifier,
@@ -291,12 +291,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             .await;
                         }
                         Err(e) => {
+                            let reject_reason = e.reject_reason();
+                            let e = e.into_error();
                             warn!(error = %e, "Failed to decode ConfirmedCOVNotification");
-                            let reject_reason = if req.service_request.is_empty() {
-                                RejectReason::MISSING_REQUIRED_PARAMETER
-                            } else {
-                                RejectReason::OTHER
-                            };
                             Self::send_confirmed_request_reject(
                                 network,
                                 source_mac,

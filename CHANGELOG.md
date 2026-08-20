@@ -89,22 +89,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Client-mode responders now return `Reject(UNRECOGNIZED_SERVICE)` for
   complete unicast ConfirmedRequest APDUs without a handler (#374), preserve
-  routed reply addressing, use the immediate MS/TP reply channel when one is
-  present, reject malformed confirmed COV payloads before delivery (including
-  an empty required parameter list), and return a server-side
+  routed reply addressing, send ready MS/TP responses immediately (or
+  `ReplyPostponed` with transmission margin before `T_reply_delay`), classify
+  malformed confirmed COV payloads with the applicable Clause 18.9 Reject
+  reason before delivery, and return a server-side
   `SEGMENTATION_NOT_SUPPORTED` Abort when inbound request reassembly is
   unavailable. Confirmed multicast and broadcast deliveries remain silent as
   required by the responding TSM. B/IP and B/IP6 now obtain the actual UDP
   destination from packet metadata and fail closed on missing, truncated, or
-  mismatched metadata; B/IP6 Original-Unicast also requires the local
-  Destination-VMAC before learning the sender, and outbound B/IP6 unicast now
-  fails explicitly until the destination VMAC has been learned instead of
-  emitting a guaranteed-to-be-discarded reserved VMAC. To retain
+  mismatched metadata; oversized Windows datagrams are dropped without stopping
+  reception. B/IP6 unicast data and address-resolution acknowledgements also
+  require the local Destination-VMAC before learning the sender. Its VMAC table
+  is bounded, preserves a unique learned link-local scope, fails closed when
+  scopes are ambiguous, and deterministically replaces stale endpoint mappings.
+  Annex U Forwarded-NPDU now uses the standard single-VMAC wire layout, exposes
+  the original 18-byte B/IPv6 source, and learns it for follow-up unicast.
+  Outbound unicast fails explicitly until the destination VMAC has been learned
+  instead of guessing from an IP endpoint; automatic outbound Address-Resolution
+  remains a follow-up. To retain
   group-delivery provenance after frame decoding, the public `ReceivedNpdu` and
   `ReceivedApdu` envelopes gain `link_layer_group` and `is_group` fields;
   downstream custom transports or exhaustive struct literals must initialize
-  the new fields. Windows builds gain a direct `windows-sys` dependency for
-  `WSARecvMsg` destination metadata.
+  the new fields. The public Forwarded-NPDU payload decoder now returns the
+  original B/IPv6 address and NPDU because the original VMAC is already in the
+  BVLC6 header. Windows builds gain a direct `windows-sys` dependency for
+  `WSARecvMsg` destination metadata; unsupported OS targets reject B/IP startup
+  when safe destination metadata cannot be obtained.
 
 - Confirmed-Request `max-segments-accepted` no longer maps every non-rung
   client capacity to `B'111'` ("greater than 64"). Capacities 0 and 1 now fail

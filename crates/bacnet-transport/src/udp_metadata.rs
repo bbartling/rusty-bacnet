@@ -15,6 +15,7 @@ pub(crate) enum IpVersion {
     V6,
 }
 
+#[derive(Debug)]
 pub(crate) struct ReceivedDatagram {
     pub len: usize,
     pub peer: SocketAddr,
@@ -131,7 +132,10 @@ impl DestinationReceiver {
             )
         };
         if result == SOCKET_ERROR {
-            return Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }));
+            return Err(classify_recv_error(
+                unsafe { WSAGetLastError() },
+                WSAEMSGSIZE,
+            ));
         }
         if message.dwFlags & (MSG_TRUNC | MSG_CTRUNC) != 0 {
             return Err(invalid_metadata("truncated UDP payload or packet metadata"));
@@ -155,10 +159,31 @@ impl DestinationReceiver {
             os_group_delivery: Some(message.dwFlags & (MSG_BCAST | MSG_MCAST) != 0),
         })
     }
+
+    #[cfg(not(any(unix, windows)))]
+    fn try_recv_from(
+        &self,
+        _udp_socket: &UdpSocket,
+        _buf: &mut [u8],
+    ) -> io::Result<ReceivedDatagram> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "UDP destination metadata is unsupported on this platform",
+        ))
+    }
 }
 
 fn invalid_metadata(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn classify_recv_error(code: i32, message_too_large_code: i32) -> io::Error {
+    if code == message_too_large_code {
+        invalid_metadata("truncated UDP payload")
+    } else {
+        io::Error::from_raw_os_error(code)
+    }
 }
 
 #[cfg(unix)]
@@ -190,6 +215,25 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
 #[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
 fn ipv4_packet_info_option() -> io::Result<(libc::c_int, libc::c_int)> {
     Ok((libc::IPPROTO_IP, libc::IP_PKTINFO))
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))
+))]
+unsafe fn unix_ipv4_destination_cmsg(_header: &libc::cmsghdr) -> io::Result<Option<Ipv4Addr>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "IPv4 destination metadata is unsupported on this platform",
+    ))
 }
 
 #[cfg(all(
@@ -351,6 +395,14 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+fn configure_packet_info(_udp_socket: &Socket, _version: IpVersion) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "UDP destination metadata is unsupported on this platform",
+    ))
+}
+
 #[cfg(windows)]
 fn windows_recv_msg(
     udp_socket: &Socket,
@@ -502,5 +554,45 @@ mod tests {
         let received = receiver.recv_from(&socket, &mut buf).await.unwrap();
         assert_eq!(&buf[..received.len], b"v6");
         assert_eq!(received.destination, IpAddr::V6(Ipv6Addr::LOCALHOST));
+    }
+
+    #[tokio::test]
+    async fn oversized_datagram_is_dropped_without_stopping_receive() {
+        let socket = Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None).unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let receiver = DestinationReceiver::configure(&socket, IpVersion::V4).unwrap();
+        socket
+            .bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into())
+            .unwrap();
+        let socket = UdpSocket::from_std(socket.into()).unwrap();
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let destination = socket.local_addr().unwrap();
+
+        sender.send_to(&[0xAA; 64], destination).await.unwrap();
+        let mut buf = [0u8; 8];
+        assert_eq!(
+            receiver
+                .recv_from(&socket, &mut buf)
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        sender.send_to(b"ok", destination).await.unwrap();
+        let received = receiver.recv_from(&socket, &mut buf).await.unwrap();
+        assert_eq!(&buf[..received.len], b"ok");
+    }
+
+    #[test]
+    fn oversized_datagram_error_is_droppable_invalid_data() {
+        assert_eq!(
+            classify_recv_error(10040, 10040).kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            classify_recv_error(12345, 10040).raw_os_error(),
+            Some(12345)
+        );
     }
 }

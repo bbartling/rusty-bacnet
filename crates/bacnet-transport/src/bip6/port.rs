@@ -1,5 +1,4 @@
 use std::collections::hash_map::RandomState;
-use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
@@ -16,6 +15,8 @@ use tracing::{debug, warn};
 use crate::port::{ReceivedNpdu, TransportPort};
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
 
+use super::frame::destination_vmac_matches;
+use super::vmac_table::VmacTable;
 use super::{
     decode_bvlc6, decode_forwarded_npdu_payload, encode_address_resolution_ack, encode_bvlc6,
     encode_bvlc6_original_broadcast, encode_bvlc6_original_unicast,
@@ -71,7 +72,9 @@ pub(super) fn original_destination_matches(
     os_group_delivery: Option<bool>,
 ) -> bool {
     match function {
-        Bvlc6Function::OriginalUnicast => is_local_unicast_delivery(
+        Bvlc6Function::OriginalUnicast
+        | Bvlc6Function::AddressResolutionAck
+        | Bvlc6Function::VirtualAddressResolutionAck => is_local_unicast_delivery(
             destination,
             destination_vmac,
             local_ip,
@@ -109,41 +112,6 @@ pub fn decode_bip6_mac(mac: &[u8]) -> Result<(Ipv6Addr, u16), Error> {
     let ip = Ipv6Addr::from(ip_bytes);
     let port = u16::from_be_bytes([mac[16], mac[17]]);
     Ok((ip, port))
-}
-
-/// VMAC-to-address mapping table per Clause U.5.
-/// Updated from incoming frames (learn-on-receive) and AR exchanges.
-#[derive(Debug, Clone)]
-pub(super) struct VmacTable {
-    entries: Arc<tokio::sync::RwLock<HashMap<Bip6Vmac, SocketAddrV6>>>,
-}
-
-impl VmacTable {
-    fn new() -> Self {
-        Self {
-            entries: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// Learn a VMAC-to-address mapping from an incoming frame.
-    pub(super) async fn learn(&self, vmac: Bip6Vmac, addr: SocketAddrV6) {
-        self.entries.write().await.insert(vmac, addr);
-    }
-
-    /// Look up the B/IPv6 address for a VMAC.
-    #[allow(dead_code)] // used by AR exchange (future)
-    async fn lookup(&self, vmac: &Bip6Vmac) -> Option<SocketAddrV6> {
-        self.entries.read().await.get(vmac).copied()
-    }
-
-    /// Reverse lookup: find the VMAC for a B/IPv6 address.
-    async fn lookup_by_addr(&self, addr: &SocketAddrV6) -> Option<Bip6Vmac> {
-        let entries = self.entries.read().await;
-        entries
-            .iter()
-            .find(|(_, a)| *a == addr)
-            .map(|(vmac, _)| *vmac)
-    }
 }
 
 /// BACnet/IPv6 transport over UDP (Annex U).
@@ -525,6 +493,18 @@ impl TransportPort for Bip6Transport {
                         let data = &recv_buf[..received.len];
                         match decode_bvlc6(data) {
                             Ok(frame) => {
+                                if !destination_vmac_matches(
+                                    frame.function,
+                                    frame.destination_vmac,
+                                    source_vmac_copy,
+                                ) {
+                                    debug!(
+                                        function = frame.function.to_byte(),
+                                        destination_vmac = ?frame.destination_vmac,
+                                        "Dropping BVLC6 message addressed to another VMAC"
+                                    );
+                                    continue;
+                                }
                                 if !original_destination_matches(
                                     frame.function,
                                     received.destination,
@@ -540,8 +520,12 @@ impl TransportPort for Bip6Transport {
                                     );
                                     continue;
                                 }
-                                // Learn-on-receive: update VMAC table from every frame
-                                if frame.source_vmac != [0; 3] {
+                                // Forwarded-NPDU's source VMAC identifies the original
+                                // node, not the forwarding BBMD. Its original address is
+                                // learned from the function payload below.
+                                if frame.function != Bvlc6Function::ForwardedNpdu
+                                    && frame.source_vmac != [0; 3]
+                                {
                                     if let std::net::SocketAddr::V6(v6) = received.peer {
                                         vmac_table_clone.learn(frame.source_vmac, v6).await;
                                     }
@@ -581,18 +565,36 @@ impl TransportPort for Bip6Transport {
 
                                     Bvlc6Function::ForwardedNpdu => {
                                         match decode_forwarded_npdu_payload(&frame.payload) {
-                                            Ok((originating_vmac, _source_addr, npdu_bytes)) => {
+                                            Ok((mut source_addr, npdu_bytes)) => {
                                                 if npdu_bytes.is_empty() {
                                                     debug!(
                                                     "ForwardedNpdu with no NPDU payload, ignoring"
                                                 );
                                                     continue;
                                                 }
+                                                // A forwarded link-local address has no wire scope;
+                                                // use the forwarding BBMD's ingress interface hint.
+                                                if source_addr.ip().is_unicast_link_local()
+                                                    && source_addr.scope_id() == 0
+                                                {
+                                                    if let std::net::SocketAddr::V6(peer) =
+                                                        received.peer
+                                                    {
+                                                        source_addr.set_scope_id(peer.scope_id());
+                                                    }
+                                                }
+                                                vmac_table_clone
+                                                    .learn(frame.source_vmac, source_addr)
+                                                    .await;
+                                                let source_mac = encode_bip6_mac(
+                                                    *source_addr.ip(),
+                                                    source_addr.port(),
+                                                );
                                                 if tx
                                                     .try_send(ReceivedNpdu {
                                                         npdu: Bytes::copy_from_slice(npdu_bytes),
                                                         source_mac: MacAddr::from_slice(
-                                                            &originating_vmac,
+                                                            &source_mac,
                                                         ),
                                                         link_layer_group: true,
                                                         data_attributes: Vec::new(),
@@ -762,21 +764,21 @@ impl TransportPort for Bip6Transport {
         })?;
 
         let (ip, port) = decode_bip6_mac(mac)?;
-        let dest = SocketAddrV6::new(ip, port, 0, 0);
-
         let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH + npdu.len());
-        let source_vmac = self.source_vmac;
-        // Original-Unicast requires the destination's actual VMAC. Sending
-        // the reserved unknown VMAC would guarantee a conforming peer drops
-        // the frame, so fail before emission until an inbound frame has
-        // populated the Clause U.5 table.
-        let dest_vmac = self.vmac_table.lookup_by_addr(&dest).await.ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::AddrNotAvailable,
-                "BIP6 destination VMAC is unknown; receive a frame from the peer first",
-            ))
-        })?;
-        encode_bvlc6_original_unicast(&mut buf, &source_vmac, &dest_vmac, npdu)?;
+        // Original-Unicast requires the destination's actual VMAC. The
+        // network MAC contains only IPv6+port, so use the latest learned
+        // mapping both for that VMAC and for the exact scoped endpoint.
+        let (dest_vmac, dest) =
+            self.vmac_table
+                .resolve_by_addr(ip, port)
+                .await
+                .ok_or_else(|| {
+                    Error::Transport(std::io::Error::new(
+                        std::io::ErrorKind::AddrNotAvailable,
+                        "BIP6 destination VMAC is unknown; receive a frame from the peer first",
+                    ))
+                })?;
+        encode_bvlc6_original_unicast(&mut buf, &self.source_vmac, &dest_vmac, npdu)?;
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 

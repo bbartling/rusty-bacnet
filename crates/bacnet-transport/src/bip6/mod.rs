@@ -107,6 +107,7 @@ pub struct Bvlc6Frame {
 mod frame;
 pub use frame::*;
 mod port;
+mod vmac_table;
 pub use port::{
     decode_bip6_mac, encode_bip6_mac, generate_random_vmac, Bip6BroadcastScope,
     Bip6ForeignDeviceConfig, Bip6Transport, BACNET_IPV6_MULTICAST,

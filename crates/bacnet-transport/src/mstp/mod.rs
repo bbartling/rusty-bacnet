@@ -50,6 +50,9 @@ fn calculate_t_slot_ms(_baud_rate: u32) -> u64 {
 }
 /// Maximum time a node may delay before sending a reply to DataExpectingReply (ms).
 const T_REPLY_DELAY_MS: u64 = 250;
+/// Scheduling/write margin reserved so the first reply octet starts before
+/// the T_reply_delay limit rather than beginning at the limit.
+const T_REPLY_TRANSMIT_MARGIN_MS: u64 = 25;
 /// Minimum silence time (40 bit times) before transmitting after receiving last octet.
 fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
     40_000_000u64 / baud_rate as u64
@@ -309,6 +312,30 @@ impl MasterNode {
         }
     }
 
+    /// Complete AnswerDataRequest with application data or ReplyPostponed.
+    pub(crate) fn finish_data_request(&mut self, reply_data: Option<Bytes>) -> Option<MstpFrame> {
+        if self.state != MasterState::AnswerDataRequest {
+            return None;
+        }
+        let destination = self.pending_reply_source.take().unwrap_or(BROADCAST_MAC);
+        self.reply_rx = None;
+        self.state = MasterState::Idle;
+        Some(match reply_data {
+            Some(data) => MstpFrame {
+                frame_type: FrameType::BACnetDataNotExpectingReply,
+                destination,
+                source: self.config.this_station,
+                data,
+            },
+            None => MstpFrame {
+                frame_type: FrameType::ReplyPostponed,
+                destination,
+                source: self.config.this_station,
+                data: Bytes::new(),
+            },
+        })
+    }
+
     /// Decide what to send when we have the token. Returns a frame to send.
     pub fn use_token(&mut self) -> MstpFrame {
         // Send queued data if available and under frame limit
@@ -497,5 +524,7 @@ fn next_addr(current: u8, max_master: u8) -> u8 {
 mod port;
 pub use port::{LoopbackSerial, MstpTransport, NoSerial};
 
+#[cfg(test)]
+mod port_timing_tests;
 #[cfg(test)]
 mod tests;
