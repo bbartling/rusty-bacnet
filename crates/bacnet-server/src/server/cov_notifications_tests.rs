@@ -1,10 +1,11 @@
-use super::cov_notifications::cov_multiple_timestamps;
+use super::cov_clock::cov_multiple_datetime;
 use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::{Date, Time};
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
@@ -58,7 +59,20 @@ fn sample_cov_multiple_notification() -> COVNotificationMultipleRequest {
         subscriber_process_identifier: 7,
         initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 123).unwrap(),
         time_remaining: 0,
-        timestamp: BACnetTimeStamp::SequenceNumber(42),
+        timestamp: Some((
+            Date {
+                year: 126,
+                month: 4,
+                day: 13,
+                day_of_week: 1,
+            },
+            Time {
+                hour: 10,
+                minute: 11,
+                second: 12,
+                hundredths: 13,
+            },
+        )),
         list_of_cov_notifications: vec![COVNotificationItem {
             monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
                 .unwrap(),
@@ -66,7 +80,12 @@ fn sample_cov_multiple_notification() -> COVNotificationMultipleRequest {
                 property_identifier: PropertyIdentifier::PRESENT_VALUE,
                 property_array_index: None,
                 value: vec![0x44, 0x42, 0x91, 0x00, 0x00],
-                time_of_change: Some(vec![0x19, 0x2A]),
+                time_of_change: Some(Time {
+                    hour: 10,
+                    minute: 11,
+                    second: 12,
+                    hundredths: 13,
+                }),
             }],
         }],
     }
@@ -113,32 +132,71 @@ fn confirmed_cov_multiple_apdu_uses_multiple_service_choice() {
 }
 
 #[test]
-fn cov_multiple_timestamps_wrap_seconds_of_epoch_into_range() {
-    // A 2026-era seconds-of-epoch value (far above 65535): both the request
-    // timestamp and the timeOfChange [3] content bytes must read back as
-    // sequence-number ≤ 65535 through the shared timestamp codec.
-    let (timestamp, ts_choice_bytes) = cov_multiple_timestamps(1_776_000_000);
-    let (decoded, end) =
-        bacnet_encoding::primitives::decode_timestamp_choice(&ts_choice_bytes, 0).unwrap();
-    assert_eq!(end, ts_choice_bytes.len());
-    let BACnetTimeStamp::SequenceNumber(n) = decoded else {
-        panic!("expected sequence-number choice, got {decoded:?}");
-    };
-    assert!(n <= 65_535);
-    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(n));
-    assert_eq!(n, 1_776_000_000 % 65_536);
+fn cov_multiple_timestamp_uses_device_local_bacnet_date_and_time() {
+    let (date, time) = cov_multiple_datetime(Duration::ZERO, 0);
+    assert_eq!(
+        date,
+        Date {
+            year: 70,
+            month: 1,
+            day: 1,
+            day_of_week: 4,
+        }
+    );
+    assert_eq!(
+        time,
+        Time {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            hundredths: 0,
+        }
+    );
 
-    // Small values pass through unchanged.
-    let (timestamp, ts_choice_bytes) = cov_multiple_timestamps(42);
-    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(42));
-    let (decoded, _) =
-        bacnet_encoding::primitives::decode_timestamp_choice(&ts_choice_bytes, 0).unwrap();
-    assert_eq!(decoded, BACnetTimeStamp::SequenceNumber(42));
-    // Exact boundary.
-    let (timestamp, _) = cov_multiple_timestamps(65_535);
-    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(65_535));
-    let (timestamp, _) = cov_multiple_timestamps(65_536);
-    assert_eq!(timestamp, BACnetTimeStamp::SequenceNumber(0));
+    // 2024-02-29T12:34:56.780Z exercises leap-day and hundredths handling.
+    let (date, time) = cov_multiple_datetime(Duration::new(1_709_210_096, 780_000_000), 0);
+    assert_eq!(
+        date,
+        Date {
+            year: 124,
+            month: 2,
+            day: 29,
+            day_of_week: 4,
+        }
+    );
+    assert_eq!(
+        time,
+        Time {
+            hour: 12,
+            minute: 34,
+            second: 56,
+            hundredths: 78,
+        }
+    );
+
+    let (date, time) = cov_multiple_datetime(Duration::new(86_400, 0), -60);
+    assert_eq!(
+        date,
+        Date {
+            year: 70,
+            month: 1,
+            day: 1,
+            day_of_week: 4,
+        }
+    );
+    assert_eq!(time.hour, 23);
+
+    let (date, time) = cov_multiple_datetime(Duration::new(86_399, 0), 60);
+    assert_eq!(
+        date,
+        Date {
+            year: 70,
+            month: 1,
+            day: 2,
+            day_of_week: 5,
+        }
+    );
+    assert_eq!(time.hour, 0);
 }
 
 #[tokio::test]
@@ -313,7 +371,85 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
                 req.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE
             );
+            let notification =
+                COVNotificationMultipleRequest::decode(&req.service_request).unwrap();
+            assert_eq!(notification.time_remaining, 0);
+            assert_eq!(notification.timestamp, None);
+            assert_eq!(
+                notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
+                None
+            );
         }
         other => panic!("expected unconfirmed COVNotificationMultiple, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
+        &sent,
+    ))));
+
+    let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
+    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
+    let mut db = ObjectDatabase::new();
+    let mut device = DeviceObject::new(DeviceConfig {
+        instance: 1234,
+        name: "Timestamped-COV-Multiple-Test".into(),
+        ..DeviceConfig::default()
+    })
+    .unwrap();
+    device.set_object_list(vec![device_oid, ao_oid]);
+    db.add(Box::new(device)).unwrap();
+    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
+        .unwrap();
+
+    let db = Arc::new(RwLock::new(db));
+    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
+    {
+        let mut table = cov_table.write().await;
+        table.subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+            subscriber_network: None,
+            subscriber_process_identifier: 7,
+            monitored_object_identifier: ao_oid,
+            issue_confirmed_notifications: false,
+            expires_at: Some(Instant::now() + Duration::from_secs(300)),
+            last_notified_value: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Multiple,
+            timestamped: true,
+        });
+    }
+
+    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+        &db,
+        &network,
+        &cov_table,
+        &Arc::new(Semaphore::new(255)),
+        &Arc::new(Mutex::new(ServerTsm::new())),
+        &Arc::new(AtomicU8::new(0)),
+        &ServerConfig::default(),
+        &ao_oid,
+    )
+    .await;
+
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
+    let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+        panic!("expected unconfirmed COVNotificationMultiple");
+    };
+    let notification = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+    assert!((298..=300).contains(&notification.time_remaining));
+    let (_, request_time) = notification
+        .timestamp
+        .expect("timestamped values require request BACnetDateTime");
+    assert_eq!(
+        notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
+        Some(request_time)
+    );
 }

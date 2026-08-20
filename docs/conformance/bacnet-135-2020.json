@@ -530,19 +530,28 @@
     "crates/bacnet-server/src/server/cov_notifications.rs",
     "crates/bacnet-server/src/server/segmentation.rs",
     "crates/bacnet-server/src/server/dispatch.rs",
-    "crates/bacnet-server/src/server/requests.rs",
+    "crates/bacnet-server/src/server/requests/mod.rs",
     "crates/bacnet-server/src/cov.rs",
     "crates/bacnet-services/src/cov.rs",
-    "crates/bacnet-services/src/cov_multiple.rs"
+    "crates/bacnet-services/src/cov_multiple.rs",
+    "crates/bacnet-services/src/cov_multiple_helpers.rs",
+    "crates/bacnet-server/src/server/cov_clock.rs",
+    "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs"
    ],
    "positive_tests": [
     "crates/bacnet-services/src/cov_multiple.rs::tests::subscribe_cov_property_multiple_uses_standard_tags",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::notification_decodes_standard_datetime_and_primitive_time_of_change",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::encoder_validation_is_atomic_and_caps_total_nested_items",
     "crates/bacnet-server/src/cov.rs::tests::cov_multiple_context_lifetime_refreshes_and_expires",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_handler_returns_initial_subscriptions",
+    "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_deduplicates_initial_subscriptions",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_cancellation_removes_context_or_specs",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_records_routed_subscriber_endpoint",
     "crates/bacnet-server/src/server/cov_notifications_tests.rs::unconfirmed_cov_multiple_apdu_uses_multiple_service_choice",
     "crates/bacnet-server/src/server/cov_notifications_tests.rs::confirmed_cov_multiple_apdu_uses_multiple_service_choice",
+    "crates/bacnet-server/src/server/cov_notifications_tests.rs::cov_multiple_timestamp_uses_device_local_bacnet_date_and_time",
+    "crates/bacnet-server/src/server/cov_notifications_tests.rs::timestamped_cov_multiple_reports_datetime_and_remaining_lifetime",
     "crates/bacnet-server/src/server/cov_notifications_tests.rs::routed_cov_send_preserves_npdu_destination",
     "crates/bacnet-server/src/server/cov_notifications_tests.rs::routed_segmented_complex_ack_preserves_npdu_destination",
     "crates/bacnet-server/src/server/cov_notifications_tests.rs::cov_property_multiple_subscription_uses_multiple_notification_on_change",
@@ -552,6 +561,10 @@
    ],
    "negative_tests": [
     "crates/bacnet-services/src/cov_multiple.rs::tests::subscribe_cov_property_multiple_rejects_malformed_header_fields",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::subscribe_rejects_empty_reference_lists_and_special_property_identifiers",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::timestamp_and_time_of_change_presence_must_agree",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::notification_rejects_legacy_timestamp_and_time_shapes",
+    "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::notification_rejects_empty_lists_and_special_property_identifiers",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_rejects_invalid_service_parameters",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_invalid_property_is_atomic",
     "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_capacity_failure_is_atomic",
@@ -560,7 +573,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. This row remains below supported status until fuller BIBB/PICS and clause-level conformance evidence exists, including first-failed-subscription response shape, complete Device active-COV property synchronization, context-level Active_COV_Multiple_Subscriptions evidence, and fuller clause-level evidence."
+   "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. Issue #342 evidence corrects both mandatory booleans, optional BACnetDateTime and primitive Time fields, nested-list cardinalities, prohibited monitored-property identifiers, cumulative decode/encode caps, pre-mutation encoder validation, local-time server projection, active time-remaining projection, and duplicate-reference amplification. This row remains below supported status: ordered partial-success execution and first-failed-subscription provenance, max-notification-delay queuing and timestamped change history, schema-aware ANY validation, Active_COV_Multiple_Subscriptions synchronization, client-mode COV Multiple reception, outbound APDU size/segmentation policy, and fuller BIBB/PICS evidence remain separate work."
   },
   {
    "id": "BACNET-15-ARRAY-INDEX-GATING",

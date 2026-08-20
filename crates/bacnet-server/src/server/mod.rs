@@ -22,7 +22,7 @@ use bacnet_encoding::apdu::{
     SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
 };
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_encoding::primitives::{encode_ctx_unsigned, encode_property_value};
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::segmentation::{
     max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
@@ -934,6 +934,7 @@ impl ScServerBuilder {
     }
 }
 
+mod cov_clock;
 mod cov_notifications;
 mod dispatch;
 mod event_notifications;

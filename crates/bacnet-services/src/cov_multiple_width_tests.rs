@@ -42,7 +42,6 @@ fn cov_notification_multiple(
         &ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap(),
     );
     encode_context_value(&mut buf, 2, time_remaining);
-    primitives::encode_timestamp(&mut buf, 3, &BACnetTimeStamp::SequenceNumber(1)).unwrap();
     tags::encode_opening_tag(&mut buf, 4);
     primitives::encode_ctx_object_id(
         &mut buf,

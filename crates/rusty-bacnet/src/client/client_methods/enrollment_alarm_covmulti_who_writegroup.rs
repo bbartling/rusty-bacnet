@@ -147,8 +147,10 @@ impl BACnetClient {
     ///
     /// `specs` is a list of `(ObjectIdentifier, [(PropertyIdentifier, array_index, cov_increment, timestamped), ...])`.
     /// `cov_increment` is an optional float; `timestamped` is a bool.
+    /// `issue_confirmed_notifications` is required, including for cancellations.
     /// For subscriptions and re-subscriptions, `lifetime` and `max_notification_delay` are both required.
-    #[pyo3(signature = (address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None, lifetime=None))]
+    /// A whole-context cancellation uses an empty `specs` list and omits both timing fields.
+    #[pyo3(signature = (address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn subscribe_cov_property_multiple<'py>(
         &self,
@@ -159,12 +161,10 @@ impl BACnetClient {
             PyObjectIdentifier,
             Vec<(PyPropertyIdentifier, Option<u32>, Option<f32>, bool)>,
         )>,
+        issue_confirmed_notifications: bool,
         max_notification_delay: Option<u32>,
-        issue_confirmed_notifications: Option<bool>,
         lifetime: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let confirmed = issue_confirmed_notifications
-            .ok_or_else(|| PyValueError::new_err("issue_confirmed_notifications is required"))?;
         match (lifetime, max_notification_delay) {
             (None, None) => {}
             (Some(lifetime), Some(max_delay)) => {
@@ -213,13 +213,13 @@ impl BACnetClient {
             };
             let req = SubscribeCOVPropertyMultipleRequest {
                 subscriber_process_identifier,
-                issue_confirmed_notifications: Some(confirmed),
+                issue_confirmed_notifications,
                 lifetime,
                 max_notification_delay,
                 list_of_cov_subscription_specifications: rust_specs,
             };
             let mut buf = BytesMut::new();
-            req.encode(&mut buf);
+            req.try_encode(&mut buf).map_err(to_py_err)?;
             c.confirmed_request(
                 &mac,
                 ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,

@@ -87,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- COV Multiple wire models now match the Clause 13.16–13.18 and Clause 21
+  productions (#342). `issue_confirmed_notifications` and each reference's
+  `timestamped` flag are mandatory booleans and are encoded even when false;
+  subscription reference lists, notification lists, and per-object value lists
+  enforce their specified cardinalities; and the special `ALL`, `OPTIONAL`,
+  and `REQUIRED` property identifiers are rejected without excluding
+  proprietary identifiers. Decode and encode paths apply a cumulative 10,000
+  nested-item bound, and fallible request encoding validates the full model
+  before mutating the destination buffer.
+
+  `COVNotificationMultipleRequest.timestamp` is now an optional BACnetDateTime
+  represented as `Option<(Date, Time)>`, and each value's optional
+  `time_of_change` is a primitive `Time` rather than raw constructed bytes.
+  The built-in server emits both only for timestamped subscriptions, projects
+  the wall clock through the Device object's `UTC_Offset`, reports the active
+  subscription lifetime instead of zero, and deduplicates repeated effective
+  references before producing the initial notification. These are breaking
+  Rust model changes. The Python `subscribe_cov_property_multiple` method now
+  requires `issue_confirmed_notifications: bool` before its optional timing
+  arguments and propagates pre-send model validation errors.
+
 - GetEnrollmentSummary now uses its Clause 13.11 service-specific Event State
   Filter values (`OFFNORMAL`, `FAULT`, `NORMAL`, `ALL`, and `ACTIVE`) instead
   of interpreting them as `EventState`; omission correctly defaults to `ALL`,
