@@ -230,3 +230,92 @@ async fn non_must_understand_destination_option_allows_delivery() {
 
     transport.stop().await.unwrap();
 }
+
+#[test]
+fn secure_path_without_must_understand_is_rejected_before_state_mutation() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    let message_id_before = conn.next_message_id;
+    let state_before = conn.state;
+    let attribute = DataAttribute {
+        option_type: 1,
+        must_understand: false,
+        data: Vec::new(),
+    };
+
+    let err = conn
+        .build_encapsulated_npdu_with_data_attributes([0x02; 6], &[0x01, 0x02], &[attribute])
+        .unwrap_err();
+
+    match err {
+        Error::Encoding(message) => assert!(message.contains("Must Understand")),
+        other => panic!("expected encoding error, got {other}"),
+    }
+    assert_eq!(conn.next_message_id, message_id_before);
+    assert_eq!(conn.state, state_before);
+}
+
+#[test]
+fn secure_path_with_header_data_is_rejected_before_state_mutation() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    let message_id_before = conn.next_message_id;
+    let state_before = conn.state;
+    let attribute = DataAttribute {
+        option_type: 1,
+        must_understand: true,
+        data: vec![0xAA],
+    };
+
+    let err = conn
+        .build_encapsulated_npdu_with_data_attributes([0x02; 6], &[0x01, 0x02], &[attribute])
+        .unwrap_err();
+
+    match err {
+        Error::Encoding(message) => assert!(message.contains("Header Data")),
+        other => panic!("expected encoding error, got {other}"),
+    }
+    assert_eq!(conn.next_message_id, message_id_before);
+    assert_eq!(conn.state, state_before);
+}
+
+#[tokio::test]
+async fn invalid_secure_path_options_are_rejected_before_websocket_emission() {
+    let cases = [
+        (
+            DataAttribute {
+                option_type: 1,
+                must_understand: false,
+                data: Vec::new(),
+            },
+            "Must Understand",
+        ),
+        (
+            DataAttribute {
+                option_type: 1,
+                must_understand: true,
+                data: vec![0xAA],
+            },
+            "Header Data",
+        ),
+    ];
+
+    for (attribute, expected_message) in cases {
+        let (mut transport, _rx, ws_hub) = start_transport().await;
+
+        let err = transport
+            .send_unicast_with_data_attributes(&[0x01, 0x02], &[0x02; 6], &[attribute])
+            .await
+            .unwrap_err();
+
+        match err {
+            Error::Encoding(message) => assert!(message.contains(expected_message)),
+            other => panic!("expected encoding error, got {other}"),
+        }
+        assert!(timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err());
+
+        transport.stop().await.unwrap();
+    }
+}

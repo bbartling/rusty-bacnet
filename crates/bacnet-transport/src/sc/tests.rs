@@ -523,6 +523,7 @@ async fn transport_send_unicast_encodes_data_attributes_as_options() {
         .unwrap();
 
     let data = ws_hub.recv().await.unwrap();
+    assert_eq!(data[10], 0xC1);
     let msg = decode_sc_message(&data).unwrap();
     assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
     assert_eq!(msg.destination_vmac, Some(dest_vmac));
@@ -576,7 +577,7 @@ fn connection_rejects_too_many_data_attributes_on_encode() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let attributes = vec![
         DataAttribute {
-            option_type: 1,
+            option_type: 31,
             must_understand: false,
             data: Vec::new(),
         };
@@ -594,7 +595,7 @@ fn connection_rejects_too_many_data_attributes_on_encode() {
 fn connection_rejects_oversize_data_attribute_payload_on_encode() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let attribute = DataAttribute {
-        option_type: 1,
+        option_type: 31,
         must_understand: false,
         data: vec![0; u16::MAX as usize + 1],
     };
