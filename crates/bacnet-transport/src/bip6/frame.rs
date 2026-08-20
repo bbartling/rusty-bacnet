@@ -71,10 +71,29 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
     if length < BVLC6_HEADER_LENGTH {
         return Err(Error::decoding(2, "BVLC6 length less than header size"));
     }
-    if length > data.len() {
+    if length != data.len() {
         return Err(Error::decoding(
             2,
-            format!("BVLC6 length {} exceeds data length {}", length, data.len()),
+            format!(
+                "BVLC6 length {} does not match datagram length {}",
+                length,
+                data.len()
+            ),
+        ));
+    }
+
+    let fixed_length = match function {
+        Bvlc6Function::VirtualAddressResolution => Some(BVLC6_HEADER_LENGTH),
+        Bvlc6Function::AddressResolution
+        | Bvlc6Function::AddressResolutionAck
+        | Bvlc6Function::VirtualAddressResolutionAck => Some(BVLC6_UNICAST_HEADER_LENGTH),
+        Bvlc6Function::ForwardedAddressResolution => Some(28),
+        _ => None,
+    };
+    if fixed_length.is_some_and(|expected| length != expected) {
+        return Err(Error::decoding(
+            2,
+            format!("BVLC6 function has invalid fixed length {length}"),
         ));
     }
 
@@ -86,6 +105,7 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
         function,
         Bvlc6Function::OriginalUnicast
             | Bvlc6Function::AddressResolution
+            | Bvlc6Function::ForwardedAddressResolution
             | Bvlc6Function::AddressResolutionAck
             | Bvlc6Function::VirtualAddressResolutionAck
     );
@@ -163,7 +183,7 @@ pub fn encode_virtual_address_resolution(source_vmac: &Bip6Vmac) -> BytesMut {
 
 /// Encode a BVLC-IPv6 Virtual-Address-Resolution-Ack frame (10 bytes).
 ///
-/// Per spec Clause U.2.7A: includes the requester's VMAC as destination.
+/// Per spec Clause U.2.8: includes the requester's VMAC as destination.
 /// type(1) + function(1) + length(2) + source_vmac(3) + dest_vmac(3) = 10.
 pub fn encode_virtual_address_resolution_ack(
     source_vmac: &Bip6Vmac,
@@ -193,7 +213,7 @@ pub fn encode_address_resolution(source_vmac: &Bip6Vmac, target_vmac: &Bip6Vmac)
 
 /// Encode a BVLC-IPv6 Address-Resolution-Ack frame (10 bytes).
 ///
-/// Per spec Clause U.2.5: includes the requester's VMAC as destination.
+/// Per spec Clause U.2.6: includes the requester's VMAC as destination.
 pub fn encode_address_resolution_ack(source_vmac: &Bip6Vmac, dest_vmac: &Bip6Vmac) -> BytesMut {
     let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH);
     buf.put_u8(BVLC6_TYPE);

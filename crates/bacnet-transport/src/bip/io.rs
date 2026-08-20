@@ -20,11 +20,24 @@ pub(super) fn original_destination_matches(
     destination: IpAddr,
     local_ip: Ipv4Addr,
     configured_broadcast: Ipv4Addr,
+    local_unicast_ips: &[Ipv4Addr],
+    wildcard_bind: bool,
     os_group_delivery: Option<bool>,
 ) -> bool {
     match function {
         f if f == BvlcFunction::ORIGINAL_UNICAST_NPDU => {
-            destination == IpAddr::V4(local_ip) && os_group_delivery != Some(true)
+            let ip_matches = match destination {
+                IpAddr::V4(ip) if wildcard_bind => {
+                    ip != configured_broadcast
+                        && ip != Ipv4Addr::BROADCAST
+                        && !ip.is_multicast()
+                        && (local_unicast_ips.contains(&ip)
+                            || (cfg!(windows) && os_group_delivery == Some(false)))
+                }
+                IpAddr::V4(ip) => ip == local_ip,
+                IpAddr::V6(_) => false,
+            };
+            ip_matches && os_group_delivery != Some(true)
         }
         f if f == BvlcFunction::ORIGINAL_BROADCAST_NPDU => {
             matches!(destination, IpAddr::V4(ip) if ip == configured_broadcast || ip == Ipv4Addr::BROADCAST)

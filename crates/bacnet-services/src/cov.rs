@@ -432,13 +432,20 @@ mod tests {
                 .reject_reason(),
             RejectReason::INVALID_TAG
         );
-        // RejectReason has no invalid-data-encoding value; a present
-        // ObjectIdentifier with an invalid wire width is OTHER syntax.
+        // A present ObjectIdentifier with an invalid wire width has invalid
+        // data encoding rather than a missing argument.
         assert_eq!(
             COVNotificationRequest::decode_detailed(&[0x09, 0x01, 0x1B, 0x01, 0x02, 0x03])
                 .unwrap_err()
                 .reject_reason(),
-            RejectReason::OTHER
+            RejectReason::INVALID_DATA_ENCODING
+        );
+        // Unsigned values use the smallest possible encoding.
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[0x0A, 0x00, 0x01])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_DATA_ENCODING
         );
     }
 
@@ -460,6 +467,34 @@ mod tests {
                 .unwrap_err()
                 .reject_reason(),
             RejectReason::PARAMETER_OUT_OF_RANGE
+        );
+    }
+
+    #[test]
+    fn test_decode_cov_notification_classifies_nested_invalid_tag() {
+        let req = COVNotificationRequest {
+            subscriber_process_identifier: 1,
+            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            time_remaining: 60,
+            list_of_values: vec![BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                value: vec![0x21, 0x01],
+                priority: None,
+            }],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+        let list_start = buf.iter().position(|byte| *byte == 0x4E).unwrap();
+        buf[list_start + 1] = 0x79;
+
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_TAG
         );
     }
 

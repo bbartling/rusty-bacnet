@@ -342,6 +342,47 @@ async fn partial_confirmed_cov_reports_missing_required_parameter() {
 }
 
 #[tokio::test]
+async fn invalid_confirmed_cov_representation_reports_invalid_data_encoding() {
+    let client_mac = vec![0x45];
+    let (client_transport, mut peer_transport) =
+        LoopbackTransport::pair(client_mac.clone(), vec![0x46]);
+    let mut peer_rx = peer_transport.start().await.unwrap();
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+    let mut cov_rx = client.cov_notifications();
+
+    let request = encode_inbound(
+        confirmed_request(
+            0x3A,
+            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+            false,
+            Bytes::from_static(&[0x09, 0x01, 0x1B, 0x01, 0x02, 0x03]),
+        ),
+        None,
+    );
+    peer_transport
+        .send_unicast(&request, &client_mac)
+        .await
+        .unwrap();
+
+    let (_, apdu) = receive_response(&mut peer_rx).await;
+    let Apdu::Reject(reject) = apdu else {
+        panic!("expected Reject");
+    };
+    assert_eq!(reject.invoke_id, 0x3A);
+    assert_eq!(reject.reject_reason, RejectReason::INVALID_DATA_ENCODING);
+    assert!(timeout(Duration::from_millis(100), cov_rx.recv())
+        .await
+        .is_err());
+
+    client.stop().await.unwrap();
+    peer_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn unsupported_confirmed_group_delivery_remains_silent() {
     let client_mac = vec![0x51];
     let (client_transport, mut peer_transport) = LoopbackTransport::pair(client_mac, vec![0x52]);

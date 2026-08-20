@@ -70,13 +70,13 @@ fn decode_required_context<'a>(
     let end = pos.checked_add(tag.length as usize).ok_or_else(|| {
         failure(
             Error::decoding(pos, format!("{field} length overflow")),
-            RejectReason::OTHER,
+            RejectReason::INVALID_DATA_ENCODING,
         )
     })?;
     if end > data.len() {
         return Err(failure(
             Error::decoding(pos, format!("{field} has invalid data encoding")),
-            RejectReason::OTHER,
+            RejectReason::INVALID_DATA_ENCODING,
         ));
     }
     Ok((&data[pos..end], end))
@@ -89,8 +89,14 @@ fn decode_required_u32(
     field: &str,
 ) -> COVDecodeResult<(u32, usize)> {
     let (content, end) = decode_required_context(data, offset, expected_tag, field)?;
+    if content.len() > 1 && content.first() == Some(&0) {
+        return Err(failure(
+            Error::decoding(offset, format!("{field} is not minimally encoded")),
+            RejectReason::INVALID_DATA_ENCODING,
+        ));
+    }
     let value = primitives::decode_unsigned(content)
-        .map_err(|error| failure(error, RejectReason::OTHER))?;
+        .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
     let value = u32::try_from(value).map_err(|_| {
         failure(
             Error::decoding(offset, format!("{field} exceeds u32")),
@@ -104,8 +110,10 @@ fn property_value_reject_reason(error: &Error) -> RejectReason {
     match error {
         Error::InvalidTag(_) => RejectReason::INVALID_TAG,
         Error::OutOfRange(_) => RejectReason::PARAMETER_OUT_OF_RANGE,
+        Error::BufferTooShort { .. } => RejectReason::INVALID_DATA_ENCODING,
         Error::Decoding { message, .. }
-            if message.contains("expected opening tag")
+            if message.contains("expected context tag")
+                || message.contains("expected opening tag")
                 || message.contains("expected closing tag") =>
         {
             RejectReason::INVALID_TAG
@@ -113,6 +121,7 @@ fn property_value_reject_reason(error: &Error) -> RejectReason {
         Error::Decoding { message, .. } if message.contains("out of range") => {
             RejectReason::PARAMETER_OUT_OF_RANGE
         }
+        Error::Decoding { .. } => RejectReason::INVALID_DATA_ENCODING,
         _ => RejectReason::OTHER,
     }
 }
@@ -129,13 +138,13 @@ impl COVNotificationRequest {
 
         let (content, end) = decode_required_context(data, offset, 1, "COVNotification device-id")?;
         let initiating_device_identifier = ObjectIdentifier::decode(content)
-            .map_err(|error| failure(error, RejectReason::OTHER))?;
+            .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
         offset = end;
 
         let (content, end) =
             decode_required_context(data, offset, 2, "COVNotification monitored-id")?;
         let monitored_object_identifier = ObjectIdentifier::decode(content)
-            .map_err(|error| failure(error, RejectReason::OTHER))?;
+            .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
         offset = end;
 
         let (time_remaining, end) =

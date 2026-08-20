@@ -443,11 +443,24 @@ impl TransportPort for BipTransport {
         let std_socket: std::net::UdpSocket = socket2.into();
         let socket = UdpSocket::from_std(std_socket).map_err(Error::Transport)?;
 
-        let local_ip = if self.interface.is_unspecified() {
+        let wildcard_bind = self.interface.is_unspecified();
+        let local_ip = if wildcard_bind {
             resolve_local_ip().unwrap_or(Ipv4Addr::LOCALHOST)
         } else {
             self.interface
         };
+        let local_unicast_ips = if wildcard_bind {
+            crate::local_addresses::ipv4()
+        } else {
+            vec![local_ip]
+        };
+        #[cfg(unix)]
+        if wildcard_bind && local_unicast_ips.is_empty() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "could not enumerate local IPv4 addresses for wildcard ingress",
+            )));
+        }
 
         let local_port = socket.local_addr().map_err(Error::Transport)?.port();
         self.port = local_port;
@@ -522,6 +535,8 @@ impl TransportPort for BipTransport {
                                     received.destination,
                                     local_ip,
                                     recv_ctx.broadcast_addr,
+                                    &local_unicast_ips,
+                                    wildcard_bind,
                                     received.os_group_delivery,
                                 ) {
                                     debug!(

@@ -783,6 +783,12 @@ fn pending_reply_source_stored_on_data_expecting_reply() {
 }
 
 #[test]
+fn t_turnaround_rounds_up_to_full_bit_time() {
+    assert_eq!(calculate_t_turnaround_us(9600), 4167);
+    assert_eq!(calculate_t_turnaround_us(38_400), 1042);
+}
+
+#[test]
 fn t_slot_baud_rate_9600() {
     assert_eq!(calculate_t_slot_ms(9600), 10);
 }

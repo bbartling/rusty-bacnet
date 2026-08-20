@@ -97,16 +97,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unavailable. Confirmed multicast and broadcast deliveries remain silent as
   required by the responding TSM. B/IP and B/IP6 now obtain the actual UDP
   destination from packet metadata and fail closed on missing, truncated, or
-  mismatched metadata; oversized Windows datagrams are dropped without stopping
-  reception. B/IP6 unicast data and address-resolution acknowledgements also
-  require the local Destination-VMAC before learning the sender. Its VMAC table
-  is bounded, preserves a unique learned link-local scope, fails closed when
-  scopes are ambiguous, and deterministically replaces stale endpoint mappings.
-  Annex U Forwarded-NPDU now uses the standard single-VMAC wire layout, exposes
-  the original 18-byte B/IPv6 source, and learns it for follow-up unicast.
-  Outbound unicast fails explicitly until the destination VMAC has been learned
-  instead of guessing from an IP endpoint; automatic outbound Address-Resolution
-  remains a follow-up. To retain
+  mismatched metadata while preserving wildcard binds; oversized Windows
+  datagrams are dropped without stopping reception. B/IP6 unicast data and
+  address-resolution acknowledgements also require the local Destination-VMAC
+  before learning the sender. Its 4,096-entry VMAC table preserves a unique
+  learned link-local scope, fails closed when scopes are ambiguous, and
+  deterministically replaces stale endpoint mappings. Device instance zero's
+  VMAC remains valid. Annex U fixed-size messages reject surplus bytes;
+  Address-Resolution and Virtual-Address-Resolution use their specified
+  multicast and unicast paths. Forwarded-NPDU now uses the standard single-VMAC
+  wire layout, accepts only multicast delivery or the configured non-link-local
+  foreign-device BBMD, exposes the original 18-byte B/IPv6 source, and learns a validated,
+  non-link-local origin for follow-up unicast. Outbound unicast fails explicitly
+  until the destination VMAC has been learned instead of guessing from an IP
+  endpoint; automatic outbound VMAC discovery remains a follow-up. To retain
   group-delivery provenance after frame decoding, the public `ReceivedNpdu` and
   `ReceivedApdu` envelopes gain `link_layer_group` and `is_group` fields;
   downstream custom transports or exhaustive struct literals must initialize
@@ -1146,7 +1150,7 @@ Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, E
 
 #### BACnet/IPv6 — VMAC & Address Resolution (Annex U)
 - **Fixed** Virtual-Address-Resolution wire format — was 10 bytes with duplicate VMAC payload, now 7 bytes per Clause U.2.7
-- **Fixed** Virtual-Address-Resolution-ACK — now accepts and encodes requester's destination VMAC (10 bytes per Clause U.2.7A)
+- **Fixed** Virtual-Address-Resolution-ACK — now accepts and encodes requester's destination VMAC (10 bytes per Clause U.2.8)
 - **Fixed** `send_unicast` derived destination VMAC from IPv6 address bytes — now uses VMAC address table reverse lookup per Clause U.5
 - **Fixed** decoder only extracted destination VMAC for OriginalUnicast — now also extracts for AddressResolution, AddressResolutionAck, VirtualAddressResolutionAck
 - **Fixed** `derive_vmac_from_device_instance` did not mask to 22 bits per Clause H.7.2

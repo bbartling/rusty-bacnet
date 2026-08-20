@@ -4,7 +4,8 @@ use std::time::Duration;
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 
-use super::port::{derive_vmac_from_device_instance, original_destination_matches};
+use super::ingress::original_destination_matches;
+use super::vmac_table::{derive_vmac_from_addr, derive_vmac_from_device_instance};
 use super::*;
 use crate::port::TransportPort;
 
@@ -19,6 +20,8 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         Some(local_vmac),
         local_ip,
         local_vmac,
+        &[local_ip],
+        false,
         None,
     ));
     assert!(!original_destination_matches(
@@ -27,6 +30,8 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         Some(local_vmac),
         local_ip,
         local_vmac,
+        &[local_ip],
+        false,
         None,
     ));
     assert!(!original_destination_matches(
@@ -35,6 +40,8 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         Some([9, 9, 9]),
         local_ip,
         local_vmac,
+        &[local_ip],
+        false,
         None,
     ));
     assert!(original_destination_matches(
@@ -43,6 +50,8 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         None,
         local_ip,
         local_vmac,
+        &[local_ip],
+        false,
         None,
     ));
     assert!(!original_destination_matches(
@@ -51,7 +60,80 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         Some(local_vmac),
         local_ip,
         local_vmac,
+        &[local_ip],
+        false,
         Some(true),
+    ));
+
+    assert!(original_destination_matches(
+        Bvlc6Function::OriginalUnicast,
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9).into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        &[local_ip, Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9),],
+        true,
+        None,
+    ));
+    assert!(!original_destination_matches(
+        Bvlc6Function::OriginalUnicast,
+        BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        &[local_ip],
+        true,
+        Some(true),
+    ));
+    assert!(original_destination_matches(
+        Bvlc6Function::AddressResolution,
+        BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        &[local_ip],
+        false,
+        Some(true),
+    ));
+    assert!(!original_destination_matches(
+        Bvlc6Function::AddressResolution,
+        local_ip.into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        &[local_ip],
+        false,
+        Some(false),
+    ));
+    assert!(original_destination_matches(
+        Bvlc6Function::VirtualAddressResolution,
+        local_ip.into(),
+        None,
+        local_ip,
+        local_vmac,
+        &[local_ip],
+        false,
+        Some(false),
+    ));
+    assert!(!original_destination_matches(
+        Bvlc6Function::VirtualAddressResolution,
+        BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
+        None,
+        local_ip,
+        local_vmac,
+        &[local_ip],
+        false,
+        Some(true),
+    ));
+    assert!(!original_destination_matches(
+        Bvlc6Function::ForwardedAddressResolution,
+        local_ip.into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        &[local_ip],
+        false,
+        Some(false),
     ));
 }
 
@@ -116,6 +198,35 @@ async fn vmac_table_is_bounded() {
 
     assert_eq!(table.len().await, super::vmac_table::MAX_VMAC_TABLE_ENTRIES);
     assert_eq!(table.lookup(&[0xFE, 0xFE, 0xFE]).await, None);
+
+    table
+        .learn(
+            [0xFD, 0xFD, 0xFD],
+            SocketAddrV6::new(Ipv6Addr::LOCALHOST, 10_000, 0, 0),
+        )
+        .await;
+    assert_eq!(table.len().await, super::vmac_table::MAX_VMAC_TABLE_ENTRIES);
+    assert_eq!(table.lookup(&[0, 0, 0]).await, None);
+    assert!(table.lookup(&[0xFD, 0xFD, 0xFD]).await.is_some());
+}
+
+#[tokio::test]
+async fn vmac_table_does_not_retain_ambiguous_reverse_entries() {
+    let table = super::vmac_table::VmacTable::new();
+    let ip = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
+
+    for port in 10_000..10_100 {
+        table
+            .learn([1, 2, 3], SocketAddrV6::new(ip, port, 0, 4))
+            .await;
+        table
+            .learn([4, 5, 6], SocketAddrV6::new(ip, port, 0, 7))
+            .await;
+        assert_eq!(table.resolve_by_addr(ip, port).await, None);
+    }
+
+    assert_eq!(table.len().await, 2);
+    assert_eq!(table.resolve_by_addr(ip, 10_000).await, None);
 }
 
 #[tokio::test]
@@ -384,6 +495,26 @@ fn encode_decode_address_resolution_ack() {
 }
 
 #[test]
+fn fixed_length_bvlc6_frames_reject_surplus_bytes() {
+    let mut var = encode_virtual_address_resolution(&[1, 2, 3]);
+    var.extend_from_slice(&[0]);
+    assert!(decode_bvlc6(&var).is_err());
+
+    let mut ar = encode_address_resolution(&[1, 2, 3], &[4, 5, 6]);
+    ar.extend_from_slice(&[0]);
+    let ar_len = ar.len() as u16;
+    ar[2..4].copy_from_slice(&ar_len.to_be_bytes());
+    assert!(decode_bvlc6(&ar).is_err());
+}
+
+#[test]
+fn bvlc6_declared_length_must_match_datagram() {
+    let mut frame = encode_virtual_address_resolution(&[1, 2, 3]);
+    frame[2..4].copy_from_slice(&6u16.to_be_bytes());
+    assert!(decode_bvlc6(&frame).is_err());
+}
+
+#[test]
 fn vmac_from_device_instance_masks_to_22_bits() {
     let vmac = derive_vmac_from_device_instance(0x123456);
     assert_eq!(vmac, [0x12, 0x34, 0x56]);
@@ -456,8 +587,18 @@ fn forwarded_npdu_encode_decode_round_trip() {
 
 #[tokio::test]
 async fn bip6_forwarded_npdu_delivered() {
-    // Verify that a ForwardedNpdu sent to a transport is delivered as a ReceivedNpdu
+    // Verify a foreign device accepts a ForwardedNpdu only from its BBMD.
+    let sender = UdpSocket::bind("[::1]:0").await.unwrap();
+    let sender_addr = match sender.local_addr().unwrap() {
+        std::net::SocketAddr::V6(address) => address,
+        _ => unreachable!(),
+    };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
+        bbmd_ip: *sender_addr.ip(),
+        bbmd_port: sender_addr.port(),
+        ttl: 60,
+    });
     let mut rx = transport.start().await.unwrap();
 
     // Build a ForwardedNpdu frame from a "BBMD"
@@ -483,10 +624,41 @@ async fn bip6_forwarded_npdu_delivered() {
     )
     .expect("valid BVLC6 encoding");
 
-    // Send directly to the transport's bound address using a separate socket
-    let sender = UdpSocket::bind("[::1]:0").await.unwrap();
     let (_, transport_port) = decode_bip6_mac(transport.local_mac()).unwrap();
     let dest = SocketAddrV6::new(Ipv6Addr::LOCALHOST, transport_port, 0, 0);
+
+    let malformed_vmac = [0x41, 0x00, 0x01];
+    let mut malformed_payload = origin_addr.ip().octets().to_vec();
+    malformed_payload.extend_from_slice(&origin_addr.port().to_be_bytes());
+    malformed_payload.push(0);
+    let mut malformed = BytesMut::new();
+    encode_bvlc6(
+        &mut malformed,
+        Bvlc6Function::ForwardedNpdu,
+        &malformed_vmac,
+        &malformed_payload,
+    )
+    .unwrap();
+    sender.send_to(&malformed, dest).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(transport.vmac_table.lookup(&malformed_vmac).await, None);
+
+    let link_local_vmac = [0x41, 0x00, 0x02];
+    let mut link_local_payload = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1).octets().to_vec();
+    link_local_payload.extend_from_slice(&origin_addr.port().to_be_bytes());
+    link_local_payload.extend_from_slice(&test_npdu);
+    let mut link_local = BytesMut::new();
+    encode_bvlc6(
+        &mut link_local,
+        Bvlc6Function::ForwardedNpdu,
+        &link_local_vmac,
+        &link_local_payload,
+    )
+    .unwrap();
+    sender.send_to(&link_local, dest).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(transport.vmac_table.lookup(&link_local_vmac).await, None);
+
     sender.send_to(&buf, dest).await.unwrap();
 
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -522,14 +694,13 @@ async fn bip6_forwarded_npdu_delivered() {
 
 #[tokio::test]
 async fn bip6_var_response() {
-    // Verify that receiving a VAR from a node with the same VMAC
-    // causes a VAR-Ack response (collision detection per Clause U.5).
+    // A unicast VAR asks the destination node to disclose its VMAC.
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(42));
     let _rx = transport.start().await.unwrap();
     let our_vmac = transport.source_vmac;
+    let requester_vmac = [0x41, 0x22, 0x33];
 
-    // Build a VAR frame from a node claiming our VMAC (collision scenario)
-    let buf = encode_virtual_address_resolution(&our_vmac);
+    let buf = encode_virtual_address_resolution(&requester_vmac);
 
     // Send VAR to the transport
     let checker = UdpSocket::bind("[::1]:0").await.unwrap();
@@ -547,8 +718,7 @@ async fn bip6_var_response() {
             let frame = decode_bvlc6(&resp_buf[..len]).unwrap();
             assert_eq!(frame.function, Bvlc6Function::VirtualAddressResolutionAck);
             assert_eq!(frame.source_vmac, our_vmac);
-            // destination_vmac should be the querier's VMAC (same as ours)
-            assert_eq!(frame.destination_vmac, Some(our_vmac));
+            assert_eq!(frame.destination_vmac, Some(requester_vmac));
         }
         Ok(Err(e)) => panic!("recv error: {e}"),
         Err(_) => panic!("timeout waiting for VAR-Ack response"),
@@ -605,6 +775,13 @@ fn bvlc6_function_codes_match_types_crate() {
 fn generate_random_vmac_produces_3_bytes() {
     let vmac = generate_random_vmac();
     assert_eq!(vmac.len(), 3);
+    assert_eq!(vmac[0] & 0xC0, 0x40);
+}
+
+#[test]
+fn address_derived_vmac_uses_random_instance_range() {
+    let address = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 47_808, 0, 0);
+    assert_eq!(derive_vmac_from_addr(&address)[0] & 0xC0, 0x40);
 }
 
 #[test]

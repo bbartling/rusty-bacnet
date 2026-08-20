@@ -12,6 +12,8 @@ fn original_function_must_match_actual_ipv4_destination() {
         local.into(),
         local,
         broadcast,
+        &[local],
+        false,
         None,
     ));
     assert!(!original_destination_matches(
@@ -19,6 +21,8 @@ fn original_function_must_match_actual_ipv4_destination() {
         broadcast.into(),
         local,
         broadcast,
+        &[local],
+        false,
         None,
     ));
     assert!(!original_destination_matches(
@@ -26,6 +30,8 @@ fn original_function_must_match_actual_ipv4_destination() {
         local.into(),
         local,
         broadcast,
+        &[local],
+        false,
         None,
     ));
     assert!(original_destination_matches(
@@ -33,7 +39,28 @@ fn original_function_must_match_actual_ipv4_destination() {
         broadcast.into(),
         local,
         broadcast,
+        &[local],
+        false,
         None,
+    ));
+
+    assert!(original_destination_matches(
+        BvlcFunction::ORIGINAL_UNICAST_NPDU,
+        Ipv4Addr::new(192, 0, 2, 11).into(),
+        local,
+        broadcast,
+        &[local, Ipv4Addr::new(192, 0, 2, 11)],
+        true,
+        None,
+    ));
+    assert!(!original_destination_matches(
+        BvlcFunction::ORIGINAL_UNICAST_NPDU,
+        broadcast.into(),
+        local,
+        broadcast,
+        &[local],
+        true,
+        Some(true),
     ));
 }
 

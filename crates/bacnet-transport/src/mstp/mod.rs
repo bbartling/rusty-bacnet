@@ -55,7 +55,7 @@ const T_REPLY_DELAY_MS: u64 = 250;
 const T_REPLY_TRANSMIT_MARGIN_MS: u64 = 25;
 /// Minimum silence time (40 bit times) before transmitting after receiving last octet.
 fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
-    40_000_000u64 / baud_rate as u64
+    40_000_000u64.div_ceil(baud_rate as u64)
 }
 /// Number of retries for token pass before declaring token lost.
 const N_RETRY_TOKEN: u8 = 1;
@@ -272,6 +272,9 @@ impl MasterNode {
             }
             FrameType::BACnetDataExpectingReply => {
                 if frame.destination == self.config.this_station {
+                    if self.state == MasterState::AnswerDataRequest {
+                        return None;
+                    }
                     self.state = MasterState::AnswerDataRequest;
                     self.pending_reply_source = Some(frame.source);
                     let (tx, rx) = oneshot::channel();
@@ -526,5 +529,7 @@ pub use port::{LoopbackSerial, MstpTransport, NoSerial};
 
 #[cfg(test)]
 mod port_timing_tests;
+#[cfg(test)]
+mod reply_tests;
 #[cfg(test)]
 mod tests;

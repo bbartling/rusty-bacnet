@@ -106,14 +106,17 @@ pub struct Bvlc6Frame {
 
 mod frame;
 pub use frame::*;
+mod ingress;
 mod port;
 mod vmac_table;
 pub use port::{
-    decode_bip6_mac, encode_bip6_mac, generate_random_vmac, Bip6BroadcastScope,
-    Bip6ForeignDeviceConfig, Bip6Transport, BACNET_IPV6_MULTICAST,
-    BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
+    decode_bip6_mac, encode_bip6_mac, Bip6BroadcastScope, Bip6ForeignDeviceConfig, Bip6Transport,
+    BACNET_IPV6_MULTICAST, BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
     BACNET_IPV6_MULTICAST_SITE_LOCAL, DEFAULT_BACNET6_PORT,
 };
+pub use vmac_table::generate_random_vmac;
 
+#[cfg(test)]
+mod safety_tests;
 #[cfg(test)]
 mod tests;
