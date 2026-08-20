@@ -642,6 +642,7 @@ impl ScClientBuilder {
     ) -> Result<BACnetClient<bacnet_transport::sc::ScTransport<W>>, Error> {
         self.validate_identity()?;
         self.options.validate()?;
+        validate_max_segments(self.config.max_segments)?;
         let transport = self.sc_transport(ws);
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
@@ -655,6 +656,7 @@ impl ScClientBuilder {
     > {
         self.validate_identity()?;
         self.options.validate()?;
+        validate_max_segments(self.config.max_segments)?;
         let tls_config =
             self.tls_config.as_ref().cloned().ok_or_else(|| {
                 Error::Encoding("SC client builder: tls_config is required".into())
