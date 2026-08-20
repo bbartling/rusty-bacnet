@@ -340,9 +340,62 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION => {
-                match handlers::handle_life_safety_operation(&req.service_request) {
-                    Ok(()) => simple_ack(),
+                let request = bacnet_services::life_safety::LifeSafetyOperationRequest::decode(
+                    &req.service_request,
+                );
+                match request {
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    Ok(request) => {
+                        let validation = handlers::validate_life_safety_operation(request.request);
+                        let execution = if let Err(e) = validation {
+                            Err(e)
+                        } else {
+                            let target_exists = match request.object_identifier {
+                                Some(oid) => db.read().await.get(&oid).is_some(),
+                                None => true,
+                            };
+
+                            if !target_exists {
+                                Err(handlers::life_safety_error(
+                                    ErrorClass::OBJECT,
+                                    ErrorCode::UNKNOWN_OBJECT,
+                                ))
+                            } else {
+                                let context = LifeSafetyOperationAuthorizationContext {
+                                    source_mac: MacAddr::from_slice(source_mac),
+                                    source_network: source_network.clone(),
+                                    invoke_id,
+                                    request: request.clone(),
+                                };
+                                let authorized = config
+                                    .life_safety_operation_authorizer
+                                    .as_ref()
+                                    .is_some_and(|authorizer| {
+                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                            || authorizer(&context),
+                                        ))
+                                        .unwrap_or(false)
+                                    });
+                                if !authorized {
+                                    Err(handlers::life_safety_error(
+                                        ErrorClass::SERVICES,
+                                        ErrorCode::SERVICE_REQUEST_DENIED,
+                                    ))
+                                } else {
+                                    let mut db = db.write().await;
+                                    handlers::handle_life_safety_operation(&mut db, &request)
+                                }
+                            }
+                        };
+
+                        match execution {
+                            Ok(changed) => {
+                                written_oids.extend(changed);
+                                simple_ack()
+                            }
+                            Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                        }
+                    }
                 }
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {

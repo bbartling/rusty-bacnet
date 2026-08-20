@@ -50,8 +50,8 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::WHO_IS,
     ServiceSupported::READ_RANGE,
     ServiceSupported::UTC_TIME_SYNCHRONIZATION,
-    // Dispatched but decode-only pending #177 (LifeSafetyOperation applies
-    // no life-safety semantics yet).
+    // Executes authorized silence/unsilence operations. Reset operations stay
+    // explicitly unsupported pending application-executor and replay semantics.
     ServiceSupported::LIFE_SAFETY_OPERATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
     ServiceSupported::GET_EVENT_INFORMATION,

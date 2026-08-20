@@ -12,12 +12,12 @@
 
 | Dimension | Value | Count |
 |---|---|---|
-| Priority | P0 | 15 |
+| Priority | P0 | 16 |
 | Priority | P1 | 23 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 11 |
+| Status | implementation-present-needs-conformance-tests | 12 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
@@ -80,6 +80,7 @@
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 2 |
 | `BACNET-13-EVENT-DISABLE-WPM-ROLLBACK` | Clause 12.52 Table 12-61 (Alert Enrollment Event_State, Acked_Transitions, Event_Detection_Enable); Clause 13.2.2.1 disabled-state initial conditions; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 ordered WritePropertyMultiple procedure | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-13-EVENT-ENROLLMENT-EVALUATOR` | Clause 12.12 with Table 12-14 (Event Enrollment Object Type; Time_Delay_Normal Unsigned, conformance O, extract 16444-16446, property text 16887-16889); Clause 12.12 Table 12-15 (Time_Delay -> pTimeDelay mapping for every evaluated algorithm); Clause 13.2.2.1.4 (transition actions incl. the same-state rule); Clause 13.2.3 (Acked_Transitions on a received transition); Clause 13.3 common introduction and 13.3.1/13.3.2/13.3.3/13.3.5/13.3.6 direction rules with the pTimeDelayNormal fallback; Figure 13-10 | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-13-LIFE-SAFETY-OPERATION` | Clause 13.13; Clauses 12.15 and 12.16 Silenced and Operation_Expected properties; Clause 18 errors | P0 | implementation-present-needs-conformance-tests | 1 |
 
 ## Follow-Up Source
 

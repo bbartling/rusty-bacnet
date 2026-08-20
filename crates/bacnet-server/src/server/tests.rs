@@ -10,6 +10,24 @@ fn server_config_cov_retry_timeout_default() {
 fn server_config_time_sync_callback_default_is_none() {
     let config = ServerConfig::default();
     assert!(config.on_time_sync.is_none());
+    assert!(config.life_safety_operation_authorizer.is_none());
+}
+
+#[test]
+fn all_builders_assign_life_safety_operation_authorizer() {
+    let generic =
+        BACnetServer::<BipTransport>::generic_builder().life_safety_operation_authorizer(|_| true);
+    assert!(generic.config.life_safety_operation_authorizer.is_some());
+
+    let bip =
+        BACnetServer::<BipTransport>::bip_builder().life_safety_operation_authorizer(|_| true);
+    assert!(bip.config.life_safety_operation_authorizer.is_some());
+
+    #[cfg(feature = "sc-tls")]
+    {
+        let sc = BACnetServer::sc_builder().life_safety_operation_authorizer(|_| true);
+        assert!(sc.config.life_safety_operation_authorizer.is_some());
+    }
 }
 
 // -----------------------------------------------------------------------

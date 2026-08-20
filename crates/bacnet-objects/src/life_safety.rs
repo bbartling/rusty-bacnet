@@ -1,13 +1,66 @@
 //! Life Safety Point (type 21) and Life Safety Zone (type 22) objects
 //! per ASHRAE 135-2020 Clauses 12.15 and 12.16.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType, PropertyIdentifier, SilencedState,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, LifeSafetyOperationEffect};
+
+fn life_safety_error(code: ErrorCode) -> Error {
+    Error::Protocol {
+        class: ErrorClass::OBJECT.to_raw() as u32,
+        code: code.to_raw() as u32,
+    }
+}
+
+fn apply_silenced_operation(
+    silenced: &mut u32,
+    operation_expected: &mut u32,
+    operation: LifeSafetyOperation,
+) -> Result<LifeSafetyOperationEffect, Error> {
+    let current = *silenced;
+    if current > SilencedState::ALL_SILENCED.to_raw() {
+        return Err(life_safety_error(
+            ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+        ));
+    }
+
+    let desired = if operation == LifeSafetyOperation::SILENCE {
+        SilencedState::ALL_SILENCED.to_raw()
+    } else if operation == LifeSafetyOperation::SILENCE_AUDIBLE {
+        current | SilencedState::AUDIBLE_SILENCED.to_raw()
+    } else if operation == LifeSafetyOperation::SILENCE_VISUAL {
+        current | SilencedState::VISIBLE_SILENCED.to_raw()
+    } else if operation == LifeSafetyOperation::UNSILENCE {
+        SilencedState::UNSILENCED.to_raw()
+    } else if operation == LifeSafetyOperation::UNSILENCE_AUDIBLE {
+        current & !SilencedState::AUDIBLE_SILENCED.to_raw()
+    } else if operation == LifeSafetyOperation::UNSILENCE_VISUAL {
+        current & !SilencedState::VISIBLE_SILENCED.to_raw()
+    } else {
+        return Err(life_safety_error(ErrorCode::VALUE_OUT_OF_RANGE));
+    };
+
+    // A response-loss retry is safe even though the successful operation
+    // cleared Operation_Expected. No duplicate mutation or notification occurs.
+    if desired == current {
+        return Ok(LifeSafetyOperationEffect::AlreadyApplied);
+    }
+    if *operation_expected != operation.to_raw() {
+        return Err(life_safety_error(
+            ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+        ));
+    }
+
+    *silenced = desired;
+    *operation_expected = LifeSafetyOperation::NONE.to_raw();
+    Ok(LifeSafetyOperationEffect::Applied)
+}
 
 // ---------------------------------------------------------------------------
 // LifeSafetyPointObject (type 21)
@@ -85,6 +138,16 @@ impl LifeSafetyPointObject {
     /// Set the tracking value (LifeSafetyState enumeration).
     pub fn set_tracking_value(&mut self, state: u32) {
         self.tracking_value = state;
+    }
+
+    /// Set the locally determined silenced state.
+    pub fn set_silenced(&mut self, state: SilencedState) {
+        self.silenced = state.to_raw();
+    }
+
+    /// Set the next LifeSafetyOperation expected by local device logic.
+    pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
+        self.operation_expected = operation.to_raw();
     }
 
     /// Set the direct reading (raw sensor value).
@@ -172,19 +235,10 @@ impl BACnetObject for LifeSafetyPointObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if property == PropertyIdentifier::SILENCED {
-            if let PropertyValue::Enumerated(v) = value {
-                self.silenced = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if property == PropertyIdentifier::OPERATION_EXPECTED {
-            if let PropertyValue::Enumerated(v) = value {
-                self.operation_expected = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+        if property == PropertyIdentifier::SILENCED
+            || property == PropertyIdentifier::OPERATION_EXPECTED
+        {
+            return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::DIRECT_READING {
             if let PropertyValue::Real(v) = value {
@@ -236,6 +290,24 @@ impl BACnetObject for LifeSafetyPointObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::MODE
+                | PropertyIdentifier::DIRECT_READING
+                | PropertyIdentifier::MAINTENANCE_REQUIRED
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+        )
+    }
+
+    fn apply_life_safety_operation(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationEffect, Error> {
+        apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
     }
 }
 
@@ -301,6 +373,16 @@ impl LifeSafetyZoneObject {
     /// Set the operating mode (LifeSafetyMode enumeration).
     pub fn set_mode(&mut self, mode: u32) {
         self.mode = mode;
+    }
+
+    /// Set the locally determined silenced state.
+    pub fn set_silenced(&mut self, state: SilencedState) {
+        self.silenced = state.to_raw();
+    }
+
+    /// Set the next LifeSafetyOperation expected by local device logic.
+    pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
+        self.operation_expected = operation.to_raw();
     }
 
     /// Set the description.
@@ -374,19 +456,10 @@ impl BACnetObject for LifeSafetyZoneObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if property == PropertyIdentifier::SILENCED {
-            if let PropertyValue::Enumerated(v) = value {
-                self.silenced = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if property == PropertyIdentifier::OPERATION_EXPECTED {
-            if let PropertyValue::Enumerated(v) = value {
-                self.operation_expected = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+        if property == PropertyIdentifier::SILENCED
+            || property == PropertyIdentifier::OPERATION_EXPECTED
+        {
+            return Err(common::write_access_denied_error());
         }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
@@ -420,6 +493,22 @@ impl BACnetObject for LifeSafetyZoneObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::MODE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+        )
+    }
+
+    fn apply_life_safety_operation(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationEffect, Error> {
+        apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
     }
 }
 

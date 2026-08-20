@@ -1,4 +1,4 @@
-//! LifeSafetyOperation service per ASHRAE 135-2020 Clause 15.2.7.
+//! LifeSafetyOperation service per ASHRAE 135-2020 Clause 13.13.
 
 use bacnet_encoding::primitives;
 use bacnet_types::enums::LifeSafetyOperation;
@@ -7,6 +7,17 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use crate::common::{decode_context, decode_context_u32};
+
+fn decode_requesting_source(content: &[u8]) -> Result<String, Error> {
+    match content.first().copied() {
+        Some(
+            primitives::charset::IBM_MICROSOFT_DBCS
+            | primitives::charset::JIS_X_0208
+            | primitives::charset::UCS4,
+        ) => Ok(String::new()),
+        _ => primitives::decode_character_string(content),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LifeSafetyOperationRequest
@@ -46,7 +57,7 @@ impl LifeSafetyOperationRequest {
 
         // [1] requestingSource
         let (content, end) = decode_context(data, offset, 1, "LifeSafetyOp requestingSource")?;
-        let requesting_source = primitives::decode_character_string(content)?;
+        let requesting_source = decode_requesting_source(content)?;
         offset = end;
 
         // [2] request (BACnetLifeSafetyOperation)
@@ -88,6 +99,20 @@ mod tests {
         buf.extend_from_slice(value);
     }
 
+    fn raw_context_character_string(buf: &mut BytesMut, charset: u8, value: &[u8]) {
+        wire_tags::encode_tag(buf, 1, TagClass::Context, (value.len() + 1) as u32);
+        buf.extend_from_slice(&[charset]);
+        buf.extend_from_slice(value);
+    }
+
+    fn raw_request_with_source(charset: u8, source: &[u8]) -> BytesMut {
+        let mut buf = BytesMut::new();
+        raw_context_unsigned(&mut buf, 0, &[1]);
+        raw_context_character_string(&mut buf, charset, source);
+        raw_context_unsigned(&mut buf, 2, &[LifeSafetyOperation::SILENCE.to_raw() as u8]);
+        buf
+    }
+
     fn raw_request(process_id: &[u8], operation: &[u8], field_tags: [u8; 3]) -> BytesMut {
         let mut buf = BytesMut::new();
         raw_context_unsigned(&mut buf, field_tags[0], process_id);
@@ -124,6 +149,24 @@ mod tests {
         req.encode(&mut buf).unwrap();
         let decoded = LifeSafetyOperationRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn unsupported_requesting_source_charsets_use_empty_string() {
+        for charset in [1, 2, 3] {
+            let decoded = LifeSafetyOperationRequest::decode(&raw_request_with_source(
+                charset,
+                &[0, 0, 0, 1],
+            ))
+            .unwrap();
+            assert_eq!(decoded.requesting_source, "");
+            assert_eq!(decoded.request, LifeSafetyOperation::SILENCE);
+        }
+    }
+
+    #[test]
+    fn malformed_supported_requesting_source_still_errors() {
+        assert!(LifeSafetyOperationRequest::decode(&raw_request_with_source(0, &[0xff])).is_err());
     }
 
     #[test]
