@@ -241,20 +241,29 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
     use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 
     let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
+    handle_subscribe_cov_property_multiple_request_endpoint(
+        table,
+        db,
+        source_mac,
+        source_network,
+        request,
+    )
+}
 
-    let confirmed = request
-        .issue_confirmed_notifications
-        .ok_or(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::MISSING_REQUIRED_PARAMETER.to_raw() as u32,
-        })?;
+pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
+    table: &mut CovSubscriptionTable,
+    db: &ObjectDatabase,
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
+) -> Result<Vec<CovSubscription>, Error> {
+    let confirmed = request.issue_confirmed_notifications;
     let cancellation = match (request.lifetime, request.max_notification_delay) {
         (None, None) => true,
         (Some(_), Some(_)) => false,
         _ => {
-            return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::INCONSISTENT_PARAMETERS.to_raw() as u32,
+            return Err(Error::Reject {
+                reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
             });
         }
     };
@@ -361,6 +370,20 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
             subscriptions.push(subscription);
         }
     }
+
+    // The subscription table's effective identity does not include array
+    // index or per-reference options. Keep only the last occurrence of each
+    // effective key, matching the table's existing last-write-wins behavior,
+    // so a duplicate-heavy request cannot amplify the initial notification.
+    subscriptions.reverse();
+    let mut unique_subscription_keys = HashSet::new();
+    subscriptions.retain(|subscription| {
+        unique_subscription_keys.insert((
+            subscription.monitored_object_identifier,
+            subscription.monitored_property,
+        ))
+    });
+    subscriptions.reverse();
 
     if table.len() + new_keys.len() > MAX_COV_SUBSCRIPTIONS {
         return Err(Error::Protocol {

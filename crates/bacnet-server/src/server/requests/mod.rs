@@ -402,23 +402,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
-                let db = db.read().await;
-                let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_property_multiple_with_initial_endpoint(
-                    &mut table,
-                    &db,
-                    source_mac,
-                    source_network.as_ref(),
-                    &req.service_request,
-                ) {
-                    Ok(subscriptions) => {
-                        if !subscriptions.is_empty() {
-                            initial_cov_notifications
-                                .push(InitialCovNotification::Multiple(subscriptions));
-                        }
-                        simple_ack()
-                    }
+                let decoded =
+                    bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest::decode(
+                        &req.service_request,
+                    );
+                match decoded {
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    Ok(request) => {
+                        let db = db.read().await;
+                        let mut table = cov_table.write().await;
+                        match handlers::handle_subscribe_cov_property_multiple_request_endpoint(
+                            &mut table,
+                            &db,
+                            source_mac,
+                            source_network.as_ref(),
+                            request,
+                        ) {
+                            Ok(subscriptions) => {
+                                if !subscriptions.is_empty() {
+                                    initial_cov_notifications
+                                        .push(InitialCovNotification::Multiple(subscriptions));
+                                }
+                                simple_ack()
+                            }
+                            Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                        }
+                    }
                 }
             }
             _ => {

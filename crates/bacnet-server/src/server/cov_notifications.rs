@@ -1,22 +1,5 @@
+use super::cov_clock::{cov_multiple_datetime, cov_multiple_time_remaining, device_utc_offset};
 use super::*;
-
-/// Timestamp fields for COVNotificationMultiple: the request-level
-/// `timestamp [3] BACnetTimeStamp` and each value's `timeOfChange [3]` both
-/// carry a sequence-number form. Clause 21's `BACnetTimeStamp` production
-/// constrains `sequence-number` to `Unsigned (0..65535)` and the shared
-/// codec rejects anything larger on encode — wrap seconds-of-epoch into the
-/// valid window ONCE so both fields agree (previously the request timestamp
-/// was wrapped but `timeOfChange` encoded raw seconds, reintroducing the
-/// non-conformant >65535 value the wrap exists to prevent).
-pub(crate) fn cov_multiple_timestamps(total_secs: u64) -> (BACnetTimeStamp, Vec<u8>) {
-    let seconds = total_secs % 65_536;
-    let mut timestamp_choice = BytesMut::new();
-    encode_ctx_unsigned(&mut timestamp_choice, 1, seconds);
-    (
-        BACnetTimeStamp::SequenceNumber(seconds),
-        timestamp_choice.to_vec(),
-    )
-}
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn send_cov_apdu(
@@ -302,18 +285,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
-        let total_secs = now.as_secs();
-        let (timestamp, timestamp_choice_bytes) = cov_multiple_timestamps(total_secs);
-        let mut timestamp_choice = BytesMut::new();
-        timestamp_choice.extend_from_slice(&timestamp_choice_bytes);
-
-        let (device_oid, items, last_notified) = {
+        let (device_oid, items, last_notified, timestamp_date, timestamp_time) = {
             let db = db.read().await;
             let device_oid = db
                 .list_objects()
                 .into_iter()
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
+            let utc_offset_minutes = device_utc_offset(&db, &device_oid);
+            let (timestamp_date, timestamp_time) = cov_multiple_datetime(now, utc_offset_minutes);
 
             let mut items: Vec<COVNotificationItem> = Vec::new();
             let mut last_notified = Vec::new();
@@ -353,7 +333,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     property_identifier,
                     property_array_index: sub.monitored_property_array_index,
                     value: value_buf.to_vec(),
-                    time_of_change: sub.timestamped.then(|| timestamp_choice.to_vec()),
+                    time_of_change: sub.timestamped.then_some(timestamp_time),
                 };
 
                 if let Some(item) = items.iter_mut().find(|item| {
@@ -368,17 +348,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
 
-            (device_oid, items, last_notified)
+            (
+                device_oid,
+                items,
+                last_notified,
+                timestamp_date,
+                timestamp_time,
+            )
         };
 
         if items.is_empty() {
             return;
         }
 
+        let timestamp = items
+            .iter()
+            .flat_map(|item| &item.list_of_values)
+            .any(|value| value.time_of_change.is_some())
+            .then_some((timestamp_date, timestamp_time));
+        let time_remaining = cov_multiple_time_remaining(representative.expires_at);
+
         let notification = COVNotificationMultipleRequest {
             subscriber_process_identifier: representative.subscriber_process_identifier,
             initiating_device_identifier: device_oid,
-            time_remaining: 0,
+            time_remaining,
             timestamp,
             list_of_cov_notifications: items,
         };

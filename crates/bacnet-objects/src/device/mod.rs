@@ -254,7 +254,8 @@ impl DeviceObject {
             }),
         );
 
-        // UTC_Offset: signed integer minutes from UTC (e.g., -300 for EST).
+        // UTC_Offset: minutes west of UTC (e.g., +300 for EST); subtract it
+        // from UTC to obtain local standard time.
         properties.insert(
             PropertyIdentifier::UTC_OFFSET,
             PropertyValue::Signed(0), // UTC

@@ -141,7 +141,7 @@ use bacnet_services::cov::{
     SubscribeCOVRequest, COVNotificationRequest, UnsubscribeCOVRequest,
 };
 use bacnet_services::cov_multiple::{
-    COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 ```
 
@@ -674,16 +674,26 @@ client.write_property_multiple(&mac, specs).await?;
 client.subscribe_cov(&mac, process_id, oid, true, Some(300)).await?;
 
 // Subscribe to multiple properties at once
-let cov_specs: Vec<COVSubscriptionSpecification> = vec![/* object/property references */];
+let cov_specs = vec![COVSubscriptionSpecification {
+    monitored_object_identifier: oid,
+    list_of_cov_references: vec![COVReference {
+        monitored_property: PropertyReference {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+        },
+        cov_increment: Some(0.5),
+        timestamped: true,
+    }],
+}];
 let request = SubscribeCOVPropertyMultipleRequest {
     subscriber_process_identifier: process_id,
-    issue_confirmed_notifications: Some(true),
+    issue_confirmed_notifications: true,
     lifetime: Some(300),
     max_notification_delay: Some(10),
     list_of_cov_subscription_specifications: cov_specs,
 };
 let mut service_data = bytes::BytesMut::new();
-request.encode(&mut service_data);
+request.try_encode(&mut service_data)?;
 client
     .confirmed_request(
         &mac,

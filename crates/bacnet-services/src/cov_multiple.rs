@@ -1,15 +1,21 @@
 //! SubscribeCOVPropertyMultiple and COVNotificationMultiple services
-//! per ASHRAE 135-2020 Clauses 13.16 / 13.18.
+//! per ASHRAE 135-2020 Clauses 13.16–13.18.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{PropertyIdentifier, RejectReason};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
+use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use crate::common::{
-    decode_context, decode_context_bool, decode_context_u32, PropertyReference, MAX_DECODED_ITEMS,
+use crate::common::{decode_context, decode_context_u32, PropertyReference, MAX_DECODED_ITEMS};
+
+#[path = "cov_multiple_helpers.rs"]
+mod helpers;
+use helpers::{
+    actual_time_is_valid, decode_date_time, decode_required_bool, reject,
+    validate_actual_date_time, validate_actual_time, validate_decoded_property_identifier,
+    validate_property_identifier, validate_raw_property_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -35,20 +41,74 @@ pub struct COVSubscriptionSpecification {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubscribeCOVPropertyMultipleRequest {
     pub subscriber_process_identifier: u32,
-    pub issue_confirmed_notifications: Option<bool>,
+    pub issue_confirmed_notifications: bool,
     pub lifetime: Option<u32>,
     pub max_notification_delay: Option<u32>,
     pub list_of_cov_subscription_specifications: Vec<COVSubscriptionSpecification>,
 }
 
 impl SubscribeCOVPropertyMultipleRequest {
+    /// Encode a validated request without mutating `buf` on failure.
+    pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
+        self.encode_validated(buf);
+        Ok(())
+    }
+
+    /// Encode a request known to satisfy the service model.
+    ///
+    /// Dynamic or untrusted models should use [`Self::try_encode`] instead.
     pub fn encode(&self, buf: &mut BytesMut) {
+        self.try_encode(buf)
+            .expect("valid SubscribeCOVPropertyMultiple request");
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        match (self.lifetime, self.max_notification_delay) {
+            (None, None) => {}
+            (Some(lifetime), Some(max_delay))
+                if lifetime != 0 && max_delay <= 3_600 && max_delay < lifetime => {}
+            (Some(_), Some(_)) => {
+                return Err(Error::Encoding(
+                    "SubscribeCOVPropertyMultiple timing values are out of range".into(),
+                ));
+            }
+            _ => {
+                return Err(Error::Encoding(
+                    "SubscribeCOVPropertyMultiple lifetime and max-notification-delay must both be present or absent".into(),
+                ));
+            }
+        }
+        let mut total_references = 0usize;
+        for spec in &self.list_of_cov_subscription_specifications {
+            if spec.list_of_cov_references.is_empty() {
+                return Err(Error::Encoding(
+                    "SubscribeCOVPropertyMultiple COV-reference list must not be empty".into(),
+                ));
+            }
+            total_references = total_references
+                .checked_add(spec.list_of_cov_references.len())
+                .ok_or_else(|| Error::Encoding("COV-reference count overflow".into()))?;
+            if total_references > MAX_DECODED_ITEMS {
+                return Err(Error::Encoding(format!(
+                    "SubscribeCOVPropertyMultiple exceeds {MAX_DECODED_ITEMS} COV references"
+                )));
+            }
+            for cov_ref in &spec.list_of_cov_references {
+                validate_property_identifier(
+                    cov_ref.monitored_property.property_identifier,
+                    "SubscribeCOVPropertyMultiple monitored property",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn encode_validated(&self, buf: &mut BytesMut) {
         // [0] subscriberProcessIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.subscriber_process_identifier as u64);
         // [1] issueConfirmedNotifications
-        if let Some(v) = self.issue_confirmed_notifications {
-            primitives::encode_ctx_boolean(buf, 1, v);
-        }
+        primitives::encode_ctx_boolean(buf, 1, self.issue_confirmed_notifications);
         // [2] lifetime OPTIONAL
         if let Some(v) = self.lifetime {
             primitives::encode_ctx_unsigned(buf, 2, v as u64);
@@ -73,10 +133,8 @@ impl SubscribeCOVPropertyMultipleRequest {
                 if let Some(inc) = cov_ref.cov_increment {
                     primitives::encode_ctx_real(buf, 1, inc);
                 }
-                // [2] timestamped DEFAULT FALSE
-                if cov_ref.timestamped {
-                    primitives::encode_ctx_boolean(buf, 2, true);
-                }
+                // [2] timestamped
+                primitives::encode_ctx_boolean(buf, 2, cov_ref.timestamped);
             }
             tags::encode_closing_tag(buf, 1);
         }
@@ -92,20 +150,13 @@ impl SubscribeCOVPropertyMultipleRequest {
         offset = end;
 
         // [1] issueConfirmedNotifications
-        let mut issue_confirmed_notifications = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(1) {
-                let (value, end) = decode_context_bool(
-                    data,
-                    offset,
-                    1,
-                    "SubscribeCOVPropertyMultiple confirmed-notifications",
-                )?;
-                issue_confirmed_notifications = Some(value);
-                offset = end;
-            }
-        }
+        let (issue_confirmed_notifications, end) = decode_required_bool(
+            data,
+            offset,
+            1,
+            "SubscribeCOVPropertyMultiple confirmed-notifications",
+        )?;
+        offset = end;
 
         // [2] lifetime OPTIONAL
         let mut lifetime = None;
@@ -146,6 +197,7 @@ impl SubscribeCOVPropertyMultipleRequest {
         offset = tag_end;
 
         let mut specs = Vec::new();
+        let mut total_references = 0usize;
         loop {
             if offset >= data.len() {
                 return Err(Error::decoding(
@@ -153,13 +205,16 @@ impl SubscribeCOVPropertyMultipleRequest {
                     "SubscribeCOVPropertyMultiple missing closing tag 4",
                 ));
             }
-            if specs.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(offset, "too many subscription specs"));
-            }
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_closing_tag(4) {
                 offset = tag_end;
                 break;
+            }
+            if specs.len() >= MAX_DECODED_ITEMS {
+                return Err(reject(
+                    RejectReason::BUFFER_OVERFLOW,
+                    "too many subscription specs",
+                ));
             }
 
             // [0] monitoredObjectIdentifier
@@ -186,13 +241,22 @@ impl SubscribeCOVPropertyMultipleRequest {
                         "SubscribeCOVPropertyMultiple missing closing tag 1",
                     ));
                 }
-                if refs.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(offset, "too many COV references"));
-                }
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if tag.is_closing_tag(1) {
+                    if refs.is_empty() {
+                        return Err(reject(
+                            RejectReason::PARAMETER_OUT_OF_RANGE,
+                            "SubscribeCOVPropertyMultiple COV-reference list is empty",
+                        ));
+                    }
                     offset = tag_end;
                     break;
+                }
+                if total_references >= MAX_DECODED_ITEMS {
+                    return Err(reject(
+                        RejectReason::BUFFER_OVERFLOW,
+                        "too many COV references",
+                    ));
                 }
 
                 // [0] monitoredProperty — opening tag 0
@@ -203,6 +267,10 @@ impl SubscribeCOVPropertyMultipleRequest {
                     ));
                 }
                 let (prop_ref, new_off) = PropertyReference::decode(data, tag_end)?;
+                validate_decoded_property_identifier(
+                    prop_ref.property_identifier,
+                    "SubscribeCOVPropertyMultiple monitored property",
+                )?;
                 offset = new_off;
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if !tag.is_closing_tag(0) {
@@ -223,27 +291,21 @@ impl SubscribeCOVPropertyMultipleRequest {
                     }
                 }
 
-                // [2] timestamped DEFAULT FALSE
-                let mut timestamped = false;
-                if offset < data.len() {
-                    let (tag, _) = tags::decode_tag(data, offset)?;
-                    if tag.is_context(2) {
-                        let (value, end) = decode_context_bool(
-                            data,
-                            offset,
-                            2,
-                            "SubscribeCOVPropertyMultiple timestamped",
-                        )?;
-                        timestamped = value;
-                        offset = end;
-                    }
-                }
+                // [2] timestamped
+                let (timestamped, end) = decode_required_bool(
+                    data,
+                    offset,
+                    2,
+                    "SubscribeCOVPropertyMultiple timestamped",
+                )?;
+                offset = end;
 
                 refs.push(COVReference {
                     monitored_property: prop_ref,
                     cov_increment,
                     timestamped,
                 });
+                total_references += 1;
             }
 
             specs.push(COVSubscriptionSpecification {
@@ -279,7 +341,7 @@ pub struct COVNotificationValue {
     pub property_array_index: Option<u32>,
     /// Raw application-tagged bytes for the value.
     pub value: Vec<u8>,
-    pub time_of_change: Option<Vec<u8>>,
+    pub time_of_change: Option<Time>,
 }
 
 /// A single object notification within a COVNotificationMultiple.
@@ -295,48 +357,106 @@ pub struct COVNotificationMultipleRequest {
     pub subscriber_process_identifier: u32,
     pub initiating_device_identifier: ObjectIdentifier,
     pub time_remaining: u32,
-    pub timestamp: BACnetTimeStamp,
+    /// Date and time of the last conveyed timestamped change.
+    pub timestamp: Option<(Date, Time)>,
     pub list_of_cov_notifications: Vec<COVNotificationItem>,
 }
 
 impl COVNotificationMultipleRequest {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
+        let mut encoded = BytesMut::new();
         // [0] subscriberProcessIdentifier
-        primitives::encode_ctx_unsigned(buf, 0, self.subscriber_process_identifier as u64);
+        primitives::encode_ctx_unsigned(&mut encoded, 0, self.subscriber_process_identifier as u64);
         // [1] initiatingDeviceIdentifier
-        primitives::encode_ctx_object_id(buf, 1, &self.initiating_device_identifier);
+        primitives::encode_ctx_object_id(&mut encoded, 1, &self.initiating_device_identifier);
         // [2] timeRemaining
-        primitives::encode_ctx_unsigned(buf, 2, self.time_remaining as u64);
-        // [3] timestamp
-        primitives::encode_timestamp(buf, 3, &self.timestamp)?;
+        primitives::encode_ctx_unsigned(&mut encoded, 2, self.time_remaining as u64);
+        // [3] timestamp OPTIONAL — BACnetDateTime, not BACnetTimeStamp
+        if let Some((date, time)) = &self.timestamp {
+            tags::encode_opening_tag(&mut encoded, 3);
+            primitives::encode_app_date(&mut encoded, date);
+            primitives::encode_app_time(&mut encoded, time);
+            tags::encode_closing_tag(&mut encoded, 3);
+        }
         // [4] listOfCovNotifications
-        tags::encode_opening_tag(buf, 4);
+        tags::encode_opening_tag(&mut encoded, 4);
         for item in &self.list_of_cov_notifications {
             // [0] monitoredObjectIdentifier
-            primitives::encode_ctx_object_id(buf, 0, &item.monitored_object_identifier);
+            primitives::encode_ctx_object_id(&mut encoded, 0, &item.monitored_object_identifier);
             // [1] listOfValues
-            tags::encode_opening_tag(buf, 1);
+            tags::encode_opening_tag(&mut encoded, 1);
             for val in &item.list_of_values {
                 // [0] propertyIdentifier
-                primitives::encode_ctx_unsigned(buf, 0, val.property_identifier.to_raw() as u64);
+                primitives::encode_ctx_unsigned(
+                    &mut encoded,
+                    0,
+                    val.property_identifier.to_raw() as u64,
+                );
                 // [1] propertyArrayIndex OPTIONAL
                 if let Some(idx) = val.property_array_index {
-                    primitives::encode_ctx_unsigned(buf, 1, idx as u64);
+                    primitives::encode_ctx_unsigned(&mut encoded, 1, idx as u64);
                 }
                 // [2] value (opening/closing)
-                tags::encode_opening_tag(buf, 2);
-                buf.extend_from_slice(&val.value);
-                tags::encode_closing_tag(buf, 2);
-                // [3] timeOfChange OPTIONAL (opening/closing)
-                if let Some(ref ts) = val.time_of_change {
-                    tags::encode_opening_tag(buf, 3);
-                    buf.extend_from_slice(ts);
-                    tags::encode_closing_tag(buf, 3);
+                tags::encode_opening_tag(&mut encoded, 2);
+                encoded.extend_from_slice(&val.value);
+                tags::encode_closing_tag(&mut encoded, 2);
+                // [3] timeOfChange OPTIONAL — primitive context Time
+                if let Some(time) = &val.time_of_change {
+                    tags::encode_tag(&mut encoded, 3, tags::TagClass::Context, 4);
+                    encoded.extend_from_slice(&time.encode());
                 }
             }
-            tags::encode_closing_tag(buf, 1);
+            tags::encode_closing_tag(&mut encoded, 1);
         }
-        tags::encode_closing_tag(buf, 4);
+        tags::encode_closing_tag(&mut encoded, 4);
+        buf.extend_from_slice(&encoded);
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        if self.list_of_cov_notifications.is_empty() {
+            return Err(Error::Encoding(
+                "COVNotificationMultiple notification list must not be empty".into(),
+            ));
+        }
+        let mut total_values = 0usize;
+        let mut has_time_of_change = false;
+        if let Some((date, time)) = &self.timestamp {
+            validate_actual_date_time(date, time)?;
+        }
+        for item in &self.list_of_cov_notifications {
+            if item.list_of_values.is_empty() {
+                return Err(Error::Encoding(
+                    "COVNotificationMultiple value list must not be empty".into(),
+                ));
+            }
+            total_values = total_values
+                .checked_add(item.list_of_values.len())
+                .ok_or_else(|| Error::Encoding("notification value count overflow".into()))?;
+            if total_values > MAX_DECODED_ITEMS {
+                return Err(Error::Encoding(format!(
+                    "COVNotificationMultiple exceeds {MAX_DECODED_ITEMS} values"
+                )));
+            }
+            for value in &item.list_of_values {
+                validate_property_identifier(
+                    value.property_identifier,
+                    "COVNotificationMultiple property",
+                )?;
+                validate_raw_property_value(&value.value)?;
+                if let Some(time) = &value.time_of_change {
+                    validate_actual_time(time)?;
+                }
+                has_time_of_change |= value.time_of_change.is_some();
+            }
+        }
+        if self.timestamp.is_some() != has_time_of_change {
+            return Err(Error::Encoding(
+                "COVNotificationMultiple timestamp must be present iff a time-of-change is present"
+                    .into(),
+            ));
+        }
         Ok(())
     }
 
@@ -358,9 +478,16 @@ impl COVNotificationMultipleRequest {
             decode_context_u32(data, offset, 2, "COVNotificationMultiple time-remaining")?;
         offset = end;
 
-        // [3] timestamp
-        let (timestamp, new_off) = primitives::decode_timestamp(data, offset, 3)?;
-        offset = new_off;
+        // [3] timestamp OPTIONAL — BACnetDateTime
+        let mut timestamp = None;
+        if offset < data.len() {
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_opening_tag(3) {
+                let (date_time, end) = decode_date_time(data, offset, 3)?;
+                timestamp = Some(date_time);
+                offset = end;
+            }
+        }
 
         // [4] listOfCovNotifications — opening tag 4
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
@@ -373,6 +500,8 @@ impl COVNotificationMultipleRequest {
         offset = tag_end;
 
         let mut items = Vec::new();
+        let mut total_values = 0usize;
+        let mut has_time_of_change = false;
         loop {
             if offset >= data.len() {
                 return Err(Error::decoding(
@@ -380,13 +509,22 @@ impl COVNotificationMultipleRequest {
                     "COVNotificationMultiple missing closing tag 4",
                 ));
             }
-            if items.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(offset, "too many notification items"));
-            }
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_closing_tag(4) {
+                if items.is_empty() {
+                    return Err(reject(
+                        RejectReason::PARAMETER_OUT_OF_RANGE,
+                        "COVNotificationMultiple notification list is empty",
+                    ));
+                }
                 offset = tag_end;
                 break;
+            }
+            if items.len() >= MAX_DECODED_ITEMS {
+                return Err(reject(
+                    RejectReason::BUFFER_OVERFLOW,
+                    "too many notification items",
+                ));
             }
 
             // [0] monitoredObjectIdentifier
@@ -413,19 +551,33 @@ impl COVNotificationMultipleRequest {
                         "COVNotificationMultiple missing closing tag 1",
                     ));
                 }
-                if values.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(offset, "too many notification values"));
-                }
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if tag.is_closing_tag(1) {
+                    if values.is_empty() {
+                        return Err(reject(
+                            RejectReason::PARAMETER_OUT_OF_RANGE,
+                            "COVNotificationMultiple value list is empty",
+                        ));
+                    }
                     offset = tag_end;
                     break;
+                }
+                if total_values >= MAX_DECODED_ITEMS {
+                    return Err(reject(
+                        RejectReason::BUFFER_OVERFLOW,
+                        "too many notification values",
+                    ));
                 }
 
                 // [0] propertyIdentifier
                 let (prop_id, end) =
                     decode_context_u32(data, offset, 0, "COVNotificationMultiple property-id")?;
                 offset = end;
+                let property_identifier = PropertyIdentifier::from_raw(prop_id);
+                validate_decoded_property_identifier(
+                    property_identifier,
+                    "COVNotificationMultiple property",
+                )?;
 
                 // [1] propertyArrayIndex OPTIONAL
                 let mut array_index = None;
@@ -452,28 +604,51 @@ impl COVNotificationMultipleRequest {
                     ));
                 }
                 let (value_bytes, new_off) = tags::extract_context_value(data, tag_end, 2)?;
+                if value_bytes.is_empty() {
+                    return Err(reject(
+                        RejectReason::INVALID_DATA_ENCODING,
+                        "COVNotificationMultiple property value is empty",
+                    ));
+                }
                 let value = value_bytes.to_vec();
                 offset = new_off;
 
-                // [3] timeOfChange OPTIONAL (opening/closing)
+                // [3] timeOfChange OPTIONAL — primitive context Time
                 let mut time_of_change = None;
                 if offset < data.len() {
                     let (peek, _) = tags::decode_tag(data, offset)?;
-                    if peek.is_opening_tag(3) {
-                        let (_, inner_start) = tags::decode_tag(data, offset)?;
-                        let (ts_bytes, new_off) =
-                            tags::extract_context_value(data, inner_start, 3)?;
-                        time_of_change = Some(ts_bytes.to_vec());
-                        offset = new_off;
+                    if peek.is_context(3) {
+                        let (content, end) = decode_context(
+                            data,
+                            offset,
+                            3,
+                            "COVNotificationMultiple time-of-change",
+                        )?;
+                        let decoded_time = Time::decode(content).map_err(|_| {
+                            reject(
+                                RejectReason::INVALID_DATA_ENCODING,
+                                "COVNotificationMultiple time-of-change is malformed",
+                            )
+                        })?;
+                        if !actual_time_is_valid(&decoded_time) {
+                            return Err(reject(
+                                RejectReason::INVALID_DATA_ENCODING,
+                                "COVNotificationMultiple time-of-change is not an actual Time",
+                            ));
+                        }
+                        time_of_change = Some(decoded_time);
+                        has_time_of_change = true;
+                        offset = end;
                     }
                 }
 
                 values.push(COVNotificationValue {
-                    property_identifier: PropertyIdentifier::from_raw(prop_id),
+                    property_identifier,
                     property_array_index: array_index,
                     value,
                     time_of_change,
                 });
+                total_values += 1;
             }
 
             items.push(COVNotificationItem {
@@ -485,6 +660,12 @@ impl COVNotificationMultipleRequest {
             return Err(Error::decoding(
                 offset,
                 "COVNotificationMultiple has trailing data",
+            ));
+        }
+        if timestamp.is_some() != has_time_of_change {
+            return Err(reject(
+                RejectReason::PARAMETER_OUT_OF_RANGE,
+                "COVNotificationMultiple timestamp/time-of-change mismatch",
             ));
         }
 
@@ -503,193 +684,9 @@ impl COVNotificationMultipleRequest {
 mod width_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::enums::ObjectType;
-    use bacnet_types::primitives::Time;
+#[path = "cov_multiple_conformance_tests.rs"]
+mod conformance_tests;
 
-    #[test]
-    fn subscribe_cov_property_multiple_round_trip() {
-        let req = SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 42,
-            issue_confirmed_notifications: Some(true),
-            lifetime: Some(60),
-            max_notification_delay: Some(10),
-            list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-                monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
-                    .unwrap(),
-                list_of_cov_references: vec![
-                    COVReference {
-                        monitored_property: PropertyReference {
-                            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                            property_array_index: None,
-                        },
-                        cov_increment: Some(1.0),
-                        timestamped: true,
-                    },
-                    COVReference {
-                        monitored_property: PropertyReference {
-                            property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                            property_array_index: None,
-                        },
-                        cov_increment: None,
-                        timestamped: false,
-                    },
-                ],
-            }],
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = SubscribeCOVPropertyMultipleRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn subscribe_cov_property_multiple_uses_standard_tags() {
-        let req = SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 42,
-            issue_confirmed_notifications: Some(true),
-            lifetime: Some(60),
-            max_notification_delay: Some(5),
-            list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-                monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 10)
-                    .unwrap(),
-                list_of_cov_references: vec![COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                    },
-                    cov_increment: Some(1.0),
-                    timestamped: true,
-                }],
-            }],
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-
-        let mut offset = 0;
-        for tag_number in [0, 1, 2, 3] {
-            let (tag, pos) = tags::decode_tag(&buf, offset).unwrap();
-            assert!(tag.is_context(tag_number));
-            offset = pos + tag.length as usize;
-        }
-        let (tag, _) = tags::decode_tag(&buf, offset).unwrap();
-        assert!(tag.is_opening_tag(4));
-    }
-
-    #[test]
-    fn subscribe_cov_property_multiple_rejects_malformed_header_fields() {
-        let mut malformed_bool = BytesMut::new();
-        primitives::encode_ctx_unsigned(&mut malformed_bool, 0, 1);
-        tags::encode_tag(&mut malformed_bool, 1, tags::TagClass::Context, 0);
-        tags::encode_opening_tag(&mut malformed_bool, 4);
-        tags::encode_closing_tag(&mut malformed_bool, 4);
-        assert!(SubscribeCOVPropertyMultipleRequest::decode(&malformed_bool).is_err());
-
-        let mut oversized_lifetime = BytesMut::new();
-        primitives::encode_ctx_unsigned(&mut oversized_lifetime, 0, 1);
-        primitives::encode_ctx_boolean(&mut oversized_lifetime, 1, true);
-        tags::encode_tag(&mut oversized_lifetime, 2, tags::TagClass::Context, 5);
-        oversized_lifetime.extend_from_slice(&[1, 0, 0, 0, 0]);
-        tags::encode_opening_tag(&mut oversized_lifetime, 4);
-        tags::encode_closing_tag(&mut oversized_lifetime, 4);
-        assert!(SubscribeCOVPropertyMultipleRequest::decode(&oversized_lifetime).is_err());
-    }
-
-    #[test]
-    fn subscribe_cov_property_multiple_minimal() {
-        let req = SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 1,
-            issue_confirmed_notifications: None,
-            lifetime: None,
-            max_notification_delay: None,
-            list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-                monitored_object_identifier: ObjectIdentifier::new(ObjectType::BINARY_INPUT, 5)
-                    .unwrap(),
-                list_of_cov_references: vec![COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                    },
-                    cov_increment: None,
-                    timestamped: false,
-                }],
-            }],
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = SubscribeCOVPropertyMultipleRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn cov_notification_multiple_round_trip() {
-        let req = COVNotificationMultipleRequest {
-            subscriber_process_identifier: 1,
-            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap(),
-            time_remaining: 60,
-            timestamp: BACnetTimeStamp::SequenceNumber(42),
-            list_of_cov_notifications: vec![COVNotificationItem {
-                monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
-                    .unwrap(),
-                list_of_values: vec![
-                    COVNotificationValue {
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                        value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
-                        time_of_change: None,
-                    },
-                    COVNotificationValue {
-                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                        property_array_index: None,
-                        value: vec![0x82, 0x04, 0x00],
-                        time_of_change: Some(vec![0x19, 0x2A]), // raw timestamp bytes
-                    },
-                ],
-            }],
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
-        let decoded = COVNotificationMultipleRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn cov_notification_multiple_with_time_timestamp() {
-        let req = COVNotificationMultipleRequest {
-            subscriber_process_identifier: 5,
-            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap(),
-            time_remaining: 0,
-            timestamp: BACnetTimeStamp::Time(Time {
-                hour: 12,
-                minute: 30,
-                second: 0,
-                hundredths: 0,
-            }),
-            list_of_cov_notifications: vec![COVNotificationItem {
-                monitored_object_identifier: ObjectIdentifier::new(ObjectType::BINARY_VALUE, 3)
-                    .unwrap(),
-                list_of_values: vec![COVNotificationValue {
-                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                    property_array_index: None,
-                    value: vec![0x91, 0x01],
-                    time_of_change: None,
-                }],
-            }],
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
-        let decoded = COVNotificationMultipleRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn subscribe_cov_property_multiple_empty_input() {
-        assert!(SubscribeCOVPropertyMultipleRequest::decode(&[]).is_err());
-    }
-
-    #[test]
-    fn cov_notification_multiple_empty_input() {
-        assert!(COVNotificationMultipleRequest::decode(&[]).is_err());
-    }
-}
+#[cfg(test)]
+#[path = "cov_multiple_tests.rs"]
+mod tests;
