@@ -102,7 +102,11 @@ fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
     primitives::encode_ctx_unsigned(&mut missing_confirmed, 0, 1);
     tags::encode_opening_tag(&mut missing_confirmed, 4);
     tags::encode_closing_tag(&mut missing_confirmed, 4);
-    assert!(SubscribeCOVPropertyMultipleRequest::decode(&missing_confirmed).is_err());
+    assert!(matches!(
+        SubscribeCOVPropertyMultipleRequest::decode(&missing_confirmed),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER.to_raw()
+    ));
 
     let mut missing_timestamped = raw_subscription(PropertyIdentifier::PRESENT_VALUE).to_vec();
     let timestamped = missing_timestamped
@@ -110,7 +114,30 @@ fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
         .rposition(|window| window == [0x29, 0x00])
         .unwrap();
     missing_timestamped.drain(timestamped..timestamped + 2);
-    assert!(SubscribeCOVPropertyMultipleRequest::decode(&missing_timestamped).is_err());
+    assert!(matches!(
+        SubscribeCOVPropertyMultipleRequest::decode(&missing_timestamped),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER.to_raw()
+    ));
+
+    let malformed_confirmed = [0x09, 0x01, 0x19, 0x02, 0x4e, 0x4f];
+    assert!(matches!(
+        SubscribeCOVPropertyMultipleRequest::decode(&malformed_confirmed),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+    ));
+
+    let mut malformed_timestamped = raw_subscription(PropertyIdentifier::PRESENT_VALUE);
+    let timestamped = malformed_timestamped
+        .windows(2)
+        .rposition(|window| window == [0x29, 0x00])
+        .unwrap();
+    malformed_timestamped[timestamped + 1] = 2;
+    assert!(matches!(
+        SubscribeCOVPropertyMultipleRequest::decode(&malformed_timestamped),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+    ));
 }
 
 #[test]
@@ -238,10 +265,83 @@ fn timestamp_and_time_of_change_presence_must_agree() {
 }
 
 #[test]
+fn notification_requires_specific_actual_date_and_time_values() {
+    let valid_date = bacnet_types::primitives::Date {
+        year: 126,
+        month: 8,
+        day: 20,
+        day_of_week: 4,
+    };
+    let valid_time = bacnet_types::primitives::Time {
+        hour: 12,
+        minute: 34,
+        second: 56,
+        hundredths: 78,
+    };
+
+    let mut invalid_date = notification_with(PropertyIdentifier::PRESENT_VALUE);
+    invalid_date.timestamp = Some((
+        bacnet_types::primitives::Date {
+            month: 0,
+            ..valid_date
+        },
+        valid_time,
+    ));
+    invalid_date.list_of_cov_notifications[0].list_of_values[0].time_of_change = Some(valid_time);
+    let mut output = BytesMut::from(&b"prefix"[..]);
+    assert!(invalid_date.encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
+
+    let mut invalid_time = notification_with(PropertyIdentifier::PRESENT_VALUE);
+    let invalid_actual_time = bacnet_types::primitives::Time {
+        hour: 24,
+        ..valid_time
+    };
+    invalid_time.timestamp = Some((valid_date, invalid_actual_time));
+    invalid_time.list_of_cov_notifications[0].list_of_values[0].time_of_change =
+        Some(invalid_actual_time);
+    assert!(invalid_time.encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
+
+    let mut encoded = BytesMut::new();
+    let mut valid = notification_with(PropertyIdentifier::PRESENT_VALUE);
+    valid.timestamp = Some((valid_date, valid_time));
+    valid.list_of_cov_notifications[0].list_of_values[0].time_of_change = Some(valid_time);
+    valid.encode(&mut encoded).unwrap();
+    let date_tag = encoded.iter().position(|byte| *byte == 0xa4).unwrap();
+    encoded[date_tag + 2] = 0;
+    assert!(matches!(
+        COVNotificationMultipleRequest::decode(&encoded),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+    ));
+
+    encoded.clear();
+    valid.encode(&mut encoded).unwrap();
+    let time_of_change = encoded.iter().position(|byte| *byte == 0x3c).unwrap();
+    encoded[time_of_change + 1] = 24;
+    assert!(matches!(
+        COVNotificationMultipleRequest::decode(&encoded),
+        Err(Error::Reject { reason })
+            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+    ));
+}
+
+#[test]
 fn encoder_validation_is_atomic_and_caps_total_nested_items() {
     let mut invalid_subscription = subscription_with(PropertyIdentifier::ALL);
     let mut output = BytesMut::from(&b"prefix"[..]);
     assert!(invalid_subscription.try_encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
+
+    let mut inconsistent_timing = subscription_with(PropertyIdentifier::PRESENT_VALUE);
+    inconsistent_timing.max_notification_delay = None;
+    assert!(inconsistent_timing.try_encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
+
+    let mut out_of_range_timing = subscription_with(PropertyIdentifier::PRESENT_VALUE);
+    out_of_range_timing.lifetime = Some(0);
+    assert!(out_of_range_timing.try_encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 
     invalid_subscription.list_of_cov_subscription_specifications[0].list_of_cov_references =
@@ -251,35 +351,83 @@ fn encoder_validation_is_atomic_and_caps_total_nested_items() {
 
     let mut exact = subscription_with(PropertyIdentifier::PRESENT_VALUE);
     exact.list_of_cov_subscription_specifications[0].list_of_cov_references =
-        vec![property_ref(PropertyIdentifier::PRESENT_VALUE); MAX_DECODED_ITEMS];
+        vec![property_ref(PropertyIdentifier::PRESENT_VALUE); MAX_DECODED_ITEMS / 2];
+    let mut second_specification = exact.list_of_cov_subscription_specifications[0].clone();
+    second_specification.monitored_object_identifier = oid(ObjectType::ANALOG_INPUT, 2);
+    second_specification.list_of_cov_references =
+        vec![property_ref(PropertyIdentifier::PRESENT_VALUE); MAX_DECODED_ITEMS / 2];
+    exact
+        .list_of_cov_subscription_specifications
+        .push(second_specification);
     let mut encoded = BytesMut::new();
     exact.try_encode(&mut encoded).unwrap();
+    let decoded = SubscribeCOVPropertyMultipleRequest::decode(&encoded).unwrap();
     assert_eq!(
-        SubscribeCOVPropertyMultipleRequest::decode(&encoded)
-            .unwrap()
-            .list_of_cov_subscription_specifications[0]
+        decoded.list_of_cov_subscription_specifications[0]
             .list_of_cov_references
-            .len(),
+            .len()
+            + decoded.list_of_cov_subscription_specifications[1]
+                .list_of_cov_references
+                .len(),
         MAX_DECODED_ITEMS
     );
+    let mut extra_reference = BytesMut::new();
+    tags::encode_opening_tag(&mut extra_reference, 0);
+    PropertyReference {
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+    }
+    .encode(&mut extra_reference);
+    tags::encode_closing_tag(&mut extra_reference, 0);
+    primitives::encode_ctx_boolean(&mut extra_reference, 2, false);
+    let mut over_cap = encoded.to_vec();
+    let insert_at = over_cap.len() - 2;
+    over_cap.splice(insert_at..insert_at, extra_reference);
+    assert!(matches!(
+        SubscribeCOVPropertyMultipleRequest::decode(&over_cap),
+        Err(Error::Reject { reason }) if reason == RejectReason::BUFFER_OVERFLOW.to_raw()
+    ));
 
     let value = notification_with(PropertyIdentifier::PRESENT_VALUE).list_of_cov_notifications[0]
         .list_of_values[0]
         .clone();
     let mut notification = notification_with(PropertyIdentifier::PRESENT_VALUE);
     notification.list_of_cov_notifications[0].list_of_values =
-        vec![value.clone(); MAX_DECODED_ITEMS];
+        vec![value.clone(); MAX_DECODED_ITEMS / 2];
+    notification
+        .list_of_cov_notifications
+        .push(COVNotificationItem {
+            monitored_object_identifier: oid(ObjectType::ANALOG_INPUT, 2),
+            list_of_values: vec![value.clone(); MAX_DECODED_ITEMS / 2],
+        });
     encoded.clear();
     notification.encode(&mut encoded).unwrap();
+    let decoded = COVNotificationMultipleRequest::decode(&encoded).unwrap();
     assert_eq!(
-        COVNotificationMultipleRequest::decode(&encoded)
-            .unwrap()
-            .list_of_cov_notifications[0]
-            .list_of_values
-            .len(),
-        MAX_DECODED_ITEMS
+        decoded
+            .list_of_cov_notifications
+            .iter()
+            .map(|item| item.list_of_values.len())
+            .sum::<usize>(),
+        MAX_DECODED_ITEMS,
     );
-    notification.list_of_cov_notifications[0]
+    let mut extra_value = BytesMut::new();
+    primitives::encode_ctx_unsigned(
+        &mut extra_value,
+        0,
+        PropertyIdentifier::PRESENT_VALUE.to_raw() as u64,
+    );
+    tags::encode_opening_tag(&mut extra_value, 2);
+    extra_value.extend_from_slice(&[0]);
+    tags::encode_closing_tag(&mut extra_value, 2);
+    let mut over_cap = encoded.to_vec();
+    let insert_at = over_cap.len() - 2;
+    over_cap.splice(insert_at..insert_at, extra_value);
+    assert!(matches!(
+        COVNotificationMultipleRequest::decode(&over_cap),
+        Err(Error::Reject { reason }) if reason == RejectReason::BUFFER_OVERFLOW.to_raw()
+    ));
+    notification.list_of_cov_notifications[1]
         .list_of_values
         .push(value);
     output.truncate(b"prefix".len());
@@ -298,11 +446,77 @@ fn notification_rejects_legacy_timestamp_and_time_shapes() {
     tags::encode_closing_tag(&mut primitive_timestamp, 4);
     assert!(COVNotificationMultipleRequest::decode(&primitive_timestamp).is_err());
 
+    let mut constructed_time = BytesMut::new();
+    primitives::encode_ctx_unsigned(&mut constructed_time, 0, 1);
+    primitives::encode_ctx_object_id(&mut constructed_time, 1, &oid(ObjectType::DEVICE, 1));
+    primitives::encode_ctx_unsigned(&mut constructed_time, 2, 1);
+    tags::encode_opening_tag(&mut constructed_time, 4);
+    primitives::encode_ctx_object_id(&mut constructed_time, 0, &oid(ObjectType::ANALOG_INPUT, 1));
+    tags::encode_opening_tag(&mut constructed_time, 1);
+    primitives::encode_ctx_unsigned(
+        &mut constructed_time,
+        0,
+        PropertyIdentifier::PRESENT_VALUE.to_raw() as u64,
+    );
+    tags::encode_opening_tag(&mut constructed_time, 2);
+    constructed_time.extend_from_slice(&[0]);
+    tags::encode_closing_tag(&mut constructed_time, 2);
+    tags::encode_opening_tag(&mut constructed_time, 3);
+    primitives::encode_ctx_unsigned(&mut constructed_time, 1, 42);
+    tags::encode_closing_tag(&mut constructed_time, 3);
+    tags::encode_closing_tag(&mut constructed_time, 1);
+    tags::encode_closing_tag(&mut constructed_time, 4);
+    assert!(COVNotificationMultipleRequest::decode(&constructed_time).is_err());
+
     let mut malformed_value = notification_with(PropertyIdentifier::PRESENT_VALUE);
     malformed_value.list_of_cov_notifications[0].list_of_values[0].value = vec![0x2e];
     let mut output = BytesMut::from(&b"prefix"[..]);
     assert!(malformed_value.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
+}
+
+#[test]
+fn notification_decoder_rejects_timestamp_presence_mismatch_and_accepts_proprietary_id() {
+    let date = bacnet_types::primitives::Date {
+        year: 126,
+        month: 8,
+        day: 20,
+        day_of_week: 4,
+    };
+    let time = bacnet_types::primitives::Time {
+        hour: 12,
+        minute: 34,
+        second: 56,
+        hundredths: 78,
+    };
+    let mut request = notification_with(PropertyIdentifier::PRESENT_VALUE);
+    request.timestamp = Some((date, time));
+    request.list_of_cov_notifications[0].list_of_values[0].time_of_change = Some(time);
+    let mut encoded = BytesMut::new();
+    request.encode(&mut encoded).unwrap();
+    let time_of_change = encoded
+        .windows(5)
+        .rposition(|window| window == [0x3c, 12, 34, 56, 78])
+        .unwrap();
+    let mut mismatched = encoded.to_vec();
+    mismatched.drain(time_of_change..time_of_change + 5);
+    assert!(matches!(
+        COVNotificationMultipleRequest::decode(&mismatched),
+        Err(Error::Reject { reason }) if reason == RejectReason::PARAMETER_OUT_OF_RANGE.to_raw()
+    ));
+
+    let proprietary = PropertyIdentifier::from_raw(512);
+    let request = notification_with(proprietary);
+    encoded.clear();
+    request.encode(&mut encoded).unwrap();
+    assert_eq!(
+        COVNotificationMultipleRequest::decode(&encoded)
+            .unwrap()
+            .list_of_cov_notifications[0]
+            .list_of_values[0]
+            .property_identifier,
+        proprietary,
+    );
 }
 
 #[test]

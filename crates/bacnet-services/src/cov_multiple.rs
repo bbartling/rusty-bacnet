@@ -8,15 +8,14 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use crate::common::{
-    decode_context, decode_context_bool, decode_context_u32, PropertyReference, MAX_DECODED_ITEMS,
-};
+use crate::common::{decode_context, decode_context_u32, PropertyReference, MAX_DECODED_ITEMS};
 
 #[path = "cov_multiple_helpers.rs"]
 mod helpers;
 use helpers::{
-    decode_date_time, reject, validate_decoded_property_identifier, validate_property_identifier,
-    validate_raw_property_value,
+    actual_time_is_valid, decode_date_time, decode_required_bool, reject,
+    validate_actual_date_time, validate_actual_time, validate_decoded_property_identifier,
+    validate_property_identifier, validate_raw_property_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -65,6 +64,21 @@ impl SubscribeCOVPropertyMultipleRequest {
     }
 
     fn validate(&self) -> Result<(), Error> {
+        match (self.lifetime, self.max_notification_delay) {
+            (None, None) => {}
+            (Some(lifetime), Some(max_delay))
+                if lifetime != 0 && max_delay <= 3_600 && max_delay < lifetime => {}
+            (Some(_), Some(_)) => {
+                return Err(Error::Encoding(
+                    "SubscribeCOVPropertyMultiple timing values are out of range".into(),
+                ));
+            }
+            _ => {
+                return Err(Error::Encoding(
+                    "SubscribeCOVPropertyMultiple lifetime and max-notification-delay must both be present or absent".into(),
+                ));
+            }
+        }
         let mut total_references = 0usize;
         for spec in &self.list_of_cov_subscription_specifications {
             if spec.list_of_cov_references.is_empty() {
@@ -136,24 +150,12 @@ impl SubscribeCOVPropertyMultipleRequest {
         offset = end;
 
         // [1] issueConfirmedNotifications
-        if offset >= data.len() {
-            return Err(reject(
-                RejectReason::MISSING_REQUIRED_PARAMETER,
-                "SubscribeCOVPropertyMultiple confirmed-notifications is missing",
-            ));
-        }
-        let (issue_confirmed_notifications, end) = decode_context_bool(
+        let (issue_confirmed_notifications, end) = decode_required_bool(
             data,
             offset,
             1,
             "SubscribeCOVPropertyMultiple confirmed-notifications",
-        )
-        .map_err(|_| {
-            reject(
-                RejectReason::INVALID_DATA_ENCODING,
-                "SubscribeCOVPropertyMultiple confirmed-notifications is malformed",
-            )
-        })?;
+        )?;
         offset = end;
 
         // [2] lifetime OPTIONAL
@@ -290,24 +292,12 @@ impl SubscribeCOVPropertyMultipleRequest {
                 }
 
                 // [2] timestamped
-                if offset >= data.len() {
-                    return Err(reject(
-                        RejectReason::MISSING_REQUIRED_PARAMETER,
-                        "SubscribeCOVPropertyMultiple timestamped is missing",
-                    ));
-                }
-                let (timestamped, end) = decode_context_bool(
+                let (timestamped, end) = decode_required_bool(
                     data,
                     offset,
                     2,
                     "SubscribeCOVPropertyMultiple timestamped",
-                )
-                .map_err(|_| {
-                    reject(
-                        RejectReason::INVALID_DATA_ENCODING,
-                        "SubscribeCOVPropertyMultiple timestamped is malformed",
-                    )
-                })?;
+                )?;
                 offset = end;
 
                 refs.push(COVReference {
@@ -432,6 +422,9 @@ impl COVNotificationMultipleRequest {
         }
         let mut total_values = 0usize;
         let mut has_time_of_change = false;
+        if let Some((date, time)) = &self.timestamp {
+            validate_actual_date_time(date, time)?;
+        }
         for item in &self.list_of_cov_notifications {
             if item.list_of_values.is_empty() {
                 return Err(Error::Encoding(
@@ -452,6 +445,9 @@ impl COVNotificationMultipleRequest {
                     "COVNotificationMultiple property",
                 )?;
                 validate_raw_property_value(&value.value)?;
+                if let Some(time) = &value.time_of_change {
+                    validate_actual_time(time)?;
+                }
                 has_time_of_change |= value.time_of_change.is_some();
             }
         }
@@ -628,12 +624,19 @@ impl COVNotificationMultipleRequest {
                             3,
                             "COVNotificationMultiple time-of-change",
                         )?;
-                        time_of_change = Some(Time::decode(content).map_err(|_| {
+                        let decoded_time = Time::decode(content).map_err(|_| {
                             reject(
                                 RejectReason::INVALID_DATA_ENCODING,
                                 "COVNotificationMultiple time-of-change is malformed",
                             )
-                        })?);
+                        })?;
+                        if !actual_time_is_valid(&decoded_time) {
+                            return Err(reject(
+                                RejectReason::INVALID_DATA_ENCODING,
+                                "COVNotificationMultiple time-of-change is not an actual Time",
+                            ));
+                        }
+                        time_of_change = Some(decoded_time);
                         has_time_of_change = true;
                         offset = end;
                     }

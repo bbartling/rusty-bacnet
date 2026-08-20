@@ -262,9 +262,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         (None, None) => true,
         (Some(_), Some(_)) => false,
         _ => {
-            return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::INCONSISTENT_PARAMETERS.to_raw() as u32,
+            return Err(Error::Reject {
+                reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
             });
         }
     };

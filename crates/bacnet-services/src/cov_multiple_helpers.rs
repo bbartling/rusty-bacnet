@@ -4,10 +4,73 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
+use crate::common::decode_context_bool;
+
 pub(super) fn reject(reason: RejectReason, _message: &'static str) -> Error {
     Error::Reject {
         reason: reason.to_raw(),
     }
+}
+
+pub(super) fn decode_required_bool(
+    data: &[u8],
+    offset: usize,
+    context_tag: u8,
+    field: &'static str,
+) -> Result<(bool, usize), Error> {
+    if offset >= data.len() {
+        return Err(reject(
+            RejectReason::MISSING_REQUIRED_PARAMETER,
+            "required Boolean is missing",
+        ));
+    }
+    let (tag, _) = tags::decode_tag(data, offset).map_err(|_| {
+        reject(
+            RejectReason::INVALID_DATA_ENCODING,
+            "required Boolean tag is malformed",
+        )
+    })?;
+    if !tag.is_context(context_tag) {
+        return Err(reject(
+            RejectReason::MISSING_REQUIRED_PARAMETER,
+            "required Boolean is missing",
+        ));
+    }
+    decode_context_bool(data, offset, context_tag, field).map_err(|_| {
+        reject(
+            RejectReason::INVALID_DATA_ENCODING,
+            "required Boolean value is malformed",
+        )
+    })
+}
+
+fn actual_date_is_valid(date: &Date) -> bool {
+    date.year != Date::UNSPECIFIED
+        && (1..=12).contains(&date.month)
+        && (1..=31).contains(&date.day)
+        && (1..=7).contains(&date.day_of_week)
+}
+
+pub(super) fn actual_time_is_valid(time: &Time) -> bool {
+    time.hour <= 23 && time.minute <= 59 && time.second <= 59 && time.hundredths <= 99
+}
+
+pub(super) fn validate_actual_date_time(date: &Date, time: &Time) -> Result<(), Error> {
+    if !actual_date_is_valid(date) || !actual_time_is_valid(time) {
+        return Err(Error::Encoding(
+            "COVNotificationMultiple requires a specific actual DateTime".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_actual_time(time: &Time) -> Result<(), Error> {
+    if !actual_time_is_valid(time) {
+        return Err(Error::Encoding(
+            "COVNotificationMultiple time-of-change must be a specific actual Time".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn property_identifier_is_forbidden(property_identifier: PropertyIdentifier) -> bool {
@@ -124,6 +187,12 @@ pub(super) fn decode_date_time(
         )
     })?)
     .map_err(|_| reject(RejectReason::INVALID_DATA_ENCODING, "invalid DateTime Time"))?;
+    if !actual_date_is_valid(&date) || !actual_time_is_valid(&time) {
+        return Err(reject(
+            RejectReason::INVALID_DATA_ENCODING,
+            "DateTime must contain a specific actual Date and Time",
+        ));
+    }
     pos = content_end;
 
     let (closing, end) = tags::decode_tag(data, pos)?;

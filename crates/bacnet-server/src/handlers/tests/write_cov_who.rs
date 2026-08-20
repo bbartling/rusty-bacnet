@@ -338,59 +338,6 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
 }
 
 #[test]
-fn subscribe_cov_property_multiple_rejects_invalid_service_parameters() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::cov_multiple::{
-        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
-    };
-
-    let db = make_db_with_ai();
-    let mut table = CovSubscriptionTable::new();
-    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let specs = vec![COVSubscriptionSpecification {
-        monitored_object_identifier: oid,
-        list_of_cov_references: vec![COVReference {
-            monitored_property: PropertyReference {
-                property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                property_array_index: None,
-            },
-            cov_increment: Some(0.5),
-            timestamped: false,
-        }],
-    }];
-
-    for (lifetime, max_notification_delay, expected_code) in [
-        (Some(300), None, ErrorCode::INCONSISTENT_PARAMETERS),
-        (None, Some(10), ErrorCode::INCONSISTENT_PARAMETERS),
-        (Some(0), Some(0), ErrorCode::VALUE_OUT_OF_RANGE),
-        (Some(300), Some(300), ErrorCode::VALUE_OUT_OF_RANGE),
-        (Some(4000), Some(3601), ErrorCode::VALUE_OUT_OF_RANGE),
-    ] {
-        let request = SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 1,
-            issue_confirmed_notifications: false,
-            lifetime,
-            max_notification_delay,
-            list_of_cov_subscription_specifications: specs.clone(),
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-
-        let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
-            .unwrap_err();
-        match err {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
-                assert_eq!(code, expected_code.to_raw() as u32);
-            }
-            other => panic!("expected service parameter protocol error, got {other:?}"),
-        }
-        assert!(table.is_empty());
-    }
-}
-
-#[test]
 fn subscribe_cov_property_multiple_invalid_property_is_atomic() {
     use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{

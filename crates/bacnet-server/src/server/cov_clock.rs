@@ -33,11 +33,12 @@ pub(crate) fn cov_multiple_time_remaining(expires_at: Option<Instant>) -> u32 {
 /// COVNotificationMultiple carries an optional BACnetDateTime at the request
 /// level and an optional primitive Time for each timestamped value. Keeping
 /// both values on the same conversion path prevents them from disagreeing at
-/// a day boundary.
+/// a day boundary. BACnet `UTC_Offset` is positive west of UTC and is
+/// subtracted from UTC to obtain local standard time.
 pub(crate) fn cov_multiple_datetime(elapsed: Duration, utc_offset_minutes: i32) -> (Date, Time) {
     let total_secs = elapsed
         .as_secs()
-        .saturating_add_signed(i64::from(utc_offset_minutes) * 60);
+        .saturating_add_signed(-i64::from(utc_offset_minutes) * 60);
     let days_since_epoch = (total_secs / 86_400) as i64;
     let seconds_today = total_secs % 86_400;
 

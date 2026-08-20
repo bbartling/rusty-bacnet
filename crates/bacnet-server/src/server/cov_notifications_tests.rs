@@ -174,7 +174,9 @@ fn cov_multiple_timestamp_uses_device_local_bacnet_date_and_time() {
         }
     );
 
-    let (date, time) = cov_multiple_datetime(Duration::new(86_400, 0), -60);
+    // BACnet UTC_Offset is positive west of UTC and is subtracted. At +60,
+    // 1970-01-02T00:00Z is still 1970-01-01 locally.
+    let (date, time) = cov_multiple_datetime(Duration::new(86_400, 0), 60);
     assert_eq!(
         date,
         Date {
@@ -186,7 +188,8 @@ fn cov_multiple_timestamp_uses_device_local_bacnet_date_and_time() {
     );
     assert_eq!(time.hour, 23);
 
-    let (date, time) = cov_multiple_datetime(Duration::new(86_399, 0), 60);
+    // A negative (east-of-UTC) offset advances the local civil day.
+    let (date, time) = cov_multiple_datetime(Duration::new(86_399, 0), -60);
     assert_eq!(
         date,
         Date {
