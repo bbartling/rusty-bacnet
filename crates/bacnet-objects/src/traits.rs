@@ -4,7 +4,9 @@ use std::any::Any;
 use std::borrow::Cow;
 
 use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -20,6 +22,15 @@ use crate::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitored
 /// values, destructive log writes, and writes that update derived properties.
 #[doc(hidden)]
 pub struct WritePropertyRollback(Box<dyn Any + Send + Sync>);
+
+/// Result of applying a LifeSafetyOperation to an object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifeSafetyOperationEffect {
+    /// The operation changed object state.
+    Applied,
+    /// The requested idempotent state was already present.
+    AlreadyApplied,
+}
 
 impl WritePropertyRollback {
     /// Wrap object-private rollback state.
@@ -249,6 +260,37 @@ pub trait BACnetObject: Send + Sync {
             class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
             code: bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw()
                 as u32,
+        })
+    }
+
+    /// Apply a LifeSafetyOperation atomically to this object.
+    ///
+    /// Implementations must leave the object unchanged when returning `Err`.
+    /// They run synchronously under the object-database write lock and must be
+    /// fast, nonblocking, and panic-free. External or irreversible actuation
+    /// also needs an application-owned idempotency/replay contract. The default
+    /// reports that the object does not support this service.
+    fn apply_life_safety_operation(
+        &mut self,
+        _operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationEffect, Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Set the next LifeSafetyOperation expected by trusted local logic.
+    ///
+    /// This is an application-facing state channel, not a network property
+    /// write. The default reports that the object does not support the state.
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        _operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
     }
 

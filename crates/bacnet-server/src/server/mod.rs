@@ -42,8 +42,9 @@ use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, NetworkPriority, NotifyType,
-    ObjectType, PropertyIdentifier, RejectReason, Segmentation, UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation,
+    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, RejectReason, Segmentation,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
@@ -51,6 +52,7 @@ use bacnet_types::MacAddr;
 
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
+use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
 
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
@@ -274,6 +276,11 @@ pub struct ServerConfig {
     pub cov_retry_timeout_ms: u64,
     /// Optional callback invoked when a TimeSynchronization request is received.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
+    /// Optional LifeSafetyOperation authorization policy.
+    ///
+    /// Absence is fail-closed: requests receive SERVICES /
+    /// SERVICE_REQUEST_DENIED before object mutation.
+    pub life_safety_operation_authorizer: Option<LifeSafetyOperationAuthorizer>,
     /// Optional password required for DeviceCommunicationControl.
     pub dcc_password: Option<String>,
     /// Optional password required for ReinitializeDevice.
@@ -341,6 +348,13 @@ impl std::fmt::Debug for ServerConfig {
                 "on_time_sync",
                 &self.on_time_sync.as_ref().map(|_| "<callback>"),
             )
+            .field(
+                "life_safety_operation_authorizer",
+                &self
+                    .life_safety_operation_authorizer
+                    .as_ref()
+                    .map(|_| "<callback>"),
+            )
             .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
             .field(
                 "reinit_password",
@@ -367,6 +381,7 @@ impl Default for ServerConfig {
             vendor_id: 0,
             cov_retry_timeout_ms: 3000,
             on_time_sync: None,
+            life_safety_operation_authorizer: None,
             dcc_password: None,
             reinit_password: None,
             enable_fault_detection: false,
@@ -405,6 +420,15 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());
+        self
+    }
+
+    /// Set the policy that authorizes inbound LifeSafetyOperation requests.
+    pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
         self
     }
 
@@ -496,6 +520,15 @@ impl BipServerBuilder {
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());
+        self
+    }
+
+    /// Set the policy that authorizes inbound LifeSafetyOperation requests.
+    pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
         self
     }
 
@@ -831,6 +864,15 @@ impl ScServerBuilder {
         self
     }
 
+    /// Set the policy that authorizes inbound LifeSafetyOperation requests.
+    pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
     /// Enable periodic fault detection / reliability evaluation.
     ///
     /// Reliability evaluation only; Event Enrollment evaluation is configured
@@ -917,6 +959,8 @@ mod event_network_priority_tests;
 mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;
+#[cfg(test)]
+mod life_safety_operation_tests;
 #[cfg(test)]
 mod segmentation_tests;
 #[cfg(test)]

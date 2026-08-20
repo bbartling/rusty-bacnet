@@ -1085,6 +1085,11 @@ server.add_life_safety_point(instance=1, name="Smoke Detector")
 server.add_life_safety_zone(instance=1, name="Floor 3 Zone")
 ```
 
+Python-hosted servers currently expose no LifeSafetyOperation authorization or
+trusted `Operation_Expected` state channel. Inbound LifeSafetyOperation is
+therefore fail-closed (`SERVICES / SERVICE_REQUEST_DENIED`) for these objects.
+Use the Rust server API when authorized silence/unsilence execution is required.
+
 #### Access Control
 
 ```python
