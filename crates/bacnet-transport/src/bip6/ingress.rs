@@ -21,6 +21,8 @@ pub(super) fn forwarded_source_is_usable(source: SocketAddrV6) -> bool {
     source.port() != 0
         && !ip.is_unspecified()
         && !ip.is_multicast()
+        && !ip.is_loopback()
+        && ip.to_ipv4().is_none()
         // A Forwarded-NPDU carries no IPv6 scope ID. Synthesizing the BBMD's
         // ingress scope for a link-local origin can target the wrong link.
         && !ip.is_unicast_link_local()

@@ -95,6 +95,88 @@ pub(crate) fn ipv6() -> Vec<Ipv6Addr> {
     collect().1
 }
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "l4re",
+    target_os = "android",
+    target_os = "emscripten",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "haiku",
+    target_os = "nto",
+    target_os = "hurd",
+    target_os = "fuchsia",
+))]
+#[allow(unsafe_code)]
+pub(crate) fn ipv6_interface_index(addr: &Ipv6Addr) -> Option<u32> {
+    use std::ffi::CStr;
+
+    struct IfAddrsGuard(*mut libc::ifaddrs);
+    impl Drop for IfAddrsGuard {
+        fn drop(&mut self) {
+            // SAFETY: this is the matching deallocator for `getifaddrs`.
+            unsafe { libc::freeifaddrs(self.0) }
+        }
+    }
+
+    let mut head = std::ptr::null_mut();
+    // SAFETY: the guarded list and address pointers remain valid through the walk.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return None;
+    }
+    let _guard = IfAddrsGuard(head);
+    let mut current = head;
+    while !current.is_null() {
+        // SAFETY: `current` is a node in the live guarded list.
+        let entry = unsafe { &*current };
+        if !entry.ifa_addr.is_null() {
+            // SAFETY: the non-null sockaddr is valid for its reported family.
+            let family = unsafe { (*entry.ifa_addr).sa_family as i32 };
+            if family == libc::AF_INET6 {
+                // SAFETY: family AF_INET6 selects the sockaddr_in6 layout.
+                let address = unsafe { &*(entry.ifa_addr as *const libc::sockaddr_in6) };
+                if Ipv6Addr::from(address.sin6_addr.s6_addr) == *addr {
+                    // SAFETY: the OS provides a NUL-terminated interface name.
+                    let index =
+                        unsafe { libc::if_nametoindex(CStr::from_ptr(entry.ifa_name).as_ptr()) };
+                    if index != 0 {
+                        return Some(index);
+                    }
+                }
+            }
+        }
+        current = entry.ifa_next;
+    }
+    None
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "l4re",
+    target_os = "android",
+    target_os = "emscripten",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "haiku",
+    target_os = "nto",
+    target_os = "hurd",
+    target_os = "fuchsia",
+)))]
+pub(crate) fn ipv6_interface_index(addr: &Ipv6Addr) -> Option<u32> {
+    let _ = addr;
+    None
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

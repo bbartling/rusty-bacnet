@@ -231,7 +231,7 @@ async fn vmac_table_does_not_retain_ambiguous_reverse_entries() {
 
 #[tokio::test]
 async fn wrong_destination_vmac_ack_is_not_learned() {
-    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(42));
     let _rx = transport.start().await.unwrap();
     let (_, transport_port) = decode_bip6_mac(transport.local_mac()).unwrap();
     let destination = SocketAddrV6::new(Ipv6Addr::LOCALHOST, transport_port, 0, 0);
@@ -375,7 +375,7 @@ fn bip6_max_apdu_length() {
 
 #[tokio::test]
 async fn bip6_start_stop() {
-    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
     let _rx = transport.start().await.unwrap();
     assert!(transport.socket.is_some());
     assert_eq!(transport.local_mac().len(), 18);
@@ -385,8 +385,8 @@ async fn bip6_start_stop() {
 
 #[tokio::test]
 async fn bip6_unicast_loopback() {
-    let mut transport_a = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
-    let mut transport_b = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let mut transport_a = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(2));
+    let mut transport_b = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(3));
 
     let _rx_a = transport_a.start().await.unwrap();
     let mut rx_b = transport_b.start().await.unwrap();
@@ -600,7 +600,7 @@ async fn bip6_forwarded_npdu_delivered() {
         std::net::SocketAddr::V6(address) => address,
         _ => unreachable!(),
     };
-    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(44));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
         bbmd_ip: *sender_addr.ip(),
         bbmd_port: sender_addr.port(),
@@ -612,11 +612,8 @@ async fn bip6_forwarded_npdu_delivered() {
     let originating_vmac: Bip6Vmac = [0xAA, 0xAA, 0xAA];
     let test_npdu = vec![0x01, 0x00, 0xCA, 0xFE];
 
-    let origin = UdpSocket::bind("[::1]:0").await.unwrap();
-    let origin_addr = match origin.local_addr().unwrap() {
-        std::net::SocketAddr::V6(address) => address,
-        _ => unreachable!(),
-    };
+    let origin_addr =
+        SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9), 47_808, 0, 0);
 
     let mut forwarded_payload = origin_addr.ip().octets().to_vec();
     forwarded_payload.extend_from_slice(&origin_addr.port().to_be_bytes());
@@ -670,7 +667,11 @@ async fn bip6_forwarded_npdu_delivered() {
         ),
         (
             [0x41, 0x00, 0x05],
-            SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0),
+            SocketAddrV6::new(Ipv6Addr::LOCALHOST, origin_addr.port(), 0, 0),
+        ),
+        (
+            [0x41, 0x00, 0x06],
+            SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10), 0, 0, 0),
         ),
     ];
     for (vmac, invalid_origin) in invalid_origins {
@@ -700,21 +701,10 @@ async fn bip6_forwarded_npdu_delivered() {
     );
     assert!(received.link_layer_group);
 
-    let reply_npdu = [0x01, 0x00, 0xBE, 0xEF];
-    transport
-        .send_unicast(&reply_npdu, received.source_mac.as_slice())
-        .await
-        .unwrap();
-    let mut reply_buf = [0u8; 64];
-    let (reply_len, _) =
-        tokio::time::timeout(Duration::from_secs(2), origin.recv_from(&mut reply_buf))
-            .await
-            .expect("reply timeout")
-            .unwrap();
-    let reply = decode_bvlc6(&reply_buf[..reply_len]).unwrap();
-    assert_eq!(reply.function, Bvlc6Function::OriginalUnicast);
-    assert_eq!(reply.destination_vmac, Some(originating_vmac));
-    assert_eq!(reply.payload.as_ref(), reply_npdu);
+    assert_eq!(
+        transport.vmac_table.lookup(&originating_vmac).await,
+        Some(origin_addr)
+    );
 
     transport.stop().await.unwrap();
 }

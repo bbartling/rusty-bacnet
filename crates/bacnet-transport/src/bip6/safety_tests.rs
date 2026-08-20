@@ -73,7 +73,14 @@ fn forwarded_npdu_origin_must_be_a_usable_unicast_endpoint() {
         SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 47_808, 0, 0),
         SocketAddrV6::new(BACNET_IPV6_MULTICAST_SITE_LOCAL, 47_808, 0, 0),
         SocketAddrV6::new(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1), 47_808, 0, 4),
-        SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0),
+        SocketAddrV6::new(Ipv6Addr::LOCALHOST, 47_808, 0, 0),
+        SocketAddrV6::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc000, 0x0201),
+            47_808,
+            0,
+            0,
+        ),
+        SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9), 0, 0, 0),
     ] {
         assert!(!forwarded_source_is_usable(source), "{source}");
     }
@@ -81,7 +88,7 @@ fn forwarded_npdu_origin_must_be_a_usable_unicast_endpoint() {
 
 #[tokio::test]
 async fn device_zero_vmac_is_learned_and_used_for_reply() {
-    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(43));
     let mut rx = transport.start().await.unwrap();
     let (_, transport_port) = decode_bip6_mac(transport.local_mac()).unwrap();
     let destination = SocketAddrV6::new(Ipv6Addr::LOCALHOST, transport_port, 0, 0);
@@ -120,7 +127,7 @@ async fn untrusted_forwarded_npdu_cannot_replace_learned_peer() {
         std::net::SocketAddr::V6(address) => address,
         _ => unreachable!(),
     };
-    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(45));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
         bbmd_ip: *bbmd_addr.ip(),
         bbmd_port: bbmd_addr.port(),

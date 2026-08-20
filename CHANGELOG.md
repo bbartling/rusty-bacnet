@@ -105,19 +105,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before learning the sender. Its 4,096-entry VMAC table preserves a unique
   learned link-local scope, fails closed when scopes are ambiguous, and
   deterministically replaces stale endpoint mappings. Device instance zero's
-  VMAC remains valid; out-of-range instances fail startup. Unconfigured nodes
-  draw Random Device Instance VMACs from OS randomness, probe the configured
-  multicast scope, and fail startup rather than use a configured or random VMAC
-  with a detected collision. The public `generate_random_vmac` helper is
+  VMAC remains valid; out-of-range instances fail startup. Directly connected,
+  unconfigured nodes draw Random Device Instance VMACs from OS randomness,
+  probe the configured multicast scope, answer peer probes during startup, and
+  fail atomically on probe errors or collisions. Random-identity foreign-device
+  startup is rejected until BBMD-assisted resolution is implemented. The public
+  `generate_random_vmac` helper is
   consequently fallible. Annex U fixed-size messages reject surplus bytes;
   Address-Resolution and Virtual-Address-Resolution use their specified
   multicast and unicast paths. Forwarded-NPDU now uses the standard single-VMAC
   wire layout, accepts only multicast delivery or the configured non-link-local
   foreign-device BBMD, exposes the original 18-byte B/IPv6 source, and learns
-  only a validated, nonzero-port, non-multicast, non-unspecified, non-link-local
-  origin for follow-up unicast. Outbound unicast fails explicitly
-  until the destination VMAC has been learned instead of guessing from an IP
-  endpoint; automatic outbound VMAC discovery remains a follow-up. To retain
+  only a validated, nonzero-port, non-multicast, non-unspecified, non-loopback,
+  non-IPv4-mapped, non-link-local origin for follow-up unicast. Outbound unicast
+  fails explicitly until the destination VMAC has been learned instead of
+  guessing from an IP endpoint; automatic outbound VMAC discovery remains a
+  follow-up. To retain
   group-delivery provenance after frame decoding, the public `ReceivedNpdu` and
   `ReceivedApdu` envelopes gain `link_layer_group` and `is_group` fields;
   downstream custom transports or exhaustive struct literals must initialize

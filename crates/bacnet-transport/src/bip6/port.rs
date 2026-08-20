@@ -151,6 +151,10 @@ impl Bip6Transport {
     }
 
     /// Configure this transport as a foreign device.
+    ///
+    /// A foreign device must also have a configured Device instance. Random
+    /// VMAC startup is rejected until BBMD-assisted collision resolution is
+    /// implemented.
     /// Must be called before `start()`.
     pub fn register_as_foreign_device(&mut self, config: Bip6ForeignDeviceConfig) {
         self.foreign_device = Some(config);
@@ -201,64 +205,6 @@ fn resolve_local_ipv6() -> Option<Ipv6Addr> {
     }
 }
 
-/// Best-effort resolution of IPv6 interface index for the given address.
-/// Returns `None` if the interface cannot be determined.
-#[allow(unsafe_code)]
-fn resolve_interface_index(addr: &Ipv6Addr) -> Option<u32> {
-    #[cfg(unix)]
-    {
-        use std::ffi::CStr;
-
-        /// RAII guard for `getifaddrs` that calls `freeifaddrs` on drop.
-        struct IfAddrsGuard(*mut libc::ifaddrs);
-        impl Drop for IfAddrsGuard {
-            fn drop(&mut self) {
-                // SAFETY: `self.0` was returned by `getifaddrs` and stored without modification;
-                // `freeifaddrs` is the matching deallocator and is called exactly once on drop.
-                unsafe { libc::freeifaddrs(self.0) }
-            }
-        }
-
-        // SAFETY: this block performs the `getifaddrs`/walk/family-dispatch dance. The
-        // returned linked list is owned by `_guard` (calls `freeifaddrs` on drop). All
-        // pointer dereferences of `cursor`/`ifa.ifa_addr` are gated on null checks; address
-        // family bytes are read after confirming `family == AF_INET6`. `CStr::from_ptr`
-        // requires NUL-terminated strings, which the kernel guarantees for `ifa_name`.
-        unsafe {
-            let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
-            if libc::getifaddrs(&mut ifaddrs) != 0 {
-                return None;
-            }
-            let _guard = IfAddrsGuard(ifaddrs);
-            let mut cursor = ifaddrs;
-            while !cursor.is_null() {
-                let ifa = &*cursor;
-                if !ifa.ifa_addr.is_null() {
-                    let family = (*ifa.ifa_addr).sa_family as i32;
-                    if family == libc::AF_INET6 {
-                        let sockaddr6 = &*(ifa.ifa_addr as *const libc::sockaddr_in6);
-                        let ifa_ip = Ipv6Addr::from(sockaddr6.sin6_addr.s6_addr);
-                        if ifa_ip == *addr {
-                            let name = CStr::from_ptr(ifa.ifa_name);
-                            let idx = libc::if_nametoindex(name.as_ptr());
-                            if idx != 0 {
-                                return Some(idx);
-                            }
-                        }
-                    }
-                }
-                cursor = ifa.ifa_next;
-            }
-            None
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = addr;
-        None
-    }
-}
-
 impl TransportPort for Bip6Transport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         if self.recv_task.is_some() {
@@ -271,6 +217,12 @@ impl TransportPort for Bip6Transport {
             return Err(Error::Encoding(
                 "BACnet Device instance must be in 0..=4194303".to_string(),
             ));
+        }
+        if self.foreign_device.is_some() && self.device_instance.is_none() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "BIP6 foreign devices require a configured Device instance until BBMD-assisted random-VMAC resolution is implemented",
+            )));
         }
 
         let wildcard_bind = self.interface.is_unspecified();
@@ -332,40 +284,41 @@ impl TransportPort for Bip6Transport {
             generate_random_vmac()?
         };
 
-        let if_index = if local_ip.is_loopback() {
-            0u32
-        } else {
-            resolve_interface_index(&local_ip).unwrap_or_else(|| {
+        let if_index =
+            crate::local_addresses::ipv6_interface_index(&local_ip).unwrap_or_else(|| {
                 warn!("Could not resolve interface index for {local_ip}, using OS default (0)");
                 0u32
-            })
-        };
+            });
+        let collision_probe_required = self.device_instance.is_none();
+        let collision_group = self.broadcast_scope.multicast_addr();
         for group in &[
             BACNET_IPV6_MULTICAST_LINK_LOCAL,
             BACNET_IPV6_MULTICAST_SITE_LOCAL,
             BACNET_IPV6_MULTICAST_ORG_LOCAL,
         ] {
             if let Err(e) = socket.join_multicast_v6(group, if_index) {
+                if collision_probe_required && *group == collision_group {
+                    return Err(Error::Transport(e));
+                }
                 warn!("Could not join IPv6 multicast group {group} on interface {if_index}: {e}");
             }
         }
 
         let socket = Arc::new(socket);
-        self.socket = Some(Arc::clone(&socket));
 
         // VMAC collision detection and resolution
-        {
-            let multicast_dest = SocketAddrV6::new(
-                self.broadcast_scope.multicast_addr(),
-                self.port,
-                0,
-                if_index,
-            );
+        if self.foreign_device.is_none() {
+            let multicast_dest = SocketAddrV6::new(collision_group, self.port, 0, if_index);
             let mut check_buf = vec![0u8; 64];
 
             for attempt in 0..=MAX_VMAC_RETRIES {
                 let ar_msg = encode_address_resolution(&self.source_vmac, &self.source_vmac);
-                let _ = socket.send_to(&ar_msg, multicast_dest).await;
+                if let Err(error) = socket.send_to(&ar_msg, multicast_dest).await {
+                    if collision_probe_required {
+                        return Err(Error::Transport(error));
+                    }
+                    debug!(error = %error, "Configured-VMAC collision probe send failed");
+                }
 
                 let mut collision = false;
                 let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
@@ -378,6 +331,34 @@ impl TransportPort for Bip6Transport {
                     {
                         Ok(Ok(received)) => {
                             if let Ok(frame) = decode_bvlc6(&check_buf[..received.len]) {
+                                let is_self_loop = matches!(
+                                    received.peer,
+                                    std::net::SocketAddr::V6(peer)
+                                        if peer.port() == local_port
+                                            && (*peer.ip() == local_ip
+                                                || local_unicast_ips.contains(peer.ip()))
+                                );
+                                if frame.function == Bvlc6Function::AddressResolution
+                                    && frame.destination_vmac == Some(self.source_vmac)
+                                    && matches!(received.destination, std::net::IpAddr::V6(ip) if ip == collision_group)
+                                    && received.os_group_delivery != Some(false)
+                                    && !is_self_loop
+                                {
+                                    let ack = encode_address_resolution_ack(
+                                        &self.source_vmac,
+                                        &frame.source_vmac,
+                                    );
+                                    if let Err(error) = socket.send_to(&ack, received.peer).await {
+                                        if collision_probe_required {
+                                            return Err(Error::Transport(error));
+                                        }
+                                        debug!(error = %error, "Configured-VMAC AR-Ack send failed");
+                                    }
+                                    if frame.source_vmac == self.source_vmac {
+                                        collision = true;
+                                        break;
+                                    }
+                                }
                                 // AR-ACK from another node using our VMAC.
                                 if frame.function == Bvlc6Function::AddressResolutionAck
                                     && frame.source_vmac == self.source_vmac
@@ -401,7 +382,10 @@ impl TransportPort for Bip6Transport {
                             continue;
                         }
                         Ok(Err(e)) => {
-                            debug!(error = %e, "Error during VMAC collision check");
+                            if collision_probe_required {
+                                return Err(Error::Transport(e));
+                            }
+                            debug!(error = %e, "Configured-VMAC collision probe receive failed");
                             break;
                         }
                         Err(_) => break, // timeout elapsed — no collision
@@ -709,6 +693,7 @@ impl TransportPort for Bip6Transport {
         });
 
         self.recv_task = Some(recv_task);
+        self.socket = Some(Arc::clone(&socket));
 
         // Start foreign device registration if configured
         if let Some(fd) = &self.foreign_device {
