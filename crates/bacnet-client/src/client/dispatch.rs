@@ -36,7 +36,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
-        is_broadcast: bool,
+        is_group: bool,
+        reply_tx: Option<oneshot::Sender<Bytes>>,
         apdu: Apdu,
         limits: ResponseLimits,
     ) {
@@ -243,11 +244,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
             }
             Apdu::ConfirmedRequest(req) => {
-                if is_broadcast {
+                if is_group {
                     debug!(
                         invoke_id = req.invoke_id,
                         service = req.service_choice.to_raw(),
-                        "Ignoring broadcast ConfirmedRequest"
+                        "Ignoring group-addressed ConfirmedRequest"
                     );
                     return;
                 }
@@ -256,6 +257,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         network,
                         source_mac,
                         source_network,
+                        reply_tx,
                         req.invoke_id,
                         bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
                     )
@@ -284,17 +286,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 req.invoke_id,
                                 req.service_choice,
                                 response,
+                                reply_tx,
                             )
                             .await;
                         }
                         Err(e) => {
                             warn!(error = %e, "Failed to decode ConfirmedCOVNotification");
+                            let reject_reason = if req.service_request.is_empty() {
+                                RejectReason::MISSING_REQUIRED_PARAMETER
+                            } else {
+                                RejectReason::OTHER
+                            };
                             Self::send_confirmed_request_reject(
                                 network,
                                 source_mac,
                                 source_network,
+                                reply_tx,
                                 req.invoke_id,
-                                RejectReason::OTHER,
+                                reject_reason,
                             )
                             .await;
                         }
@@ -308,6 +317,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         network,
                         source_mac,
                         source_network,
+                        reply_tx,
                         req.invoke_id,
                         RejectReason::UNRECOGNIZED_SERVICE,
                     )
@@ -509,6 +519,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         network: &Arc<NetworkLayer<T>>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
+        reply_tx: Option<oneshot::Sender<Bytes>>,
         invoke_id: u8,
         reject_reason: RejectReason,
     ) {
@@ -521,7 +532,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, reason = reject_reason.to_raw(), "Failed to encode Reject");
             return;
         }
-        if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
+        if let Err(e) =
+            Self::send_received_reply_apdu(network, &buf, source_mac, source_network, reply_tx)
+                .await
+        {
             warn!(error = %e, reason = reject_reason.to_raw(), "Failed to send Reject");
         }
     }
@@ -530,6 +544,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         network: &Arc<NetworkLayer<T>>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
+        reply_tx: Option<oneshot::Sender<Bytes>>,
         invoke_id: u8,
         abort_reason: bacnet_types::enums::AbortReason,
     ) {
@@ -543,7 +558,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, reason = abort_reason.to_raw(), "Failed to encode server Abort");
             return;
         }
-        if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
+        if let Err(e) =
+            Self::send_received_reply_apdu(network, &buf, source_mac, source_network, reply_tx)
+                .await
+        {
             warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send server Abort");
         }
     }
@@ -555,6 +573,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
         response: ConfirmedCOVNotificationResponse,
+        reply_tx: Option<oneshot::Sender<Bytes>>,
     ) {
         let apdu = match response {
             ConfirmedCOVNotificationResponse::Ack => Apdu::SimpleAck(SimpleAck {
@@ -573,9 +592,44 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, "Failed to encode response for COV notification");
             return;
         }
-        if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
+        if let Err(e) =
+            Self::send_received_reply_apdu(network, &buf, source_mac, source_network, reply_tx)
+                .await
+        {
             warn!(error = %e, "Failed to send response for COV notification");
         }
+    }
+
+    async fn send_received_reply_apdu(
+        network: &Arc<NetworkLayer<T>>,
+        buf: &[u8],
+        reply_mac: &[u8],
+        reply_network: &Option<NpduAddress>,
+        reply_tx: Option<oneshot::Sender<Bytes>>,
+    ) -> Result<(), Error> {
+        if let Some(reply_tx) = reply_tx {
+            let apdu = Bytes::copy_from_slice(buf);
+            let mut npdu_buf = BytesMut::with_capacity(8 + apdu.len());
+            encode_npdu(
+                &mut npdu_buf,
+                &Npdu {
+                    is_network_message: false,
+                    expecting_reply: false,
+                    priority: NetworkPriority::NORMAL,
+                    destination: reply_network
+                        .clone()
+                        .filter(|address| !address.mac_address.is_empty()),
+                    source: None,
+                    payload: apdu,
+                    ..Npdu::default()
+                },
+            )?;
+            if reply_tx.send(npdu_buf.freeze()).is_ok() {
+                return Ok(());
+            }
+        }
+
+        Self::send_reply_apdu(network, buf, reply_mac, reply_network).await
     }
 
     /// Send a reply back along the path its trigger arrived on.

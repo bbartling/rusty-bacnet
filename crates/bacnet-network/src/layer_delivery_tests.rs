@@ -4,7 +4,7 @@ use std::net::Ipv4Addr;
 use tokio::time::{timeout, Duration};
 
 #[test]
-fn effective_broadcast_respects_npdu_destination_precedence() {
+fn effective_group_delivery_respects_npdu_destination_precedence() {
     let remote_unicast = NpduAddress {
         network: 200,
         mac_address: MacAddr::from_slice(&[0x11]),
@@ -18,16 +18,16 @@ fn effective_broadcast_respects_npdu_destination_precedence() {
         mac_address: MacAddr::new(),
     };
 
-    assert!(!is_broadcast_delivery(false, None));
-    assert!(is_broadcast_delivery(true, None));
-    assert!(!is_broadcast_delivery(false, Some(&remote_unicast)));
-    assert!(!is_broadcast_delivery(true, Some(&remote_unicast)));
-    assert!(is_broadcast_delivery(false, Some(&remote_broadcast)));
-    assert!(is_broadcast_delivery(false, Some(&global_broadcast)));
+    assert!(!is_group_delivery(false, None));
+    assert!(is_group_delivery(true, None));
+    assert!(!is_group_delivery(false, Some(&remote_unicast)));
+    assert!(!is_group_delivery(true, Some(&remote_unicast)));
+    assert!(is_group_delivery(false, Some(&remote_broadcast)));
+    assert!(is_group_delivery(false, Some(&global_broadcast)));
 }
 
 #[tokio::test]
-async fn send_receive_apdu_unicast_is_not_marked_broadcast() {
+async fn send_receive_apdu_unicast_is_not_marked_as_group_delivery() {
     let transport_a = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
 
@@ -56,7 +56,7 @@ async fn send_receive_apdu_unicast_is_not_marked_broadcast() {
     assert_eq!(received.apdu, test_apdu);
     assert_eq!(received.source_mac.as_slice(), net_a.local_mac());
     assert!(received.source_network.is_none());
-    assert!(!received.is_broadcast);
+    assert!(!received.is_group);
 
     net_a.stop().await.unwrap();
     net_b.stop().await.unwrap();

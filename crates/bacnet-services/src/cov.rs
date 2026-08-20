@@ -327,6 +327,12 @@ impl COVNotificationRequest {
             values.push(pv);
             offset = new_offset;
         }
+        if values.is_empty() {
+            return Err(Error::decoding(
+                offset,
+                "COVNotification list-of-values must contain at least one value",
+            ));
+        }
         if offset != data.len() {
             return Err(Error::decoding(offset, "COVNotification has trailing data"));
         }
@@ -470,6 +476,22 @@ mod tests {
     #[test]
     fn test_decode_cov_notification_empty_input() {
         assert!(COVNotificationRequest::decode(&[]).is_err());
+    }
+
+    #[test]
+    fn test_decode_cov_notification_rejects_empty_list_of_values() {
+        let req = COVNotificationRequest {
+            subscriber_process_identifier: 1,
+            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            time_remaining: 60,
+            list_of_values: Vec::new(),
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+
+        assert!(COVNotificationRequest::decode(&buf).is_err());
     }
 
     #[test]

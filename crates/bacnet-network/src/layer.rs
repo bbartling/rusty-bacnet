@@ -23,11 +23,11 @@ pub struct ReceivedApdu {
     pub source_mac: MacAddr,
     /// Source network address if the APDU was routed (NPDU had source field).
     pub source_network: Option<NpduAddress>,
-    /// Whether the APDU's effective BACnet destination was a broadcast.
+    /// Whether the APDU's effective BACnet destination was multicast or broadcast.
     ///
     /// A specific DNET/DADR remains a unicast even when a router used a
-    /// broadcast data-link destination to reach that remote device.
-    pub is_broadcast: bool,
+    /// group data-link destination to reach that remote device.
+    pub is_group: bool,
     /// Data-link attributes associated with the NPDU, if the transport supplied any.
     pub data_attributes: Vec<DataAttribute>,
     /// Optional reply channel for MS/TP DataExpectingReply flows.
@@ -41,7 +41,7 @@ impl Clone for ReceivedApdu {
             apdu: self.apdu.clone(),
             source_mac: self.source_mac.clone(),
             source_network: self.source_network.clone(),
-            is_broadcast: self.is_broadcast,
+            is_group: self.is_group,
             data_attributes: self.data_attributes.clone(),
             reply_tx: None,
         }
@@ -54,19 +54,16 @@ impl std::fmt::Debug for ReceivedApdu {
             .field("apdu", &self.apdu)
             .field("source_mac", &self.source_mac)
             .field("source_network", &self.source_network)
-            .field("is_broadcast", &self.is_broadcast)
+            .field("is_group", &self.is_group)
             .field("data_attributes", &self.data_attributes)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(...)"))
             .finish()
     }
 }
 
-pub(crate) fn is_broadcast_delivery(
-    link_layer_broadcast: bool,
-    destination: Option<&NpduAddress>,
-) -> bool {
+pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&NpduAddress>) -> bool {
     match destination {
-        None => link_layer_broadcast,
+        None => link_layer_group,
         Some(destination) => destination.network == 0xFFFF || destination.mac_address.is_empty(),
     }
 }
@@ -124,16 +121,14 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         }
 
                         let source_network = npdu.source.clone();
-                        let is_broadcast = is_broadcast_delivery(
-                            received.link_layer_broadcast,
-                            npdu.destination.as_ref(),
-                        );
+                        let is_group =
+                            is_group_delivery(received.link_layer_group, npdu.destination.as_ref());
 
                         let apdu = ReceivedApdu {
                             apdu: npdu.payload,
                             source_mac: received.source_mac,
                             source_network,
-                            is_broadcast,
+                            is_group,
                             data_attributes: received.data_attributes,
                             reply_tx: received.reply_tx,
                         };

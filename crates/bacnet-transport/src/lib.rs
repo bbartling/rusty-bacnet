@@ -30,3 +30,4 @@ pub mod sc_frame;
 pub mod sc_hub;
 #[cfg(feature = "sc-tls")]
 pub mod sc_tls;
+mod udp_metadata;

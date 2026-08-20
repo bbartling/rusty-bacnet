@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::layer::{is_broadcast_delivery, ReceivedApdu};
+use crate::layer::{is_group_delivery, ReceivedApdu};
 use crate::router_table::{ReachabilityStatus, RouterTable};
 
 mod control_messages;
@@ -267,7 +267,7 @@ impl BACnetRouter {
                                         apdu: npdu.payload,
                                         source_mac: received.source_mac,
                                         source_network: npdu.source,
-                                        is_broadcast: true,
+                                        is_group: true,
                                         data_attributes: received.data_attributes,
                                         reply_tx: received.reply_tx,
                                     };
@@ -321,7 +321,7 @@ impl BACnetRouter {
                                                 apdu: npdu.payload,
                                                 source_mac: received.source_mac,
                                                 source_network: npdu.source,
-                                                is_broadcast: false,
+                                                is_group: false,
                                                 data_attributes: received.data_attributes,
                                                 reply_tx: received.reply_tx,
                                             };
@@ -334,7 +334,7 @@ impl BACnetRouter {
                                                     apdu: npdu.payload.clone(),
                                                     source_mac: received.source_mac.clone(),
                                                     source_network: npdu.source.clone(),
-                                                    is_broadcast: true,
+                                                    is_group: true,
                                                     data_attributes: received
                                                         .data_attributes
                                                         .clone(),
@@ -377,10 +377,7 @@ impl BACnetRouter {
                                     apdu: npdu.payload,
                                     source_mac: received.source_mac,
                                     source_network: npdu.source,
-                                    is_broadcast: is_broadcast_delivery(
-                                        received.link_layer_broadcast,
-                                        None,
-                                    ),
+                                    is_group: is_group_delivery(received.link_layer_group, None),
                                     data_attributes: received.data_attributes,
                                     reply_tx: received.reply_tx,
                                 };

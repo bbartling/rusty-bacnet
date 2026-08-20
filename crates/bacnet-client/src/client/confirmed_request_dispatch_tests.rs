@@ -4,7 +4,44 @@ use super::*;
 use bacnet_encoding::apdu::{decode_apdu, ConfirmedRequest};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::AbortReason;
+
+struct ImmediateReplyTransport {
+    local_mac: MacAddr,
+    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+    fallback_sends: Arc<Mutex<Vec<Bytes>>>,
+}
+
+impl TransportPort for ImmediateReplyTransport {
+    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        Ok(self.inbound_rx.take().expect("transport started once"))
+    }
+
+    async fn stop(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
+        self.fallback_sends
+            .lock()
+            .await
+            .push(Bytes::copy_from_slice(npdu));
+        Ok(())
+    }
+
+    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+        self.fallback_sends
+            .lock()
+            .await
+            .push(Bytes::copy_from_slice(npdu));
+        Ok(())
+    }
+
+    fn local_mac(&self) -> &[u8] {
+        &self.local_mac
+    }
+}
 
 fn confirmed_request(
     invoke_id: u8,
@@ -248,7 +285,10 @@ async fn malformed_confirmed_cov_receives_reject_without_delivery() {
         panic!("expected Reject");
     };
     assert_eq!(reject.invoke_id, 0x35);
-    assert_eq!(reject.reject_reason, RejectReason::OTHER);
+    assert_eq!(
+        reject.reject_reason,
+        RejectReason::MISSING_REQUIRED_PARAMETER
+    );
     assert!(timeout(Duration::from_millis(100), cov_rx.recv())
         .await
         .is_err());
@@ -258,7 +298,7 @@ async fn malformed_confirmed_cov_receives_reject_without_delivery() {
 }
 
 #[tokio::test]
-async fn unsupported_confirmed_broadcast_remains_silent() {
+async fn unsupported_confirmed_group_delivery_remains_silent() {
     let client_mac = vec![0x51];
     let (client_transport, mut peer_transport) = LoopbackTransport::pair(client_mac, vec![0x52]);
     let mut peer_rx = peer_transport.start().await.unwrap();
@@ -285,6 +325,60 @@ async fn unsupported_confirmed_broadcast_remains_silent() {
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_confirmed_request_uses_immediate_reply_channel() {
+    let local_mac = MacAddr::from_slice(&[0x71]);
+    let router_mac = MacAddr::from_slice(&[0x72]);
+    let remote = NpduAddress {
+        network: 300,
+        mac_address: MacAddr::from_slice(&[0x73, 0x74]),
+    };
+    let (inbound_tx, inbound_rx) = mpsc::channel(1);
+    let fallback_sends = Arc::new(Mutex::new(Vec::new()));
+    let transport = ImmediateReplyTransport {
+        local_mac,
+        inbound_rx: Some(inbound_rx),
+        fallback_sends: Arc::clone(&fallback_sends),
+    };
+    let mut client = BACnetClient::generic_builder()
+        .transport(transport)
+        .build()
+        .await
+        .unwrap();
+    let request = encode_inbound(
+        confirmed_request(
+            0x38,
+            ConfirmedServiceChoice::READ_PROPERTY,
+            false,
+            Bytes::new(),
+        ),
+        Some(remote.clone()),
+    );
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    inbound_tx
+        .send(ReceivedNpdu {
+            npdu: request.freeze(),
+            source_mac: router_mac,
+            link_layer_group: false,
+            data_attributes: Vec::new(),
+            reply_tx: Some(reply_tx),
+        })
+        .await
+        .unwrap();
+
+    let reply = timeout(Duration::from_secs(2), reply_rx)
+        .await
+        .expect("timed out waiting for immediate response")
+        .expect("immediate response channel closed");
+    let npdu = decode_npdu(reply).unwrap();
+    assert_eq!(npdu.destination, Some(remote));
+    assert_unrecognized_reject(decode_apdu(npdu.payload).unwrap(), 0x38);
+    assert!(fallback_sends.lock().await.is_empty());
+
+    client.stop().await.unwrap();
 }
 
 #[tokio::test]

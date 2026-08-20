@@ -4,9 +4,48 @@ use std::time::Duration;
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 
-use super::port::derive_vmac_from_device_instance;
+use super::port::{derive_vmac_from_device_instance, original_destination_matches};
 use super::*;
 use crate::port::TransportPort;
+
+#[test]
+fn original_function_requires_matching_ip_destination_and_vmac() {
+    let local_ip = Ipv6Addr::LOCALHOST;
+    let local_vmac = [1, 2, 3];
+
+    assert!(original_destination_matches(
+        Bvlc6Function::OriginalUnicast,
+        local_ip.into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        None,
+    ));
+    assert!(!original_destination_matches(
+        Bvlc6Function::OriginalUnicast,
+        BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
+        Some(local_vmac),
+        local_ip,
+        local_vmac,
+        None,
+    ));
+    assert!(!original_destination_matches(
+        Bvlc6Function::OriginalUnicast,
+        local_ip.into(),
+        Some([9, 9, 9]),
+        local_ip,
+        local_vmac,
+        None,
+    ));
+    assert!(original_destination_matches(
+        Bvlc6Function::OriginalBroadcast,
+        BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
+        None,
+        local_ip,
+        local_vmac,
+        None,
+    ));
+}
 
 #[test]
 fn encode_original_unicast() {
@@ -127,6 +166,21 @@ async fn bip6_unicast_loopback() {
     let mut rx_b = transport_b.start().await.unwrap();
 
     let test_npdu = vec![0x01, 0x00, 0xDE, 0xAD];
+
+    let error = transport_a
+        .send_unicast(&test_npdu, transport_b.local_mac())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("destination VMAC is unknown"));
+
+    let (peer_ip, peer_port) = decode_bip6_mac(transport_b.local_mac()).unwrap();
+    transport_a
+        .vmac_table
+        .learn(
+            transport_b.source_vmac,
+            SocketAddrV6::new(peer_ip, peer_port, 0, 0),
+        )
+        .await;
 
     transport_a
         .send_unicast(&test_npdu, transport_b.local_mac())
@@ -331,7 +385,7 @@ async fn bip6_forwarded_npdu_delivered() {
     assert_eq!(received.npdu, test_npdu);
     // source_mac must be the originating VMAC (3 bytes), not the UDP sender address
     assert_eq!(received.source_mac.as_slice(), &originating_vmac[..]);
-    assert!(received.link_layer_broadcast);
+    assert!(received.link_layer_group);
 
     transport.stop().await.unwrap();
 }

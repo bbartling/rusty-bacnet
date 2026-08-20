@@ -401,7 +401,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 	                                                            apdu: bytes::Bytes::new(),
 	                                                            source_mac: bacnet_types::MacAddr::new(),
 	                                                            source_network: None,
-	                                                            is_broadcast: false,
+	                                                            is_group: false,
 	                                                            data_attributes: Vec::new(),
 	                                                            reply_tx: None,
 	                                                        }
@@ -447,7 +447,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         apdu: bytes::Bytes::new(),
                                         source_mac: bacnet_types::MacAddr::new(),
                                         source_network: None,
-                                        is_broadcast: false,
+                                        is_group: false,
                                         data_attributes: Vec::new(),
                                         reply_tx: None,
                                     }

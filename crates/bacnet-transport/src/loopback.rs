@@ -66,7 +66,7 @@ impl TransportPort for LoopbackTransport {
         let msg = ReceivedNpdu {
             npdu: Bytes::copy_from_slice(npdu),
             source_mac: self.local_mac.clone(),
-            link_layer_broadcast: false,
+            link_layer_group: false,
             data_attributes: Vec::new(),
             reply_tx: None,
         };
@@ -80,7 +80,7 @@ impl TransportPort for LoopbackTransport {
         let msg = ReceivedNpdu {
             npdu: Bytes::copy_from_slice(npdu),
             source_mac: self.local_mac.clone(),
-            link_layer_broadcast: true,
+            link_layer_group: true,
             data_attributes: Vec::new(),
             reply_tx: None,
         };
@@ -109,7 +109,7 @@ mod tests {
         let npdu = rx_b.recv().await.unwrap();
         assert_eq!(&npdu.npdu[..], b"hello");
         assert_eq!(&npdu.source_mac[..], &[0x00, 0x01]);
-        assert!(!npdu.link_layer_broadcast);
+        assert!(!npdu.link_layer_group);
     }
 
     #[tokio::test]
@@ -122,7 +122,7 @@ mod tests {
         let npdu = rx_a.recv().await.unwrap();
         assert_eq!(&npdu.npdu[..], b"world");
         assert_eq!(&npdu.source_mac[..], &[0x00, 0x02]);
-        assert!(!npdu.link_layer_broadcast);
+        assert!(!npdu.link_layer_group);
     }
 
     #[tokio::test]
@@ -134,7 +134,7 @@ mod tests {
         a.send_broadcast(b"bcast").await.unwrap();
         let npdu = rx_b.recv().await.unwrap();
         assert_eq!(&npdu.npdu[..], b"bcast");
-        assert!(npdu.link_layer_broadcast);
+        assert!(npdu.link_layer_group);
     }
 
     #[tokio::test]

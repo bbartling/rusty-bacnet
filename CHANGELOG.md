@@ -89,13 +89,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Client-mode responders now return `Reject(UNRECOGNIZED_SERVICE)` for
   complete unicast ConfirmedRequest APDUs without a handler (#374), preserve
-  routed reply addressing, reject malformed confirmed COV payloads before
-  delivery, and return a server-side `SEGMENTATION_NOT_SUPPORTED` Abort when
-  inbound request reassembly is unavailable. Confirmed broadcasts remain
-  silent as required by the responding TSM. To retain that distinction after
-  frame decoding, the public `ReceivedNpdu` and `ReceivedApdu` envelopes gain
-  `link_layer_broadcast` and `is_broadcast` fields; downstream custom
-  transports or exhaustive struct literals must initialize the new fields.
+  routed reply addressing, use the immediate MS/TP reply channel when one is
+  present, reject malformed confirmed COV payloads before delivery (including
+  an empty required parameter list), and return a server-side
+  `SEGMENTATION_NOT_SUPPORTED` Abort when inbound request reassembly is
+  unavailable. Confirmed multicast and broadcast deliveries remain silent as
+  required by the responding TSM. B/IP and B/IP6 now obtain the actual UDP
+  destination from packet metadata and fail closed on missing, truncated, or
+  mismatched metadata; B/IP6 Original-Unicast also requires the local
+  Destination-VMAC before learning the sender, and outbound B/IP6 unicast now
+  fails explicitly until the destination VMAC has been learned instead of
+  emitting a guaranteed-to-be-discarded reserved VMAC. To retain
+  group-delivery provenance after frame decoding, the public `ReceivedNpdu` and
+  `ReceivedApdu` envelopes gain `link_layer_group` and `is_group` fields;
+  downstream custom transports or exhaustive struct literals must initialize
+  the new fields. Windows builds gain a direct `windows-sys` dependency for
+  `WSARecvMsg` destination metadata.
 
 - Confirmed-Request `max-segments-accepted` no longer maps every non-rung
   client capacity to `B'111'` ("greater than 64"). Capacities 0 and 1 now fail

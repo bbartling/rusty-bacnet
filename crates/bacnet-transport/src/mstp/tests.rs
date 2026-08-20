@@ -128,7 +128,7 @@ fn handle_data_not_expecting_reply_unicast() {
     let received = rx.try_recv().unwrap();
     assert_eq!(received.npdu, npdu_data);
     assert_eq!(received.source_mac.as_slice(), &[0u8]);
-    assert!(!received.link_layer_broadcast);
+    assert!(!received.link_layer_group);
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn handle_data_not_expecting_reply_broadcast() {
     assert!(node.reply_rx.is_none());
     let received = rx.try_recv().unwrap();
     assert_eq!(received.source_mac.as_slice(), &[5u8]);
-    assert!(received.link_layer_broadcast);
+    assert!(received.link_layer_group);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn handle_data_expecting_reply() {
 
     let received = rx.try_recv().unwrap();
     assert_eq!(received.npdu, vec![0x01, 0x00, 0x30]);
-    assert!(!received.link_layer_broadcast);
+    assert!(!received.link_layer_group);
 }
 
 #[test]
