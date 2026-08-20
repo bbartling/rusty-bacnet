@@ -71,6 +71,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEventState>()?;
     PyEventState::register_constants(&m.getattr("EventState")?)?;
 
+    m.add_class::<PyEnrollmentSummaryEventStateFilter>()?;
+    PyEnrollmentSummaryEventStateFilter::register_constants(
+        &m.getattr("EnrollmentSummaryEventStateFilter")?,
+    )?;
+
     m.add_class::<PyEventType>()?;
     PyEventType::register_constants(&m.getattr("EventType")?)?;
 

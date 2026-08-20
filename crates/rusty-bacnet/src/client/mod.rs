@@ -43,9 +43,9 @@ use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use crate::errors::to_py_err;
 use crate::types::{
     parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyCovNotificationIterator,
-    PyDiscoveredDevice, PyEnableDisable, PyEventState, PyEventType, PyLifeSafetyOperation,
-    PyMessagePriority, PyObjectIdentifier, PyObjectType, PyPropertyIdentifier, PyPropertyValue,
-    PyReinitializedState,
+    PyDiscoveredDevice, PyEnableDisable, PyEnrollmentSummaryEventStateFilter, PyEventState,
+    PyEventType, PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier, PyObjectType,
+    PyPropertyIdentifier, PyPropertyValue, PyReinitializedState,
 };
 
 /// Async BACnet client for reading/writing properties on remote devices.

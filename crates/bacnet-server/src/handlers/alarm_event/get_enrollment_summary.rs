@@ -16,6 +16,7 @@ pub fn handle_get_enrollment_summary(
     use bacnet_services::enrollment_summary::{
         EnrollmentSummaryEntry, GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
     };
+    use bacnet_types::enums::EnrollmentSummaryEventStateFilter;
 
     let request = GetEnrollmentSummaryRequest::decode(service_data)?;
 
@@ -41,17 +42,32 @@ pub fn handle_get_enrollment_summary(
             })
             .unwrap_or(0);
 
-        if let Some(filter_state) = request.event_state_filter {
-            if event_state != filter_state.to_raw() {
-                continue;
+        let event_state_matches = match request.event_state_filter {
+            None => true,
+            Some(filter) if filter == EnrollmentSummaryEventStateFilter::ALL => true,
+            Some(filter) if filter == EnrollmentSummaryEventStateFilter::ACTIVE => {
+                event_state != bacnet_types::enums::EventState::NORMAL.to_raw()
             }
+            Some(filter) if filter == EnrollmentSummaryEventStateFilter::OFFNORMAL => {
+                event_state == bacnet_types::enums::EventState::OFFNORMAL.to_raw()
+            }
+            Some(filter) if filter == EnrollmentSummaryEventStateFilter::FAULT => {
+                event_state == bacnet_types::enums::EventState::FAULT.to_raw()
+            }
+            Some(filter) if filter == EnrollmentSummaryEventStateFilter::NORMAL => {
+                event_state == bacnet_types::enums::EventState::NORMAL.to_raw()
+            }
+            Some(_) => false,
+        };
+        if !event_state_matches {
+            continue;
         }
 
         let notification_class = object
             .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
             .ok()
             .and_then(|v| match v {
-                PropertyValue::Unsigned(n) => Some(n as u16),
+                PropertyValue::Unsigned(n) => u32::try_from(n).ok(),
                 _ => None,
             })
             .unwrap_or(0);
@@ -66,7 +82,7 @@ pub fn handle_get_enrollment_summary(
             // Look up priority from the notification class object for the current event state
             let priority = ObjectIdentifier::new(
                 bacnet_types::enums::ObjectType::NOTIFICATION_CLASS,
-                notification_class as u32,
+                notification_class,
             )
             .ok()
             .and_then(|nc_oid| db.get(&nc_oid))
@@ -86,16 +102,12 @@ pub fn handle_get_enrollment_summary(
             }
         }
 
-        if event_state == 0 && request.event_state_filter.is_none() {
-            continue;
-        }
-
         entries.push(EnrollmentSummaryEntry {
             object_identifier: oid,
             event_type: bacnet_types::enums::EventType::CHANGE_OF_STATE,
             event_state: bacnet_types::enums::EventState::from_raw(event_state),
             priority: 0,
-            notification_class,
+            notification_class: Some(notification_class),
         });
     }
 

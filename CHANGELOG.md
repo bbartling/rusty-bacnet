@@ -87,6 +87,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GetEnrollmentSummary now uses its Clause 13.11 service-specific Event State
+  Filter values (`OFFNORMAL`, `FAULT`, `NORMAL`, `ALL`, and `ACTIVE`) instead
+  of interpreting them as `EventState`; omission correctly defaults to `ALL`,
+  and undefined filter values are rejected before encoding or handler
+  evaluation (#358). The request's Notification Class filter and the ACK's
+  optional Notification Class now use the full `u32` BACnet Unsigned model.
+  ACK decoding preserves absent versus explicit zero and re-encoding no longer
+  inserts a zero field that was absent on the wire (#176). This retypes the
+  public Rust request/ACK fields and replaces the Python method's `EventState`
+  parameter with `EnrollmentSummaryEventStateFilter`; Python results expose an
+  omitted Notification Class as `None`.
+
 - Test-only server dispatch truth-chain constants are now compiled and
   re-exported only for tests, removing their three non-test unused-code
   warnings while preserving the PICS services-supported cross-check (#359).

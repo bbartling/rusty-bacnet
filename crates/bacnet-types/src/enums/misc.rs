@@ -96,12 +96,23 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet acknowledgment filter for GetEnrollmentSummary (Clause 13.7.1).
+    /// BACnet acknowledgment filter for GetEnrollmentSummary (Clause 13.11.1.1).
     pub struct AcknowledgmentFilter(u32);
 
     const ALL = 0;
     const ACKED = 1;
     const NOT_ACKED = 2;
+}
+
+bacnet_enum! {
+    /// Event-state filter for GetEnrollmentSummary (Clause 13.11.1.1).
+    pub struct EnrollmentSummaryEventStateFilter(u32);
+
+    const OFFNORMAL = 0;
+    const FAULT = 1;
+    const NORMAL = 2;
+    const ALL = 3;
+    const ACTIVE = 4;
 }
 
 bacnet_enum! {

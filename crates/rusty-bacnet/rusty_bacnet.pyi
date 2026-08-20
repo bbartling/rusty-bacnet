@@ -502,6 +502,23 @@ class EventState:
     def __hash__(self) -> int: ...
 
 
+class EnrollmentSummaryEventStateFilter:
+    """GetEnrollmentSummary event-state filter (Clause 13.11.1.1)."""
+
+    OFFNORMAL: EnrollmentSummaryEventStateFilter
+    FAULT: EnrollmentSummaryEventStateFilter
+    NORMAL: EnrollmentSummaryEventStateFilter
+    ALL: EnrollmentSummaryEventStateFilter
+    ACTIVE: EnrollmentSummaryEventStateFilter
+
+    @staticmethod
+    def from_raw(value: int) -> EnrollmentSummaryEventStateFilter: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
 class EventType:
     """BACnet event type enumeration (Clause 12.12.6)."""
 
@@ -1185,7 +1202,7 @@ class BACnetClient:
         self,
         address: str,
         acknowledgment_filter: int = 0,
-        event_state_filter: Optional[EventState] = None,
+        event_state_filter: Optional[EnrollmentSummaryEventStateFilter] = None,
         event_type_filter: Optional[EventType] = None,
         min_priority: Optional[int] = None,
         max_priority: Optional[int] = None,
@@ -1194,7 +1211,8 @@ class BACnetClient:
         """Get enrollment summary from a remote device.
 
         Returns ``[{"object_id": ObjectIdentifier, "event_type": EventType,
-        "event_state": EventState, "priority": int, "notification_class": int}, ...]``.
+        "event_state": EventState, "priority": int,
+        "notification_class": Optional[int]}, ...]``.
         """
         ...
 

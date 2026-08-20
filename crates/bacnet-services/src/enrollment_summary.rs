@@ -1,8 +1,8 @@
-//! GetEnrollmentSummary service per ASHRAE 135-2020 Clause 13.8.
+//! GetEnrollmentSummary service per ASHRAE 135-2020 Clause 13.11.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
-use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::enums::{EnrollmentSummaryEventStateFilter, EventState, EventType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -44,13 +44,13 @@ pub struct GetEnrollmentSummaryRequest {
     /// [1] enrollmentFilter (optional) — BACnetRecipientProcess.
     pub enrollment_filter: Option<RecipientProcess>,
     /// [2] eventStateFilter (optional).
-    pub event_state_filter: Option<EventState>,
+    pub event_state_filter: Option<EnrollmentSummaryEventStateFilter>,
     /// [3] eventTypeFilter (optional).
     pub event_type_filter: Option<EventType>,
     /// [4] priorityFilter { [0] minPriority, [1] maxPriority } (optional).
     pub priority_filter: Option<PriorityFilter>,
     /// [5] notificationClassFilter (optional).
-    pub notification_class_filter: Option<u16>,
+    pub notification_class_filter: Option<u32>,
 }
 
 impl GetEnrollmentSummaryRequest {
@@ -58,7 +58,8 @@ impl GetEnrollmentSummaryRequest {
     ///
     /// # Panics
     ///
-    /// Panics if an enrollment filter has no device.
+    /// Panics if an enrollment filter has no device or an event-state filter
+    /// contains a value outside the service-defined enumeration.
     pub fn encode(&self, buf: &mut BytesMut) {
         self.try_encode(buf)
             .expect("invalid GetEnrollmentSummary request");
@@ -73,6 +74,13 @@ impl GetEnrollmentSummaryRequest {
         {
             return Err(Error::Encoding(
                 "EnrollmentSummary enrollmentFilter requires a device".into(),
+            ));
+        }
+        if self.event_state_filter.is_some_and(|filter| {
+            filter.to_raw() > EnrollmentSummaryEventStateFilter::ACTIVE.to_raw()
+        }) {
+            return Err(Error::Encoding(
+                "EnrollmentSummary eventStateFilter is an undefined enumeration".into(),
             ));
         }
         // [0] acknowledgmentFilter
@@ -211,9 +219,15 @@ impl GetEnrollmentSummaryRequest {
         let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
         if let Some(content) = opt_data {
             let value = primitives::decode_unsigned(content)?;
-            event_state_filter = Some(EventState::from_raw(u32::try_from(value).map_err(
-                |_| Error::decoding(offset, "EnrollmentSummary eventStateFilter exceeds u32"),
-            )?));
+            let value = u32::try_from(value).map_err(|_| {
+                Error::decoding(offset, "EnrollmentSummary eventStateFilter exceeds u32")
+            })?;
+            if value > EnrollmentSummaryEventStateFilter::ACTIVE.to_raw() {
+                return Err(Error::Reject {
+                    reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+                });
+            }
+            event_state_filter = Some(EnrollmentSummaryEventStateFilter::from_raw(value));
             offset = new_offset;
         }
 
@@ -300,10 +314,10 @@ impl GetEnrollmentSummaryRequest {
             let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 5)?;
             if let Some(content) = opt_data {
                 let value = primitives::decode_unsigned(content)?;
-                notification_class_filter = Some(u16::try_from(value).map_err(|_| {
+                notification_class_filter = Some(u32::try_from(value).map_err(|_| {
                     Error::decoding(
                         offset,
-                        "EnrollmentSummary notificationClassFilter exceeds u16",
+                        "EnrollmentSummary notificationClassFilter exceeds u32",
                     )
                 })?);
                 offset = new_offset;
@@ -338,8 +352,8 @@ pub struct EnrollmentSummaryEntry {
     pub event_type: EventType,
     pub event_state: EventState,
     pub priority: u8,
-    /// Zero when the optional notification-class member is absent.
-    pub notification_class: u16,
+    /// Optional notification-class member.
+    pub notification_class: Option<u32>,
 }
 
 /// GetEnrollmentSummary-ACK: a sequence of summary entries.
@@ -355,7 +369,9 @@ impl GetEnrollmentSummaryAck {
             primitives::encode_app_enumerated(buf, entry.event_type.to_raw());
             primitives::encode_app_enumerated(buf, entry.event_state.to_raw());
             primitives::encode_app_unsigned(buf, entry.priority as u64);
-            primitives::encode_app_unsigned(buf, entry.notification_class as u64);
+            if let Some(notification_class) = entry.notification_class {
+                primitives::encode_app_unsigned(buf, notification_class as u64);
+            }
         }
     }
 
@@ -452,7 +468,7 @@ impl GetEnrollmentSummaryAck {
             offset = end;
 
             // notificationClass (app unsigned, optional)
-            let mut notification_class = 0;
+            let mut notification_class = None;
             if offset < data.len() {
                 let (tag, pos) = tags::decode_tag(data, offset)?;
                 if is_application_tag(&tag, data[offset], tags::app_tag::UNSIGNED) {
@@ -464,9 +480,9 @@ impl GetEnrollmentSummaryAck {
                         ));
                     }
                     let value = primitives::decode_unsigned(&data[pos..end])?;
-                    notification_class = u16::try_from(value).map_err(|_| {
-                        Error::decoding(pos, "EnrollmentSummaryAck notificationClass exceeds u16")
-                    })?;
+                    notification_class = Some(u32::try_from(value).map_err(|_| {
+                        Error::decoding(pos, "EnrollmentSummaryAck notificationClass exceeds u32")
+                    })?);
                     offset = end;
                 }
             }
@@ -498,7 +514,7 @@ mod tests {
         let req = GetEnrollmentSummaryRequest {
             acknowledgment_filter: 0, // all
             enrollment_filter: None,
-            event_state_filter: Some(EventState::OFFNORMAL),
+            event_state_filter: Some(EnrollmentSummaryEventStateFilter::OFFNORMAL),
             event_type_filter: None,
             priority_filter: Some(PriorityFilter {
                 min_priority: 1,
@@ -537,14 +553,14 @@ mod tests {
                     event_type: EventType::OUT_OF_RANGE,
                     event_state: EventState::HIGH_LIMIT,
                     priority: 3,
-                    notification_class: 10,
+                    notification_class: Some(10),
                 },
                 EnrollmentSummaryEntry {
                     object_identifier: ObjectIdentifier::new(ObjectType::BINARY_INPUT, 5).unwrap(),
                     event_type: EventType::CHANGE_OF_STATE,
                     event_state: EventState::NORMAL,
                     priority: 7,
-                    notification_class: 20,
+                    notification_class: Some(20),
                 },
             ],
         };
@@ -577,7 +593,7 @@ mod tests {
         let req = GetEnrollmentSummaryRequest {
             acknowledgment_filter: 0,
             enrollment_filter: None,
-            event_state_filter: Some(EventState::FAULT),
+            event_state_filter: Some(EnrollmentSummaryEventStateFilter::FAULT),
             event_type_filter: None,
             priority_filter: None,
             notification_class_filter: None,
@@ -600,7 +616,7 @@ mod tests {
                 event_type: EventType::OUT_OF_RANGE,
                 event_state: EventState::HIGH_LIMIT,
                 priority: 3,
-                notification_class: 10,
+                notification_class: Some(10),
             }],
         };
         let mut buf = BytesMut::new();
@@ -616,7 +632,7 @@ mod tests {
                 event_type: EventType::OUT_OF_RANGE,
                 event_state: EventState::HIGH_LIMIT,
                 priority: 3,
-                notification_class: 10,
+                notification_class: Some(10),
             }],
         };
         let mut buf = BytesMut::new();

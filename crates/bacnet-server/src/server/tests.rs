@@ -424,6 +424,24 @@ fn seg_key_distinguishes_routed_sources_behind_same_router() {
     assert_ne!(key_a, key_b);
 }
 
+#[test]
+fn service_reject_error_preserves_reason_on_wire_response() {
+    let response = BACnetServer::<BipTransport>::error_apdu_from_error(
+        0x31,
+        ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
+        &Error::Reject {
+            reason: RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+        },
+    );
+    assert_eq!(
+        response,
+        Apdu::Reject(RejectPdu {
+            invoke_id: 0x31,
+            reject_reason: RejectReason::UNDEFINED_ENUMERATION,
+        })
+    );
+}
+
 #[tokio::test]
 async fn reply_tx_response_preserves_routed_npdu_destination() {
     use bacnet_encoding::apdu::decode_apdu;
