@@ -203,6 +203,12 @@ impl MasterNode {
         match frame.frame_type {
             FrameType::Token => {
                 if frame.destination == self.config.this_station {
+                    // A reply decision owns the node until its bound response
+                    // or ReplyPostponed is sent. Out-of-turn traffic must not
+                    // replace that transaction's state or requester.
+                    if self.pending_reply_source.is_some() {
+                        return None;
+                    }
                     debug!(src = frame.source, "received token");
                     self.sole_master = false;
                     self.state = MasterState::UseToken;
@@ -272,7 +278,7 @@ impl MasterNode {
             }
             FrameType::BACnetDataExpectingReply => {
                 if frame.destination == self.config.this_station {
-                    if self.state == MasterState::AnswerDataRequest {
+                    if self.pending_reply_source.is_some() {
                         return None;
                     }
                     self.state = MasterState::AnswerDataRequest;
@@ -317,10 +323,7 @@ impl MasterNode {
 
     /// Complete AnswerDataRequest with application data or ReplyPostponed.
     pub(crate) fn finish_data_request(&mut self, reply_data: Option<Bytes>) -> Option<MstpFrame> {
-        if self.state != MasterState::AnswerDataRequest {
-            return None;
-        }
-        let destination = self.pending_reply_source.take().unwrap_or(BROADCAST_MAC);
+        let destination = self.pending_reply_source.take()?;
         self.reply_rx = None;
         self.state = MasterState::Idle;
         Some(match reply_data {

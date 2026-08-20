@@ -1,10 +1,10 @@
-//! Deterministic BACnet/IPv6 VMAC and scoped-endpoint mappings.
+//! BACnet/IPv6 VMAC generation and scoped-endpoint mappings.
 
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, Hasher};
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
+
+use bacnet_types::error::Error;
 
 use super::Bip6Vmac;
 
@@ -12,29 +12,19 @@ use super::Bip6Vmac;
 pub(super) const MAX_VMAC_TABLE_ENTRIES: usize = 4096;
 
 pub(super) fn derive_vmac_from_device_instance(device_instance: u32) -> Bip6Vmac {
-    let bytes = (device_instance & 0x3F_FFFF).to_be_bytes();
+    debug_assert!(device_instance <= 0x3F_FFFF);
+    let bytes = device_instance.to_be_bytes();
     [bytes[1], bytes[2], bytes[3]]
 }
 
 /// Generate a Random Device Instance VMAC for collision resolution (Clause H.7.2).
-pub fn generate_random_vmac() -> Bip6Vmac {
-    let bytes = RandomState::new().build_hasher().finish().to_ne_bytes();
-    [(bytes[0] & 0x3F) | 0x40, bytes[1], bytes[2]]
-}
-
-pub(super) fn derive_vmac_from_addr(addr: &SocketAddrV6) -> Bip6Vmac {
+pub fn generate_random_vmac() -> Result<Bip6Vmac, Error> {
     let mut vmac = [0u8; 3];
-    for (index, byte) in addr
-        .ip()
-        .octets()
-        .iter()
-        .chain(addr.port().to_be_bytes().iter())
-        .enumerate()
-    {
-        vmac[index % 3] ^= byte;
-    }
+    getrandom::fill(&mut vmac).map_err(|error| {
+        Error::Encoding(format!("failed to generate Random Instance VMAC: {error}"))
+    })?;
     vmac[0] = (vmac[0] & 0x3F) | 0x40;
-    vmac
+    Ok(vmac)
 }
 
 /// VMAC-to-address mapping table per Clause U.5.

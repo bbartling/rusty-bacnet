@@ -8,6 +8,47 @@ use socket2::Socket;
 use tokio::io::Interest;
 use tokio::net::UdpSocket;
 
+macro_rules! supported_unix_item {
+    ($item:item) => {
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "l4re",
+            target_os = "android",
+            target_os = "emscripten",
+            target_vendor = "apple",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "nto",
+        ))]
+        $item
+    };
+}
+
+macro_rules! unsupported_udp_metadata_item {
+    ($item:item) => {
+        #[cfg(not(any(
+            windows,
+            target_os = "linux",
+            target_os = "l4re",
+            target_os = "android",
+            target_os = "emscripten",
+            target_vendor = "apple",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "nto",
+        )))]
+        $item
+    };
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum IpVersion {
     V4,
@@ -49,7 +90,7 @@ impl DestinationReceiver {
             .await
     }
 
-    #[cfg(unix)]
+    supported_unix_item! {
     fn try_recv_from(
         &self,
         udp_socket: &UdpSocket,
@@ -89,6 +130,7 @@ impl DestinationReceiver {
             destination,
             os_group_delivery: None,
         })
+    }
     }
 
     #[cfg(windows)]
@@ -134,7 +176,7 @@ impl DestinationReceiver {
         if result == SOCKET_ERROR {
             return Err(classify_recv_error(
                 unsafe { WSAGetLastError() },
-                WSAEMSGSIZE,
+                &[WSAEMSGSIZE, WSAECONNRESET, WSAENETRESET],
             ));
         }
         if message.dwFlags & (MSG_TRUNC | MSG_CTRUNC) != 0 {
@@ -160,7 +202,7 @@ impl DestinationReceiver {
         })
     }
 
-    #[cfg(not(any(unix, windows)))]
+    unsupported_udp_metadata_item! {
     fn try_recv_from(
         &self,
         _udp_socket: &UdpSocket,
@@ -171,6 +213,7 @@ impl DestinationReceiver {
             "UDP destination metadata is unsupported on this platform",
         ))
     }
+    }
 }
 
 fn invalid_metadata(message: &'static str) -> io::Error {
@@ -178,15 +221,15 @@ fn invalid_metadata(message: &'static str) -> io::Error {
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-fn classify_recv_error(code: i32, message_too_large_code: i32) -> io::Error {
-    if code == message_too_large_code {
-        invalid_metadata("truncated UDP payload")
+fn classify_recv_error(code: i32, droppable_codes: &[i32]) -> io::Error {
+    if droppable_codes.contains(&code) {
+        invalid_metadata("droppable UDP receive error")
     } else {
         io::Error::from_raw_os_error(code)
     }
 }
 
-#[cfg(unix)]
+supported_unix_item! {
 fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<()> {
     use std::mem::size_of;
     use std::os::fd::AsRawFd;
@@ -211,6 +254,7 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
         Err(io::Error::last_os_error())
     }
 }
+}
 
 #[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
 fn ipv4_packet_info_option() -> io::Result<(libc::c_int, libc::c_int)> {
@@ -229,11 +273,13 @@ fn ipv4_packet_info_option() -> io::Result<(libc::c_int, libc::c_int)> {
         target_os = "openbsd"
     ))
 ))]
+supported_unix_item! {
 unsafe fn unix_ipv4_destination_cmsg(_header: &libc::cmsghdr) -> io::Result<Option<Ipv4Addr>> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "IPv4 destination metadata is unsupported on this platform",
     ))
+}
 }
 
 #[cfg(all(
@@ -269,7 +315,7 @@ fn ipv4_packet_info_option() -> io::Result<(libc::c_int, libc::c_int)> {
     ))
 }
 
-#[cfg(unix)]
+supported_unix_item! {
 unsafe fn unix_socket_addr(storage: &libc::sockaddr_storage) -> Option<SocketAddr> {
     match storage.ss_family as libc::c_int {
         libc::AF_INET => {
@@ -291,8 +337,9 @@ unsafe fn unix_socket_addr(storage: &libc::sockaddr_storage) -> Option<SocketAdd
         _ => None,
     }
 }
+}
 
-#[cfg(unix)]
+supported_unix_item! {
 unsafe fn unix_destination(message: &libc::msghdr, version: IpVersion) -> io::Result<IpAddr> {
     let mut destination = None;
     let mut header = unsafe { libc::CMSG_FIRSTHDR(message) };
@@ -308,8 +355,9 @@ unsafe fn unix_destination(message: &libc::msghdr, version: IpVersion) -> io::Re
     }
     destination.ok_or_else(|| invalid_metadata("missing UDP destination metadata"))
 }
+}
 
-#[cfg(unix)]
+supported_unix_item! {
 unsafe fn unix_destination_cmsg(
     header: &libc::cmsghdr,
     version: IpVersion,
@@ -331,11 +379,13 @@ unsafe fn unix_destination_cmsg(
         _ => Ok(None),
     }
 }
+}
 
-#[cfg(unix)]
+supported_unix_item! {
 fn unix_cmsg_has_payload<T>(header: &libc::cmsghdr) -> bool {
     let required = unsafe { libc::CMSG_LEN(std::mem::size_of::<T>() as _) } as usize;
     header.cmsg_len as usize >= required
+}
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -395,12 +445,13 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
     }
 }
 
-#[cfg(not(any(unix, windows)))]
+unsupported_udp_metadata_item! {
 fn configure_packet_info(_udp_socket: &Socket, _version: IpVersion) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "UDP destination metadata is unsupported on this platform",
     ))
+}
 }
 
 #[cfg(windows)]
@@ -585,13 +636,21 @@ mod tests {
     }
 
     #[test]
-    fn oversized_datagram_error_is_droppable_invalid_data() {
+    fn windows_recoverable_receive_errors_are_droppable_invalid_data() {
         assert_eq!(
-            classify_recv_error(10040, 10040).kind(),
+            classify_recv_error(10040, &[10040, 10054, 10052]).kind(),
             io::ErrorKind::InvalidData
         );
         assert_eq!(
-            classify_recv_error(12345, 10040).raw_os_error(),
+            classify_recv_error(10054, &[10040, 10054, 10052]).kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            classify_recv_error(10052, &[10040, 10054, 10052]).kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            classify_recv_error(12345, &[10040, 10054, 10052]).raw_os_error(),
             Some(12345)
         );
     }

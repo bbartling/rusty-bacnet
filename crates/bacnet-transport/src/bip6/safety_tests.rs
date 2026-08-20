@@ -4,7 +4,7 @@ use std::time::Duration;
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 
-use super::ingress::forwarded_npdu_is_trusted;
+use super::ingress::{forwarded_npdu_is_trusted, forwarded_source_is_usable};
 use super::*;
 use crate::port::TransportPort;
 
@@ -59,6 +59,24 @@ fn forwarded_npdu_requires_multicast_or_configured_bbmd() {
         false,
         Some((link_local, 47_808)),
     ));
+}
+
+#[test]
+fn forwarded_npdu_origin_must_be_a_usable_unicast_endpoint() {
+    assert!(forwarded_source_is_usable(SocketAddrV6::new(
+        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9),
+        47_808,
+        0,
+        0,
+    )));
+    for source in [
+        SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 47_808, 0, 0),
+        SocketAddrV6::new(BACNET_IPV6_MULTICAST_SITE_LOCAL, 47_808, 0, 0),
+        SocketAddrV6::new(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1), 47_808, 0, 4),
+        SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0),
+    ] {
+        assert!(!forwarded_source_is_usable(source), "{source}");
+    }
 }
 
 #[tokio::test]

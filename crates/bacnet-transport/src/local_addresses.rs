@@ -2,7 +2,23 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "l4re",
+    target_os = "android",
+    target_os = "emscripten",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "haiku",
+    target_os = "nto",
+    target_os = "hurd",
+    target_os = "fuchsia",
+))]
 #[allow(unsafe_code)]
 fn collect() -> (Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
     struct IfAddrsGuard(*mut libc::ifaddrs);
@@ -50,7 +66,23 @@ fn collect() -> (Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
     (ipv4, ipv6)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "l4re",
+    target_os = "android",
+    target_os = "emscripten",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "haiku",
+    target_os = "nto",
+    target_os = "hurd",
+    target_os = "fuchsia",
+)))]
 fn collect() -> (Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
     (Vec::new(), Vec::new())
 }
@@ -66,11 +98,25 @@ pub(crate) fn ipv6() -> Vec<Ipv6Addr> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn local_addresses_include_loopback_on_unix() {
-        #[cfg(unix)]
-        {
-            assert!(super::ipv4().contains(&std::net::Ipv4Addr::LOCALHOST));
-            assert!(super::ipv6().contains(&std::net::Ipv6Addr::LOCALHOST));
-        }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "l4re",
+        target_os = "android",
+        target_os = "emscripten",
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "solaris",
+        target_os = "illumos",
+        target_os = "haiku",
+        target_os = "nto",
+        target_os = "hurd",
+        target_os = "fuchsia",
+    ))]
+    fn local_addresses_include_loopback_on_supported_targets() {
+        assert!(super::ipv4().contains(&std::net::Ipv4Addr::LOCALHOST));
+        assert!(super::ipv6().contains(&std::net::Ipv6Addr::LOCALHOST));
     }
 }

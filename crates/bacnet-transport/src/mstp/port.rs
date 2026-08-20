@@ -81,6 +81,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
             let mut encode_buf = BytesMut::with_capacity(1024);
             let mut pending_reply_rx: Option<oneshot::Receiver<Bytes>> = None;
+            let mut pending_reply_deadline: Option<tokio::time::Instant> = None;
 
             loop {
                 tokio::select! {
@@ -95,6 +96,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             .await
                     }, if pending_reply_rx.is_some() => {
                         pending_reply_rx = None;
+                        pending_reply_deadline = None;
                         let mut node_guard = node.lock().await;
                         let response = node_guard.finish_data_request(reply.ok());
                         drop(node_guard);
@@ -177,10 +179,20 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     let mut node_guard = node.lock().await;
                                     let response =
                                         node_guard.handle_received_frame(&frame, &npdu_tx);
+                                    let mut started_reply = false;
                                     if pending_reply_rx.is_none()
                                         && node_guard.state == MasterState::AnswerDataRequest
                                     {
                                         pending_reply_rx = node_guard.reply_rx.take();
+                                        started_reply = pending_reply_rx.is_some();
+                                    }
+                                    if started_reply {
+                                        pending_reply_deadline = Some(
+                                            last_byte_time
+                                                + tokio::time::Duration::from_millis(
+                                                    reply_decision_delay_ms,
+                                                ),
+                                        );
                                     }
                                     let mut pending_writes: Vec<Vec<u8>> = Vec::new();
                                     if let Some(response) = response {
@@ -239,14 +251,6 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                         MasterState::UseToken
                                         | MasterState::DoneWithToken => T_USAGE_TIMEOUT_MS,
                                     };
-                                    let reply_deadline = (node_guard.state
-                                        == MasterState::AnswerDataRequest)
-                                        .then(|| {
-                                            last_byte_time
-                                                + tokio::time::Duration::from_millis(
-                                                    reply_decision_delay_ms,
-                                                )
-                                        });
                                     drop(node_guard);
 
                                     // T_turnaround before transmitting
@@ -264,7 +268,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     }
 
                                     sleep.as_mut().reset(
-                                        reply_deadline.unwrap_or_else(|| {
+                                        pending_reply_deadline.unwrap_or_else(|| {
                                             tokio::time::Instant::now()
                                                 + tokio::time::Duration::from_millis(timeout_ms)
                                         }),
@@ -284,6 +288,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                     () = &mut sleep => {
                         let mut node_guard = node.lock().await;
                         let mut pending_writes: Vec<Vec<u8>> = Vec::new();
+                        let was_answering_data_request =
+                            node_guard.pending_reply_source.is_some();
                         let timeout_ms = match node_guard.state {
                             MasterState::Idle => {
                                 node_guard.state = MasterState::NoToken;
@@ -379,6 +385,9 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 T_USAGE_TIMEOUT_MS
                             }
                         };
+                        if was_answering_data_request {
+                            pending_reply_deadline = None;
+                        }
                         drop(node_guard);
 
                         // T_turnaround before transmitting

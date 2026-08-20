@@ -5,7 +5,7 @@ use bytes::BytesMut;
 use tokio::net::UdpSocket;
 
 use super::ingress::original_destination_matches;
-use super::vmac_table::{derive_vmac_from_addr, derive_vmac_from_device_instance};
+use super::vmac_table::derive_vmac_from_device_instance;
 use super::*;
 use crate::port::TransportPort;
 
@@ -505,6 +505,20 @@ fn fixed_length_bvlc6_frames_reject_surplus_bytes() {
     let ar_len = ar.len() as u16;
     ar[2..4].copy_from_slice(&ar_len.to_be_bytes());
     assert!(decode_bvlc6(&ar).is_err());
+
+    for (function, payload) in [
+        (Bvlc6Function::Result, vec![0; 2]),
+        (Bvlc6Function::RegisterForeignDevice, vec![0; 2]),
+        (Bvlc6Function::DeleteForeignDeviceEntry, vec![0; 18]),
+    ] {
+        let mut frame = BytesMut::new();
+        encode_bvlc6(&mut frame, function, &[1, 2, 3], &payload).unwrap();
+        assert!(decode_bvlc6(&frame).is_ok());
+        frame.extend_from_slice(&[0]);
+        let length = frame.len() as u16;
+        frame[2..4].copy_from_slice(&length.to_be_bytes());
+        assert!(decode_bvlc6(&frame).is_err(), "{function:?}");
+    }
 }
 
 #[test]
@@ -515,12 +529,13 @@ fn bvlc6_declared_length_must_match_datagram() {
 }
 
 #[test]
-fn vmac_from_device_instance_masks_to_22_bits() {
+fn vmac_from_valid_device_instance_uses_all_22_bits() {
     let vmac = derive_vmac_from_device_instance(0x123456);
     assert_eq!(vmac, [0x12, 0x34, 0x56]);
-    // Value > 22 bits — upper bits should be masked off
-    let vmac = derive_vmac_from_device_instance(0xFFFFFFFF);
-    assert_eq!(vmac, [0x3F, 0xFF, 0xFF]);
+    assert_eq!(
+        derive_vmac_from_device_instance(0x3F_FFFF),
+        [0x3F, 0xFF, 0xFF]
+    );
 }
 
 // --- ForwardedNpdu tests ---
@@ -543,17 +558,9 @@ fn decode_forwarded_npdu_extracts_npdu() {
 #[test]
 fn decode_forwarded_npdu_rejects_short_payload() {
     assert!(decode_forwarded_npdu_payload(&[0x01; 17]).is_err());
+    assert!(decode_forwarded_npdu_payload(&[0x01; 18]).is_err());
+    assert!(decode_forwarded_npdu_payload(&[0x01; 19]).is_err());
     assert!(decode_forwarded_npdu_payload(&[]).is_err());
-}
-
-#[test]
-fn decode_forwarded_npdu_vmac_and_addr_only_is_ok() {
-    // Exactly 18 bytes = B/IPv6 address with empty NPDU. The originating
-    // VMAC is carried by the BVLC6 header, not duplicated in the payload.
-    let mut payload = Ipv6Addr::LOCALHOST.octets().to_vec(); // 16 bytes
-    payload.extend_from_slice(&47808u16.to_be_bytes()); // 2 bytes
-    let (_addr, npdu) = decode_forwarded_npdu_payload(&payload).unwrap();
-    assert!(npdu.is_empty());
 }
 
 #[test]
@@ -643,21 +650,41 @@ async fn bip6_forwarded_npdu_delivered() {
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert_eq!(transport.vmac_table.lookup(&malformed_vmac).await, None);
 
-    let link_local_vmac = [0x41, 0x00, 0x02];
-    let mut link_local_payload = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1).octets().to_vec();
-    link_local_payload.extend_from_slice(&origin_addr.port().to_be_bytes());
-    link_local_payload.extend_from_slice(&test_npdu);
-    let mut link_local = BytesMut::new();
-    encode_bvlc6(
-        &mut link_local,
-        Bvlc6Function::ForwardedNpdu,
-        &link_local_vmac,
-        &link_local_payload,
-    )
-    .unwrap();
-    sender.send_to(&link_local, dest).await.unwrap();
+    let invalid_origins = [
+        (
+            [0x41, 0x00, 0x02],
+            SocketAddrV6::new(
+                Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+                origin_addr.port(),
+                0,
+                4,
+            ),
+        ),
+        (
+            [0x41, 0x00, 0x03],
+            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, origin_addr.port(), 0, 0),
+        ),
+        (
+            [0x41, 0x00, 0x04],
+            SocketAddrV6::new(BACNET_IPV6_MULTICAST_SITE_LOCAL, origin_addr.port(), 0, 0),
+        ),
+        (
+            [0x41, 0x00, 0x05],
+            SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0),
+        ),
+    ];
+    for (vmac, invalid_origin) in invalid_origins {
+        let mut payload = invalid_origin.ip().octets().to_vec();
+        payload.extend_from_slice(&invalid_origin.port().to_be_bytes());
+        payload.extend_from_slice(&test_npdu);
+        let mut frame = BytesMut::new();
+        encode_bvlc6(&mut frame, Bvlc6Function::ForwardedNpdu, &vmac, &payload).unwrap();
+        sender.send_to(&frame, dest).await.unwrap();
+    }
     tokio::time::sleep(Duration::from_millis(25)).await;
-    assert_eq!(transport.vmac_table.lookup(&link_local_vmac).await, None);
+    for (vmac, _) in invalid_origins {
+        assert_eq!(transport.vmac_table.lookup(&vmac).await, None);
+    }
 
     sender.send_to(&buf, dest).await.unwrap();
 
@@ -769,30 +796,4 @@ fn bvlc6_function_codes_match_types_crate() {
         Bvlc6Function::from_byte(0x0B),
         Bvlc6Function::Unknown(0x0B)
     ));
-}
-
-#[test]
-fn generate_random_vmac_produces_3_bytes() {
-    let vmac = generate_random_vmac();
-    assert_eq!(vmac.len(), 3);
-    assert_eq!(vmac[0] & 0xC0, 0x40);
-}
-
-#[test]
-fn address_derived_vmac_uses_random_instance_range() {
-    let address = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 47_808, 0, 0);
-    assert_eq!(derive_vmac_from_addr(&address)[0] & 0xC0, 0x40);
-}
-
-#[test]
-fn generate_random_vmac_is_nondeterministic() {
-    // Generate several VMACs — at least two should differ.
-    let vmacs: Vec<Bip6Vmac> = (0..10).map(|_| generate_random_vmac()).collect();
-    let all_same = vmacs.windows(2).all(|w| w[0] == w[1]);
-    assert!(!all_same, "10 random VMACs should not all be identical");
-}
-
-#[test]
-fn max_vmac_retries_constant() {
-    const { assert!(MAX_VMAC_RETRIES >= 1, "must allow at least one retry") };
 }

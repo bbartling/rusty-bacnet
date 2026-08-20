@@ -97,18 +97,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unavailable. Confirmed multicast and broadcast deliveries remain silent as
   required by the responding TSM. B/IP and B/IP6 now obtain the actual UDP
   destination from packet metadata and fail closed on missing, truncated, or
-  mismatched metadata while preserving wildcard binds; oversized Windows
-  datagrams are dropped without stopping reception. B/IP6 unicast data and
+  mismatched metadata while preserving wildcard binds. B/IP management
+  messages require actual unicast delivery, and oversized datagrams plus
+  transient Windows UDP reset errors are dropped without stopping reception.
+  B/IP6 unicast data and
   address-resolution acknowledgements also require the local Destination-VMAC
   before learning the sender. Its 4,096-entry VMAC table preserves a unique
   learned link-local scope, fails closed when scopes are ambiguous, and
   deterministically replaces stale endpoint mappings. Device instance zero's
-  VMAC remains valid. Annex U fixed-size messages reject surplus bytes;
+  VMAC remains valid; out-of-range instances fail startup. Unconfigured nodes
+  draw Random Device Instance VMACs from OS randomness, probe the configured
+  multicast scope, and fail startup rather than use a configured or random VMAC
+  with a detected collision. The public `generate_random_vmac` helper is
+  consequently fallible. Annex U fixed-size messages reject surplus bytes;
   Address-Resolution and Virtual-Address-Resolution use their specified
   multicast and unicast paths. Forwarded-NPDU now uses the standard single-VMAC
   wire layout, accepts only multicast delivery or the configured non-link-local
-  foreign-device BBMD, exposes the original 18-byte B/IPv6 source, and learns a validated,
-  non-link-local origin for follow-up unicast. Outbound unicast fails explicitly
+  foreign-device BBMD, exposes the original 18-byte B/IPv6 source, and learns
+  only a validated, nonzero-port, non-multicast, non-unspecified, non-link-local
+  origin for follow-up unicast. Outbound unicast fails explicitly
   until the destination VMAC has been learned instead of guessing from an IP
   endpoint; automatic outbound VMAC discovery remains a follow-up. To retain
   group-delivery provenance after frame decoding, the public `ReceivedNpdu` and
@@ -117,8 +124,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new fields. The public Forwarded-NPDU payload decoder now returns the
   original B/IPv6 address and NPDU because the original VMAC is already in the
   BVLC6 header. Windows builds gain a direct `windows-sys` dependency for
-  `WSARecvMsg` destination metadata; unsupported OS targets reject B/IP startup
-  when safe destination metadata cannot be obtained.
+  `WSARecvMsg` destination metadata. Interface enumeration is compiled only on
+  targets whose libc exposes `getifaddrs`; unsupported OS targets still compile
+  and reject B/IP startup when safe destination metadata cannot be obtained.
 
 - Confirmed-Request `max-segments-accepted` no longer maps every non-rung
   client capacity to `B'111'` ("greater than 64"). Capacities 0 and 1 now fail

@@ -17,7 +17,7 @@ pub const BVLC6_HEADER_LENGTH: usize = 7;
 /// BVLC-IPv6 unicast header length: type(1) + function(1) + length(2) + source-vmac(3) + dest-vmac(3).
 pub const BVLC6_UNICAST_HEADER_LENGTH: usize = 10;
 
-/// Maximum number of VMAC collision resolution retries before giving up (Annex U.5).
+/// Maximum number of random VMAC regenerations before startup fails (Annex U.5/H.7.2).
 pub const MAX_VMAC_RETRIES: u32 = 3;
 
 /// BVLC-IPv6 function codes per Annex U.
@@ -120,3 +120,5 @@ pub use vmac_table::generate_random_vmac;
 mod safety_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vmac_generation_tests;

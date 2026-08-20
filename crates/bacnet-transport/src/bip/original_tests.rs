@@ -62,6 +62,56 @@ fn original_function_must_match_actual_ipv4_destination() {
         true,
         Some(true),
     ));
+
+    for function in [
+        BvlcFunction::BVLC_RESULT,
+        BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+        BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+        BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
+        BvlcFunction::REGISTER_FOREIGN_DEVICE,
+        BvlcFunction::READ_FOREIGN_DEVICE_TABLE,
+        BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
+        BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+        BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
+    ] {
+        assert!(original_destination_matches(
+            function,
+            local.into(),
+            local,
+            broadcast,
+            &[local],
+            false,
+            None,
+        ));
+        assert!(!original_destination_matches(
+            function,
+            broadcast.into(),
+            local,
+            broadcast,
+            &[local],
+            false,
+            Some(true),
+        ));
+    }
+
+    assert!(original_destination_matches(
+        BvlcFunction::FORWARDED_NPDU,
+        local.into(),
+        local,
+        broadcast,
+        &[local],
+        false,
+        None,
+    ));
+    assert!(original_destination_matches(
+        BvlcFunction::FORWARDED_NPDU,
+        broadcast.into(),
+        local,
+        broadcast,
+        &[local],
+        false,
+        Some(true),
+    ));
 }
 
 async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {

@@ -1,6 +1,6 @@
 //! BACnet/IPv6 ingress provenance checks.
 
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 
 use super::{
     Bip6Vmac, Bvlc6Function, BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
@@ -14,6 +14,16 @@ fn is_bacnet_ipv6_multicast(destination: Ipv6Addr) -> bool {
             | BACNET_IPV6_MULTICAST_SITE_LOCAL
             | BACNET_IPV6_MULTICAST_ORG_LOCAL
     )
+}
+
+pub(super) fn forwarded_source_is_usable(source: SocketAddrV6) -> bool {
+    let ip = source.ip();
+    source.port() != 0
+        && !ip.is_unspecified()
+        && !ip.is_multicast()
+        // A Forwarded-NPDU carries no IPv6 scope ID. Synthesizing the BBMD's
+        // ingress scope for a link-local origin can target the wrong link.
+        && !ip.is_unicast_link_local()
 }
 
 pub(super) fn is_local_unicast_delivery(

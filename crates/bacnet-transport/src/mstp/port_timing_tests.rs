@@ -71,3 +71,37 @@ async fn reply_postponed_starts_before_reply_delay_limit() {
     assert!(started.elapsed() < tokio::time::Duration::from_millis(T_REPLY_DELAY_MS));
     transport.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn second_data_request_does_not_extend_first_reply_deadline() {
+    let (serial_transport, serial_peer) = LoopbackSerial::pair();
+    let mut transport = MstpTransport::new(serial_transport, timing_config());
+    let mut npdu_rx = transport.start().await.unwrap();
+    let mut first = BytesMut::new();
+    encode_frame(&mut first, &expecting_reply_frame()).unwrap();
+    let started = tokio::time::Instant::now();
+    serial_peer.write(&first).await.unwrap();
+
+    let received = npdu_rx.recv().await.unwrap();
+    let _reply_tx = received.reply_tx.unwrap();
+    tokio::time::advance(tokio::time::Duration::from_millis(100)).await;
+
+    let mut second = BytesMut::new();
+    let second_request = MstpFrame {
+        source: 8,
+        data: Bytes::from_static(&[0x01, 0x04, 0x20]),
+        ..expecting_reply_frame()
+    };
+    encode_frame(&mut second, &second_request).unwrap();
+    serial_peer.write(&second).await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(npdu_rx.try_recv().is_err());
+
+    let mut response_buf = [0u8; 64];
+    let response_len = serial_peer.read(&mut response_buf).await.unwrap();
+    let (response, _) = decode_frame(&response_buf[..response_len]).unwrap();
+    assert_eq!(response.frame_type, FrameType::ReplyPostponed);
+    assert_eq!(response.destination, 7);
+    assert!(started.elapsed() < tokio::time::Duration::from_millis(T_REPLY_DELAY_MS));
+    transport.stop().await.unwrap();
+}

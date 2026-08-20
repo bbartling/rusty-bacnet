@@ -16,11 +16,10 @@ use crate::udp_metadata::{DestinationReceiver, IpVersion};
 
 use super::frame::destination_vmac_matches;
 use super::ingress::{
-    forwarded_npdu_is_trusted, is_local_unicast_delivery, original_destination_matches,
+    forwarded_npdu_is_trusted, forwarded_source_is_usable, is_local_unicast_delivery,
+    original_destination_matches,
 };
-use super::vmac_table::{
-    derive_vmac_from_addr, derive_vmac_from_device_instance, generate_random_vmac, VmacTable,
-};
+use super::vmac_table::{derive_vmac_from_device_instance, generate_random_vmac, VmacTable};
 use super::{
     decode_bvlc6, decode_forwarded_npdu_payload, encode_address_resolution,
     encode_address_resolution_ack, encode_bvlc6, encode_bvlc6_original_broadcast,
@@ -128,8 +127,8 @@ impl Bip6Transport {
     /// - `interface`: Local IPv6 address to bind (use `::` for all interfaces)
     /// - `port`: UDP port (default 47808 / 0xBAC0)
     /// - `device_instance`: If `Some(id)`, derive the 3-byte VMAC from the
-    ///   lower 22 bits of the device instance (per Clause H.7.2). Otherwise the
-    ///   VMAC is derived from the local IPv6 address + port.
+    ///   valid 22-bit device instance (per Clause H.7.2). Otherwise an
+    ///   OS-random Random Device Instance VMAC is generated at startup.
     pub fn new(interface: Ipv6Addr, port: u16, device_instance: Option<u32>) -> Self {
         Self {
             interface,
@@ -268,6 +267,11 @@ impl TransportPort for Bip6Transport {
                 "BIP6 transport already started",
             )));
         }
+        if self.device_instance.is_some_and(|id| id > 0x3F_FFFF) {
+            return Err(Error::Encoding(
+                "BACnet Device instance must be in 0..=4194303".to_string(),
+            ));
+        }
 
         let wildcard_bind = self.interface.is_unspecified();
         let socket2_sock = socket2::Socket::new(
@@ -325,8 +329,7 @@ impl TransportPort for Bip6Transport {
         self.source_vmac = if let Some(id) = self.device_instance {
             derive_vmac_from_device_instance(id)
         } else {
-            let local_v6 = SocketAddrV6::new(local_ip, local_port, 0, 0);
-            derive_vmac_from_addr(&local_v6)
+            generate_random_vmac()?
         };
 
         let if_index = if local_ip.is_loopback() {
@@ -352,8 +355,12 @@ impl TransportPort for Bip6Transport {
 
         // VMAC collision detection and resolution
         {
-            let multicast_dest =
-                SocketAddrV6::new(BACNET_IPV6_MULTICAST_LINK_LOCAL, self.port, 0, if_index);
+            let multicast_dest = SocketAddrV6::new(
+                self.broadcast_scope.multicast_addr(),
+                self.port,
+                0,
+                if_index,
+            );
             let mut check_buf = vec![0u8; 64];
 
             for attempt in 0..=MAX_VMAC_RETRIES {
@@ -405,9 +412,16 @@ impl TransportPort for Bip6Transport {
                     break;
                 }
 
+                if self.device_instance.is_some() {
+                    return Err(Error::Transport(std::io::Error::new(
+                        std::io::ErrorKind::AddrInUse,
+                        "configured BACnet Device instance VMAC is already in use",
+                    )));
+                }
+
                 if attempt < MAX_VMAC_RETRIES {
                     let old_vmac = self.source_vmac;
-                    self.source_vmac = generate_random_vmac();
+                    self.source_vmac = generate_random_vmac()?;
                     warn!(
                         old_vmac = ?old_vmac,
                         new_vmac = ?self.source_vmac,
@@ -416,11 +430,12 @@ impl TransportPort for Bip6Transport {
                         "BIP6 VMAC collision detected, re-deriving new VMAC"
                     );
                 } else {
-                    warn!(
-                        vmac = ?self.source_vmac,
-                        "BIP6 VMAC collision persists after {MAX_VMAC_RETRIES} retries, \
-                         proceeding with current VMAC"
-                    );
+                    return Err(Error::Transport(std::io::Error::new(
+                        std::io::ErrorKind::AddrInUse,
+                        format!(
+                            "random BIP6 VMAC collision persists after {MAX_VMAC_RETRIES} retries"
+                        ),
+                    )));
                 }
             }
         }
@@ -554,10 +569,10 @@ impl TransportPort for Bip6Transport {
                                                 );
                                                     continue;
                                                 }
-                                                if source_addr.ip().is_unicast_link_local() {
+                                                if !forwarded_source_is_usable(source_addr) {
                                                     debug!(
                                                         source = %source_addr,
-                                                        "Dropping Forwarded-NPDU with unscoped link-local origin"
+                                                        "Dropping Forwarded-NPDU with unusable origin"
                                                     );
                                                     continue;
                                                 }
