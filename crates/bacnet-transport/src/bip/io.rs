@@ -84,6 +84,7 @@ pub(super) async fn handle_bvll_message(
                 .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
+                    link_layer_broadcast: false,
                     data_attributes: Vec::new(),
                     reply_tx: None,
                 })
@@ -104,6 +105,7 @@ pub(super) async fn handle_bvll_message(
                 .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
+                    link_layer_broadcast: true,
                     data_attributes: Vec::new(),
                     reply_tx: None,
                 })
@@ -158,6 +160,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        link_layer_broadcast: true,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     })
@@ -197,6 +200,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        link_layer_broadcast: true,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     })
@@ -236,6 +240,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        link_layer_broadcast: true,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     })

@@ -87,6 +87,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Client-mode responders now return `Reject(UNRECOGNIZED_SERVICE)` for
+  complete unicast ConfirmedRequest APDUs without a handler (#374), preserve
+  routed reply addressing, reject malformed confirmed COV payloads before
+  delivery, and return a server-side `SEGMENTATION_NOT_SUPPORTED` Abort when
+  inbound request reassembly is unavailable. Confirmed broadcasts remain
+  silent as required by the responding TSM. To retain that distinction after
+  frame decoding, the public `ReceivedNpdu` and `ReceivedApdu` envelopes gain
+  `link_layer_broadcast` and `is_broadcast` fields; downstream custom
+  transports or exhaustive struct literals must initialize the new fields.
+
 - Confirmed-Request `max-segments-accepted` no longer maps every non-rung
   client capacity to `B'111'` ("greater than 64"). Capacities 0 and 1 now fail
   client startup and direct APDU encoding; finite values through 64 round down

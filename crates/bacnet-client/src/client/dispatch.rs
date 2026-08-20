@@ -36,6 +36,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
+        is_broadcast: bool,
         apdu: Apdu,
         limits: ResponseLimits,
     ) {
@@ -242,6 +243,25 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
             }
             Apdu::ConfirmedRequest(req) => {
+                if is_broadcast {
+                    debug!(
+                        invoke_id = req.invoke_id,
+                        service = req.service_choice.to_raw(),
+                        "Ignoring broadcast ConfirmedRequest"
+                    );
+                    return;
+                }
+                if req.segmented {
+                    Self::send_server_abort(
+                        network,
+                        source_mac,
+                        source_network,
+                        req.invoke_id,
+                        bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
+                    )
+                    .await;
+                    return;
+                }
                 if req.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION {
                     match COVNotificationRequest::decode(&req.service_request) {
                         Ok(notification) => {
@@ -269,13 +289,29 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         }
                         Err(e) => {
                             warn!(error = %e, "Failed to decode ConfirmedCOVNotification");
+                            Self::send_confirmed_request_reject(
+                                network,
+                                source_mac,
+                                source_network,
+                                req.invoke_id,
+                                RejectReason::OTHER,
+                            )
+                            .await;
                         }
                     }
                 } else {
                     debug!(
                         service = req.service_choice.to_raw(),
-                        "Ignoring ConfirmedRequest (client mode)"
+                        "Rejecting unsupported ConfirmedRequest (client mode)"
                     );
+                    Self::send_confirmed_request_reject(
+                        network,
+                        source_mac,
+                        source_network,
+                        req.invoke_id,
+                        RejectReason::UNRECOGNIZED_SERVICE,
+                    )
+                    .await;
                 }
             }
             Apdu::UnconfirmedRequest(req) => {
@@ -466,6 +502,49 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 )
                 .await;
             }
+        }
+    }
+
+    async fn send_confirmed_request_reject(
+        network: &Arc<NetworkLayer<T>>,
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        invoke_id: u8,
+        reject_reason: RejectReason,
+    ) {
+        let reject = Apdu::Reject(RejectPdu {
+            invoke_id,
+            reject_reason,
+        });
+        let mut buf = BytesMut::with_capacity(3);
+        if let Err(e) = encode_apdu(&mut buf, &reject) {
+            warn!(error = %e, reason = reject_reason.to_raw(), "Failed to encode Reject");
+            return;
+        }
+        if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
+            warn!(error = %e, reason = reject_reason.to_raw(), "Failed to send Reject");
+        }
+    }
+
+    async fn send_server_abort(
+        network: &Arc<NetworkLayer<T>>,
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        invoke_id: u8,
+        abort_reason: bacnet_types::enums::AbortReason,
+    ) {
+        let abort = Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id,
+            abort_reason,
+        });
+        let mut buf = BytesMut::with_capacity(3);
+        if let Err(e) = encode_apdu(&mut buf, &abort) {
+            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to encode server Abort");
+            return;
+        }
+        if let Err(e) = Self::send_reply_apdu(network, &buf, source_mac, source_network).await {
+            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send server Abort");
         }
     }
 

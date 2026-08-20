@@ -292,6 +292,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
             apdu: Bytes::new(),
             source_mac: source_mac.clone(),
             source_network,
+            is_broadcast: false,
             data_attributes: Vec::new(),
             reply_tx: None,
         },

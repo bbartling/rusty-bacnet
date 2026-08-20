@@ -50,6 +50,7 @@ async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
         received.source_mac.as_slice(),
         &encode_bip_mac(sender.0, sender.1)
     );
+    assert!(!received.link_layer_broadcast);
 
     handle_bvll_message(&msg, (Ipv4Addr::LOCALHOST.octets(), local_port), &ctx).await;
     assert!(
@@ -124,6 +125,7 @@ async fn original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo
         received.source_mac.as_slice(),
         &encode_bip_mac(sender.0, sender.1)
     );
+    assert!(received.link_layer_broadcast);
 
     for (label, socket) in [
         ("BDT peer", &bdt_peer_sink),

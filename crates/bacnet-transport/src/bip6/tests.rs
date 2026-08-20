@@ -331,6 +331,7 @@ async fn bip6_forwarded_npdu_delivered() {
     assert_eq!(received.npdu, test_npdu);
     // source_mac must be the originating VMAC (3 bytes), not the UDP sender address
     assert_eq!(received.source_mac.as_slice(), &originating_vmac[..]);
+    assert!(received.link_layer_broadcast);
 
     transport.stop().await.unwrap();
 }

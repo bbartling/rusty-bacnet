@@ -693,6 +693,8 @@ mod transport {
                                         .try_send(ReceivedNpdu {
                                             npdu: frame.payload.clone(),
                                             source_mac: MacAddr::from(frame.source),
+                                            link_layer_broadcast: frame.destination
+                                                == ETHERNET_BROADCAST,
                                             data_attributes: Vec::new(),
                                             reply_tx: None,
                                         })

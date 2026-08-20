@@ -246,6 +246,7 @@ impl MasterNode {
                         let _ = npdu_tx.try_send(ReceivedNpdu {
                             npdu: frame.data.clone(),
                             source_mac: MacAddr::from_slice(&[frame.source]),
+                            link_layer_broadcast: false,
                             data_attributes: Vec::new(),
                             reply_tx: None,
                         });
@@ -259,6 +260,7 @@ impl MasterNode {
                     let _ = npdu_tx.try_send(ReceivedNpdu {
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
+                        link_layer_broadcast: frame.destination == BROADCAST_MAC,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     });
@@ -274,6 +276,7 @@ impl MasterNode {
                     let _ = npdu_tx.try_send(ReceivedNpdu {
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
+                        link_layer_broadcast: false,
                         data_attributes: Vec::new(),
                         reply_tx: Some(tx),
                     });

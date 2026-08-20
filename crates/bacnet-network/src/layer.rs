@@ -23,6 +23,11 @@ pub struct ReceivedApdu {
     pub source_mac: MacAddr,
     /// Source network address if the APDU was routed (NPDU had source field).
     pub source_network: Option<NpduAddress>,
+    /// Whether the APDU's effective BACnet destination was a broadcast.
+    ///
+    /// A specific DNET/DADR remains a unicast even when a router used a
+    /// broadcast data-link destination to reach that remote device.
+    pub is_broadcast: bool,
     /// Data-link attributes associated with the NPDU, if the transport supplied any.
     pub data_attributes: Vec<DataAttribute>,
     /// Optional reply channel for MS/TP DataExpectingReply flows.
@@ -36,6 +41,7 @@ impl Clone for ReceivedApdu {
             apdu: self.apdu.clone(),
             source_mac: self.source_mac.clone(),
             source_network: self.source_network.clone(),
+            is_broadcast: self.is_broadcast,
             data_attributes: self.data_attributes.clone(),
             reply_tx: None,
         }
@@ -48,9 +54,20 @@ impl std::fmt::Debug for ReceivedApdu {
             .field("apdu", &self.apdu)
             .field("source_mac", &self.source_mac)
             .field("source_network", &self.source_network)
+            .field("is_broadcast", &self.is_broadcast)
             .field("data_attributes", &self.data_attributes)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(...)"))
             .finish()
+    }
+}
+
+pub(crate) fn is_broadcast_delivery(
+    link_layer_broadcast: bool,
+    destination: Option<&NpduAddress>,
+) -> bool {
+    match destination {
+        None => link_layer_broadcast,
+        Some(destination) => destination.network == 0xFFFF || destination.mac_address.is_empty(),
     }
 }
 
@@ -107,11 +124,16 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         }
 
                         let source_network = npdu.source.clone();
+                        let is_broadcast = is_broadcast_delivery(
+                            received.link_layer_broadcast,
+                            npdu.destination.as_ref(),
+                        );
 
                         let apdu = ReceivedApdu {
                             apdu: npdu.payload,
                             source_mac: received.source_mac,
                             source_network,
+                            is_broadcast,
                             data_attributes: received.data_attributes,
                             reply_tx: received.reply_tx,
                         };
@@ -511,42 +533,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_receive_apdu_unicast() {
-        let transport_a = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-        let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-
-        let mut net_a = NetworkLayer::new(transport_a);
-        let mut net_b = NetworkLayer::new(transport_b);
-
-        let _rx_a = net_a.start().await.unwrap();
-        let mut rx_b = net_b.start().await.unwrap();
-
-        let test_apdu = vec![0x10, 0x08];
-
-        net_a
-            .send_apdu(
-                &test_apdu,
-                net_b.local_mac(),
-                false,
-                NetworkPriority::NORMAL,
-            )
-            .await
-            .unwrap();
-
-        let received = timeout(Duration::from_secs(2), rx_b.recv())
-            .await
-            .expect("Timed out waiting for APDU")
-            .expect("Channel closed");
-
-        assert_eq!(received.apdu, test_apdu);
-        assert_eq!(received.source_mac.as_slice(), net_a.local_mac());
-        assert!(received.source_network.is_none());
-
-        net_a.stop().await.unwrap();
-        net_b.stop().await.unwrap();
-    }
-
-    #[tokio::test]
     async fn sc_data_options_reach_received_apdu_data_attributes() {
         let (ws_client, ws_hub) = LoopbackWebSocket::pair();
         let hub_vmac = [0x10; 6];
@@ -853,3 +839,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "layer_delivery_tests.rs"]
+mod delivery_tests;

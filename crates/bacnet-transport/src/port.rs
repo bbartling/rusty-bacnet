@@ -31,6 +31,12 @@ pub struct ReceivedNpdu {
     pub npdu: Bytes,
     /// Source MAC address in transport-native format.
     pub source_mac: MacAddr,
+    /// Whether the NPDU arrived using the data link's broadcast destination.
+    ///
+    /// This is ingress provenance, not a conclusion about the NPDU's logical
+    /// destination: routers may legitimately send a routed unicast over a
+    /// broadcast data-link destination.
+    pub link_layer_broadcast: bool,
     /// Optional data attributes carried by the data link.
     pub data_attributes: Vec<DataAttribute>,
     /// Optional reply channel for MS/TP DataExpectingReply frames.
@@ -44,6 +50,7 @@ impl Clone for ReceivedNpdu {
         Self {
             npdu: self.npdu.clone(),
             source_mac: self.source_mac.clone(),
+            link_layer_broadcast: self.link_layer_broadcast,
             data_attributes: self.data_attributes.clone(),
             reply_tx: None, // oneshot::Sender is not Clone; clones lose the reply channel
         }
@@ -55,6 +62,7 @@ impl std::fmt::Debug for ReceivedNpdu {
         f.debug_struct("ReceivedNpdu")
             .field("npdu", &self.npdu)
             .field("source_mac", &self.source_mac)
+            .field("link_layer_broadcast", &self.link_layer_broadcast)
             .field("data_attributes", &self.data_attributes)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(Sender)"))
             .finish()

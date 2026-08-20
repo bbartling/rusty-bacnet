@@ -396,6 +396,7 @@ async fn transport_receive_preserves_data_options_as_attributes() {
         .expect("SC NPDU channel closed");
     assert_eq!(received.npdu, msg.payload);
     assert_eq!(received.source_mac.as_slice(), hub_vmac);
+    assert!(!received.link_layer_broadcast);
     assert_eq!(received.data_attributes.len(), 2);
     assert_eq!(received.data_attributes[0].option_type, 1);
     assert!(received.data_attributes[0].must_understand);
