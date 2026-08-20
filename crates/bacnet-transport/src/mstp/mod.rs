@@ -50,9 +50,12 @@ fn calculate_t_slot_ms(_baud_rate: u32) -> u64 {
 }
 /// Maximum time a node may delay before sending a reply to DataExpectingReply (ms).
 const T_REPLY_DELAY_MS: u64 = 250;
+/// Scheduling/write margin reserved so the first reply octet starts before
+/// the T_reply_delay limit rather than beginning at the limit.
+const T_REPLY_TRANSMIT_MARGIN_MS: u64 = 25;
 /// Minimum silence time (40 bit times) before transmitting after receiving last octet.
 fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
-    40_000_000u64 / baud_rate as u64
+    40_000_000u64.div_ceil(baud_rate as u64)
 }
 /// Number of retries for token pass before declaring token lost.
 const N_RETRY_TOKEN: u8 = 1;
@@ -200,6 +203,12 @@ impl MasterNode {
         match frame.frame_type {
             FrameType::Token => {
                 if frame.destination == self.config.this_station {
+                    // A reply decision owns the node until its bound response
+                    // or ReplyPostponed is sent. Out-of-turn traffic must not
+                    // replace that transaction's state or requester.
+                    if self.pending_reply_source.is_some() {
+                        return None;
+                    }
                     debug!(src = frame.source, "received token");
                     self.sole_master = false;
                     self.state = MasterState::UseToken;
@@ -246,6 +255,7 @@ impl MasterNode {
                         let _ = npdu_tx.try_send(ReceivedNpdu {
                             npdu: frame.data.clone(),
                             source_mac: MacAddr::from_slice(&[frame.source]),
+                            link_layer_group: false,
                             data_attributes: Vec::new(),
                             reply_tx: None,
                         });
@@ -259,6 +269,7 @@ impl MasterNode {
                     let _ = npdu_tx.try_send(ReceivedNpdu {
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
+                        link_layer_group: frame.destination == BROADCAST_MAC,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     });
@@ -267,6 +278,9 @@ impl MasterNode {
             }
             FrameType::BACnetDataExpectingReply => {
                 if frame.destination == self.config.this_station {
+                    if self.pending_reply_source.is_some() {
+                        return None;
+                    }
                     self.state = MasterState::AnswerDataRequest;
                     self.pending_reply_source = Some(frame.source);
                     let (tx, rx) = oneshot::channel();
@@ -274,6 +288,7 @@ impl MasterNode {
                     let _ = npdu_tx.try_send(ReceivedNpdu {
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
+                        link_layer_group: false,
                         data_attributes: Vec::new(),
                         reply_tx: Some(tx),
                     });
@@ -304,6 +319,27 @@ impl MasterNode {
             }
             _ => None,
         }
+    }
+
+    /// Complete AnswerDataRequest with application data or ReplyPostponed.
+    pub(crate) fn finish_data_request(&mut self, reply_data: Option<Bytes>) -> Option<MstpFrame> {
+        let destination = self.pending_reply_source.take()?;
+        self.reply_rx = None;
+        self.state = MasterState::Idle;
+        Some(match reply_data {
+            Some(data) => MstpFrame {
+                frame_type: FrameType::BACnetDataNotExpectingReply,
+                destination,
+                source: self.config.this_station,
+                data,
+            },
+            None => MstpFrame {
+                frame_type: FrameType::ReplyPostponed,
+                destination,
+                source: self.config.this_station,
+                data: Bytes::new(),
+            },
+        })
     }
 
     /// Decide what to send when we have the token. Returns a frame to send.
@@ -494,5 +530,9 @@ fn next_addr(current: u8, max_master: u8) -> u8 {
 mod port;
 pub use port::{LoopbackSerial, MstpTransport, NoSerial};
 
+#[cfg(test)]
+mod port_timing_tests;
+#[cfg(test)]
+mod reply_tests;
 #[cfg(test)]
 mod tests;

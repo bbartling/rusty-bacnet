@@ -18,6 +18,7 @@ pub mod bip6;
 pub mod bvll;
 #[cfg(feature = "ethernet")]
 pub mod ethernet;
+mod local_addresses;
 pub mod loopback;
 pub mod mstp;
 pub mod mstp_frame;
@@ -30,3 +31,4 @@ pub mod sc_frame;
 pub mod sc_hub;
 #[cfg(feature = "sc-tls")]
 pub mod sc_tls;
+mod udp_metadata;

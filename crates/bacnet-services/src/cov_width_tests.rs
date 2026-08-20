@@ -67,7 +67,7 @@ fn cov_notification(process_id: &[u8], time_remaining: &[u8]) -> BytesMut {
 }
 
 #[test]
-fn cov_unsigned_fields_accept_u32_max_with_leading_zero() {
+fn subscribe_cov_unsigned_fields_accept_u32_max_with_leading_zero() {
     let decoded = SubscribeCOVRequest::decode(&subscribe_cov(
         MAX_WITH_LEADING_ZERO,
         Some(MAX_WITH_LEADING_ZERO),
@@ -87,14 +87,19 @@ fn cov_unsigned_fields_accept_u32_max_with_leading_zero() {
     assert_eq!(decoded.lifetime, Some(u32::MAX));
     assert_eq!(decoded.monitored_property_identifier.to_raw(), u32::MAX);
     assert_eq!(decoded.monitored_property_array_index, Some(u32::MAX));
+}
 
-    let decoded = COVNotificationRequest::decode(&cov_notification(
+#[test]
+fn confirmed_cov_rejects_nonminimal_unsigned_encoding() {
+    let error = COVNotificationRequest::decode_detailed(&cov_notification(
         MAX_WITH_LEADING_ZERO,
         MAX_WITH_LEADING_ZERO,
     ))
-    .unwrap();
-    assert_eq!(decoded.subscriber_process_identifier, u32::MAX);
-    assert_eq!(decoded.time_remaining, u32::MAX);
+    .unwrap_err();
+    assert_eq!(
+        error.reject_reason(),
+        bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING
+    );
 }
 
 #[test]

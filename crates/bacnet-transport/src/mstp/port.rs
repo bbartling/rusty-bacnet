@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, warn};
 
 use crate::mstp_frame::{
@@ -13,7 +13,7 @@ use crate::port::{ReceivedNpdu, TransportPort};
 use super::{
     calculate_t_frame_abort_us, calculate_t_turnaround_us, next_addr, MasterNode, MasterState,
     MstpConfig, SerialPort, MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS,
-    T_REPLY_TIMEOUT_MS, T_USAGE_TIMEOUT_MS,
+    T_REPLY_TIMEOUT_MS, T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,6 +66,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         let serial_clone = serial.clone();
         let t_turnaround_us = calculate_t_turnaround_us(self.config.baud_rate);
         let t_frame_abort_us = calculate_t_frame_abort_us(self.config.baud_rate);
+        let reply_decision_delay_ms = T_REPLY_DELAY_MS
+            .saturating_sub(t_turnaround_us.div_ceil(1_000) + T_REPLY_TRANSMIT_MARGIN_MS);
 
         // Receive loop using tokio::select! with timer
         let task = tokio::spawn(async move {
@@ -78,9 +80,44 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             tokio::pin!(sleep);
 
             let mut encode_buf = BytesMut::with_capacity(1024);
+            let mut pending_reply_rx: Option<oneshot::Receiver<Bytes>> = None;
+            let mut pending_reply_deadline: Option<tokio::time::Instant> = None;
 
             loop {
                 tokio::select! {
+                    biased;
+                    // A DataExpectingReply application response must wake the
+                    // loop immediately; waiting for T_reply_delay would begin
+                    // transmission after the Standard's deadline.
+                    reply = async {
+                        pending_reply_rx
+                            .as_mut()
+                            .expect("reply branch is guarded")
+                            .await
+                    }, if pending_reply_rx.is_some() => {
+                        pending_reply_rx = None;
+                        pending_reply_deadline = None;
+                        let mut node_guard = node.lock().await;
+                        let response = node_guard.finish_data_request(reply.ok());
+                        drop(node_guard);
+
+                        if let Some(response) = response {
+                            encode_buf.clear();
+                            if encode_frame(&mut encode_buf, &response).is_ok() {
+                                tokio::time::sleep(tokio::time::Duration::from_micros(
+                                    t_turnaround_us,
+                                ))
+                                .await;
+                                if let Err(e) = serial_clone.write(&encode_buf).await {
+                                    warn!("MS/TP write error: {}", e);
+                                }
+                            }
+                        }
+                        sleep.as_mut().reset(
+                            tokio::time::Instant::now()
+                                + tokio::time::Duration::from_millis(T_USAGE_TIMEOUT_MS),
+                        );
+                    }
                     // Branch 1: serial data arrives
                     result = serial_clone.read(&mut recv_buf) => {
                         match result {
@@ -142,6 +179,21 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     let mut node_guard = node.lock().await;
                                     let response =
                                         node_guard.handle_received_frame(&frame, &npdu_tx);
+                                    let mut started_reply = false;
+                                    if pending_reply_rx.is_none()
+                                        && node_guard.state == MasterState::AnswerDataRequest
+                                    {
+                                        pending_reply_rx = node_guard.reply_rx.take();
+                                        started_reply = pending_reply_rx.is_some();
+                                    }
+                                    if started_reply {
+                                        pending_reply_deadline = Some(
+                                            last_byte_time
+                                                + tokio::time::Duration::from_millis(
+                                                    reply_decision_delay_ms,
+                                                ),
+                                        );
+                                    }
                                     let mut pending_writes: Vec<Vec<u8>> = Vec::new();
                                     if let Some(response) = response {
                                         encode_buf.clear();
@@ -194,7 +246,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                         MasterState::NoToken => T_NO_TOKEN_MS,
                                         MasterState::PollForMaster => node_guard.t_slot_ms,
                                         MasterState::WaitForReply => T_REPLY_TIMEOUT_MS,
-                                        MasterState::AnswerDataRequest => T_REPLY_DELAY_MS,
+                                        MasterState::AnswerDataRequest => reply_decision_delay_ms,
                                         MasterState::PassToken => T_USAGE_TIMEOUT_MS,
                                         MasterState::UseToken
                                         | MasterState::DoneWithToken => T_USAGE_TIMEOUT_MS,
@@ -216,8 +268,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     }
 
                                     sleep.as_mut().reset(
-                                        tokio::time::Instant::now()
-                                            + tokio::time::Duration::from_millis(timeout_ms),
+                                        pending_reply_deadline.unwrap_or_else(|| {
+                                            tokio::time::Instant::now()
+                                                + tokio::time::Duration::from_millis(timeout_ms)
+                                        }),
                                     );
                                 }
                                 Err(_) => {
@@ -234,6 +288,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                     () = &mut sleep => {
                         let mut node_guard = node.lock().await;
                         let mut pending_writes: Vec<Vec<u8>> = Vec::new();
+                        let was_answering_data_request =
+                            node_guard.pending_reply_source.is_some();
                         let timeout_ms = match node_guard.state {
                             MasterState::Idle => {
                                 node_guard.state = MasterState::NoToken;
@@ -282,36 +338,21 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 T_USAGE_TIMEOUT_MS
                             }
                             MasterState::AnswerDataRequest => {
-                                let dest = node_guard.pending_reply_source.unwrap_or(BROADCAST_MAC);
-                                // Check if the application layer sent a reply via the channel.
-                                let reply_data = node_guard.reply_rx.take().and_then(|mut rx| rx.try_recv().ok());
-                                if let Some(data) = reply_data {
-                                    // Send the reply as DataNotExpectingReply
-                                    let reply_frame = MstpFrame {
-                                        frame_type: FrameType::BACnetDataNotExpectingReply,
-                                        destination: dest,
-                                        source: node_guard.config.this_station,
-                                        data,
-                                    };
+                                // The timer fires early enough to include
+                                // turnaround and scheduling before the first
+                                // octet's T_reply_delay deadline. Prefer a
+                                // response that became ready at the boundary.
+                                let reply_data = pending_reply_rx
+                                    .take()
+                                    .and_then(|mut rx| rx.try_recv().ok());
+                                if let Some(reply_frame) =
+                                    node_guard.finish_data_request(reply_data)
+                                {
                                     encode_buf.clear();
-                                    if let Ok(()) = encode_frame(&mut encode_buf, &reply_frame) {
-                                        pending_writes.push(encode_buf.to_vec());
-                                    }
-                                } else {
-                                    // No reply in time — send ReplyPostponed
-                                    let rp = MstpFrame {
-                                        frame_type: FrameType::ReplyPostponed,
-                                        destination: dest,
-                                        source: node_guard.config.this_station,
-                                        data: Bytes::new(),
-                                    };
-                                    encode_buf.clear();
-                                    if let Ok(()) = encode_frame(&mut encode_buf, &rp) {
+                                    if encode_frame(&mut encode_buf, &reply_frame).is_ok() {
                                         pending_writes.push(encode_buf.to_vec());
                                     }
                                 }
-                                node_guard.pending_reply_source = None;
-                                node_guard.state = MasterState::Idle;
                                 T_USAGE_TIMEOUT_MS
                             }
                             MasterState::PassToken => {
@@ -344,6 +385,9 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 T_USAGE_TIMEOUT_MS
                             }
                         };
+                        if was_answering_data_request {
+                            pending_reply_deadline = None;
+                        }
                         drop(node_guard);
 
                         // T_turnaround before transmitting

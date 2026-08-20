@@ -128,6 +128,7 @@ fn handle_data_not_expecting_reply_unicast() {
     let received = rx.try_recv().unwrap();
     assert_eq!(received.npdu, npdu_data);
     assert_eq!(received.source_mac.as_slice(), &[0u8]);
+    assert!(!received.link_layer_group);
 }
 
 #[test]
@@ -152,6 +153,7 @@ fn handle_data_not_expecting_reply_broadcast() {
     assert!(node.reply_rx.is_none());
     let received = rx.try_recv().unwrap();
     assert_eq!(received.source_mac.as_slice(), &[5u8]);
+    assert!(received.link_layer_group);
 }
 
 #[test]
@@ -180,6 +182,7 @@ fn handle_data_expecting_reply() {
 
     let received = rx.try_recv().unwrap();
     assert_eq!(received.npdu, vec![0x01, 0x00, 0x30]);
+    assert!(!received.link_layer_group);
 }
 
 #[test]
@@ -777,6 +780,12 @@ fn pending_reply_source_stored_on_data_expecting_reply() {
     let _ = node.handle_received_frame(&frame, &tx);
     assert_eq!(node.state, MasterState::AnswerDataRequest);
     assert_eq!(node.pending_reply_source, Some(7));
+}
+
+#[test]
+fn t_turnaround_rounds_up_to_full_bit_time() {
+    assert_eq!(calculate_t_turnaround_us(9600), 4167);
+    assert_eq!(calculate_t_turnaround_us(38_400), 1042);
 }
 
 #[test]

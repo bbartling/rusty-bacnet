@@ -87,6 +87,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Client-mode responders now return `Reject(UNRECOGNIZED_SERVICE)` for
+  complete unicast ConfirmedRequest APDUs without a handler (#374), preserve
+  routed reply addressing, send ready MS/TP responses immediately (or
+  `ReplyPostponed` with transmission margin before `T_reply_delay`), classify
+  malformed confirmed COV payloads with the applicable Clause 18.9 Reject
+  reason before delivery, and return a server-side
+  `SEGMENTATION_NOT_SUPPORTED` Abort when inbound request reassembly is
+  unavailable. Confirmed multicast and broadcast deliveries remain silent as
+  required by the responding TSM. B/IP and B/IP6 now obtain the actual UDP
+  destination from packet metadata and fail closed on missing, truncated, or
+  mismatched metadata while preserving wildcard binds. B/IP management
+  messages require actual unicast delivery, and oversized datagrams plus
+  transient Windows UDP reset errors are dropped without stopping reception.
+  B/IP6 unicast data and
+  address-resolution acknowledgements also require the local Destination-VMAC
+  before learning the sender. Its 4,096-entry VMAC table preserves a unique
+  learned link-local scope, fails closed when scopes are ambiguous, and
+  deterministically replaces stale endpoint mappings. Device instance zero's
+  VMAC remains valid; out-of-range instances fail startup. Directly connected,
+  unconfigured nodes draw Random Device Instance VMACs from OS randomness,
+  probe the configured multicast scope, answer peer probes during startup, and
+  fail atomically on probe errors or collisions. Random-identity foreign-device
+  startup is rejected until BBMD-assisted resolution is implemented. The public
+  `generate_random_vmac` helper is
+  consequently fallible. Annex U fixed-size messages reject surplus bytes;
+  Address-Resolution and Virtual-Address-Resolution use their specified
+  multicast and unicast paths. Forwarded-NPDU now uses the standard single-VMAC
+  wire layout, accepts only multicast delivery or the configured non-link-local
+  foreign-device BBMD, exposes the original 18-byte B/IPv6 source, and learns
+  only a validated, nonzero-port, non-multicast, non-unspecified, non-loopback,
+  non-IPv4-mapped, non-link-local origin for follow-up unicast. Outbound unicast
+  fails explicitly until the destination VMAC has been learned instead of
+  guessing from an IP endpoint; automatic outbound VMAC discovery remains a
+  follow-up. To retain
+  group-delivery provenance after frame decoding, the public `ReceivedNpdu` and
+  `ReceivedApdu` envelopes gain `link_layer_group` and `is_group` fields;
+  downstream custom transports or exhaustive struct literals must initialize
+  the new fields. The public Forwarded-NPDU payload decoder now returns the
+  original B/IPv6 address and NPDU because the original VMAC is already in the
+  BVLC6 header. Windows builds gain a direct `windows-sys` dependency for
+  `WSARecvMsg` destination metadata. Interface enumeration is compiled only on
+  targets whose libc exposes `getifaddrs`; unsupported OS targets still compile
+  and reject B/IP startup when safe destination metadata cannot be obtained.
+
 - Confirmed-Request `max-segments-accepted` no longer maps every non-rung
   client capacity to `B'111'` ("greater than 64"). Capacities 0 and 1 now fail
   client startup and direct APDU encoding; finite values through 64 round down
@@ -1117,7 +1161,7 @@ Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, E
 
 #### BACnet/IPv6 — VMAC & Address Resolution (Annex U)
 - **Fixed** Virtual-Address-Resolution wire format — was 10 bytes with duplicate VMAC payload, now 7 bytes per Clause U.2.7
-- **Fixed** Virtual-Address-Resolution-ACK — now accepts and encodes requester's destination VMAC (10 bytes per Clause U.2.7A)
+- **Fixed** Virtual-Address-Resolution-ACK — now accepts and encodes requester's destination VMAC (10 bytes per Clause U.2.8)
 - **Fixed** `send_unicast` derived destination VMAC from IPv6 address bytes — now uses VMAC address table reverse lookup per Clause U.5
 - **Fixed** decoder only extracted destination VMAC for OriginalUnicast — now also extracts for AddressResolution, AddressResolutionAck, VirtualAddressResolutionAck
 - **Fixed** `derive_vmac_from_device_instance` did not mask to 22 bits per Clause H.7.2

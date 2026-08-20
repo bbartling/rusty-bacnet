@@ -463,6 +463,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                             .try_send(ReceivedNpdu {
                                                 npdu,
                                                 source_mac: MacAddr::from_slice(&source_vmac),
+                                                link_layer_group: msg.destination_vmac
+                                                    == Some(BROADCAST_VMAC),
                                                 data_attributes: data_attributes::from_data_options(&msg),
                                                 reply_tx: None,
                                             })
