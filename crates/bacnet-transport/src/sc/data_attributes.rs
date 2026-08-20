@@ -8,6 +8,7 @@ use tracing::warn;
 use super::WebSocketPort;
 
 const MAX_SC_DATA_ATTRIBUTES: usize = 64;
+const SECURE_PATH_OPTION_TYPE: u8 = 1;
 
 pub(super) fn from_data_options(msg: &ScMessage) -> Vec<DataAttribute> {
     msg.data_options
@@ -106,28 +107,38 @@ pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<S
         )));
     }
 
-    data_attributes
-        .iter()
-        .map(|attribute| {
-            if !(1..=31).contains(&attribute.option_type) {
-                return Err(Error::Encoding(format!(
-                    "BACnet/SC Data Option type must be 1..31, got {}",
-                    attribute.option_type
-                )));
-            }
-            if attribute.data.len() > u16::MAX as usize {
-                return Err(Error::Encoding(format!(
-                    "BACnet/SC Data Option type {} payload length {} exceeds 65535",
-                    attribute.option_type,
-                    attribute.data.len()
-                )));
-            }
+    for attribute in data_attributes {
+        if !(1..=31).contains(&attribute.option_type) {
+            return Err(Error::Encoding(format!(
+                "BACnet/SC Data Option type must be 1..31, got {}",
+                attribute.option_type
+            )));
+        }
+        if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.must_understand {
+            return Err(Error::Encoding(
+                "BACnet/SC Secure Path Data Option must set Must Understand".into(),
+            ));
+        }
+        if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.data.is_empty() {
+            return Err(Error::Encoding(
+                "BACnet/SC Secure Path Data Option must not contain Header Data".into(),
+            ));
+        }
+        if attribute.data.len() > u16::MAX as usize {
+            return Err(Error::Encoding(format!(
+                "BACnet/SC Data Option type {} payload length {} exceeds 65535",
+                attribute.option_type,
+                attribute.data.len()
+            )));
+        }
+    }
 
-            Ok(ScOption {
-                option_type: attribute.option_type,
-                must_understand: attribute.must_understand,
-                data: attribute.data.clone(),
-            })
+    Ok(data_attributes
+        .iter()
+        .map(|attribute| ScOption {
+            option_type: attribute.option_type,
+            must_understand: attribute.must_understand,
+            data: attribute.data.clone(),
         })
-        .collect()
+        .collect())
 }

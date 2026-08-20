@@ -214,13 +214,14 @@ impl ScConnection {
         npdu: &[u8],
         data_attributes: &[DataAttribute],
     ) -> Result<ScMessage, Error> {
+        let data_options = data_attributes::to_data_options(data_attributes)?;
         Ok(ScMessage {
             function: ScFunction::EncapsulatedNpdu,
             message_id: self.next_id(),
             originating_vmac: None,
             destination_vmac: Some(dest_vmac),
             dest_options: Vec::new(),
-            data_options: data_attributes::to_data_options(data_attributes)?,
+            data_options,
             payload: Bytes::copy_from_slice(npdu),
         })
     }
