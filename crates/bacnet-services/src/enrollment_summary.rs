@@ -219,14 +219,12 @@ impl GetEnrollmentSummaryRequest {
         let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
         if let Some(content) = opt_data {
             let value = primitives::decode_unsigned(content)?;
-            let value = u32::try_from(value).map_err(|_| {
-                Error::decoding(offset, "EnrollmentSummary eventStateFilter exceeds u32")
-            })?;
-            if value > EnrollmentSummaryEventStateFilter::ACTIVE.to_raw() {
+            if value > u64::from(EnrollmentSummaryEventStateFilter::ACTIVE.to_raw()) {
                 return Err(Error::Reject {
                     reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw(),
                 });
             }
+            let value = u32::try_from(value).expect("event-state filter was validated to 0..=4");
             event_state_filter = Some(EnrollmentSummaryEventStateFilter::from_raw(value));
             offset = new_offset;
         }

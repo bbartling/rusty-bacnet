@@ -345,6 +345,12 @@ fn request_rejects_undefined_event_state_filter() {
                 if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
         ));
     }
+    let above_u32 = [0x09, 0, 0x2D, 0x05, 1, 0, 0, 0, 0];
+    assert!(matches!(
+        GetEnrollmentSummaryRequest::decode(&above_u32),
+        Err(Error::Reject { reason })
+            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+    ));
 
     let request = GetEnrollmentSummaryRequest {
         acknowledgment_filter: 0,
