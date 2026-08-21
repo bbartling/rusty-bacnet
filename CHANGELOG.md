@@ -101,6 +101,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The client no longer segments confirmed requests to peers whose
+  authoritative `Segmentation_Supported` says they cannot receive segments
+  (#371). When request sizing requires segmentation and the selected
+  device-table row's capability is authoritative — learned from the peer's
+  I-Am or explicitly supplied via `add_routed_device` or an explicit
+  `DeviceTable::upsert` — a `NO_SEGMENTATION` or `SEGMENTED_TRANSMIT` peer
+  now produces a local `Error::Segmentation` naming the advertised
+  capability before any frame is sent or transaction allocated, instead of
+  the guaranteed Clause 18 SEGMENTATION_NOT_SUPPORTED abort. Legacy manual
+  `add_device` rows keep their previous behavior: their capability fields
+  are documented placeholders, so unknown capability never causes a local
+  refusal, and a later I-Am refresh makes the row authoritative. Receive-
+  capable (`SEGMENTED_RECEIVE`/`SEGMENTED_BOTH`) peers segment exactly as
+  before.
+
 - DeviceTable address identity no longer conflates routers with routed
   peers, and duplicate matches resolve deterministically (#372). A local
   `get_by_mac` lookup now considers only unambiguously local rows: a routed
