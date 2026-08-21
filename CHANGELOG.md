@@ -33,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     up-reduced-speed / down-rated-speed / down-reduced-speed): the
     Escalator object's `operation_direction` (477) now resolves and
     displays by name instead of falling through to `ResolvedEnum::Unknown`.
-    The object still stores a raw `u32`; retyping is follow-up work.
+    The object stores the value as the typed enum and accepts all six named
+    values plus Clause 23.1 proprietary extensions (1024..=65535), refusing
+    reserved undefined values (6..=1023) and anything above the enumeration
+    maximum with PROPERTY / VALUE_OUT_OF_RANGE (#284).
   - New `BinaryLightingPV` (off / on / warn / warn-off / warn-relinquish /
     stop) and `LightingTransition` (none / fade / ramp); `transition` (385)
     now resolves. No resolve arm exists for `BinaryLightingPV` — it types
@@ -86,6 +89,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the intrinsic detectors (in-memory only).
 
 ### Fixed
+
+- The Escalator object's `operation_direction` (477) is now stored as the
+  typed `EscalatorOperationDirection` (default UNKNOWN) instead of a raw
+  `u32` with an invented 0=unknown/1=up/2=down/3=stopped comment mapping
+  (#284). Write validation now matches the Clause 21 production: all six
+  named values are accepted — including DOWN_RATED_SPEED (4) and
+  DOWN_REDUCED_SPEED (5), which the old `> 3` guard rejected — and
+  Clause 23.1 proprietary extensions (1024..=65535) are preserved as raw
+  values. Reserved undefined values (6..=1023) and values above the
+  enumeration maximum are refused with PROPERTY / VALUE_OUT_OF_RANGE;
+  non-Enumerated inputs with PROPERTY / INVALID_DATA_TYPE. Failed writes
+  leave the prior value unchanged. No wire-format or service-model change.
 
 - The bundled server now enforces a File object's declared
   `File_Access_Method` when executing AtomicReadFile and AtomicWriteFile
