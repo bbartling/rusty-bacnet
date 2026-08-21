@@ -33,7 +33,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
-use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice};
+use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice, RoutedDeviceConfig};
 use crate::segmentation::{max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType};
 use crate::tsm::{Tsm, TsmConfig, TsmResponse};
 
