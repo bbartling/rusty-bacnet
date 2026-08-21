@@ -174,7 +174,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// Vendor ID is recorded as 0 when unknown; this does not affect
     /// routing or request-size decisions.
+    ///
+    /// Malformed routing metadata is rejected deliberately: an empty
+    /// `router_mac` or `remote_mac` cannot identify a next hop or a peer, so
+    /// such a registration returns [`Error::Encoding`] and the table is left
+    /// unchanged (an empty SADR could never satisfy a routed lookup).
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
+        if config.router_mac.is_empty() {
+            return Err(Error::Encoding(
+                "router_mac must not be empty: it is the immediate transport next hop".into(),
+            ));
+        }
+        if config.remote_mac.is_empty() {
+            return Err(Error::Encoding(
+                "remote_mac must not be empty: it is half of the routed peer's identity".into(),
+            ));
+        }
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
             config.instance,

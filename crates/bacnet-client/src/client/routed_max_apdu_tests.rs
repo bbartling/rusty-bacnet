@@ -347,6 +347,38 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
     router_transport.stop().await.unwrap();
 }
 
+/// Malformed routing metadata is rejected before any table mutation: empty
+/// next-hop or peer addresses can never identify a route or a peer (#372).
+#[tokio::test]
+async fn manual_routed_registration_rejects_empty_addresses() {
+    let (client_transport, _peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+
+    for (router_mac, remote_mac) in [(Vec::new(), vec![0x03]), (vec![0x02], Vec::new())] {
+        let result = client
+            .add_routed_device(RoutedDeviceConfig {
+                instance: 3003,
+                router_mac,
+                remote_network: 100,
+                remote_mac,
+                max_apdu_length: 128,
+                segmentation_supported: Segmentation::BOTH,
+                max_segments_accepted: None,
+            })
+            .await;
+        assert!(result.is_err(), "empty address must be rejected");
+    }
+
+    assert!(
+        client.device_table.lock().await.get(3003).is_none(),
+        "a refused registration must not create a row"
+    );
+}
+
 /// Legacy `add_device` keeps creating unambiguously local rows: the local
 /// lookup finds them and the routed lookup by SNET/SADR does not (#372).
 #[tokio::test]
