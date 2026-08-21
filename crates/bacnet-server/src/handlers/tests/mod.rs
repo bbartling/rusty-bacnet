@@ -40,6 +40,7 @@ mod cov_multiple_parameters;
 mod detection_enable_summary;
 mod device_event;
 mod enrollment_summary_filters;
+mod file_access_method;
 mod framed_properties;
 mod life_safety_operation;
 mod multi_element_writes;

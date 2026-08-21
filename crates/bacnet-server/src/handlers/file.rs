@@ -1,4 +1,37 @@
 use super::*;
+use bacnet_objects::traits::BACnetObject;
+use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
+
+/// Refuse a request whose access method does not match the File object's
+/// declared File_Access_Method, or whose declared method cannot be read
+/// back as the Clause 21 `BACnetFileAccessMethod` production.
+///
+/// Clauses 14.1 and 14.2 require SERVICES / INVALID_FILE_ACCESS_METHOD for
+/// an "Incorrect File access method"; Clause 18 defines the code as the
+/// error generated when AtomicReadFile or AtomicWriteFile specifies a File
+/// Access Method that is not valid for the specified file. Reading fails
+/// closed: a missing, undecodable, or out-of-production property value is
+/// treated as a mismatch rather than defaulting to stream or record access.
+fn invalid_file_access_method() -> Error {
+    Error::Protocol {
+        class: ErrorClass::SERVICES.to_raw() as u32,
+        code: ErrorCode::INVALID_FILE_ACCESS_METHOD.to_raw() as u32,
+    }
+}
+
+fn validate_file_access_method(
+    object: &dyn BACnetObject,
+    expected: ObjectFileAccessMethod,
+) -> Result<(), Error> {
+    let actual = match object.read_property(PropertyIdentifier::FILE_ACCESS_METHOD, None) {
+        Ok(PropertyValue::Enumerated(raw)) => raw,
+        _ => return Err(invalid_file_access_method()),
+    };
+    if actual != expected.to_raw() {
+        return Err(invalid_file_access_method());
+    }
+    Ok(())
+}
 
 /// Handle a ReadRange request.
 ///
@@ -136,6 +169,16 @@ pub fn handle_atomic_read_file(
         });
     }
 
+    // Clause 14.1: refuse a mismatched access method before any file read
+    // or ACK encoding. The request CHOICE maps semantically — Stream means
+    // STREAM_ACCESS, Record means RECORD_ACCESS — never by CHOICE tag
+    // number (stream is CHOICE [0] but enumeration value 1).
+    let expected = match &request.access {
+        FileAccessMethod::Stream { .. } => ObjectFileAccessMethod::STREAM_ACCESS,
+        FileAccessMethod::Record { .. } => ObjectFileAccessMethod::RECORD_ACCESS,
+    };
+    validate_file_access_method(object, expected)?;
+
     let file_size = object
         .read_property(PropertyIdentifier::FILE_SIZE, None)
         .ok()
@@ -255,6 +298,16 @@ pub fn handle_atomic_write_file(
             code: ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
         });
     }
+
+    // Clause 14.2: refuse a mismatched access method before any mutation or
+    // ACK encoding, preserving the existing READ_ONLY precedence. The
+    // request CHOICE maps semantically — Stream means STREAM_ACCESS, Record
+    // means RECORD_ACCESS — never by CHOICE tag number.
+    let expected = match &request.access {
+        FileWriteAccessMethod::Stream { .. } => ObjectFileAccessMethod::STREAM_ACCESS,
+        FileWriteAccessMethod::Record { .. } => ObjectFileAccessMethod::RECORD_ACCESS,
+    };
+    validate_file_access_method(object, expected)?;
 
     match request.access {
         FileWriteAccessMethod::Stream {

@@ -87,6 +87,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The bundled server now enforces a File object's declared
+  `File_Access_Method` when executing AtomicReadFile and AtomicWriteFile
+  (#287). A stream request against a record-access file, or a record
+  request against a stream-access file, is refused with
+  SERVICES / INVALID_FILE_ACCESS_METHOD (Clauses 14.1, 14.2, and 18)
+  before any ACK is encoded or object state changes. The request CHOICE
+  maps semantically to the Clause 21 `BACnetFileAccessMethod` enumeration
+  (stream → STREAM_ACCESS, record → RECORD_ACCESS), never by CHOICE tag
+  number; an unreadable, mistyped, or out-of-production property value
+  also fails closed. Previously the property was never consulted, so the
+  required error was unreachable.
+
 - Audit notification and AuditLogQuery wire models now follow the field and
   tag shapes of the Standard 135-2020 Clause 21 productions within the
   library's `u64` Unsigned implementation limit (#345). Audit notification
