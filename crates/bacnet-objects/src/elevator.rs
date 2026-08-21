@@ -4,7 +4,7 @@
 //! - EscalatorObject (type 58): represents an escalator
 //! - LiftObject (type 59): represents a single lift/elevator car
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EscalatorOperationDirection, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -186,11 +186,9 @@ pub struct EscalatorObject {
     energy_meter_ref: Vec<u8>,
     /// Power mode (Boolean).
     power_mode: bool,
-    /// Operation direction (BACnetEscalatorOperationDirection, Clause 21):
-    /// 0=unknown, 1=stopped, 2=up-rated-speed, 3=up-reduced-speed,
-    /// 4=down-rated-speed, 5=down-reduced-speed. Retyping this raw `u32` to
-    /// the enum is tracked in #284.
-    operation_direction: u32,
+    /// Operation direction (BACnetEscalatorOperationDirection, Clause 21);
+    /// proprietary extensions (Clause 23.1) are preserved as raw values.
+    operation_direction: EscalatorOperationDirection,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: u32,
@@ -209,7 +207,7 @@ impl EscalatorObject {
             energy_meter: 0.0,
             energy_meter_ref: Vec::new(),
             power_mode: false,
-            operation_direction: 0, // unknown
+            operation_direction: EscalatorOperationDirection::UNKNOWN,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
@@ -257,7 +255,7 @@ impl BACnetObject for EscalatorObject {
             }
             p if p == PropertyIdentifier::POWER_MODE => Ok(PropertyValue::Boolean(self.power_mode)),
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
-                Ok(PropertyValue::Enumerated(self.operation_direction))
+                Ok(PropertyValue::Enumerated(self.operation_direction.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -292,10 +290,19 @@ impl BACnetObject for EscalatorObject {
             }
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
                 if let PropertyValue::Enumerated(v) = value {
-                    if v > 3 {
+                    // Accept the six named values of the Clause 21
+                    // BACnetEscalatorOperationDirection production plus
+                    // proprietary extensions (Clause 23.1: 1024..=65535);
+                    // 6..=1023 is reserved and undefined in the 2020
+                    // production. Validate before mutating so a refused
+                    // write leaves the prior value intact.
+                    let named = EscalatorOperationDirection::ALL_NAMED
+                        .iter()
+                        .any(|&(_, value)| value.to_raw() == v);
+                    if !(named || (1024..=65535).contains(&v)) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.operation_direction = v;
+                    self.operation_direction = EscalatorOperationDirection::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())

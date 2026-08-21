@@ -1,4 +1,65 @@
 use super::*;
+use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorOperationDirection};
+
+/// Operation_Direction is writable for simulation while Out_Of_Service is
+/// true (Clause 12.60); write-domain tests run with OOS enabled.
+fn oos_escalator() -> EscalatorObject {
+    let mut esc = EscalatorObject::new(1, "ESC-1").unwrap();
+    esc.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    esc
+}
+
+fn assert_value_out_of_range(result: Result<(), Error>, context: &str) {
+    match result.expect_err(&format!("{context}: write must be refused")) {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                ErrorClass::PROPERTY.to_raw() as u32,
+                "{context}: wrong error class"
+            );
+            assert_eq!(
+                code,
+                ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+                "{context}: wrong error code"
+            );
+        }
+        other => panic!("{context}: expected PROPERTY/VALUE_OUT_OF_RANGE, got {other:?}"),
+    }
+}
+
+fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
+    match result.expect_err(&format!("{context}: write must be refused")) {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                ErrorClass::PROPERTY.to_raw() as u32,
+                "{context}: wrong error class"
+            );
+            assert_eq!(
+                code,
+                ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                "{context}: wrong error code"
+            );
+        }
+        other => panic!("{context}: expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+    }
+}
+
+fn read_direction(esc: &EscalatorObject) -> u32 {
+    match esc
+        .read_property(PropertyIdentifier::OPERATION_DIRECTION, None)
+        .unwrap()
+    {
+        PropertyValue::Enumerated(raw) => raw,
+        other => panic!("expected Enumerated readback, got {other:?}"),
+    }
+}
 
 // --- ElevatorGroupObject ---
 
@@ -136,6 +197,191 @@ fn escalator_property_list() {
     assert!(list.contains(&PropertyIdentifier::POWER_MODE));
     assert!(list.contains(&PropertyIdentifier::OPERATION_DIRECTION));
     assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
+}
+
+// --- Operation_Direction typed behavior (#284) ---
+
+#[test]
+fn escalator_operation_direction_field_is_typed_and_defaults_to_unknown() {
+    let esc = EscalatorObject::new(1, "ESC-1").unwrap();
+    assert_eq!(
+        esc.operation_direction,
+        EscalatorOperationDirection::UNKNOWN
+    );
+}
+
+#[test]
+fn escalator_operation_direction_default_readback_is_enumerated_zero() {
+    let esc = EscalatorObject::new(1, "ESC-1").unwrap();
+    assert_eq!(
+        esc.read_property(PropertyIdentifier::OPERATION_DIRECTION, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+}
+
+#[test]
+fn escalator_all_named_directions_round_trip_with_oos() {
+    let mut esc = oos_escalator();
+    let mut last_raw = 0;
+    for &(name, value) in EscalatorOperationDirection::ALL_NAMED {
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Enumerated(value.to_raw()),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("named direction {name} must be accepted: {e:?}"));
+        assert_eq!(read_direction(&esc), value.to_raw(), "{name} round-trip");
+        last_raw = value.to_raw();
+    }
+    assert_eq!(
+        last_raw,
+        EscalatorOperationDirection::DOWN_REDUCED_SPEED.to_raw()
+    );
+}
+
+#[test]
+fn escalator_down_directions_are_accepted() {
+    for raw in [
+        EscalatorOperationDirection::DOWN_RATED_SPEED.to_raw(),
+        EscalatorOperationDirection::DOWN_REDUCED_SPEED.to_raw(),
+    ] {
+        let mut esc = oos_escalator();
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Enumerated(raw),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("raw {raw} must be accepted: {e:?}"));
+        assert_eq!(read_direction(&esc), raw);
+    }
+}
+
+// --- Proprietary boundaries (Clause 23.1 / Table 23-1) ---
+
+#[test]
+fn escalator_proprietary_direction_values_round_trip() {
+    for raw in [1024u32, 65535] {
+        let mut esc = oos_escalator();
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Enumerated(raw),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("proprietary raw {raw} must be accepted: {e:?}"));
+        assert_eq!(read_direction(&esc), raw, "raw {raw} must not normalize");
+    }
+}
+
+// --- Invalid boundaries ---
+
+#[test]
+fn escalator_reserved_direction_values_rejected() {
+    for raw in [6u32, 1023] {
+        let mut esc = oos_escalator();
+        assert_value_out_of_range(
+            esc.write_property(
+                PropertyIdentifier::OPERATION_DIRECTION,
+                None,
+                PropertyValue::Enumerated(raw),
+                None,
+            ),
+            &format!("reserved raw {raw}"),
+        );
+    }
+}
+
+#[test]
+fn escalator_above_maximum_direction_values_rejected() {
+    for raw in [65536u32, u32::MAX] {
+        let mut esc = oos_escalator();
+        assert_value_out_of_range(
+            esc.write_property(
+                PropertyIdentifier::OPERATION_DIRECTION,
+                None,
+                PropertyValue::Enumerated(raw),
+                None,
+            ),
+            &format!("above-maximum raw {raw}"),
+        );
+    }
+}
+
+#[test]
+fn escalator_operation_direction_wrong_datatype_rejected() {
+    let mut esc = oos_escalator();
+    assert_invalid_data_type(
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Unsigned(4),
+            None,
+        ),
+        "Unsigned instead of Enumerated",
+    );
+}
+
+// --- Atomicity ---
+
+#[test]
+fn escalator_failed_writes_leave_prior_direction_unchanged() {
+    let mut esc = oos_escalator();
+    let prior = EscalatorOperationDirection::UP_RATED_SPEED.to_raw();
+    esc.write_property(
+        PropertyIdentifier::OPERATION_DIRECTION,
+        None,
+        PropertyValue::Enumerated(prior),
+        None,
+    )
+    .unwrap();
+
+    assert_value_out_of_range(
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Enumerated(6),
+            None,
+        ),
+        "reserved 6",
+    );
+    assert_eq!(
+        read_direction(&esc),
+        prior,
+        "value changed after reserved rejection"
+    );
+
+    assert_value_out_of_range(
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Enumerated(u32::MAX),
+            None,
+        ),
+        "above maximum",
+    );
+    assert_eq!(
+        read_direction(&esc),
+        prior,
+        "value changed after above-maximum rejection"
+    );
+
+    assert_invalid_data_type(
+        esc.write_property(
+            PropertyIdentifier::OPERATION_DIRECTION,
+            None,
+            PropertyValue::Unsigned(4),
+            None,
+        ),
+        "wrong datatype",
+    );
+    assert_eq!(
+        read_direction(&esc),
+        prior,
+        "value changed after datatype rejection"
+    );
 }
 
 // --- LiftObject ---
