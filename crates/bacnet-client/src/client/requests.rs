@@ -179,19 +179,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let unsegmented_apdu_size = 4 + service_data.len();
         let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
-        let (remote_max_apdu, remote_max_segments, advertised) = {
+        let (remote_max_apdu, remote_max_segments, advertised, peer_segmentation) = {
             let dt = self.device_table.lock().await;
             // A routed peer is recorded under the router's MAC, so only the
             // SNET/SADR of the NPDU that carried its I-Am identifies it
             // (Clause 5.2.1.2 term (c) binds the peer's Max APDU Length
             // Accepted regardless of how the peer is reached).
-            let device = match target {
-                ConfirmedTarget::Local { mac } => dt.get_by_mac(mac),
+            let (device, peer_segmentation) = match target {
+                ConfirmedTarget::Local { mac } => {
+                    (dt.get_by_mac(mac), dt.local_peer_segmentation(mac))
+                }
                 ConfirmedTarget::Routed {
                     dest_network,
                     dest_mac,
                     ..
-                } => dt.get_by_network_address(dest_network, dest_mac),
+                } => (
+                    dt.get_by_network_address(dest_network, dest_mac),
+                    dt.routed_peer_segmentation(dest_network, dest_mac),
+                ),
             };
             let max_apdu = device
                 .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
@@ -202,10 +207,35 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             } else {
                 LengthBoundedBy::LocalConfig(max_apdu)
             };
-            (max_apdu.min(target_transport_max_apdu), max_seg, advertised)
+            (
+                max_apdu.min(target_transport_max_apdu),
+                max_seg,
+                advertised,
+                peer_segmentation,
+            )
         };
         check_transmittable_length(advertised, target_transport_max_apdu)?;
         if unsegmented_apdu_size > remote_max_apdu as usize {
+            // Clause 12.11: a NO_SEGMENTATION or SEGMENTED_TRANSMIT peer
+            // accepts exactly one segment — only unsegmented requests — and
+            // Clause 18's SEGMENTATION_NOT_SUPPORTED abort is the certain
+            // outcome of sending anyway. Refuse locally when the capability
+            // is authoritative (I-Am or explicit configuration); a legacy
+            // placeholder row stays unknown and keeps today's behavior.
+            if let Some(crate::discovery::PeerSegmentation::Authoritative(capability)) =
+                peer_segmentation
+            {
+                if matches!(
+                    capability,
+                    bacnet_types::enums::Segmentation::NONE
+                        | bacnet_types::enums::Segmentation::TRANSMIT
+                ) {
+                    return Err(Error::Segmentation(format!(
+                        "request requires segmentation but the peer advertised \
+                         {capability:?} and cannot receive segmented requests"
+                    )));
+                }
+            }
             return self
                 .segmented_confirmed_request(
                     target,

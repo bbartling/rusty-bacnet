@@ -158,7 +158,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             source_network: None,
             source_address: None,
         };
-        self.device_table.lock().await.upsert(device);
+        // Placeholder capability defaults (NONE, 1476) are not I-Am evidence;
+        // they must never drive a segmentation-capability decision (#371).
+        self.device_table.lock().await.upsert_placeholder(device);
         Ok(())
     }
 

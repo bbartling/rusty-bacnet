@@ -797,6 +797,8 @@ mod device_events_tests;
 #[cfg(test)]
 mod peer_max_apdu_tests;
 #[cfg(test)]
+mod peer_segmentation_tests;
+#[cfg(test)]
 mod response_correlation_tests;
 #[cfg(test)]
 mod routed_max_apdu_tests;

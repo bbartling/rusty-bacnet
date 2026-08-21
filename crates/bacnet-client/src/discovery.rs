@@ -61,6 +61,26 @@ pub struct RoutedDeviceConfig {
     pub max_segments_accepted: Option<u32>,
 }
 
+/// Provenance of a row's `Segmentation_Supported` value (Clause 12.11).
+///
+/// Only authoritative capability may drive a preflight refusal: a legacy
+/// manual registration stores placeholder defaults that must not be mistaken
+/// for a peer advertising NO_SEGMENTATION (#371).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeerSegmentation {
+    /// The value is authoritative: learned from the peer's I-Am or explicitly
+    /// supplied by a caller (`add_routed_device`, `DeviceTable::upsert`).
+    Authoritative(Segmentation),
+    /// The row stores manual placeholder defaults; capability is unknown.
+    Placeholder,
+}
+
+#[derive(Debug)]
+struct TableEntry {
+    device: DiscoveredDevice,
+    segmentation: PeerSegmentation,
+}
+
 /// Thread-safe device discovery table.
 ///
 /// Keyed by device instance number (the instance part of the DEVICE object
@@ -75,9 +95,18 @@ pub struct RoutedDeviceConfig {
 /// both routing fields are `None`. A row with exactly one routing field set is
 /// malformed; it counts as neither local nor routable and matches no secondary
 /// lookup until a complete I-Am refreshes it.
+///
+/// # Capability provenance
+///
+/// Each row records whether its `segmentation_supported` is authoritative
+/// ([I-Am ingestion][DeviceTable::upsert_with_result], explicit
+/// [`upsert`][DeviceTable::upsert], or `add_routed_device`) or a legacy
+/// placeholder (`add_device`). Provenance lives in the same table entry as
+/// the device data, so it stays coherent across insert, update, purge, and
+/// clear: any replacement of an instance replaces its provenance with it.
 #[derive(Debug, Default)]
 pub struct DeviceTable {
-    devices: HashMap<u32, DiscoveredDevice>,
+    devices: HashMap<u32, TableEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +125,9 @@ impl DeviceTable {
 
     /// Insert or update a discovered device.
     ///
+    /// The row's `segmentation_supported` is treated as authoritative
+    /// capability (explicit configuration); see [`PeerSegmentation`].
+    ///
     /// The table is capped at 4096 entries. If the table is full and the
     /// device is not already present, the new entry is silently dropped.
     pub fn upsert(&mut self, device: DiscoveredDevice) {
@@ -103,13 +135,36 @@ impl DeviceTable {
     }
 
     pub(crate) fn upsert_with_result(&mut self, device: DiscoveredDevice) -> DeviceUpsertResult {
+        let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
+        self.insert_entry(device, segmentation)
+    }
+
+    /// Insert or update a device whose capability fields are manual
+    /// placeholders rather than learned or explicitly supplied values
+    /// (legacy `add_device`). Its `segmentation_supported` must never drive
+    /// a capability decision (#371).
+    pub(crate) fn upsert_placeholder(&mut self, device: DiscoveredDevice) {
+        let _ = self.insert_entry(device, PeerSegmentation::Placeholder);
+    }
+
+    fn insert_entry(
+        &mut self,
+        device: DiscoveredDevice,
+        segmentation: PeerSegmentation,
+    ) -> DeviceUpsertResult {
         const MAX_DEVICE_TABLE_ENTRIES: usize = 4096;
         let key = device.object_identifier.instance_number();
         let is_existing = self.devices.contains_key(&key);
         if !is_existing && self.devices.len() >= MAX_DEVICE_TABLE_ENTRIES {
             return DeviceUpsertResult::Dropped;
         }
-        self.devices.insert(key, device);
+        self.devices.insert(
+            key,
+            TableEntry {
+                device,
+                segmentation,
+            },
+        );
         if is_existing {
             DeviceUpsertResult::Updated
         } else {
@@ -119,12 +174,12 @@ impl DeviceTable {
 
     /// Get all discovered devices as a snapshot.
     pub fn all(&self) -> Vec<DiscoveredDevice> {
-        self.devices.values().cloned().collect()
+        self.devices.values().map(|e| e.device.clone()).collect()
     }
 
     /// Look up a device by instance number.
     pub fn get(&self, instance: u32) -> Option<&DiscoveredDevice> {
-        self.devices.get(&instance)
+        self.devices.get(&instance).map(|e| &e.device)
     }
 
     /// Look up a local device by its MAC address.
@@ -140,9 +195,10 @@ impl DeviceTable {
     pub fn get_by_mac(&self, mac: &[u8]) -> Option<&DiscoveredDevice> {
         self.devices
             .values()
-            .filter(|d| d.is_local())
-            .filter(|d| d.mac_address.as_slice() == mac)
-            .max_by_key(|d| d.last_seen)
+            .filter(|e| e.device.is_local())
+            .filter(|e| e.device.mac_address.as_slice() == mac)
+            .max_by_key(|e| e.device.last_seen)
+            .map(|e| &e.device)
     }
 
     /// Look up a routed device by its remote network number and MAC address.
@@ -163,13 +219,38 @@ impl DeviceTable {
     ) -> Option<&DiscoveredDevice> {
         self.devices
             .values()
-            .filter(|d| {
-                d.source_network == Some(network)
-                    && d.source_address
+            .filter(|e| {
+                e.device.source_network == Some(network)
+                    && e.device
+                        .source_address
                         .as_ref()
                         .is_some_and(|a| a.as_slice() == address)
             })
-            .max_by_key(|d| d.last_seen)
+            .max_by_key(|e| e.device.last_seen)
+            .map(|e| &e.device)
+    }
+
+    /// Segmentation capability knowledge for the local row [`get_by_mac`]
+    /// selects, or `None` when no local row matches. Coherent with request
+    /// sizing: both consult the same row under one shared borrow.
+    pub(crate) fn local_peer_segmentation(&self, mac: &[u8]) -> Option<PeerSegmentation> {
+        let device = self.get_by_mac(mac)?;
+        self.devices
+            .get(&device.object_identifier.instance_number())
+            .map(|e| e.segmentation)
+    }
+
+    /// Segmentation capability knowledge for the routed row
+    /// [`get_by_network_address`] selects, or `None` when no row matches.
+    pub(crate) fn routed_peer_segmentation(
+        &self,
+        network: u16,
+        address: &[u8],
+    ) -> Option<PeerSegmentation> {
+        let device = self.get_by_network_address(network, address)?;
+        self.devices
+            .get(&device.object_identifier.instance_number())
+            .map(|e| e.segmentation)
     }
 
     /// Clear all entries.
@@ -200,9 +281,9 @@ impl DeviceTable {
         let stale_keys: Vec<u32> = self
             .devices
             .iter()
-            .filter_map(|(key, device)| {
+            .filter_map(|(key, entry)| {
                 let is_stale = now
-                    .checked_duration_since(device.last_seen)
+                    .checked_duration_since(entry.device.last_seen)
                     .is_some_and(|age| age > max_age);
                 is_stale.then_some(*key)
             })
@@ -210,7 +291,7 @@ impl DeviceTable {
 
         stale_keys
             .into_iter()
-            .filter_map(|key| self.devices.remove(&key))
+            .filter_map(|key| self.devices.remove(&key).map(|e| e.device))
             .collect()
     }
 }
@@ -361,6 +442,44 @@ mod tests {
     /// original source; the router MAC is only the local next hop). A local
     /// MAC lookup for the router's own address must therefore never select a
     /// routed peer behind that router (#372).
+    /// Provenance transitions (#371): a legacy placeholder row becomes
+    /// authoritative when refreshed through the I-Am insertion path, and
+    /// provenance never outlives its row across purge/clear.
+    #[test]
+    fn segmentation_provenance_tracks_row_lifecycle() {
+        let mut table = DeviceTable::new();
+        table.upsert_placeholder(make_device(1));
+        assert_eq!(
+            table.local_peer_segmentation(&[192, 168, 1, 100, 0xBA, 0xC0]),
+            Some(PeerSegmentation::Placeholder)
+        );
+
+        // I-Am refresh of the same instance (the dispatch path).
+        table.upsert_with_result(make_device(1));
+        assert_eq!(
+            table.local_peer_segmentation(&[192, 168, 1, 100, 0xBA, 0xC0]),
+            Some(PeerSegmentation::Authoritative(Segmentation::NONE))
+        );
+
+        // Purge removes the row and its provenance with it.
+        let mut stale = make_device(1);
+        stale.last_seen = Instant::now() - Duration::from_secs(120);
+        table.upsert_placeholder(stale);
+        table.purge_stale(Duration::from_secs(60));
+        assert_eq!(
+            table.local_peer_segmentation(&[192, 168, 1, 100, 0xBA, 0xC0]),
+            None
+        );
+
+        // Clear leaves no orphan provenance either.
+        table.upsert(make_device(2));
+        table.clear();
+        assert_eq!(
+            table.local_peer_segmentation(&[192, 168, 1, 100, 0xBA, 0xC0]),
+            None
+        );
+    }
+
     #[test]
     fn get_by_mac_ignores_routed_rows() {
         let mut table = DeviceTable::new();
