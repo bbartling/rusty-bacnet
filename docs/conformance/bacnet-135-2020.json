@@ -1544,14 +1544,14 @@
    "positive_tests": [
     "crates/bacnet-objects/src/event_enrollment/tests/alert.rs (disabled-state reset/projection, guarded internal updates, Status_Flags, writability)",
     "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_write_rollback_restores_detection_state",
-     "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs (Event/Alert/intrinsic state rollback, raw Time_Delay_Normal fallback, duplicate-name failure, OOS ordering, per-object rollback-error reconciliation)",
-     "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs (token-backed Object_Name/index restoration, unreadable-property rollback failure reporting, Channel Last_Priority, Network Port Changes_Pending, Access Door command slots, and destructive log clear rollback)"
+    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs (Event/Alert/intrinsic state rollback, raw Time_Delay_Normal fallback, duplicate-name failure, OOS ordering, per-object rollback-error reconciliation)",
+    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs (token-backed Object_Name/index restoration, unreadable-property rollback failure reporting, Channel Last_Priority, Network Port Changes_Pending, Access Door command slots, and destructive log clear rollback)"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_disabled_state_rejects_internal_transition_updates",
-     "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::wpm_reports_object_state_rollback_failure",
-     "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::rollback_failure_reports_only_the_object_that_failed_restoration",
-     "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::unreadable_successful_write_reports_failed_rollback_and_residual_object"
+    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::wpm_reports_object_state_rollback_failure",
+    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::rollback_failure_reports_only_the_object_that_failed_restoration",
+    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::unreadable_successful_write_reports_failed_rollback_and_residual_object"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1559,7 +1559,7 @@
   },
   {
    "id": "BACNET-13-EVENT-ENROLLMENT-EVALUATOR",
-    "standard_anchor": "Clause 12.12 with Table 12-14 (Event Enrollment Object Type; Time_Delay_Normal Unsigned, conformance O, extract 16444-16446, property text 16887-16889); Clause 12.12 Table 12-15 (Time_Delay -> pTimeDelay mapping for every evaluated algorithm); Clause 13.2.2.1.4 (transition actions incl. the same-state rule); Clause 13.2.3 (Acked_Transitions on a received transition); Clause 13.3 common introduction and 13.3.1/13.3.2/13.3.3/13.3.5/13.3.6 direction rules with the pTimeDelayNormal fallback; Figure 13-10",
+   "standard_anchor": "Clause 12.12 with Table 12-14 (Event Enrollment Object Type; Time_Delay_Normal Unsigned, conformance O, extract 16444-16446, property text 16887-16889); Clause 12.12 Table 12-15 (Time_Delay -> pTimeDelay mapping for every evaluated algorithm); Clause 13.2.2.1.4 (transition actions incl. the same-state rule); Clause 13.2.3 (Acked_Transitions on a received transition); Clause 13.3 common introduction and 13.3.1/13.3.2/13.3.3/13.3.5/13.3.6 direction rules with the pTimeDelayNormal fallback; Figure 13-10",
    "priority": "P1",
    "requirement_summary": "The Event Enrollment evaluator honors both delays and executes transition actions for every indicated transition. pTimeDelay (Event_Parameters.Time_Delay per Table 12-15) gates transitions into OFFNORMAL states; pTimeDelayNormal - the EE object's new optional Time_Delay_Normal property (Unsigned, Table 12-14 O, writable under the Clause 12.1.2 option, read-back falling back to Time_Delay per Clause 13.3: 'if no value is available for this parameter, then it takes on the value of the pTimeDelay parameter') - gates transitions to NORMAL. The pending countdown is owned by the EE object in-memory behind a guarded internal trait channel (mirroring set_event_state_internal, #130) and advances once per evaluation pass of the event_enrollment_task interval (#133): condition-revert cancels, a redundant qualifying observation never re-seeds (Clause 13.2.4 debounce), a changed target re-seeds with the new target's direction delay, and a parameter change mid-pending (parameters and the effective TDN are fingerprinted per pass) cancels and re-gates. Per Clause 13.2.2.1.4 the actions run 'even if the transition does not change the event state': the SPECIFIC returned state is stored ('it is not acceptable to set Event_State to OFFNORMAL when the returned value is HIGH_LIMIT'), the Acked_Transitions bit is maintained per Clause 13.2.3 (cleared when the referenced Notification Class's Ack_Required marks the transition ack-owed, otherwise set; an unresolvable class is not-required), and the transition is emitted with its Event_Enable-scoped distribute flag (Clause 12.12 / 13.2.5). CHANGE_OF_STATE condition (c) (Optional:) is implemented via the retained last-offnormal-causing value so OFFNORMAL->OFFNORMAL re-indicates; CHANGE_OF_BITSTRING condition (c) (Optional:) is deliberately unimplemented and documented. CHANGE_OF_VALUE tracks the Clause 13.3.3 detection baseline (the value at the last indicated NORMAL transition): both criteria compare against it (REAL: |current - baseline| >= a positive pIncrement; BIT STRING: significant masked-bit change), the only indication is NORMAL->NORMAL (Figure 13-10), the baseline advances at each indicated NORMAL transition, and the first observed sample initializes the baseline without indicating (the clause's explicit local matter).",
    "status": "supported-with-clause-evidence",
@@ -1627,6 +1627,34 @@
     "README supported services (qualified silence/unsilence server support)"
    ],
    "notes": "Partial #177 safety slice. The former decode-only unconditional SimpleACK path is removed. Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone objects implement only the six silence/unsilence operations and require an exact Operation_Expected match. Targeted Reset, Reset Alarm, and Reset Fault return OBJECT / VALUE_OUT_OF_RANGE pending an application-owned executor or latch contract plus duplicate-response semantics; targetless reset requests perform the required all-applicable attempt and return Result(+) without built-in reset mutation. A retransmission after successful state mutation returns INVALID_OPERATION_IN_THIS_STATE until confirmed-request response replay exists. Silenced and Operation_Expected are network-read-only by local safety policy, including WPM rollback evidence. LifeSafetyOperation deliberately does not enter the coarse whole-object COV/event fan-out; property-aware COV for Silenced and Operation_Expected remains follow-up #177. No AE-LS-A/AE-LS-B or life-safety profile claim is made."
+  },
+  {
+   "id": "BACNET-14-FILE-ACCESS-METHOD",
+   "standard_anchor": "Clause 12.13 (Table 12-16 File_Access_Method), Clauses 14.1 and 14.2 (Incorrect File access method), Clause 18 (INVALID_FILE_ACCESS_METHOD), Clause 21 (BACnetFileAccessMethod production; AtomicReadFile/AtomicWriteFile access-method CHOICE)",
+   "priority": "P1",
+   "requirement_summary": "The bundled server cross-checks each AtomicReadFile and AtomicWriteFile request's access method against the target File object's declared File_Access_Method before any ACK is encoded or object state is mutated. The request CHOICE maps semantically to the property enumeration (stream request -> STREAM_ACCESS, record request -> RECORD_ACCESS), never by CHOICE tag number (stream is CHOICE [0] but enumeration value 1; record is CHOICE [1] but enumeration value 0). A mismatch, an unreadable property, a wrong property datatype, or an out-of-production raw value fails closed with SERVICES / INVALID_FILE_ACCESS_METHOD. This row covers only access-method cross-checking; no broader File service support (stream/record storage completeness, append semantics, ReadRange) is claimed.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-server/src/handlers/file.rs",
+    "crates/bacnet-objects/src/file.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::matched_stream_read_still_succeeds",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::matched_record_read_still_succeeds",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::matched_record_write_still_succeeds"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::read_stream_against_record_access_file_is_refused",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::read_record_against_stream_access_file_is_refused",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::write_stream_against_record_access_file_is_refused",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::write_record_against_stream_access_file_is_refused",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::mismatched_write_leaves_record_file_state_unchanged",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::mismatched_write_leaves_stream_file_state_unchanged",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::unknown_access_method_raw_value_fails_closed"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Narrow row added with #287. The four-way mismatch matrix pins the exact SERVICES / INVALID_FILE_ACCESS_METHOD pairing, response-buffer atomicity, and no-mutation on refused writes. Known adjacent gaps deliberately outside this row: FileObject does not expose File_Data (property 65) through read_property/write_property, so stream reads return empty octets and stream writes are refused PROPERTY / WRITE_ACCESS_DENIED downstream of the access-method gate; non-File identifiers use OBJECT / UNSUPPORTED_OBJECT_TYPE rather than the Clause 14 SERVICES / INCONSISTENT_OBJECT_TYPE row; read-only AtomicWriteFile uses OBJECT / FILE_ACCESS_DENIED rather than the Clause 14 SERVICES / FILE_ACCESS_DENIED row."
   }
  ]
 }
