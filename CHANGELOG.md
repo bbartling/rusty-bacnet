@@ -88,6 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detection-disabled reset clears all three, and restart semantics match
   the intrinsic detectors (in-memory only).
 
+### Added
+
+- `BACnetClient::add_routed_device` with a `RoutedDeviceConfig` (#372):
+  callers that already know a routed peer can register its device instance,
+  immediate-hop router MAC, remote SNET/SADR, advertised Max APDU Length
+  Accepted, segmentation capability, and optional Max Segments Accepted,
+  so requests are sized by the peer's advertised limits instead of silently
+  falling back to local config. Vendor ID defaults to 0 when unknown and
+  empty `router_mac`/`remote_mac` registrations are refused. Rust-only for
+  now; the Python surface is unchanged.
+
 ### Fixed
 
 - DeviceTable address identity no longer conflates routers with routed
@@ -100,20 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. Both secondary lookups now select the freshest `last_seen` when
   several rows share an address, replacing nondeterministic hash-order
   picks. `resolve_device`'s two-lock snapshot/coherence boundary is now
-  documented on the method.
-
-### Added
-
-- `BACnetClient::add_routed_device` with a `RoutedDeviceConfig` (#372):
-  callers that already know a routed peer can register its device instance,
-  immediate-hop router MAC, remote SNET/SADR, advertised Max APDU Length
-  Accepted, segmentation capability, and optional Max Segments Accepted,
-  so requests are sized by the peer's advertised limits instead of silently
-  falling back to local config. Vendor ID defaults to 0 when unknown.
-  Rust-only for now; the Python surface is unchanged. Legacy
-  `add_device(instance, mac)` still creates local rows and its metadata
-  defaults are now documented as manual registration values rather than
-  advertised peer capabilities.
+  documented on the method. Legacy `add_device(instance, mac)` still
+  creates local rows and its metadata defaults are documented as manual
+  registration values rather than advertised peer capabilities.
 
 - The Escalator object's `operation_direction` (477) is now stored as the
   typed `EscalatorOperationDirection` (default UNKNOWN) instead of a raw
