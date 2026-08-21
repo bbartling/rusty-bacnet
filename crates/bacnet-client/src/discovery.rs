@@ -30,10 +30,51 @@ pub struct DiscoveredDevice {
     pub source_address: Option<MacAddr>,
 }
 
+impl DiscoveredDevice {
+    /// True when this row represents a local peer: neither routing field is
+    /// set. See the [`DeviceTable`] address-space invariant.
+    pub fn is_local(&self) -> bool {
+        self.source_network.is_none() && self.source_address.is_none()
+    }
+}
+
+/// Manual registration details for a known routed peer, for use with
+/// [`crate::client::BACnetClient::add_routed_device`].
+///
+/// Everything a caller must supply so requests to the peer route correctly
+/// and are sized by the peer's advertised limits rather than local defaults.
+#[derive(Debug, Clone)]
+pub struct RoutedDeviceConfig {
+    /// Device instance number.
+    pub instance: u32,
+    /// MAC of the immediate-hop router (transport next hop, not peer identity).
+    pub router_mac: Vec<u8>,
+    /// Remote network number (SNET) the peer resides on.
+    pub remote_network: u16,
+    /// Peer's MAC on the remote network (SADR).
+    pub remote_mac: Vec<u8>,
+    /// The peer's advertised Max APDU Length Accepted.
+    pub max_apdu_length: u32,
+    /// The peer's advertised segmentation capability.
+    pub segmentation_supported: Segmentation,
+    /// The peer's Max Segments Accepted, if known (None = unspecified).
+    pub max_segments_accepted: Option<u32>,
+}
+
 /// Thread-safe device discovery table.
 ///
 /// Keyed by device instance number (the instance part of the DEVICE object
 /// identifier). Updated whenever an IAm is received.
+///
+/// # Address-space invariant
+///
+/// A row is *routed* when it carries routed-source identity (`source_network`
+/// and `source_address`, per Clause 6.2.2 the original source SNET/SADR); its
+/// `mac_address` is then only the immediate-hop router, shared by every peer
+/// behind that router. A row is *local* only when it is unambiguously local:
+/// both routing fields are `None`. A row with exactly one routing field set is
+/// malformed; it counts as neither local nor routable and matches no secondary
+/// lookup until a complete I-Am refreshes it.
 #[derive(Debug, Default)]
 pub struct DeviceTable {
     devices: HashMap<u32, DiscoveredDevice>,
@@ -86,11 +127,22 @@ impl DeviceTable {
         self.devices.get(&instance)
     }
 
-    /// Look up a device by its MAC address.
+    /// Look up a local device by its MAC address.
+    ///
+    /// Only unambiguously local rows (no `source_network`/`source_address`)
+    /// are considered: a routed row's `mac_address` is the router it was
+    /// heard through, not the remote device's identity, so a lookup of the
+    /// router's own address must never select a peer behind it (Clause 6.2.2).
+    ///
+    /// The table is keyed by device instance, so two local rows can share one
+    /// MAC until the stale purge; the freshest `last_seen` wins, mirroring
+    /// [`DeviceTable::get_by_network_address`].
     pub fn get_by_mac(&self, mac: &[u8]) -> Option<&DiscoveredDevice> {
         self.devices
             .values()
-            .find(|d| d.mac_address.as_slice() == mac)
+            .filter(|d| d.is_local())
+            .filter(|d| d.mac_address.as_slice() == mac)
+            .max_by_key(|d| d.last_seen)
     }
 
     /// Look up a routed device by its remote network number and MAC address.
@@ -302,6 +354,89 @@ mod tests {
         let dev = table.get_by_network_address(100, &[0x03]).unwrap();
         assert_eq!(dev.object_identifier.instance_number(), 2);
         assert_eq!(dev.max_apdu_length, 128);
+    }
+
+    /// A routed row's `mac_address` is the router it was heard through, not
+    /// the remote device's identity (Clause 6.2.2: SNET/SADR identify the
+    /// original source; the router MAC is only the local next hop). A local
+    /// MAC lookup for the router's own address must therefore never select a
+    /// routed peer behind that router (#372).
+    #[test]
+    fn get_by_mac_ignores_routed_rows() {
+        let mut table = DeviceTable::new();
+        let router_mac = &[192, 168, 1, 1, 0xBA, 0xC0];
+        let routed = make_routed_device(3003, 100, &[0x03]);
+        let mut routed_with_router_mac = routed;
+        routed_with_router_mac.mac_address = MacAddr::from_slice(router_mac);
+        table.upsert(routed_with_router_mac);
+
+        assert!(table.get_by_mac(router_mac).is_none());
+    }
+
+    /// Several routed peers can share one router MAC; none of them may be
+    /// returned by a local lookup of that router's address.
+    #[test]
+    fn get_by_mac_ignores_multiple_routed_rows_behind_one_router() {
+        let mut table = DeviceTable::new();
+        let router_mac = &[192, 168, 1, 1, 0xBA, 0xC0];
+        for instance in [1u32, 2, 3] {
+            let mut peer = make_routed_device(instance, 100, &[instance as u8]);
+            peer.mac_address = MacAddr::from_slice(router_mac);
+            table.upsert(peer);
+        }
+        assert!(table.get_by_mac(router_mac).is_none());
+    }
+
+    fn make_local_device_at_mac(instance: u32, mac: &[u8]) -> DiscoveredDevice {
+        let mut device = make_device(instance);
+        device.mac_address = MacAddr::from_slice(mac);
+        device
+    }
+
+    /// A local device whose MAC byte-equals a routed peer's SADR lives in a
+    /// different address space; the local lookup must return the local row.
+    #[test]
+    fn get_by_mac_returns_local_row_not_routed_sadr_namesake() {
+        let mut table = DeviceTable::new();
+        table.upsert(make_local_device_at_mac(10, &[0x03]));
+        table.upsert(make_routed_device(3003, 100, &[0x03]));
+
+        let dev = table.get_by_mac(&[0x03]).unwrap();
+        assert_eq!(dev.object_identifier.instance_number(), 10);
+    }
+
+    /// Two local rows sharing one MAC (re-commissioned instance surviving
+    /// until the stale purge) must resolve deterministically to the freshest
+    /// advertisement, mirroring the routed lookup rule.
+    #[test]
+    fn get_by_mac_prefers_freshest_local_row() {
+        let mut table = DeviceTable::new();
+        let now = Instant::now();
+        let mut stale = make_device(1);
+        stale.last_seen = now;
+        let mut fresh = make_device(2);
+        fresh.last_seen = now + Duration::from_secs(60);
+        table.upsert(stale);
+        table.upsert(fresh);
+
+        let dev = table.get_by_mac(&[192, 168, 1, 100, 0xBA, 0xC0]).unwrap();
+        assert_eq!(dev.object_identifier.instance_number(), 2);
+    }
+
+    /// Partial routing metadata (one half of SNET/SADR set) is malformed:
+    /// such a row is not unambiguously local, so it is excluded from local
+    /// lookup; the routed lookup already requires both terms.
+    #[test]
+    fn partial_routing_metadata_is_excluded_from_local_lookup() {
+        let mut table = DeviceTable::new();
+        let mut partial = make_device(7);
+        partial.source_network = Some(100);
+        table.upsert(partial);
+
+        assert!(table.get_by_mac(&[192, 168, 1, 100, 0xBA, 0xC0]).is_none());
+        assert!(table
+            .get_by_network_address(100, &[192, 168, 1, 100, 0xBA, 0xC0])
+            .is_none());
     }
 
     #[test]
