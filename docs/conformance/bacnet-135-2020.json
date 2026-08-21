@@ -1654,7 +1654,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Narrow row added with #287. The four-way mismatch matrix pins the exact SERVICES / INVALID_FILE_ACCESS_METHOD pairing, response-buffer atomicity, and no-mutation on refused writes. Known adjacent gaps deliberately outside this row: FileObject does not expose File_Data (property 65) through read_property/write_property, so stream reads return empty octets and stream writes are refused OBJECT / WRITE_ACCESS_DENIED downstream of the access-method gate; non-File identifiers use OBJECT / UNSUPPORTED_OBJECT_TYPE rather than the Clause 14 SERVICES / INCONSISTENT_OBJECT_TYPE row; read-only AtomicWriteFile uses OBJECT / FILE_ACCESS_DENIED rather than the Clause 14 SERVICES / FILE_ACCESS_DENIED row."
+   "notes": "Narrow row added with #287. The four-way mismatch matrix pins the exact SERVICES / INVALID_FILE_ACCESS_METHOD pairing, response-buffer atomicity, and no-mutation on refused writes. Known adjacent gaps deliberately outside this row: FileObject does not expose File_Data (property 65) through read_property/write_property, so stream reads return empty octets and stream writes are refused PROPERTY / WRITE_ACCESS_DENIED downstream of the access-method gate; non-File identifiers use OBJECT / UNSUPPORTED_OBJECT_TYPE rather than the Clause 14 SERVICES / INCONSISTENT_OBJECT_TYPE row; read-only AtomicWriteFile uses OBJECT / FILE_ACCESS_DENIED rather than the Clause 14 SERVICES / FILE_ACCESS_DENIED row."
   }
  ]
 }
