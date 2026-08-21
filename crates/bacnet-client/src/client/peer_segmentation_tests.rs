@@ -22,7 +22,7 @@ use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, Segmentation};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio::time::{timeout, Duration};
 
 use crate::discovery::{DiscoveredDevice, RoutedDeviceConfig};

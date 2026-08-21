@@ -99,7 +99,7 @@ struct TableEntry {
 /// # Capability provenance
 ///
 /// Each row records whether its `segmentation_supported` is authoritative
-/// ([I-Am ingestion][DeviceTable::upsert_with_result], explicit
+/// (I-Am ingestion via `upsert_with_result`, explicit
 /// [`upsert`][DeviceTable::upsert], or `add_routed_device`) or a legacy
 /// placeholder (`add_device`). Provenance lives in the same table entry as
 /// the device data, so it stays coherent across insert, update, purge, and
