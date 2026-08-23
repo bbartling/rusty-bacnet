@@ -78,7 +78,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
-    "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_when_retransmitted_current_segment_receives_negative_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle",
@@ -103,7 +104,7 @@
    "public_claims": [
     "README supported services"
    ],
-   "notes": "This slice adds server segmented ComplexAck send-side SegmentACK validation: SegmentACKs with the server bit set are ignored, positive ACKs advance only for the current segment, negative ACKs retransmit only the current requested segment, out-of-range negative ACKs are ignored, stale final ACKs do not complete the transfer, timeout retries retransmit before idle cleanup without a final timeout Abort, client Abort is routed to terminate the active segmented response without a spurious timeout Abort, routed SegmentACK/Abort events match the NPDU source-network key, segmented response frames set NPDU expecting_reply while waiting for SegmentACK, dispatch filters stale/future ACKs before queue insertion and does not block on a full SegmentACK queue, client Abort and same-peer/invoke-id replacement use nonblocking control events, live segmented sender tasks are capped by permits until each task exits, and replacement cancels the older sender so it cannot later emit a timeout Abort. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage."
+    "notes": "This slice adds server segmented ComplexAck send-side SegmentACK validation: SegmentACKs with the server bit set are ignored, either ACK flavor naming the current segment advances the transfer, a negative ACK naming the immediately preceding segment retransmits the current segment, out-of-range negative ACKs are ignored, stale final ACKs do not complete the transfer, timeout retries retransmit before idle cleanup without a final timeout Abort, client Abort is routed to terminate the active segmented response without a spurious timeout Abort, routed SegmentACK/Abort events match the NPDU source-network key, segmented response frames set NPDU expecting_reply while waiting for SegmentACK, dispatch filters stale/future ACKs before queue insertion and does not block on a full SegmentACK queue, client Abort and same-peer/invoke-id replacement use nonblocking control events, live segmented sender tasks are capped by permits until each task exits, and replacement cancels the older sender so it cannot later emit a timeout Abort. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage."
   },
   {
    "id": "BACNET-5-SEGMENTATION-WINDOW",
@@ -124,7 +125,8 @@
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
     "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs",
-    "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_when_retransmitted_current_segment_receives_negative_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle",

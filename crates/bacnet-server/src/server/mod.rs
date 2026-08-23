@@ -606,6 +606,38 @@ struct SegmentedSendHandle {
     total_segments: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentAckDisposition {
+    Advance,
+    Retransmit,
+}
+
+fn segment_ack_disposition(
+    ack: &SegmentAckPdu,
+    current: usize,
+    total_segments: usize,
+) -> Option<SegmentAckDisposition> {
+    if current >= total_segments {
+        return None;
+    }
+
+    let ack_seq = ack.sequence_number as usize;
+    if ack_seq >= total_segments {
+        return None;
+    }
+
+    // Clause 5.4.4.2 treats either ACK flavor's sequence number as the last
+    // segment accepted. A NAK for the preceding segment asks for `current`
+    // again; a NAK for `current` confirms it and advances the send window.
+    if ack_seq == current {
+        Some(SegmentAckDisposition::Advance)
+    } else if ack.negative_ack && current.checked_sub(1) == Some(ack_seq) {
+        Some(SegmentAckDisposition::Retransmit)
+    } else {
+        None
+    }
+}
+
 impl SegmentedSendHandle {
     fn new(
         segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
@@ -631,17 +663,7 @@ impl SegmentedSendHandle {
             return false;
         }
 
-        if ack.negative_ack {
-            let ack_seq = ack.sequence_number as usize;
-            let requested = if ack_seq == 0 && current == 0 {
-                0
-            } else {
-                ack_seq.saturating_add(1)
-            };
-            requested < self.total_segments && requested == current
-        } else {
-            ack.sequence_number as usize == current
-        }
+        segment_ack_disposition(ack, current, self.total_segments).is_some()
     }
 
     fn send_control(&self, event: SegmentedSendControlEvent) {

@@ -304,24 +304,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             continue;
                         }
 
-                        if ack.negative_ack {
-                            let ack_seq = ack.sequence_number as usize;
-                            let requested = if ack_seq == 0 && seg_idx == 0 {
-                                0
-                            } else {
-                                ack_seq.saturating_add(1)
-                            };
-                            if requested >= total_segments || requested != seg_idx {
-                                tracing::warn!(
-                                    seq = ack.sequence_number,
-                                    requested,
-                                    current = seg_idx,
-                                    total = total_segments,
-                                    "Ignoring negative SegmentAck outside current send window"
-                                );
-                                continue;
-                            }
+                        let Some(disposition) =
+                            segment_ack_disposition(&ack, seg_idx, total_segments)
+                        else {
+                            tracing::warn!(
+                                seq = ack.sequence_number,
+                                negative = ack.negative_ack,
+                                current = seg_idx,
+                                total = total_segments,
+                                "Ignoring SegmentAck outside current send window"
+                            );
+                            continue;
+                        };
 
+                        if disposition == SegmentAckDisposition::Retransmit {
                             if retransmission_retries >= options.max_retries {
                                 warn!(
                                     invoke_id,
@@ -348,25 +344,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                             debug!(
                                 seq = ack.sequence_number,
-                                requested,
-                                "Negative SegmentAck retransmitting from requested sequence"
+                                current = seg_idx,
+                                "Negative SegmentAck retransmitting current sequence"
                             );
-                            seg_idx = requested;
                             continue 'send_segments;
                         }
 
-                        let acknowledged = ack.sequence_number as usize;
-                        if acknowledged == seg_idx {
-                            retransmission_retries = 0;
-                            seg_idx += 1;
-                            continue 'send_segments;
-                        }
-
-                        tracing::warn!(
-                            seq = acknowledged,
-                            current = seg_idx,
-                            "Ignoring positive SegmentAck outside current send window"
-                        );
+                        retransmission_retries = 0;
+                        seg_idx += 1;
+                        continue 'send_segments;
                     }
                     SegmentedSendWaitResult::Abort(abort) => {
                         warn!(
