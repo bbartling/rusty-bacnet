@@ -407,8 +407,9 @@ fn seg_receiver_timeout_is_4s() {
 }
 
 #[test]
-fn seg_key_distinguishes_routed_sources_behind_same_router() {
-    let router = test_mac(1);
+fn segmented_transaction_key_identity_matrix() {
+    let router_a = test_mac(1);
+    let router_b = test_mac(2);
     let remote_a = NpduAddress {
         network: 100,
         mac_address: MacAddr::from_slice(&[0x0A]),
@@ -417,11 +418,56 @@ fn seg_key_distinguishes_routed_sources_behind_same_router() {
         network: 100,
         mac_address: MacAddr::from_slice(&[0x0B]),
     };
+    let other_network = NpduAddress {
+        network: 101,
+        mac_address: remote_a.mac_address.clone(),
+    };
 
-    let key_a: SegKey = (router.clone(), Some(remote_a), 7);
-    let key_b: SegKey = (router, Some(remote_b), 7);
+    let routed_a = segmented_transaction_key(&router_a, Some(&remote_a), 7);
+    assert_eq!(
+        routed_a,
+        segmented_transaction_key(&router_b, Some(&remote_a), 7)
+    );
+    assert_eq!(routed_a.0, MacAddr::new());
+    assert_ne!(
+        routed_a,
+        segmented_transaction_key(&router_a, Some(&remote_b), 7)
+    );
+    assert_ne!(
+        routed_a,
+        segmented_transaction_key(&router_a, Some(&other_network), 7)
+    );
+    assert_ne!(
+        routed_a,
+        segmented_transaction_key(&router_a, Some(&remote_a), 8)
+    );
 
-    assert_ne!(key_a, key_b);
+    let local_a = segmented_transaction_key(&router_a, None, 7);
+    let local_b = segmented_transaction_key(&router_b, None, 7);
+    assert_ne!(local_a, local_b);
+    assert_ne!(local_a, routed_a);
+    assert_ne!(local_a, segmented_transaction_key(&router_a, None, 8));
+
+    for invalid in [
+        NpduAddress {
+            network: 0,
+            mac_address: MacAddr::from_slice(&[0x0A]),
+        },
+        NpduAddress {
+            network: 0xFFFF,
+            mac_address: MacAddr::from_slice(&[0x0A]),
+        },
+        NpduAddress {
+            network: 100,
+            mac_address: MacAddr::new(),
+        },
+    ] {
+        let key_a = segmented_transaction_key(&router_a, Some(&invalid), 7);
+        let key_b = segmented_transaction_key(&router_b, Some(&invalid), 7);
+        assert_ne!(key_a, key_b);
+        assert_eq!(key_a.0, router_a);
+        assert_eq!(key_a.1.as_ref(), Some(&invalid));
+    }
 }
 
 #[test]

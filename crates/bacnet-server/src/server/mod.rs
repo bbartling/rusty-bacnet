@@ -582,9 +582,27 @@ impl BipServerBuilder {
     }
 }
 
-/// Key for tracking in-progress segmented sends:
-/// (source MAC/router MAC, optional routed source, invoke_id).
+/// Key for tracking segmented transactions by peer and invoke ID.
 type SegKey = (MacAddr, Option<NpduAddress>, u8);
+
+fn segmented_transaction_key(
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    invoke_id: u8,
+) -> SegKey {
+    match source_network {
+        Some(address)
+            if (1..=0xFFFE).contains(&address.network) && !address.mac_address.is_empty() =>
+        {
+            (MacAddr::new(), Some(address.clone()), invoke_id)
+        }
+        _ => (
+            MacAddr::from_slice(source_mac),
+            source_network.cloned(),
+            invoke_id,
+        ),
+    }
+}
 
 #[derive(Debug)]
 enum SegmentedSendEvent {

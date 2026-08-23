@@ -101,6 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Server segmented transactions now identify a routed peer by valid NPDU
+  SNET/SADR plus Invoke ID instead of the immediate router MAC (#384).
+  ConfirmedRequest continuation segments, SegmentACKs, and client Aborts can
+  arrive through a different router without splitting reassembly or segmented
+  ComplexACK sender state. Local peers remain keyed by immediate MAC, and
+  replies still use the current or captured router MAC with NPDU DNET/DADR.
+
 - Segmented ComplexACK and ConfirmedRequest receivers now use the corrected
   modulo-256 `DuplicateInWindow` predicate from Clause 5.4.2.2 and Addendum
   135-2020ch. Each current incomplete receive window silently discards exactly
