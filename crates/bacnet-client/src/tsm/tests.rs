@@ -142,6 +142,154 @@ async fn a_response_without_a_service_choice_completes_any_transaction() {
 }
 
 #[tokio::test]
+async fn segmented_request_rejects_premature_terminal_response_kinds() {
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+
+    for response_kind in 0..3 {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_segmented_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+        assert!(
+            matches!(
+                tsm.admit_terminal_response(&mac, invoke_id, None),
+                TerminalResponseAdmission::PrematureSegmentedRequestAborted
+            ),
+            "response kind {response_kind} must be phase-gated before service correlation"
+        );
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Abort { reason }
+                if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+        ));
+        assert_eq!(tsm.pending_count(), 0);
+        assert_eq!(tsm.allocate_invoke_id(&mac), Some(invoke_id));
+    }
+}
+
+#[tokio::test]
+async fn segmented_complex_ack_zero_is_rejected_until_all_segments_are_sent() {
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+    let registration = tsm.register_segmented_transaction_with_progress(
+        mac.clone(),
+        invoke_id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+    );
+
+    assert!(matches!(
+        tsm.admit_segmented_complex_ack(&mac, invoke_id, 0),
+        SegmentedResponseAdmission::PrematureSegmentedRequestAborted
+    ));
+    assert!(matches!(
+        registration.response.await.unwrap(),
+        TsmResponse::Abort { reason }
+            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+    ));
+    assert_eq!(tsm.pending_count(), 0);
+}
+
+#[tokio::test]
+async fn reject_and_abort_are_valid_throughout_segmented_request() {
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+
+    for response in [
+        TsmResponse::Reject { reason: 3 },
+        TsmResponse::Abort { reason: 4 },
+    ] {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_segmented_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+        assert_eq!(
+            tsm.complete_transaction(&mac, invoke_id, None, response),
+            CompletionOutcome::Delivered
+        );
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Reject { reason: 3 } | TsmResponse::Abort { reason: 4 }
+        ));
+        assert_eq!(tsm.pending_count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn sent_all_segments_enables_response_correlation_before_final_ack() {
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+    let registration = tsm.register_segmented_transaction_with_progress(
+        mac.clone(),
+        invoke_id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+    );
+    let mut token = tsm
+        .begin_final_segment_send(&mac, invoke_id, &registration.owner)
+        .unwrap();
+    assert!(tsm.mark_final_segment_issued(&mac, invoke_id, &registration.owner, &mut token));
+
+    assert_eq!(
+        tsm.complete_transaction(
+            &mac,
+            invoke_id,
+            Some(ConfirmedServiceChoice::WRITE_PROPERTY),
+            TsmResponse::SimpleAck,
+        ),
+        CompletionOutcome::ServiceChoiceMismatch {
+            expected: ConfirmedServiceChoice::READ_PROPERTY,
+            observed: ConfirmedServiceChoice::WRITE_PROPERTY,
+        }
+    );
+    assert_eq!(tsm.pending_count(), 1);
+    assert_eq!(
+        tsm.complete_transaction(
+            &mac,
+            invoke_id,
+            Some(ConfirmedServiceChoice::READ_PROPERTY),
+            TsmResponse::SimpleAck,
+        ),
+        CompletionOutcome::Delivered
+    );
+    assert!(matches!(
+        registration.response.await.unwrap(),
+        TsmResponse::SimpleAck
+    ));
+}
+
+#[test]
+fn final_segment_ack_preserves_owner_in_await_confirmation() {
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+    let registration = tsm.register_segmented_transaction_with_progress(
+        mac.clone(),
+        invoke_id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+    );
+    assert!(matches!(
+        tsm.segment_ack_phase(&mac, invoke_id),
+        SegmentAckPhase::SegmentedRequest(ref owner) if owner.same_as(&registration.owner)
+    ));
+    let mut token = tsm
+        .begin_final_segment_send(&mac, invoke_id, &registration.owner)
+        .unwrap();
+    assert!(tsm.mark_final_segment_issued(&mac, invoke_id, &registration.owner, &mut token));
+    assert!(tsm.finish_segmented_request(&mac, invoke_id, &registration.owner));
+    assert!(matches!(
+        tsm.segment_ack_phase(&mac, invoke_id),
+        SegmentAckPhase::Outstanding
+    ));
+    assert!(tsm.owner_is_current(&mac, invoke_id, &registration.owner));
+}
+
+#[tokio::test]
 async fn complete_unknown_transaction_reports_no_transaction() {
     let mut tsm = Tsm::new(TsmConfig::default());
     let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
@@ -309,6 +457,10 @@ async fn stale_owner_cannot_mutate_reused_transaction_key() {
         tsm.record_segmented_response_activity(&mac, invoke_id, &first.owner),
         None
     );
+    assert!(tsm
+        .begin_final_segment_send(&mac, invoke_id, &first.owner)
+        .is_none());
+    assert!(!tsm.finish_segmented_request(&mac, invoke_id, &first.owner));
     assert!(!tsm.reset_segmented_response(&mac, invoke_id, &first.owner));
     assert_eq!(
         tsm.complete_transaction_for_owner(

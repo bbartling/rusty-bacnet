@@ -14,7 +14,9 @@ use std::time::Instant;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+#[cfg(test)]
+use tokio::time::timeout;
+use tokio::time::Duration;
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
@@ -39,8 +41,8 @@ use crate::segmentation::{
     duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
 use crate::tsm::{
-    RequestTimerExpiration, SegmentTimerExpiration, TransactionOwner, TransactionProgress, Tsm,
-    TsmConfig, TsmResponse,
+    RequestTimerExpiration, SegmentAckPhase, SegmentTimerExpiration, SegmentedResponseAdmission,
+    TerminalResponseAdmission, TransactionOwner, TransactionProgress, Tsm, TsmConfig, TsmResponse,
 };
 #[cfg(test)]
 use transaction_cleanup::{SegmentedCleanupHook, SegmentedPostWaitCleanupHook};
@@ -375,6 +377,11 @@ struct SegmentedReceiveState {
 /// Key for tracking in-progress segmented receives: (correlation_mac, invoke_id).
 type SegKey = (MacAddr, u8);
 
+struct SegmentAckRoute {
+    owner: TransactionOwner,
+    sender: mpsc::Sender<SegmentAckPdu>,
+}
+
 /// BACnet client with low-level and high-level request APIs.
 pub struct BACnetClient<T: TransportPort> {
     config: ClientConfig,
@@ -384,14 +391,12 @@ pub struct BACnetClient<T: TransportPort> {
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
     dispatch_task: Option<JoinHandle<()>>,
-    /// Channels feeding SegmentACKs to in-flight segmented sends.
+    /// Owner-qualified channels feeding SegmentACKs to in-flight segmented sends.
     ///
-    /// Lock invariant: never hold this and [`Self::tsm`] at the same time.
-    /// They are acquired in both orders by design — setup registers the
-    /// transaction and then inserts the sender, while teardown and inbound
-    /// dispatch go the other way — so the pair is deadlock-free only because
-    /// neither is ever held across the other's acquisition.
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
+    /// Dispatch may hold [`Self::tsm`] while acquiring this lock so phase
+    /// validation and delivery cannot race terminal completion. No path may
+    /// acquire the locks in the opposite order.
+    seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>>,
     cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
     #[cfg(test)]
     segmented_post_wait_cleanup: Arc<SegmentedPostWaitCleanupHook>,
@@ -789,6 +794,7 @@ mod object_mgmt;
 mod property;
 mod requests;
 mod segmentation;
+mod segmented_request;
 mod transaction_cleanup;
 
 pub use cov_notifications::{
@@ -833,6 +839,10 @@ mod segmentation_retransmit_tests;
 mod segmented_receive_duplicate_tests;
 #[cfg(test)]
 mod segmented_receive_lifecycle_tests;
+#[cfg(test)]
+mod segmented_request_ordering_tests;
+#[cfg(test)]
+mod segmented_request_state_tests;
 #[cfg(test)]
 mod segmented_timeout_tests;
 #[cfg(test)]

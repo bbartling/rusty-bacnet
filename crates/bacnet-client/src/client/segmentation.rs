@@ -1,3 +1,4 @@
+use super::segmented_request::{OutgoingSegmentContext, OutgoingSegmentSend};
 use super::*;
 use crate::tsm::CompletionOutcome;
 use bacnet_encoding::apdu::advertised_max_segments;
@@ -118,6 +119,37 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let tsm_mac = response_tsm_mac(source_mac, source_network);
         let key = (tsm_mac.clone(), ack.invoke_id);
 
+        let mut deferred_owner = None;
+        let admitted_owner = loop {
+            let admission = {
+                let mut tsm = tsm.lock().await;
+                if let Some(owner) = deferred_owner.as_ref() {
+                    tsm.admit_segmented_complex_ack_for_owner(&tsm_mac, ack.invoke_id, seq, owner)
+                } else {
+                    tsm.admit_segmented_complex_ack(&tsm_mac, ack.invoke_id, seq)
+                }
+            };
+            match admission {
+                SegmentedResponseAdmission::Active(owner) => break Some(owner),
+                SegmentedResponseAdmission::FinalSegmentSendPolling { owner, issue } => {
+                    issue.wait_until_polled().await;
+                    deferred_owner = Some(owner);
+                }
+                SegmentedResponseAdmission::PrematureSegmentedRequestAborted => {
+                    Self::send_client_abort(
+                        network,
+                        source_mac,
+                        source_network,
+                        ack.invoke_id,
+                        bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                    )
+                    .await;
+                    return;
+                }
+                SegmentedResponseAdmission::NoTransaction => break None,
+            }
+        };
+
         debug!(
             invoke_id = ack.invoke_id,
             seq = seq,
@@ -168,7 +200,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         //
         // Bind the guard so its scope is obvious: it must not be held across
         // the send below, and an `if let` here would extend it silently.
-        let owner = {
+        let owner = if let Some(owner) = admitted_owner {
+            Some(owner)
+        } else {
             tsm.lock()
                 .await
                 .owner_and_expected_service(&tsm_mac, ack.invoke_id)
@@ -455,6 +489,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         }
     }
+
     /// Send a confirmed request using segmented transfer with windowed flow control.
     pub(super) async fn segmented_confirmed_request(
         &self,
@@ -486,18 +521,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Starting segmented confirmed request"
         );
 
+        let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         let (invoke_id, registration) = {
             let mut tsm = self.tsm.lock().await;
             let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let registration =
-                tsm.register_transaction_with_progress(tsm_mac.clone(), invoke_id, service_choice);
+            let registration = tsm.register_segmented_transaction_with_progress(
+                tsm_mac.clone(),
+                invoke_id,
+                service_choice,
+            );
             (invoke_id, registration)
         };
 
         let owner = registration.owner.clone();
-        let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         let mut guard = TransactionGuard::new(
             Arc::clone(&self.tsm),
             self.cleanup_tx.clone(),
@@ -508,10 +546,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
         {
             let key = (tsm_mac.clone(), invoke_id);
-            self.seg_ack_senders
-                .lock()
-                .await
-                .insert(key, seg_ack_tx.clone());
+            self.seg_ack_senders.lock().await.insert(
+                key,
+                SegmentAckRoute {
+                    owner: owner.clone(),
+                    sender: seg_ack_tx.clone(),
+                },
+            );
         }
 
         // Tseg: use APDU timeout for now (configurable via apdu_timeout_ms)
@@ -527,9 +568,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // transfer off is a local matter, like every bounded resource here.
         const MAX_NEG_ACK_RETRIES: u32 = 10;
         let mut owns_tsm_cleanup = true;
+        let mut response_rx = registration.response;
+        let mut progress_rx = registration.progress;
+        let send_context = OutgoingSegmentContext {
+            target,
+            service_choice,
+            advertised_max_apdu,
+            remote_max_apdu,
+            invoke_id,
+            total_segments,
+            tsm_mac: &tsm_mac,
+            owner: &owner,
+        };
 
         let result = async {
-            while next_seq < total_segments {
+            let mut segmented_response_started = false;
+            'send: while next_seq < total_segments {
                 let window_start = next_seq;
                 let window_end = (window_start + window_size).min(total_segments);
 
@@ -539,32 +593,61 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .map(|(i, s)| (window_start + i, s))
                 {
                     let is_last = seq == total_segments - 1;
-                    let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                        segmented: true,
-                        more_follows: !is_last,
-                        segmented_response_accepted: self.config.segmented_response_accepted,
-                        max_segments: self.config.max_segments,
-                        max_apdu_length: advertised_max_apdu,
-                        invoke_id,
-                        sequence_number: Some(seq as u8),
-                        proposed_window_size: Some(self.config.proposed_window_size.max(1)),
-                        service_choice,
-                        service_request: segment_data.clone(),
-                    });
-
-                    let mut buf = BytesMut::with_capacity(remote_max_apdu as usize);
-                    encode_apdu(&mut buf, &pdu)?;
-
-                    self.send_confirmed_target_apdu(target, &buf).await?;
-
-                    debug!(seq, is_last, "Sent segment");
+                    match self
+                        .send_outgoing_segment(
+                            send_context,
+                            seq,
+                            segment_data,
+                            is_last,
+                            &mut response_rx,
+                            &mut progress_rx,
+                        )
+                        .await?
+                    {
+                        OutgoingSegmentSend::Sent => {
+                            debug!(seq, is_last, "Sent segment");
+                        }
+                        OutgoingSegmentSend::Terminal(response) => {
+                            owns_tsm_cleanup = false;
+                            return Ok(response);
+                        }
+                        OutgoingSegmentSend::SegmentedResponse => {
+                            segmented_response_started = true;
+                            break 'send;
+                        }
+                    }
                 }
 
                 let ack = {
                     let mut ack_retries: u8 = 0;
                     loop {
-                        match timeout(timeout_duration, seg_ack_rx.recv()).await {
-                            Ok(Some(ack)) => {
+                        let segment_timer = tokio::time::sleep(timeout_duration);
+                        tokio::pin!(segment_timer);
+                        tokio::select! {
+                            biased;
+                            response = &mut response_rx => {
+                                owns_tsm_cleanup = false;
+                                return response.map_err(|_| {
+                                    Error::Encoding("TSM response channel closed".into())
+                                });
+                            }
+                            changed = progress_rx.changed() => {
+                                if changed.is_err() {
+                                    owns_tsm_cleanup = false;
+                                    return (&mut response_rx).await.map_err(|_| {
+                                        Error::Encoding("TSM response channel closed".into())
+                                    });
+                                }
+                                if matches!(
+                                    *progress_rx.borrow_and_update(),
+                                    TransactionProgress::SegmentedResponse { .. }
+                                ) {
+                                    segmented_response_started = true;
+                                    break 'send;
+                                }
+                            }
+                            received = seg_ack_rx.recv() => match received {
+                                Some(ack) => {
                                 let ack_seq = ack.sequence_number as usize;
 
                                 // The sole gate on an inbound SegmentACK,
@@ -608,11 +691,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 }
 
                                 break ack;
-                            }
-                            Ok(None) => {
+                                }
+                                None => {
                                 return Err(Error::Encoding("SegmentAck channel closed".into()));
-                            }
-                            Err(_timeout) => {
+                                }
+                            },
+                            _ = &mut segment_timer => {
                                 ack_retries += 1;
                                 if ack_retries > max_ack_retries {
                                     return Err(Error::Timeout(timeout_duration));
@@ -627,27 +711,29 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     .map(|(i, s)| (window_start + i, s))
                                 {
                                     let is_last = seq == total_segments - 1;
-                                    let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                                        segmented: true,
-                                        more_follows: !is_last,
-                                        segmented_response_accepted: self
-                                            .config
-                                            .segmented_response_accepted,
-                                        max_segments: self.config.max_segments,
-                                        max_apdu_length: advertised_max_apdu,
-                                        invoke_id,
-                                        sequence_number: Some(seq as u8),
-                                        proposed_window_size: Some(
-                                            self.config.proposed_window_size.max(1),
-                                        ),
-                                        service_choice,
-                                        service_request: segment_data.clone(),
-                                    });
-
-                                    let mut buf = BytesMut::with_capacity(remote_max_apdu as usize);
-                                    encode_apdu(&mut buf, &pdu)?;
-
-                                    self.send_confirmed_target_apdu(target, &buf).await?;
+                                    match self
+                                        .send_outgoing_segment(
+                                            send_context,
+                                            seq,
+                                            segment_data,
+                                            false,
+                                            &mut response_rx,
+                                            &mut progress_rx,
+                                        )
+                                        .await?
+                                    {
+                                        OutgoingSegmentSend::Sent => {
+                                            debug!(seq, is_last, "Retransmitted segment");
+                                        }
+                                        OutgoingSegmentSend::Terminal(response) => {
+                                            owns_tsm_cleanup = false;
+                                            return Ok(response);
+                                        }
+                                        OutgoingSegmentSend::SegmentedResponse => {
+                                                segmented_response_started = true;
+                                                break 'send;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -683,6 +769,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 next_seq = ack_seq + 1;
             }
 
+            if !segmented_response_started {
+                self.tsm
+                    .lock()
+                    .await
+                    .finish_segmented_request(&tsm_mac, invoke_id, &owner);
+            }
             // Once entered, the phase-aware waiter owns terminal TSM removal.
             // A later key-only cancellation could target a reused invoke ID.
             owns_tsm_cleanup = false;
@@ -691,8 +783,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 &tsm_mac,
                 invoke_id,
                 &owner,
-                registration.response,
-                registration.progress,
+                response_rx,
+                progress_rx,
                 None,
             )
             .await
@@ -705,10 +797,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         {
             let key = (tsm_mac.clone(), invoke_id);
             let mut senders = self.seg_ack_senders.lock().await;
-            if senders
-                .get(&key)
-                .is_some_and(|sender| sender.same_channel(&seg_ack_tx))
-            {
+            if senders.get(&key).is_some_and(|route| {
+                route.owner.same_as(&owner) && route.sender.same_channel(&seg_ack_tx)
+            }) {
                 senders.remove(&key);
             }
         }
