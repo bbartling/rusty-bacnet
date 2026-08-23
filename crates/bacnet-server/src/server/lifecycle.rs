@@ -89,11 +89,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // senders and records server-TSM results (#377).
                         if let Apdu::Abort(ref abt) = decoded {
                             if !abt.sent_by_server {
-                                seg_receivers.remove(&(
-                                    source_mac.clone(),
-                                    source_network.clone(),
+                                let key = segmented_transaction_key(
+                                    source_mac.as_slice(),
+                                    source_network.as_ref(),
                                     abt.invoke_id,
-                                ));
+                                );
+                                seg_receivers.remove(&key);
                             }
                         }
 
@@ -101,8 +102,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
                             if req.segmented {
                                 let seq = req.sequence_number.unwrap_or(0);
-                                let key: SegKey =
-                                    (source_mac.clone(), source_network.clone(), req.invoke_id);
+                                let key = segmented_transaction_key(
+                                    source_mac.as_slice(),
+                                    source_network.as_ref(),
+                                    req.invoke_id,
+                                );
 
                                 // Clause 5.4.5.1
                                 // ConfirmedSegmentedReceivedNotSupported: a

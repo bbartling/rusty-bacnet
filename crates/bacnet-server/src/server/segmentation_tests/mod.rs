@@ -309,6 +309,20 @@ fn decoded_sent_apdu(sent: &SentFrames, index: usize) -> Apdu {
     decode_apdu(npdu.payload).expect("sent NPDU payload should decode as APDU")
 }
 
+fn sent_npdu_destination(sent: &SentFrames, index: usize) -> Option<NpduAddress> {
+    let npdu_bytes = {
+        let sent = sent.lock().unwrap();
+        sent[index].0.clone()
+    };
+    decode_npdu(npdu_bytes)
+        .expect("sent frame should decode as NPDU")
+        .destination
+}
+
+fn sent_link_destination(sent: &SentFrames, index: usize) -> MacAddr {
+    sent.lock().unwrap()[index].1.clone()
+}
+
 fn sent_expecting_reply(sent: &SentFrames, index: usize) -> bool {
     let npdu_bytes = {
         let sent = sent.lock().unwrap();

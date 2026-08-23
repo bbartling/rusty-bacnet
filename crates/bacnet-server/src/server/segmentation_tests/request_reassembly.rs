@@ -3,9 +3,9 @@
 //! Clause 20.1.2.7 makes the request sequence number modulo 256, so the wire
 //! can carry a request longer than the sequence space and only the receiver's
 //! bookkeeping stands between that and silent payload corruption. These tests
-//! run the real dispatch loop over a loopback pair, with the test playing the
-//! client in lockstep (window size 1, one ack awaited per segment — also what
-//! keeps the loopback channels from filling).
+//! run the real dispatch loop over loopback or injected test transports. The
+//! loopback tests play the client in lockstep (window size 1, one ack awaited
+//! per segment — also what keeps the loopback channels from filling).
 //!
 //! Wall-clock discipline: every test must finish well inside the 4 s
 //! reassembly reaper, which would otherwise evict the session mid-test and
@@ -16,6 +16,7 @@ use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::enums::Segmentation;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
@@ -24,6 +25,141 @@ use tokio::time::timeout;
 const SERVER_MAC: &[u8] = &[0x02];
 const CLIENT_MAC: &[u8] = &[0x01];
 const CSV_INSTANCE: u32 = 1;
+
+struct RoutedInjectionTransport {
+    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+    sent_unicast: SentFrames,
+    local_mac: MacAddr,
+}
+
+impl RoutedInjectionTransport {
+    fn new(sent_unicast: SentFrames) -> (Self, mpsc::Sender<ReceivedNpdu>) {
+        let (incoming_tx, incoming) = mpsc::channel(16);
+        (
+            Self {
+                incoming: Some(incoming),
+                sent_unicast,
+                local_mac: MacAddr::from_slice(SERVER_MAC),
+            },
+            incoming_tx,
+        )
+    }
+}
+
+impl TransportPort for RoutedInjectionTransport {
+    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        self.incoming
+            .take()
+            .ok_or_else(|| Error::Encoding("routed injection transport already started".into()))
+    }
+
+    async fn stop(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.sent_unicast
+            .lock()
+            .unwrap()
+            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
+        Ok(())
+    }
+
+    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn local_mac(&self) -> &[u8] {
+        &self.local_mac
+    }
+}
+
+async fn start_routed_reassembly_server() -> (
+    BACnetServer<RoutedInjectionTransport>,
+    mpsc::Sender<ReceivedNpdu>,
+    SentFrames,
+) {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, incoming) = RoutedInjectionTransport::new(StdArc::clone(&sent));
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        CharacterStringValueObject::new(CSV_INSTANCE, "CSV-1").unwrap(),
+    ))
+    .unwrap();
+    let config = ServerConfig {
+        segmentation_supported: Segmentation::BOTH,
+        ..ServerConfig::default()
+    };
+    let server = BACnetServer::start(config, db, transport).await.unwrap();
+    (server, incoming, sent)
+}
+
+async fn inject_routed_apdu(
+    incoming: &mpsc::Sender<ReceivedNpdu>,
+    router_mac: &MacAddr,
+    routed_source: &NpduAddress,
+    apdu: &Apdu,
+) {
+    let mut apdu_buf = BytesMut::new();
+    encode_apdu(&mut apdu_buf, apdu).unwrap();
+    let npdu = Npdu {
+        source: Some(routed_source.clone()),
+        payload: apdu_buf.freeze(),
+        ..Npdu::default()
+    };
+    let mut npdu_buf = BytesMut::new();
+    encode_npdu(&mut npdu_buf, &npdu).unwrap();
+    incoming
+        .send(ReceivedNpdu {
+            npdu: npdu_buf.freeze(),
+            source_mac: router_mac.clone(),
+            link_layer_group: false,
+            data_attributes: Vec::new(),
+            reply_tx: None,
+        })
+        .await
+        .unwrap();
+}
+
+async fn inject_routed_segment(
+    incoming: &mpsc::Sender<ReceivedNpdu>,
+    router_mac: &MacAddr,
+    routed_source: &NpduAddress,
+    invoke_id: u8,
+    seq: u8,
+    more_follows: bool,
+    data: &[u8],
+) {
+    inject_routed_apdu(
+        incoming,
+        router_mac,
+        routed_source,
+        &Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+            segmented: true,
+            more_follows,
+            segmented_response_accepted: true,
+            max_segments: None,
+            max_apdu_length: 1476,
+            invoke_id,
+            sequence_number: Some(seq),
+            proposed_window_size: Some(1),
+            service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+            service_request: Bytes::copy_from_slice(data),
+        }),
+    )
+    .await;
+}
+
+fn sent_routed_frame(sent: &SentFrames, index: usize) -> (Npdu, MacAddr) {
+    let (npdu, link_destination) = {
+        let sent = sent.lock().unwrap();
+        sent[index].clone()
+    };
+    (
+        decode_npdu(npdu).expect("sent frame should decode as NPDU"),
+        link_destination,
+    )
+}
 
 /// Start a real server on one end of a loopback pair; the test is the client
 /// on the other end. The database holds one CharacterString Value object so a
@@ -192,7 +328,7 @@ async fn expect_abort(
     }
 }
 
-pub(super) async fn present_value(server: &BACnetServer<LoopbackTransport>) -> String {
+pub(super) async fn present_value<T: TransportPort + 'static>(server: &BACnetServer<T>) -> String {
     let db = server.database().read().await;
     let oid = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, CSV_INSTANCE).unwrap();
     match db
@@ -361,6 +497,119 @@ async fn peer_abort_clears_the_reassembly_session() {
         "a segment after the peer's Abort",
     )
     .await;
+}
+
+#[tokio::test]
+async fn routed_reassembly_survives_immediate_router_change_and_replies_on_current_path() {
+    let (server, incoming, sent) = start_routed_reassembly_server().await;
+    let router_a = test_mac(30);
+    let router_b = test_mac(31);
+    let remote = routed_address(400, 0x40);
+    let invoke_id = 29;
+    let text = "routed-segment-identity";
+    let chunks = split_into(&write_property_payload(text), 2);
+
+    inject_routed_segment(
+        &incoming, &router_a, &remote, invoke_id, 0, true, &chunks[0],
+    )
+    .await;
+    wait_for_sent_len(&sent, 1).await;
+    inject_routed_segment(
+        &incoming, &router_b, &remote, invoke_id, 1, false, &chunks[1],
+    )
+    .await;
+    wait_for_sent_len(&sent, 3).await;
+
+    for (index, expected_router) in [(0, &router_a), (1, &router_b), (2, &router_b)] {
+        let (npdu, link_destination) = sent_routed_frame(&sent, index);
+        assert_eq!(&link_destination, expected_router);
+        assert_eq!(npdu.destination.as_ref(), Some(&remote));
+        assert_eq!(
+            npdu.destination.as_ref().map(|address| address.network),
+            Some(remote.network)
+        );
+        assert_eq!(
+            npdu.destination
+                .as_ref()
+                .map(|address| &address.mac_address),
+            Some(&remote.mac_address)
+        );
+        match (index, apdu::decode_apdu(npdu.payload).unwrap()) {
+            (0, Apdu::SegmentAck(ack)) => {
+                assert_eq!(ack.invoke_id, invoke_id);
+                assert_eq!(ack.sequence_number, 0);
+                assert!(!ack.negative_ack);
+            }
+            (1, Apdu::SegmentAck(ack)) => {
+                assert_eq!(ack.invoke_id, invoke_id);
+                assert_eq!(ack.sequence_number, 1);
+                assert!(!ack.negative_ack);
+            }
+            (2, Apdu::SimpleAck(ack)) => {
+                assert_eq!(ack.invoke_id, invoke_id);
+                assert_eq!(ack.service_choice, ConfirmedServiceChoice::WRITE_PROPERTY);
+            }
+            (index, other) => panic!("unexpected response {index}: {other:?}"),
+        }
+    }
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(sent_count(&sent), 3, "request must complete exactly once");
+    assert_eq!(present_value(&server).await, text);
+}
+
+#[tokio::test]
+async fn routed_peer_abort_through_new_router_removes_existing_reassembly_session() {
+    let (_server, incoming, sent) = start_routed_reassembly_server().await;
+    let router_a = test_mac(32);
+    let router_b = test_mac(33);
+    let remote = routed_address(401, 0x50);
+    let invoke_id = 30;
+
+    inject_routed_segment(
+        &incoming,
+        &router_a,
+        &remote,
+        invoke_id,
+        0,
+        true,
+        &[0x11; 16],
+    )
+    .await;
+    wait_for_sent_len(&sent, 1).await;
+    inject_routed_apdu(
+        &incoming,
+        &router_b,
+        &remote,
+        &Apdu::Abort(AbortPdu {
+            sent_by_server: false,
+            invoke_id,
+            abort_reason: AbortReason::OTHER,
+        }),
+    )
+    .await;
+    inject_routed_segment(
+        &incoming,
+        &router_a,
+        &remote,
+        invoke_id,
+        1,
+        true,
+        &[0x22; 16],
+    )
+    .await;
+    wait_for_sent_len(&sent, 2).await;
+
+    let (npdu, link_destination) = sent_routed_frame(&sent, 1);
+    assert_eq!(link_destination, router_a);
+    assert_eq!(npdu.destination, Some(remote));
+    match apdu::decode_apdu(npdu.payload).unwrap() {
+        Apdu::Abort(abort) => {
+            assert_eq!(abort.invoke_id, invoke_id);
+            assert_eq!(abort.abort_reason, AbortReason::INVALID_APDU_IN_THIS_STATE);
+        }
+        other => panic!("expected no-session Abort after routed peer Abort, got {other:?}"),
+    }
 }
 
 /// #381: a device that does not support segmented reception answers segment

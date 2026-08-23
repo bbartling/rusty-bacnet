@@ -152,11 +152,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             control_tx,
             total_segments,
         ));
-        let key = (
-            MacAddr::from_slice(source_mac),
-            source_network.cloned(),
-            invoke_id,
-        );
+        let key = segmented_transaction_key(source_mac, source_network, invoke_id);
         let insert_result = {
             let mut senders = seg_ack_senders.lock().await;
             if !senders.contains_key(&key) && senders.len() >= MAX_SEG_SENDERS {

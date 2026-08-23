@@ -172,9 +172,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
             }
             Apdu::Abort(abort) if !abort.sent_by_server => {
-                let key = (
-                    MacAddr::from_slice(source_mac),
-                    received.source_network.clone(),
+                let key = segmented_transaction_key(
+                    source_mac,
+                    received.source_network.as_ref(),
                     abort.invoke_id,
                 );
                 let routed_segmented = Self::route_segmented_send_event(
@@ -209,9 +209,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     return;
                 }
 
-                let key = (
-                    MacAddr::from_slice(source_mac),
-                    received.source_network.clone(),
+                let key = segmented_transaction_key(
+                    source_mac,
+                    received.source_network.as_ref(),
                     invoke_id,
                 );
                 if !Self::route_segmented_send_event(
