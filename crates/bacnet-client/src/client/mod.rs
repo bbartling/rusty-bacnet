@@ -846,6 +846,8 @@ mod segmented_request_state_tests;
 #[cfg(test)]
 mod segmented_response_admission_tests;
 #[cfg(test)]
+mod segmented_response_capacity_tests;
+#[cfg(test)]
 mod segmented_timeout_tests;
 #[cfg(test)]
 mod tests;

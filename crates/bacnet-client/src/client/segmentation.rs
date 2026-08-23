@@ -196,8 +196,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(
                 invoke_id = ack.invoke_id,
                 sessions = seg_state.len(),
-                "Max concurrent segmented sessions reached, dropping segment"
+                "Max concurrent segmented sessions reached, aborting newcomer"
             );
+            Self::abort_reassembly(
+                tsm,
+                network,
+                &tsm_mac,
+                &owner,
+                &MacAddr::from_slice(source_mac),
+                source_network,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+            )
+            .await;
             return;
         }
 
