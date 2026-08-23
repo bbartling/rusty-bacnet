@@ -798,8 +798,3 @@ async fn segment_overflow_guard() {
 
     client.stop().await.unwrap();
 }
-
-#[test]
-fn seg_receiver_timeout_is_4s() {
-    assert_eq!(SEG_RECEIVER_TIMEOUT, Duration::from_secs(4));
-}

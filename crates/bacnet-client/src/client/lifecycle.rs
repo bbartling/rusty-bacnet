@@ -70,6 +70,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
+        let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel::<TransactionCleanup>();
+        #[cfg(test)]
+        let segmented_cleanup = Arc::new(SegmentedCleanupHook::default());
+        #[cfg(test)]
+        let segmented_cleanup_dispatch = Arc::clone(&segmented_cleanup);
         let response_limits = ResponseLimits::from_config(&config);
 
         let dispatch_task = tokio::spawn(async move {
@@ -81,6 +86,36 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             loop {
                 tokio::select! {
+                    cleanup = cleanup_rx.recv() => {
+                        let Some(cleanup) = cleanup else {
+                            break;
+                        };
+                        if cleanup.cancel_tsm {
+                            tsm_dispatch.lock().await.cancel_transaction_for_owner(
+                                &cleanup.mac,
+                                cleanup.invoke_id,
+                                &cleanup.owner,
+                            );
+                        }
+                        let key = (cleanup.mac, cleanup.invoke_id);
+                        let removed = seg_state
+                            .get(&key)
+                            .is_some_and(|state| state.owner.same_as(&cleanup.owner));
+                        if removed {
+                            seg_state.remove(&key);
+                        }
+                        if let Some(expected_sender) = cleanup.seg_ack_sender {
+                            let mut senders = seg_ack_senders_dispatch.lock().await;
+                            if senders
+                                .get(&key)
+                                .is_some_and(|sender| sender.same_channel(&expected_sender))
+                            {
+                                senders.remove(&key);
+                            }
+                        }
+                        #[cfg(test)]
+                        segmented_cleanup_dispatch.record_processed(removed);
+                    }
                     _ = device_purge_interval.tick() => {
                         let lost_devices = device_table_dispatch
                             .lock()
@@ -97,38 +132,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         let Some(received) = received else {
                             break;
                         };
-                        let now = Instant::now();
-
-                        // Reap stale segmented sessions and send Abort to the server
-                        let stale_keys: Vec<SegKey> = seg_state
-                            .iter()
-                            .filter(|(_, state)| {
-                                now.duration_since(state.last_activity) >= SEG_RECEIVER_TIMEOUT
-                            })
-                            .map(|(key, _)| key.clone())
-                            .collect();
-                        for key in &stale_keys {
-                            if let Some(state) = seg_state.remove(key) {
-                                let abort = Apdu::Abort(AbortPdu {
-                                    sent_by_server: false,
-                                    invoke_id: key.1,
-                                    abort_reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
-                                });
-                                let mut buf = BytesMut::with_capacity(4);
-                                if let Err(e) = encode_apdu(&mut buf, &abort) {
-                                    warn!(error = %e, "Failed to encode segmented receive timeout Abort");
-                                    continue;
-                                }
-                                let _ = Self::send_reply_apdu(
-                                    &network_dispatch,
-                                    &buf,
-                                    &state.reply_mac,
-                                    &state.reply_network,
-                                )
-                                .await;
-                            }
-                        }
-
                         match apdu::decode_apdu(received.apdu.clone()) {
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
@@ -167,8 +170,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_tx,
             dispatch_task: Some(dispatch_task),
             seg_ack_senders,
+            cleanup_tx,
             #[cfg(test)]
             segmented_post_wait_cleanup: Arc::new(SegmentedPostWaitCleanupHook::default()),
+            #[cfg(test)]
+            segmented_cleanup,
             local_mac,
         })
     }

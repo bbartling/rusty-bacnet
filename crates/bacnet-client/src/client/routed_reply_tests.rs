@@ -7,7 +7,7 @@
 //!
 //! Split from `tests.rs`, which is at the 700-LOC cap.
 
-use bacnet_encoding::apdu::{self, Apdu, ComplexAck, SegmentAck as SegmentAckPdu, SimpleAck};
+use bacnet_encoding::apdu::{self, Apdu, ComplexAck, SegmentAck as SegmentAckPdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
@@ -16,7 +16,7 @@ use bytes::Bytes;
 use tokio::time::{timeout, Duration};
 
 use super::tests::send_routed_response;
-use super::{BACnetClient, SEG_RECEIVER_TIMEOUT};
+use super::BACnetClient;
 
 /// Every SegmentACK for a router-mediated segmented ComplexACK carries the
 /// peer's network and address as DNET/DADR, and the exchange completes.
@@ -230,142 +230,6 @@ async fn routed_reassembly_abort_carries_dnet_dadr() {
         matches!(result, Err(super::Error::Abort { .. })),
         "the caller must observe the abort, got {result:?}"
     );
-    router_transport.stop().await.unwrap();
-}
-
-/// The reaper's TSM_TIMEOUT Abort routes from stored state alone. This is
-/// the one reply site with no inbound PDU in scope — the trigger is a timer —
-/// so `SegmentedReceiveState.reply_network` is the only source of the peer's
-/// SNET/SADR, and this test is what requires the field to exist.
-#[tokio::test]
-async fn reaped_routed_session_abort_carries_dnet_dadr() {
-    let client_mac = vec![0x01];
-    let router_mac = vec![0x02];
-    let remote_network = 100;
-    let remote_mac = vec![0x03];
-    let (client_transport, mut router_transport) =
-        LoopbackTransport::pair(client_mac.clone(), router_mac.clone());
-    let mut router_rx = router_transport.start().await.unwrap();
-
-    // The request must outlive the reaper wait so the exchange can still
-    // finish cleanly after the stale session is reaped.
-    let mut client = BACnetClient::generic_builder()
-        .transport(client_transport)
-        .apdu_timeout_ms(8000)
-        .build()
-        .await
-        .unwrap();
-
-    let router_mac_for_request = router_mac.clone();
-    let remote_mac_for_request = remote_mac.clone();
-    let request_task = tokio::spawn(async move {
-        let result = client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
-                ConfirmedServiceChoice::READ_PROPERTY,
-                &[0x01],
-            )
-            .await;
-        client.stop().await.unwrap();
-        result
-    });
-
-    let received = timeout(Duration::from_secs(2), router_rx.recv())
-        .await
-        .expect("router timed out waiting for the request")
-        .expect("router channel closed");
-    let npdu = decode_npdu(received.npdu).unwrap();
-    let Apdu::ConfirmedRequest(req) = apdu::decode_apdu(npdu.payload).unwrap() else {
-        panic!("expected ConfirmedRequest");
-    };
-    let invoke_id = req.invoke_id;
-
-    // Open a reassembly session, then let it go stale.
-    let segment_zero = Apdu::ComplexAck(ComplexAck {
-        segmented: true,
-        more_follows: true,
-        invoke_id,
-        sequence_number: Some(0),
-        proposed_window_size: Some(1),
-        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
-        service_ack: Bytes::from_static(&[0xAA]),
-    });
-    send_routed_response(
-        &router_transport,
-        &client_mac,
-        remote_network,
-        &remote_mac,
-        segment_zero,
-    )
-    .await;
-    let seg_ack = timeout(Duration::from_secs(2), router_rx.recv())
-        .await
-        .expect("router timed out waiting for the SegmentAck")
-        .expect("router channel closed");
-    assert!(matches!(
-        apdu::decode_apdu(decode_npdu(seg_ack.npdu).unwrap().payload).unwrap(),
-        Apdu::SegmentAck(_)
-    ));
-
-    tokio::time::sleep(SEG_RECEIVER_TIMEOUT + Duration::from_millis(200)).await;
-
-    // The reaper runs on inbound traffic; an ack for an unknown invoke ID
-    // drives it without provoking any reply of its own.
-    let reaper_trigger = Apdu::SimpleAck(SimpleAck {
-        invoke_id: invoke_id.wrapping_add(1),
-        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
-    });
-    send_routed_response(
-        &router_transport,
-        &client_mac,
-        remote_network,
-        &remote_mac,
-        reaper_trigger,
-    )
-    .await;
-
-    let reply = timeout(Duration::from_secs(2), router_rx.recv())
-        .await
-        .expect("router timed out waiting for the reaper Abort")
-        .expect("router channel closed");
-    let reply_npdu = decode_npdu(reply.npdu).unwrap();
-    let destination = reply_npdu
-        .destination
-        .expect("the reaper's Abort must carry DNET/DADR");
-    assert_eq!(destination.network, remote_network);
-    assert_eq!(&destination.mac_address[..], &remote_mac[..]);
-
-    let Apdu::Abort(abort) = apdu::decode_apdu(reply_npdu.payload).unwrap() else {
-        panic!("expected Abort");
-    };
-    assert_eq!(abort.invoke_id, invoke_id);
-    assert!(!abort.sent_by_server);
-    assert_eq!(abort.abort_reason, AbortReason::TSM_TIMEOUT);
-
-    // The transaction itself survives the reap; answer it so the exchange
-    // ends cleanly instead of timing out.
-    let response = Apdu::ComplexAck(ComplexAck {
-        segmented: false,
-        more_follows: false,
-        invoke_id,
-        sequence_number: None,
-        proposed_window_size: None,
-        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
-        service_ack: Bytes::from_static(&[0xFF]),
-    });
-    send_routed_response(
-        &router_transport,
-        &client_mac,
-        remote_network,
-        &remote_mac,
-        response,
-    )
-    .await;
-
-    let result = request_task.await.unwrap().unwrap();
-    assert_eq!(result, vec![0xFF]);
     router_transport.stop().await.unwrap();
 }
 

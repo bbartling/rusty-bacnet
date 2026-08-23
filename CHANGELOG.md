@@ -105,9 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a segmented ComplexACK (Clause 5.4.4.3). Both unsegmented and segmented
   outgoing request paths switch to SEGMENTED_CONF for such responses, using an
   activity-reset receive timer of four APDU segment timeouts so request retries
-  cannot cancel a progressing response. Receive timeout returns a local
-  `Error::Timeout` without adding a peer Abort; the separate inbound reassembly
-  reaper remains unchanged (#380).
+  cannot cancel a progressing response. Receive SegmentTimer expiration now
+  returns local `Error::Abort { reason: TSM_TIMEOUT }`, promptly reclaims
+  reassembly state without inbound traffic, and sends no peer Abort. Immutable
+  registration owners keep delayed timeout and cancellation cleanup from
+  mutating a replacement transaction after immediate Invoke ID reuse (#379, #380).
 
 - Device objects configured for segmented transmit now advertise
   `Max_Segments_Accepted` as 1 instead of 65; receive-capable modes retain 65

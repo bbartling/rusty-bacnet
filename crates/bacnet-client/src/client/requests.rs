@@ -258,9 +258,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             (invoke_id, registration)
         };
 
-        // Guard cleans up invoke ID if this task is cancelled/aborted
-        let mut guard =
-            crate::tsm::TsmGuard::new(std::sync::Arc::clone(&self.tsm), tsm_mac.clone(), invoke_id);
+        let owner = registration.owner.clone();
+        let mut guard = TransactionGuard::new(
+            Arc::clone(&self.tsm),
+            self.cleanup_tx.clone(),
+            tsm_mac.clone(),
+            invoke_id,
+            owner.clone(),
+            None,
+        );
 
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
@@ -281,7 +287,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if let Err(e) = self.send_confirmed_target_apdu(target, &buf).await {
             guard.mark_completed();
             let mut tsm = self.tsm.lock().await;
-            tsm.cancel_transaction(&tsm_mac, invoke_id);
+            tsm.cancel_transaction_for_owner(&tsm_mac, invoke_id, &owner);
+            drop(tsm);
+            self.enqueue_transaction_cleanup(&tsm_mac, invoke_id, &owner, false, None);
             return Err(e);
         }
 
@@ -290,6 +298,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 target,
                 &tsm_mac,
                 invoke_id,
+                &owner,
                 registration.response,
                 registration.progress,
                 Some(&buf),
@@ -301,11 +310,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
     /// their timers to cancel each other's phase.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn wait_for_confirmed_response(
         &self,
         target: ConfirmedTarget<'_>,
         tsm_mac: &MacAddr,
         invoke_id: u8,
+        owner: &TransactionOwner,
         mut response_rx: oneshot::Receiver<TsmResponse>,
         mut progress_rx: tokio::sync::watch::Receiver<TransactionProgress>,
         retry_apdu: Option<&[u8]>,
@@ -348,13 +359,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             let retry = retry_apdu.is_some()
                                 && retries_sent < u16::from(max_retries);
                             let mut tsm = self.tsm.lock().await;
-                            match tsm.expire_request_timer(tsm_mac, invoke_id, !retry) {
+                            match tsm.expire_request_timer(tsm_mac, invoke_id, owner, !retry) {
                                 RequestTimerExpiration::Retry => {
                                     // Authorization and segment admission use the TSM lock,
                                     // but transport I/O must not. Once authorized, this retry
                                     // may finish even if segment zero is admitted meanwhile.
                                     let Some(retry_apdu) = retry_apdu else {
-                                        tsm.cancel_transaction(tsm_mac, invoke_id);
+                                        tsm.cancel_transaction_for_owner(tsm_mac, invoke_id, owner);
+                                        drop(tsm);
+                                        self.enqueue_transaction_cleanup(
+                                            tsm_mac,
+                                            invoke_id,
+                                            owner,
+                                            false,
+                                            None,
+                                        );
                                         return Err(Error::Timeout(request_timeout));
                                     };
                                     retries_sent += 1;
@@ -364,7 +383,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         .await;
                                     if let Err(error) = send_result {
                                         let mut tsm = self.tsm.lock().await;
-                                        match tsm.expire_request_timer(tsm_mac, invoke_id, true) {
+                                        match tsm.expire_request_timer(tsm_mac, invoke_id, owner, true) {
                                             RequestTimerExpiration::SegmentedResponse { generation } => {
                                                 progress = TransactionProgress::SegmentedResponse { generation };
                                                 continue;
@@ -375,7 +394,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                                     .await
                                                     .map_err(|_| Error::Encoding("TSM response channel closed".into()));
                                             }
-                                            RequestTimerExpiration::TimedOut => return Err(error),
+                                            RequestTimerExpiration::TimedOut => {
+                                                drop(tsm);
+                                                self.enqueue_transaction_cleanup(
+                                                    tsm_mac,
+                                                    invoke_id,
+                                                    owner,
+                                                    false,
+                                                    None,
+                                                );
+                                                return Err(error);
+                                            }
                                             RequestTimerExpiration::Retry => unreachable!(
                                                 "final retry-send failure disposition cannot authorize another retry"
                                             ),
@@ -392,6 +421,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     progress = TransactionProgress::SegmentedResponse { generation };
                                 }
                                 RequestTimerExpiration::TimedOut => {
+                                    drop(tsm);
+                                    self.enqueue_transaction_cleanup(
+                                        tsm_mac,
+                                        invoke_id,
+                                        owner,
+                                        false,
+                                        None,
+                                    );
                                     return Err(Error::Timeout(request_timeout));
                                 }
                                 RequestTimerExpiration::NoTransaction => {
@@ -404,7 +441,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         }
                         TransactionProgress::SegmentedResponse { generation } => {
                             let mut tsm = self.tsm.lock().await;
-                            match tsm.expire_segment_timer(tsm_mac, invoke_id, generation) {
+                            match tsm.expire_segment_timer(tsm_mac, invoke_id, owner, generation) {
                                 SegmentTimerExpiration::Activity { generation } => {
                                     progress = TransactionProgress::SegmentedResponse { generation };
                                 }
@@ -412,7 +449,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     progress = TransactionProgress::AwaitingResponse;
                                 }
                                 SegmentTimerExpiration::TimedOut => {
-                                    return Err(Error::Timeout(segment_timeout));
+                                    drop(tsm);
+                                    #[cfg(test)]
+                                    self.segmented_cleanup.pause_if_enabled().await;
+                                    self.enqueue_transaction_cleanup(
+                                        tsm_mac,
+                                        invoke_id,
+                                        owner,
+                                        false,
+                                        None,
+                                    );
+                                    return Err(Error::Abort {
+                                        reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT.to_raw(),
+                                    });
                                 }
                                 SegmentTimerExpiration::NoTransaction => {
                                     drop(tsm);
@@ -426,6 +475,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
         }
+    }
+
+    pub(super) fn enqueue_transaction_cleanup(
+        &self,
+        mac: &MacAddr,
+        invoke_id: u8,
+        owner: &TransactionOwner,
+        cancel_tsm: bool,
+        seg_ack_sender: Option<mpsc::Sender<SegmentAckPdu>>,
+    ) {
+        let _ = self.cleanup_tx.send(TransactionCleanup {
+            mac: mac.clone(),
+            invoke_id,
+            owner: owner.clone(),
+            cancel_tsm,
+            seg_ack_sender,
+        });
     }
 
     pub(super) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {

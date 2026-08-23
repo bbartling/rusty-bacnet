@@ -7,8 +7,7 @@
 //! Before #367's fix, none of those endings removed the `seg_state` entry, so
 //! the client kept acking segments of a transaction that no longer existed.
 //!
-//! The tests run a real client over a loopback pair; the test plays the
-//! server. Their receive timers finish well inside the separate 4 s reaper.
+//! The tests run a real client over a loopback pair; the test plays the server.
 
 use std::sync::Arc;
 
@@ -29,10 +28,10 @@ use tokio::time::{timeout, Duration};
 
 use super::{BACnetClient, ClientConfig};
 
-const CLIENT_MAC: &[u8] = &[0x01];
-const SERVER_MAC: &[u8] = &[0x02];
+pub(super) const CLIENT_MAC: &[u8] = &[0x01];
+pub(super) const SERVER_MAC: &[u8] = &[0x02];
 
-async fn send_to_client<T: TransportPort>(transport: &T, apdu: &Apdu) {
+pub(super) async fn send_to_client<T: TransportPort>(transport: &T, apdu: &Apdu) {
     let mut apdu_buf = BytesMut::new();
     encode_apdu(&mut apdu_buf, apdu).expect("valid APDU encoding");
     let npdu = Npdu {
@@ -44,7 +43,7 @@ async fn send_to_client<T: TransportPort>(transport: &T, apdu: &Apdu) {
     transport.send_unicast(&npdu_buf, CLIENT_MAC).await.unwrap();
 }
 
-async fn recv_apdu(rx: &mut mpsc::Receiver<ReceivedNpdu>, context: &str) -> Apdu {
+pub(super) async fn recv_apdu(rx: &mut mpsc::Receiver<ReceivedNpdu>, context: &str) -> Apdu {
     let received = timeout(Duration::from_secs(2), rx.recv())
         .await
         .unwrap_or_else(|_| panic!("{context}: timed out waiting for a PDU"))
@@ -84,7 +83,7 @@ async fn acknowledge_segmented_request(
     }
 }
 
-fn response_segment(invoke_id: u8, seq: u8, more_follows: bool, data: &[u8]) -> Apdu {
+pub(super) fn response_segment(invoke_id: u8, seq: u8, more_follows: bool, data: &[u8]) -> Apdu {
     Apdu::ComplexAck(ComplexAck {
         segmented: true,
         more_follows,
@@ -98,7 +97,7 @@ fn response_segment(invoke_id: u8, seq: u8, more_follows: bool, data: &[u8]) -> 
 
 /// Start a client, issue a ReadProperty, and hand back the peer side with the
 /// request's invoke ID already consumed from the stream.
-async fn start_reassembly(
+pub(super) async fn start_reassembly(
     config: ClientConfig,
 ) -> (
     JoinHandle<(BACnetClient<LoopbackTransport>, Result<Bytes, Error>)>,
@@ -135,7 +134,11 @@ async fn start_reassembly(
     (request_task, server_transport, server_rx, invoke_id)
 }
 
-async fn expect_segment_ack(rx: &mut mpsc::Receiver<ReceivedNpdu>, invoke_id: u8, seq: u8) {
+pub(super) async fn expect_segment_ack(
+    rx: &mut mpsc::Receiver<ReceivedNpdu>,
+    invoke_id: u8,
+    seq: u8,
+) {
     match recv_apdu(rx, &format!("ack for response segment {seq}")).await {
         Apdu::SegmentAck(ack) => {
             assert!(!ack.negative_ack);
@@ -147,7 +150,11 @@ async fn expect_segment_ack(rx: &mut mpsc::Receiver<ReceivedNpdu>, invoke_id: u8
     }
 }
 
-async fn expect_client_abort(rx: &mut mpsc::Receiver<ReceivedNpdu>, invoke_id: u8, context: &str) {
+pub(super) async fn expect_client_abort(
+    rx: &mut mpsc::Receiver<ReceivedNpdu>,
+    invoke_id: u8,
+    context: &str,
+) {
     match recv_apdu(rx, context).await {
         Apdu::Abort(abort) => {
             assert!(
@@ -350,40 +357,6 @@ async fn error_and_reject_without_a_session_surface_as_themselves() {
         }
         other => panic!("expected Err(Reject), got {other:?}"),
     }
-    client.stop().await.unwrap();
-}
-
-/// SEGMENTED_CONF times out after four APDU segment timeouts without sending
-/// a peer Abort. The next segment then reaches the existing IDLE gate and
-/// draws INVALID_APDU_IN_THIS_STATE.
-#[tokio::test]
-async fn segment_timer_timeout_ends_the_reassembly_session() {
-    let config = ClientConfig {
-        apdu_timeout_ms: 100,
-        apdu_retries: 3,
-        ..ClientConfig::default()
-    };
-    let (task, server, mut rx, invoke_id) = start_reassembly(config).await;
-
-    send_to_client(&server, &response_segment(invoke_id, 0, true, &[0x01; 8])).await;
-    expect_segment_ack(&mut rx, invoke_id, 0).await;
-
-    let (mut client, result) = timeout(Duration::from_secs(2), task)
-        .await
-        .unwrap()
-        .unwrap();
-    match result {
-        Err(Error::Timeout(duration)) => assert_eq!(duration, Duration::from_millis(400)),
-        other => panic!("expected Err(Timeout), got {other:?}"),
-    }
-
-    assert!(
-        timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
-        "receive SegmentTimer expiry must not send a peer Abort"
-    );
-
-    send_to_client(&server, &response_segment(invoke_id, 1, true, &[0x02; 8])).await;
-    expect_client_abort(&mut rx, invoke_id, "a segment after SegmentTimer expired").await;
     client.stop().await.unwrap();
 }
 

@@ -22,6 +22,24 @@ fn log_mismatch(outcome: CompletionOutcome, invoke_id: u8, pdu: &str) {
     }
 }
 
+async fn take_current_reassembly(
+    tsm: &Arc<Mutex<Tsm>>,
+    seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
+    key: &SegKey,
+) -> Option<SegmentedReceiveState> {
+    let state = seg_state.remove(key)?;
+    if tsm
+        .lock()
+        .await
+        .owner_is_current(&key.0, key.1, &state.owner)
+    {
+        Some(state)
+    } else {
+        debug!(invoke_id = key.1, "Reclaimed stale segmented receive state");
+        None
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
     #[allow(clippy::too_many_arguments)]
@@ -50,7 +68,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // reassembly IS this transaction's acknowledgment, so a
                 // second one is not answering it. Checked before the TSM
                 // lock: `abort_reassembly` takes that lock itself (#367).
-                if let Some(state) = seg_state.remove(&(tsm_mac.clone(), ack.invoke_id)) {
+                let key = (tsm_mac.clone(), ack.invoke_id);
+                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(
                         invoke_id = ack.invoke_id,
                         "Aborting reassembly on a SimpleAck"
@@ -59,6 +78,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         tsm,
                         network,
                         &tsm_mac,
+                        &state.owner,
                         &state.reply_mac,
                         &state.reply_network,
                         ack.invoke_id,
@@ -94,7 +114,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     // FALSE" is in the same Clause 5.4.4.4
                     // UnexpectedPDU_Received list: the transaction's answer
                     // is the segmented ComplexACK already under reassembly.
-                    if let Some(state) = seg_state.remove(&(tsm_mac.clone(), ack.invoke_id)) {
+                    let key = (tsm_mac.clone(), ack.invoke_id);
+                    if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                         debug!(
                             invoke_id = ack.invoke_id,
                             "Aborting reassembly on an unsegmented ComplexAck"
@@ -103,6 +124,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             tsm,
                             network,
                             &tsm_mac,
+                            &state.owner,
                             &state.reply_mac,
                             &state.reply_network,
                             ack.invoke_id,
@@ -135,7 +157,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // segmented request can be legitimate (5.4.4.2 surfaces it
                 // once SentAllSegments is TRUE, a flag this client does not
                 // track), so a `seg_ack_senders` entry must not divert here.
-                if let Some(state) = seg_state.remove(&(tsm_mac.clone(), err.invoke_id)) {
+                let key = (tsm_mac.clone(), err.invoke_id);
+                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(
                         invoke_id = err.invoke_id,
                         "Aborting reassembly on an Error PDU"
@@ -144,6 +167,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         tsm,
                         network,
                         &tsm_mac,
+                        &state.owner,
                         &state.reply_mac,
                         &state.reply_network,
                         err.invoke_id,
@@ -175,7 +199,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Same Clause 5.4.4.4 UnexpectedPDU_Received diversion as the
                 // Error arm above ("BACnet-Reject-PDU" is in the same list),
                 // with the same lock-ordering constraint (#367).
-                if let Some(state) = seg_state.remove(&(tsm_mac.clone(), rej.invoke_id)) {
+                let key = (tsm_mac.clone(), rej.invoke_id);
+                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(
                         invoke_id = rej.invoke_id,
                         "Aborting reassembly on a Reject PDU"
@@ -184,6 +209,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         tsm,
                         network,
                         &tsm_mac,
+                        &state.owner,
                         &state.reply_mac,
                         &state.reply_network,
                         rej.invoke_id,
@@ -228,20 +254,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // pending gate in `handle_segmented_complex_ack` — a later
                 // segment would find no transaction and clear the session
                 // anyway — so no test can pin this line alone; it is kept so
-                // the slot frees at the Abort, not at the peer's next move
-                // or the reaper.
-                seg_state.remove(&(tsm_mac.clone(), abt.invoke_id));
+                // the slot frees at the Abort, not at the peer's next move.
+                let key = (tsm_mac.clone(), abt.invoke_id);
+                let state = take_current_reassembly(tsm, seg_state, &key).await;
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 let mut tsm = tsm.lock().await;
                 // Carries no service choice (Clause 20.1.9).
-                tsm.complete_transaction(
-                    &tsm_mac,
-                    abt.invoke_id,
-                    None,
-                    TsmResponse::Abort {
-                        reason: abt.abort_reason.to_raw(),
-                    },
-                );
+                let response = TsmResponse::Abort {
+                    reason: abt.abort_reason.to_raw(),
+                };
+                if let Some(state) = state {
+                    tsm.complete_transaction_for_owner(
+                        &tsm_mac,
+                        abt.invoke_id,
+                        &state.owner,
+                        None,
+                        response,
+                    );
+                } else {
+                    tsm.complete_transaction(&tsm_mac, abt.invoke_id, None, response);
+                }
             }
             Apdu::ConfirmedRequest(req) => {
                 if is_group {
@@ -432,7 +464,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // only starts once the request has been sent in full, so a
                 // `seg_state` entry means any `seg_ack_senders` entry that
                 // still lingers belongs to a send that is already finished.
-                if let Some(state) = seg_state.remove(&key) {
+                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(invoke_id, "Aborting reassembly on an unexpected SegmentAck");
                     // The stored identity, not this PDU's source. A key match
                     // already forces the inbound SNET/SADR to equal the
@@ -444,6 +476,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         tsm,
                         network,
                         &tsm_mac,
+                        &state.owner,
                         &state.reply_mac,
                         &state.reply_network,
                         invoke_id,
