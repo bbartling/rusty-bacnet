@@ -1,4 +1,17 @@
 use super::*;
+use tokio::time::{timeout, Duration};
+
+fn assert_initial_response_aborted(
+    admission: SegmentedResponseAdmission,
+    expected_wire_reason: AbortReason,
+) {
+    match admission {
+        SegmentedResponseAdmission::InitialResponseAborted { wire_reason } => {
+            assert_eq!(wire_reason, expected_wire_reason);
+        }
+        other => panic!("expected aborted initial response, got {other:?}"),
+    }
+}
 
 #[test]
 fn allocate_invoke_id_sequential() {
@@ -182,8 +195,10 @@ async fn segmented_complex_ack_zero_is_rejected_until_all_segments_are_sent() {
     );
 
     assert!(matches!(
-        tsm.admit_segmented_complex_ack(&mac, invoke_id, 0),
-        SegmentedResponseAdmission::PrematureSegmentedRequestAborted
+        tsm.admit_segmented_complex_ack(&mac, invoke_id, 0, true),
+        SegmentedResponseAdmission::InitialResponseAborted {
+            wire_reason: AbortReason::INVALID_APDU_IN_THIS_STATE
+        }
     ));
     assert!(matches!(
         registration.response.await.unwrap(),
@@ -191,6 +206,205 @@ async fn segmented_complex_ack_zero_is_rejected_until_all_segments_are_sent() {
             if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
     ));
     assert_eq!(tsm.pending_count(), 0);
+}
+
+#[tokio::test]
+async fn awaiting_response_initial_segment_admission_matrix() {
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    for (sequence_number, accepted, expected_wire_reason) in [
+        (1, true, AbortReason::INVALID_APDU_IN_THIS_STATE),
+        (0, false, AbortReason::SEGMENTATION_NOT_SUPPORTED),
+        (1, false, AbortReason::INVALID_APDU_IN_THIS_STATE),
+    ] {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+
+        assert_initial_response_aborted(
+            tsm.admit_segmented_complex_ack(&mac, invoke_id, sequence_number, accepted),
+            expected_wire_reason,
+        );
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Abort { reason }
+                if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+        ));
+        assert_eq!(tsm.pending_count(), 0);
+        assert_eq!(tsm.allocate_invoke_id(&mac), Some(invoke_id));
+    }
+}
+
+#[test]
+fn segmented_response_continuations_do_not_repeat_initial_admission() {
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+    let registration = tsm.register_transaction_with_progress(
+        mac.clone(),
+        invoke_id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+    );
+
+    assert!(matches!(
+        tsm.admit_segmented_complex_ack(&mac, invoke_id, 0, true),
+        SegmentedResponseAdmission::Active(ref owner) if owner.same_as(&registration.owner)
+    ));
+    tsm.begin_segmented_response(&mac, invoke_id, &registration.owner)
+        .unwrap();
+    for (sequence_number, accepted) in [(1, true), (2, false)] {
+        assert!(matches!(
+            tsm.admit_segmented_complex_ack_for_owner(
+                &mac,
+                invoke_id,
+                sequence_number,
+                accepted,
+                &registration.owner,
+            ),
+            SegmentedResponseAdmission::Active(ref owner)
+                if owner.same_as(&registration.owner)
+        ));
+    }
+    assert_eq!(tsm.pending_count(), 1);
+}
+
+#[tokio::test]
+async fn segmented_request_initial_segment_admission_matrix() {
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    for (sequence_number, accepted, expected_wire_reason) in [
+        (0, true, AbortReason::INVALID_APDU_IN_THIS_STATE),
+        (0, false, AbortReason::SEGMENTATION_NOT_SUPPORTED),
+        (1, false, AbortReason::INVALID_APDU_IN_THIS_STATE),
+    ] {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_segmented_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+
+        assert_initial_response_aborted(
+            tsm.admit_segmented_complex_ack(&mac, invoke_id, sequence_number, accepted),
+            expected_wire_reason,
+        );
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Abort { reason }
+                if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+        ));
+        assert_eq!(tsm.pending_count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn sent_all_segments_still_applies_initial_segment_admission() {
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    for (sequence_number, accepted, expected_wire_reason) in [
+        (0, false, AbortReason::SEGMENTATION_NOT_SUPPORTED),
+        (1, false, AbortReason::INVALID_APDU_IN_THIS_STATE),
+    ] {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_segmented_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+        let mut token = tsm
+            .begin_final_segment_send(&mac, invoke_id, &registration.owner)
+            .unwrap();
+        assert!(tsm.mark_final_segment_issued(&mac, invoke_id, &registration.owner, &mut token));
+
+        assert_initial_response_aborted(
+            tsm.admit_segmented_complex_ack_for_owner(
+                &mac,
+                invoke_id,
+                sequence_number,
+                accepted,
+                &registration.owner,
+            ),
+            expected_wire_reason,
+        );
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Abort { reason }
+                if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+        ));
+        assert_eq!(tsm.pending_count(), 0);
+    }
+
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+    let registration = tsm.register_segmented_transaction_with_progress(
+        mac.clone(),
+        invoke_id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+    );
+    let mut token = tsm
+        .begin_final_segment_send(&mac, invoke_id, &registration.owner)
+        .unwrap();
+    assert!(tsm.mark_final_segment_issued(&mac, invoke_id, &registration.owner, &mut token));
+    assert!(matches!(
+        tsm.admit_segmented_complex_ack_for_owner(
+            &mac,
+            invoke_id,
+            0,
+            true,
+            &registration.owner,
+        ),
+        SegmentedResponseAdmission::Active(ref owner) if owner.same_as(&registration.owner)
+    ));
+}
+
+#[tokio::test]
+async fn invalid_initial_segment_resolves_final_send_polling() {
+    let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+    for (sequence_number, accepted, expected_wire_reason) in [
+        (0, false, AbortReason::SEGMENTATION_NOT_SUPPORTED),
+        (1, true, AbortReason::INVALID_APDU_IN_THIS_STATE),
+    ] {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_segmented_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+        let mut token = tsm
+            .begin_final_segment_send(&mac, invoke_id, &registration.owner)
+            .unwrap();
+        let (deferred_owner, issue) = match tsm
+            .admit_segmented_complex_ack(&mac, invoke_id, 0, true)
+        {
+            SegmentedResponseAdmission::FinalSegmentSendPolling { owner, issue } => (owner, issue),
+            other => panic!("expected final-send deferral, got {other:?}"),
+        };
+
+        assert_initial_response_aborted(
+            tsm.admit_segmented_complex_ack_for_owner(
+                &mac,
+                invoke_id,
+                sequence_number,
+                accepted,
+                &deferred_owner,
+            ),
+            expected_wire_reason,
+        );
+        assert!(!tsm.mark_final_segment_issued(&mac, invoke_id, &registration.owner, &mut token));
+        drop(token);
+        timeout(Duration::from_millis(100), issue.wait_until_polled())
+            .await
+            .expect("final-send admission waiter remained blocked");
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Abort { reason }
+                if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+        ));
+    }
 }
 
 #[tokio::test]
@@ -437,6 +651,11 @@ async fn stale_owner_cannot_mutate_reused_transaction_key() {
         invoke_id,
         ConfirmedServiceChoice::READ_PROPERTY,
     );
+    assert!(matches!(
+        tsm.admit_segmented_complex_ack_for_owner(&mac, invoke_id, 1, false, &first.owner,),
+        SegmentedResponseAdmission::NoTransaction
+    ));
+    assert_eq!(tsm.pending_count(), 1);
     let generation = tsm
         .begin_segmented_response(&mac, invoke_id, &replacement.owner)
         .unwrap();
