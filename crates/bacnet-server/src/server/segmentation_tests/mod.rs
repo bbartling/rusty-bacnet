@@ -396,5 +396,6 @@ fn fake_segmented_send_handle(
 
 mod ack_window;
 mod control_limits;
+mod duplicate_window;
 mod request_reassembly;
 mod routing_overlap;

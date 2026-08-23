@@ -208,24 +208,43 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 reply_mac: MacAddr::from_slice(source_mac),
                 reply_network: source_network.clone(),
                 expected_next_seq: 0,
+                initial_sequence_number: 0,
+                last_sequence_number: 0,
+                duplicate_count: 0,
                 last_activity: Instant::now(),
                 window_position: 0,
-                proposed_window_size: proposed_ws,
+                actual_window_size: proposed_ws,
                 accepted_segments: 0,
             });
 
         state.last_activity = Instant::now();
 
         if seq != state.expected_next_seq {
-            // Check for duplicate (already received) vs true gap
-            if seq < state.expected_next_seq {
-                // Duplicate segment — discard silently and ack
+            let is_duplicate = duplicate_in_window(
+                seq,
+                state.initial_sequence_number,
+                state.last_sequence_number,
+            );
+            if is_duplicate && state.duplicate_count < state.actual_window_size {
+                state.duplicate_count += 1;
                 debug!(
                     invoke_id = ack.invoke_id,
-                    seq, "Discarding duplicate segment"
+                    seq,
+                    duplicate_count = state.duplicate_count,
+                    "Silently discarding duplicate segment"
+                );
+                return;
+            }
+
+            if is_duplicate {
+                state.duplicate_count = 0;
+                warn!(
+                    invoke_id = ack.invoke_id,
+                    seq, "Duplicate allowance exhausted, sending negative SegmentAck"
                 );
             } else {
-                // True gap — send negative SegmentAck with last correctly received seq
+                state.initial_sequence_number = state.last_sequence_number;
+                state.duplicate_count = 0;
                 warn!(
                     invoke_id = ack.invoke_id,
                     expected = state.expected_next_seq,
@@ -234,16 +253,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
             }
             let neg_ack = Apdu::SegmentAck(SegmentAckPdu {
-                negative_ack: seq >= state.expected_next_seq,
+                negative_ack: true,
                 sent_by_server: false,
                 invoke_id: ack.invoke_id,
-                // Spec: sequence_number = last correctly received sequence number
-                sequence_number: if state.expected_next_seq > 0 {
-                    state.expected_next_seq.wrapping_sub(1)
-                } else {
-                    0
-                },
-                actual_window_size: proposed_ws,
+                sequence_number: state.last_sequence_number,
+                actual_window_size: state.actual_window_size,
             });
             let mut buf = BytesMut::with_capacity(4);
             if let Err(e) = encode_apdu(&mut buf, &neg_ack) {
@@ -306,19 +320,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         state.accepted_segments += 1;
         state.expected_next_seq = seq.wrapping_add(1);
+        state.last_sequence_number = seq;
         state.window_position += 1;
 
         // Per-window SegmentAck: only ack at window boundary or final segment (Clause 5.2.2)
-        let should_ack = !ack.more_follows || state.window_position >= state.proposed_window_size;
+        let should_ack = !ack.more_follows || state.window_position >= state.actual_window_size;
 
         if should_ack {
             state.window_position = 0;
+            state.initial_sequence_number = state.last_sequence_number;
+            state.duplicate_count = 0;
             let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
                 negative_ack: false,
                 sent_by_server: false,
                 invoke_id: ack.invoke_id,
                 sequence_number: seq,
-                actual_window_size: proposed_ws,
+                actual_window_size: state.actual_window_size,
             });
             let mut buf = BytesMut::with_capacity(4);
             if let Err(e) = encode_apdu(&mut buf, &seg_ack) {

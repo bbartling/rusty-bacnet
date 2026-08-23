@@ -78,7 +78,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
-    "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_when_retransmitted_current_segment_receives_negative_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle",
@@ -103,7 +104,7 @@
    "public_claims": [
     "README supported services"
    ],
-   "notes": "This slice adds server segmented ComplexAck send-side SegmentACK validation: SegmentACKs with the server bit set are ignored, positive ACKs advance only for the current segment, negative ACKs retransmit only the current requested segment, out-of-range negative ACKs are ignored, stale final ACKs do not complete the transfer, timeout retries retransmit before idle cleanup without a final timeout Abort, client Abort is routed to terminate the active segmented response without a spurious timeout Abort, routed SegmentACK/Abort events match the NPDU source-network key, segmented response frames set NPDU expecting_reply while waiting for SegmentACK, dispatch filters stale/future ACKs before queue insertion and does not block on a full SegmentACK queue, client Abort and same-peer/invoke-id replacement use nonblocking control events, live segmented sender tasks are capped by permits until each task exits, and replacement cancels the older sender so it cannot later emit a timeout Abort. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage."
+    "notes": "This slice adds server segmented ComplexAck send-side SegmentACK validation: SegmentACKs with the server bit set are ignored, either ACK flavor naming the current segment advances the transfer, a negative ACK naming the immediately preceding segment retransmits the current segment, out-of-range negative ACKs are ignored, stale final ACKs do not complete the transfer, timeout retries retransmit before idle cleanup without a final timeout Abort, client Abort is routed to terminate the active segmented response without a spurious timeout Abort, routed SegmentACK/Abort events match the NPDU source-network key, segmented response frames set NPDU expecting_reply while waiting for SegmentACK, dispatch filters stale/future ACKs before queue insertion and does not block on a full SegmentACK queue, client Abort and same-peer/invoke-id replacement use nonblocking control events, live segmented sender tasks are capped by permits until each task exits, and replacement cancels the older sender so it cannot later emit a timeout Abort. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage."
   },
   {
    "id": "BACNET-5-SEGMENTATION-WINDOW",
@@ -114,17 +115,25 @@
    "code_anchors": [
     "crates/bacnet-encoding/src/segmentation.rs",
     "crates/bacnet-client/src/client/segmentation.rs",
+    "crates/bacnet-client/src/client/segmented_receive_duplicate_tests.rs",
     "crates/bacnet-server/src/server/dispatch.rs",
+    "crates/bacnet-server/src/server/lifecycle.rs",
+    "crates/bacnet-server/src/server/segmented_receive.rs",
     "crates/bacnet-server/src/server/segmentation.rs",
-    "crates/bacnet-server/src/server/segmentation_tests.rs"
+    "crates/bacnet-server/src/server/segmentation_tests"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
     "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs",
-    "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_after_negative_ack_zero",
+     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_advances_when_retransmitted_current_segment_receives_negative_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
-    "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle"
+    "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle",
+    "crates/bacnet-encoding/src/segmentation.rs::tests::duplicate_in_window_matches_addendum_examples",
+    "crates/bacnet-encoding/src/segmentation.rs::tests::duplicate_in_window_uses_modulo_256_arithmetic",
+    "crates/bacnet-client/src/client/segmented_receive_duplicate_tests.rs::incomplete_window_silences_ndup_duplicates_then_naks_the_next",
+    "crates/bacnet-server/src/server/segmentation_tests/duplicate_window.rs::incomplete_window_silences_ndup_duplicates_then_naks_the_next"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_future_positive_segment_ack",
@@ -133,7 +142,13 @@
     "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_aborts_after_repeated_negative_segment_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_ack_flood_does_not_drop_valid_segment_ack",
     "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_returns_when_segment_ack_queue_is_full",
-    "crates/bacnet-server/src/server/segmentation_tests.rs::routed_source_segment_ack_and_abort_match_npdu_source"
+    "crates/bacnet-server/src/server/segmentation_tests.rs::routed_source_segment_ack_and_abort_match_npdu_source",
+    "crates/bacnet-encoding/src/segmentation.rs::tests::duplicate_in_window_is_false_before_current_window_receives_a_segment",
+    "crates/bacnet-encoding/src/segmentation.rs::tests::duplicate_in_window_does_not_apply_ordinary_sequence_ordering",
+    "crates/bacnet-client/src/client/segmented_receive_duplicate_tests.rs::window_one_duplicate_gets_immediate_negative_ack_without_payload_mutation",
+    "crates/bacnet-client/src/client/segmented_receive_duplicate_tests.rs::out_of_order_and_window_boundary_reset_the_duplicate_baseline",
+    "crates/bacnet-server/src/server/segmentation_tests/request_reassembly.rs::duplicate_segment_zero_draws_negative_ack_and_transfer_survives",
+    "crates/bacnet-server/src/server/segmentation_tests/duplicate_window.rs::out_of_order_segment_naks_immediately_and_resets_duplicate_state"
    ],
    "benchmarks": [
     "benchmarks/src/stress/segmentation.rs"
@@ -141,7 +156,7 @@
    "public_claims": [
     "docs/python-api.md segmentation support"
    ],
-   "notes": "This slice adds server ComplexAck send-side window evidence for current-sequence positive ACK advancement, first-window NAK0 retransmission, NAK of the previous sequence retransmitting the current segment, stale/future positive ACK ignore, wrong-direction ACK ignore, routed source-network matching, out-of-range NAK ignore, final ACK validation, timeout retransmission, repeated valid NAK abort, ACK flood/current-window filtering, and nonblocking full-queue SegmentACK dispatch. Remaining segmentation/window gaps include multi-segment window sizes beyond the current window-one send behavior, modulo-256 wrap, duplicate segment receive behavior, max APDU/max segment boundaries, and broader client/server receive-side out-of-order coverage."
+    "notes": "Receive-side client SEGMENTED_CONF and server SEGMENTED_REQUEST now use the Clause 5.4.2.2 predicate corrected by Addendum 135-2020ch, with modulo-256 unit vectors. Per-session DuplicateCount uses ActualWindowSize as Ndup: exactly Ndup in-window duplicates are discarded silently, the next is NAKed, and true out-of-order segments are NAKed immediately. Focused tests cover window one, windows greater than one, client/server baseline resets, ACK roles and fields, and byte-exact payload survival. The row remains below supported status pending multi-segment send-window behavior, full-transfer modulo-256 wrap evidence, max APDU/max segment boundaries, and broader TSM transition coverage."
   },
   {
    "id": "BACNET-6-NPDU-CONTROL",

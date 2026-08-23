@@ -145,19 +145,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     // refresh precedes the ordering checks.
                                     state.last_activity = Instant::now();
                                     if seq != state.expected_seq {
-                                        warn!(
-                                            invoke_id = req.invoke_id,
-                                            expected = state.expected_seq,
-                                            received = seq,
-                                            "Segment gap detected, sending negative SegmentAck"
-                                        );
-                                        ack_to_send = Some(SegmentAckPdu {
-                                            negative_ack: true,
-                                            sent_by_server: true,
-                                            invoke_id: req.invoke_id,
-                                            sequence_number: state.last_acked_seq,
-                                            actual_window_size: state.actual_window_size,
-                                        });
+                                        ack_to_send =
+                                            super::segmented_receive::classify_non_next_segment(
+                                                state,
+                                                req.invoke_id,
+                                                seq,
+                                            );
                                     } else {
                                         // In-order NEW segment: duplicates
                                         // and gaps returned above, so a
@@ -218,6 +211,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             || state.window_pos >= state.actual_window_size;
                                         if should_ack {
                                             state.window_pos = 0;
+                                            state.initial_sequence_number = state.last_acked_seq;
+                                            state.duplicate_count = 0;
                                             ack_to_send = Some(SegmentAckPdu {
                                                 negative_ack: false,
                                                 sent_by_server: true,
@@ -295,6 +290,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         first_req: req.clone(),
                                         last_activity: Instant::now(),
                                         expected_seq: 1,
+                                        initial_sequence_number: 0,
+                                        duplicate_count: 0,
                                         last_acked_seq: 0,
                                         window_pos: 1,
                                         actual_window_size,
@@ -304,6 +301,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         !req.more_follows || state.window_pos >= actual_window_size;
                                     if should_ack {
                                         state.window_pos = 0;
+                                        state.initial_sequence_number = state.last_acked_seq;
+                                        state.duplicate_count = 0;
                                         ack_to_send = Some(SegmentAckPdu {
                                             negative_ack: false,
                                             sent_by_server: true,

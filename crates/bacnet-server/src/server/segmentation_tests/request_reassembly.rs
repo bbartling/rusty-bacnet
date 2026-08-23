@@ -28,7 +28,7 @@ const CSV_INSTANCE: u32 = 1;
 /// Start a real server on one end of a loopback pair; the test is the client
 /// on the other end. The database holds one CharacterString Value object so a
 /// reassembled WriteProperty has a writable target.
-async fn start_reassembly_server(
+pub(super) async fn start_reassembly_server(
     segmentation: Segmentation,
 ) -> (
     BACnetServer<LoopbackTransport>,
@@ -58,7 +58,7 @@ async fn start_reassembly_server(
 /// A WriteProperty request whose reassembled form writes `text` to the CSV
 /// object's Present_Value — the payload the segments carry, so a corrupt
 /// reassembly cannot produce a SimpleAck and a correct one must.
-fn write_property_payload(text: &str) -> Vec<u8> {
+pub(super) fn write_property_payload(text: &str) -> Vec<u8> {
     let mut value = BytesMut::new();
     encode_property_value(
         &mut value,
@@ -79,7 +79,7 @@ fn write_property_payload(text: &str) -> Vec<u8> {
 }
 
 /// Split `payload` into exactly `count` non-empty chunks.
-fn split_into(payload: &[u8], count: usize) -> Vec<Vec<u8>> {
+pub(super) fn split_into(payload: &[u8], count: usize) -> Vec<Vec<u8>> {
     assert!(
         payload.len() >= count,
         "payload of {} bytes cannot fill {count} non-empty segments",
@@ -116,6 +116,17 @@ async fn send_segment(
     more_follows: bool,
     data: &[u8],
 ) {
+    send_segment_with_window(transport, invoke_id, seq, 1, more_follows, data).await;
+}
+
+pub(super) async fn send_segment_with_window(
+    transport: &LoopbackTransport,
+    invoke_id: u8,
+    seq: u8,
+    window_size: u8,
+    more_follows: bool,
+    data: &[u8],
+) {
     send_apdu(
         transport,
         &Apdu::ConfirmedRequest(ConfirmedRequestPdu {
@@ -126,7 +137,7 @@ async fn send_segment(
             max_apdu_length: 1476,
             invoke_id,
             sequence_number: Some(seq),
-            proposed_window_size: Some(1),
+            proposed_window_size: Some(window_size),
             service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
             service_request: Bytes::copy_from_slice(data),
         }),
@@ -134,7 +145,7 @@ async fn send_segment(
     .await;
 }
 
-async fn recv_apdu(
+pub(super) async fn recv_apdu(
     rx: &mut mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>,
     context: &str,
 ) -> Apdu {
@@ -146,7 +157,7 @@ async fn recv_apdu(
     apdu::decode_apdu(npdu.payload).unwrap()
 }
 
-async fn expect_positive_ack(
+pub(super) async fn expect_positive_ack(
     rx: &mut mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>,
     invoke_id: u8,
     seq: u8,
@@ -181,7 +192,7 @@ async fn expect_abort(
     }
 }
 
-async fn present_value(server: &BACnetServer<LoopbackTransport>) -> String {
+pub(super) async fn present_value(server: &BACnetServer<LoopbackTransport>) -> String {
     let db = server.database().read().await;
     let oid = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, CSV_INSTANCE).unwrap();
     match db

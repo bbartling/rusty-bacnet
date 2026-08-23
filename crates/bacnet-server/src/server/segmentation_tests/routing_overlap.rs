@@ -148,7 +148,7 @@ async fn dispatch_ack_flood_does_not_drop_valid_segment_ack() {
     .await;
 
     wait_for_sent_len(&sent, 2).await;
-    assert_eq!(complex_ack_sequence(&sent, 1), 0);
+    assert_eq!(complex_ack_sequence(&sent, 1), 1);
 
     handle.abort();
     let _ = handle.await;

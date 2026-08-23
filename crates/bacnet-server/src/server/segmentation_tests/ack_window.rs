@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero() {
+async fn segmented_complex_ack_advances_after_negative_ack_zero() {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
@@ -24,7 +24,7 @@ async fn segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero(
     send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, true, 0)).await;
 
     wait_for_sent_len(&sent, 2).await;
-    assert_eq!(complex_ack_sequence(&sent, 1), 0);
+    assert_eq!(complex_ack_sequence(&sent, 1), 1);
 
     handle.abort();
     let _ = handle.await;
@@ -52,10 +52,10 @@ async fn segmented_complex_ack_ignores_future_positive_segment_ack() {
     assert_eq!(complex_ack_sequence(&sent, 0), 0);
 
     send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, false, 1)).await;
-    send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, true, 0)).await;
+    send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, false, 0)).await;
 
     wait_for_sent_len(&sent, 2).await;
-    assert_eq!(complex_ack_sequence(&sent, 1), 0);
+    assert_eq!(complex_ack_sequence(&sent, 1), 1);
 
     handle.abort();
     let _ = handle.await;
@@ -99,6 +99,72 @@ async fn segmented_complex_ack_retransmits_current_segment_after_negative_ack_pr
 
     handle.abort();
     let _ = handle.await;
+}
+
+#[tokio::test]
+async fn segmented_complex_ack_advances_when_retransmitted_current_segment_receives_negative_ack() {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
+        &sent,
+    ))));
+    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let source_mac = test_mac(14);
+    let invoke_id = 0x4E;
+    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let handle = spawn_segmented_complex_ack_with_options(
+        Arc::clone(&network),
+        Arc::clone(&seg_ack_senders),
+        source_mac.clone(),
+        invoke_id,
+        vec![0x8E; 128],
+        SegmentedSendOptions {
+            segment_timeout: Duration::from_millis(100),
+            max_retries: 2,
+        },
+    );
+
+    wait_for_sent_len(&sent, 1).await;
+    assert_eq!(complex_ack_sequence(&sent, 0), 0);
+    dispatch_test_apdu(
+        &network,
+        &seg_ack_senders,
+        &source_mac,
+        Apdu::SegmentAck(segment_ack(invoke_id, false, 0)),
+    )
+    .await;
+
+    wait_for_sent_len(&sent, 2).await;
+    assert_eq!(complex_ack_sequence(&sent, 1), 1);
+
+    // Simulate losing the receiver's positive ACK for this window-one segment.
+    wait_for_sent_len(&sent, 3).await;
+    assert_eq!(complex_ack_sequence(&sent, 2), 1);
+    dispatch_test_apdu(
+        &network,
+        &seg_ack_senders,
+        &source_mac,
+        Apdu::SegmentAck(segment_ack(invoke_id, true, 1)),
+    )
+    .await;
+
+    wait_for_sent_len(&sent, 4).await;
+    assert_eq!(complex_ack_sequence(&sent, 3), 2);
+    dispatch_test_apdu(
+        &network,
+        &seg_ack_senders,
+        &source_mac,
+        Apdu::SegmentAck(segment_ack(invoke_id, false, 2)),
+    )
+    .await;
+
+    tokio::time::timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("segmented response task should complete after receiver-style current NAK")
+        .expect("segmented response task should not panic");
+    assert!(
+        !seg_ack_senders.lock().await.contains_key(&key),
+        "SegmentAck sender entry should be removed after final ACK"
+    );
 }
 
 #[tokio::test]
@@ -159,10 +225,10 @@ async fn segmented_complex_ack_ignores_segment_ack_with_server_bit_set() {
         server_segment_ack(invoke_id, false, 0),
     )
     .await;
-    send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, true, 0)).await;
+    send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, false, 0)).await;
 
     wait_for_sent_len(&sent, 2).await;
-    assert_eq!(complex_ack_sequence(&sent, 1), 0);
+    assert_eq!(complex_ack_sequence(&sent, 1), 1);
 
     handle.abort();
     let _ = handle.await;
@@ -233,7 +299,11 @@ async fn segmented_complex_ack_aborts_after_repeated_negative_segment_ack() {
 
     wait_for_sent_len(&sent, 1).await;
 
-    for expected_len in 2..=(MAX_NEG_SEGMENT_ACK_RETRIES as usize + 2) {
+    send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, false, 0)).await;
+    wait_for_sent_len(&sent, 2).await;
+    assert_eq!(complex_ack_sequence(&sent, 1), 1);
+
+    for expected_len in 3..=(MAX_NEG_SEGMENT_ACK_RETRIES as usize + 3) {
         send_segment_ack(&seg_ack_senders, &key, segment_ack(invoke_id, true, 0)).await;
         wait_for_sent_len(&sent, expected_len).await;
     }
