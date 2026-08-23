@@ -6,7 +6,7 @@ use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ComplexAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -131,13 +131,56 @@ async fn max_retry_budget_sends_exactly_255_retransmissions() {
     )
     .await
     .expect("the maximum retry budget must terminate");
-    assert!(
-        matches!(result, Err(Error::Timeout(duration)) if duration == Duration::from_millis(1))
-    );
+    assert!(matches!(
+        result,
+        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
+    ));
     assert_eq!(drain.await.unwrap(), 1 + usize::from(u8::MAX));
 
     client.stop().await.unwrap();
     server_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn retry_send_failure_precedes_final_timeout_indication() {
+    let (_inbound_tx, inbound_rx) = mpsc::channel(8);
+    let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
+    let retry_started = Arc::new(Notify::new());
+    let release_retry = Arc::new(Notify::new());
+    let send_count = Arc::new(AtomicUsize::new(0));
+    let transport = BlockingRetryTransport {
+        local_mac: MacAddr::from_slice(CLIENT_MAC),
+        inbound_rx: Some(inbound_rx),
+        outbound_tx,
+        send_count: Arc::clone(&send_count),
+        retry_started,
+        release_retry: Arc::clone(&release_retry),
+    };
+    let config = ClientConfig {
+        apdu_timeout_ms: 10,
+        apdu_retries: 1,
+        ..ClientConfig::default()
+    };
+    let mut client = BACnetClient::start(config, transport).await.unwrap();
+    release_retry.notify_one();
+
+    let result = timeout(
+        Duration::from_secs(1),
+        client.confirmed_request(SERVER_MAC, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C]),
+    )
+    .await
+    .expect("retry send failure did not complete the request");
+    match result {
+        Err(Error::Transport(error)) => {
+            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+            assert_eq!(error.to_string(), "injected retry failure");
+        }
+        other => panic!("expected retry transport failure, got {other:?}"),
+    }
+    assert_eq!(send_count.load(Ordering::SeqCst), 2);
+    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+
+    client.stop().await.unwrap();
 }
 
 #[tokio::test]

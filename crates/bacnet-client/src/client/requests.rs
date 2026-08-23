@@ -429,7 +429,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         false,
                                         None,
                                     );
-                                    return Err(Error::Timeout(request_timeout));
+                                    return Err(Error::Abort {
+                                        reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT.to_raw(),
+                                    });
                                 }
                                 RequestTimerExpiration::NoTransaction => {
                                     drop(tsm);

@@ -657,7 +657,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             _ = &mut segment_timer => {
                                 ack_retries += 1;
                                 if ack_retries > max_ack_retries {
-                                    return Err(Error::Timeout(timeout_duration));
+                                    return Err(Error::Abort {
+                                        reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT.to_raw(),
+                                    });
                                 }
                                 warn!(
                                     attempt = ack_retries,

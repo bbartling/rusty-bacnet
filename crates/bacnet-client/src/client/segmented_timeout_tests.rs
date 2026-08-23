@@ -54,6 +54,77 @@ async fn segment_timer_timeout_ends_the_reassembly_session() {
 }
 
 #[tokio::test]
+async fn segmented_request_without_segment_ack_returns_local_tsm_timeout() {
+    let retries = 2;
+    let config = ClientConfig {
+        apdu_timeout_ms: 40,
+        apdu_retries: retries,
+        max_apdu_length: 50,
+        proposed_window_size: 1,
+        ..ClientConfig::default()
+    };
+    let (client_transport, mut server) =
+        LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
+    let mut rx = server.start().await.unwrap();
+    let client = Arc::new(BACnetClient::start(config, client_transport).await.unwrap());
+
+    let request_client = Arc::clone(&client);
+    let request = tokio::spawn(async move {
+        request_client
+            .confirmed_request(
+                SERVER_MAC,
+                ConfirmedServiceChoice::READ_PROPERTY,
+                &[0x0C; 100],
+            )
+            .await
+    });
+
+    let mut invoke_id = None;
+    for _ in 0..=retries {
+        match recv_apdu(&mut rx, "an unacknowledged outgoing request segment").await {
+            Apdu::ConfirmedRequest(segment) => {
+                assert!(segment.segmented);
+                assert!(segment.more_follows);
+                assert_eq!(segment.sequence_number, Some(0));
+                if let Some(expected_invoke_id) = invoke_id {
+                    assert_eq!(segment.invoke_id, expected_invoke_id);
+                }
+                invoke_id = Some(segment.invoke_id);
+            }
+            other => panic!("expected ConfirmedRequest segment, got {other:?}"),
+        }
+    }
+    let invoke_id = invoke_id.expect("at least one request segment");
+
+    let result = timeout(Duration::from_secs(2), request)
+        .await
+        .expect("SegmentTimer retry exhaustion did not complete the request")
+        .unwrap();
+    assert!(matches!(
+        result,
+        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
+    ));
+    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert!(
+        !client
+            .seg_ack_senders
+            .lock()
+            .await
+            .contains_key(&(bacnet_types::MacAddr::from_slice(SERVER_MAC), invoke_id)),
+        "SegmentTimer expiry left the SegmentAck sender registered"
+    );
+    assert!(
+        timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
+        "SegmentTimer expiry sent an unexpected peer PDU"
+    );
+
+    let mut client =
+        Arc::try_unwrap(client).unwrap_or_else(|_| panic!("request task retained client"));
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn delayed_timeout_cleanup_preserves_reused_segmented_response() {
     let config = ClientConfig {
         apdu_timeout_ms: 100,

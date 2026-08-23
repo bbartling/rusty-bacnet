@@ -568,7 +568,7 @@ async fn segmented_request_timeout_cleanup_preserves_replacement_sender() {
             .await
             .unwrap()
             .unwrap(),
-        Err(Error::Timeout(_))
+        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
     ));
     assert_eq!(
         client.tsm.lock().await.pending_count(),
