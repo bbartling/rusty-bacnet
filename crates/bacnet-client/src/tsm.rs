@@ -3,13 +3,18 @@
 //! Tracks in-flight confirmed requests. Each request gets a unique invoke_id
 //! (0-255) scoped per destination MAC. Responses are delivered via oneshot channels.
 
-use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
+
+mod final_segment;
+pub(crate) use final_segment::{
+    FinalSegmentIssue, FinalSegmentSendToken, SegmentedResponseAdmission, TerminalResponseAdmission,
+};
 
 /// TSM configuration.
 #[derive(Debug, Clone)]
@@ -112,6 +117,13 @@ pub enum CompletionOutcome {
     },
 }
 
+#[derive(Debug)]
+pub(crate) enum SegmentAckPhase {
+    SegmentedRequest(TransactionOwner),
+    Outstanding,
+    Idle,
+}
+
 /// Request-side timer state delivered to the task waiting for a response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransactionProgress {
@@ -130,7 +142,7 @@ pub(crate) struct TransactionRegistration {
 /// Pointer identity is stable while delayed work retains a clone. The
 /// allocation therefore cannot be reused for a replacement transaction until
 /// every stale owner reference has gone away.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct TransactionOwner(Arc<()>);
 
 impl TransactionOwner {
@@ -162,6 +174,7 @@ pub(crate) enum SegmentTimerExpiration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransactionPhase {
     AwaitingResponse,
+    SegmentedRequest { sent_all_segments: bool },
     SegmentedResponse,
 }
 
@@ -171,6 +184,7 @@ struct PendingTransaction {
     progress: watch::Sender<TransactionProgress>,
     owner: TransactionOwner,
     phase: TransactionPhase,
+    final_segment_issue: Option<FinalSegmentIssue>,
     /// Monotonic token used to reject a SegmentTimer expiry observed before
     /// newer segment activity acquired the TSM lock.
     segment_generation: u64,
@@ -255,9 +269,42 @@ impl Tsm {
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
     ) -> TransactionRegistration {
+        self.register_transaction_in_phase(
+            destination_mac,
+            invoke_id,
+            service_choice,
+            TransactionPhase::AwaitingResponse,
+        )
+    }
+
+    pub(crate) fn register_segmented_transaction_with_progress(
+        &mut self,
+        destination_mac: MacAddr,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+    ) -> TransactionRegistration {
+        self.register_transaction_in_phase(
+            destination_mac,
+            invoke_id,
+            service_choice,
+            TransactionPhase::SegmentedRequest {
+                sent_all_segments: false,
+            },
+        )
+    }
+
+    fn register_transaction_in_phase(
+        &mut self,
+        destination_mac: MacAddr,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+        phase: TransactionPhase,
+    ) -> TransactionRegistration {
         let (tx, rx) = oneshot::channel();
         let (progress_tx, progress_rx) = watch::channel(TransactionProgress::AwaitingResponse);
         let owner = TransactionOwner::new();
+        let final_segment_issue =
+            matches!(phase, TransactionPhase::SegmentedRequest { .. }).then(FinalSegmentIssue::new);
         debug_assert!(
             !self
                 .pending
@@ -271,7 +318,8 @@ impl Tsm {
                 responder: tx,
                 progress: progress_tx,
                 owner: owner.clone(),
-                phase: TransactionPhase::AwaitingResponse,
+                phase,
+                final_segment_issue,
                 segment_generation: 0,
                 expected_service_choice: service_choice,
             },
@@ -281,6 +329,199 @@ impl Tsm {
             progress: progress_rx,
             owner,
         }
+    }
+
+    /// Reserve the first poll of the final N-UNITDATA.request. A terminal PDU
+    /// that reaches dispatch while this token is live waits for that poll to
+    /// resolve instead of being admitted or rejected early.
+    pub(crate) fn begin_final_segment_send(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+    ) -> Option<FinalSegmentSendToken> {
+        let key = (MacAddr::from_slice(destination_mac), invoke_id);
+        let pending = self.pending.get(&key)?;
+        if !pending.owner.same_as(owner)
+            || !matches!(
+                pending.phase,
+                TransactionPhase::SegmentedRequest {
+                    sent_all_segments: false
+                }
+            )
+        {
+            return None;
+        }
+        let issue = pending.final_segment_issue.as_ref()?.clone();
+        issue.begin().then_some(FinalSegmentSendToken {
+            issue,
+            resolved: false,
+        })
+    }
+
+    /// Publish `SentAllSegments` after the final send future has been polled.
+    /// The caller must not hold the TSM lock while performing that poll.
+    pub(crate) fn mark_final_segment_issued(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+        token: &mut FinalSegmentSendToken,
+    ) -> bool {
+        let key = (MacAddr::from_slice(destination_mac), invoke_id);
+        let Some(pending) = self.pending.get_mut(&key) else {
+            return false;
+        };
+        if !pending.owner.same_as(owner) {
+            return false;
+        }
+        let TransactionPhase::SegmentedRequest { sent_all_segments } = &mut pending.phase else {
+            return false;
+        };
+        if !pending
+            .final_segment_issue
+            .as_ref()
+            .is_some_and(|issue| issue.same_as(&token.issue))
+            || !token.issue.is_polling()
+        {
+            return false;
+        }
+        *sent_all_segments = true;
+        token.issued();
+        true
+    }
+
+    /// FinalACK_Received moves the same owner into AWAIT_CONFIRMATION.
+    pub(crate) fn finish_segmented_request(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+    ) -> bool {
+        let key = (MacAddr::from_slice(destination_mac), invoke_id);
+        let Some(pending) = self.pending.get_mut(&key) else {
+            return false;
+        };
+        if !pending.owner.same_as(owner)
+            || !matches!(
+                pending.phase,
+                TransactionPhase::SegmentedRequest {
+                    sent_all_segments: true
+                }
+            )
+        {
+            return false;
+        }
+        pending.phase = TransactionPhase::AwaitingResponse;
+        pending
+            .progress
+            .send_replace(TransactionProgress::AwaitingResponse);
+        true
+    }
+
+    pub(crate) fn segment_ack_phase(&self, source_mac: &[u8], invoke_id: u8) -> SegmentAckPhase {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        match self.pending.get(&key) {
+            Some(pending) if matches!(pending.phase, TransactionPhase::SegmentedRequest { .. }) => {
+                SegmentAckPhase::SegmentedRequest(pending.owner.clone())
+            }
+            Some(_) => SegmentAckPhase::Outstanding,
+            None => SegmentAckPhase::Idle,
+        }
+    }
+
+    /// Gate segment zero before receive state is allocated. In
+    /// SEGMENTED_REQUEST, any ComplexACK before `SentAllSegments`, and any
+    /// segmented ComplexACK not starting at sequence zero, is UnexpectedPDU.
+    pub(crate) fn admit_segmented_complex_ack(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        sequence_number: u8,
+    ) -> SegmentedResponseAdmission {
+        self.admit_segmented_complex_ack_inner(source_mac, invoke_id, sequence_number, None)
+    }
+
+    pub(crate) fn admit_segmented_complex_ack_for_owner(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        sequence_number: u8,
+        owner: &TransactionOwner,
+    ) -> SegmentedResponseAdmission {
+        self.admit_segmented_complex_ack_inner(source_mac, invoke_id, sequence_number, Some(owner))
+    }
+
+    fn admit_segmented_complex_ack_inner(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        sequence_number: u8,
+        owner: Option<&TransactionOwner>,
+    ) -> SegmentedResponseAdmission {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let Some(pending) = self.pending.get(&key) else {
+            return SegmentedResponseAdmission::NoTransaction;
+        };
+        if owner.is_some_and(|owner| !pending.owner.same_as(owner)) {
+            return SegmentedResponseAdmission::NoTransaction;
+        }
+        if let TransactionPhase::SegmentedRequest { sent_all_segments } = pending.phase {
+            if sequence_number != 0 {
+                self.abort_invalid_apdu_in_current_state(source_mac, invoke_id);
+                return SegmentedResponseAdmission::PrematureSegmentedRequestAborted;
+            }
+            if !sent_all_segments {
+                if let Some(issue) = pending
+                    .final_segment_issue
+                    .as_ref()
+                    .filter(|issue| issue.is_polling())
+                {
+                    return SegmentedResponseAdmission::FinalSegmentSendPolling {
+                        owner: pending.owner.clone(),
+                        issue: issue.clone(),
+                    };
+                }
+                self.abort_invalid_apdu_in_current_state(source_mac, invoke_id);
+                return SegmentedResponseAdmission::PrematureSegmentedRequestAborted;
+            }
+        }
+        SegmentedResponseAdmission::Active(pending.owner.clone())
+    }
+
+    pub(crate) fn admit_terminal_response(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        owner: Option<&TransactionOwner>,
+    ) -> TerminalResponseAdmission {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let Some(pending) = self.pending.get(&key) else {
+            return TerminalResponseAdmission::NoTransaction;
+        };
+        if owner.is_some_and(|owner| !pending.owner.same_as(owner)) {
+            return TerminalResponseAdmission::NoTransaction;
+        }
+        if matches!(
+            pending.phase,
+            TransactionPhase::SegmentedRequest {
+                sent_all_segments: false
+            }
+        ) {
+            if let Some(issue) = pending
+                .final_segment_issue
+                .as_ref()
+                .filter(|issue| issue.is_polling())
+            {
+                return TerminalResponseAdmission::FinalSegmentSendPolling {
+                    owner: pending.owner.clone(),
+                    issue: issue.clone(),
+                };
+            }
+            self.abort_invalid_apdu_in_current_state(source_mac, invoke_id);
+            return TerminalResponseAdmission::PrematureSegmentedRequestAborted;
+        }
+        TerminalResponseAdmission::Active(pending.owner.clone())
     }
 
     /// Enter SEGMENTED_CONF after the first segment has been saved.
@@ -297,6 +538,14 @@ impl Tsm {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         let pending = self.pending.get_mut(&key)?;
         if !pending.owner.same_as(owner) {
+            return None;
+        }
+        if matches!(
+            pending.phase,
+            TransactionPhase::SegmentedRequest {
+                sent_all_segments: false
+            }
+        ) {
             return None;
         }
         pending.segment_generation = pending.segment_generation.wrapping_add(1);
@@ -506,6 +755,25 @@ impl Tsm {
         if owner.is_some_and(|owner| !entry.get().owner.same_as(owner)) {
             return CompletionOutcome::NoTransaction;
         }
+        let requires_sent_all_segments = matches!(
+            &response,
+            TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Error { .. }
+        );
+        if requires_sent_all_segments
+            && matches!(
+                entry.get().phase,
+                TransactionPhase::SegmentedRequest {
+                    sent_all_segments: false
+                }
+            )
+        {
+            let pending = entry.remove();
+            self.release_invoke_id(source_mac, invoke_id);
+            let _ = pending.responder.send(TsmResponse::Abort {
+                reason: AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw(),
+            });
+            return CompletionOutcome::Delivered;
+        }
         let expected = entry.get().expected_service_choice;
         if let Some(observed) = observed_service_choice {
             if observed != expected {
@@ -518,6 +786,17 @@ impl Tsm {
         self.release_invoke_id(source_mac, invoke_id);
         let _ = pending.responder.send(response);
         CompletionOutcome::Delivered
+    }
+
+    fn abort_invalid_apdu_in_current_state(&mut self, source_mac: &[u8], invoke_id: u8) {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let Some(pending) = self.pending.remove(&key) else {
+            return;
+        };
+        self.release_invoke_id(source_mac, invoke_id);
+        let _ = pending.responder.send(TsmResponse::Abort {
+            reason: AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw(),
+        });
     }
 
     /// Cancel a pending transaction. Returns `true` if found.

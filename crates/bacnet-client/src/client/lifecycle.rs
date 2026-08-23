@@ -67,7 +67,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let confirmed_cov_ack_policy = options.confirmed_cov_notification_ack_policy.clone();
         let (device_tx, _) = broadcast::channel::<DeviceEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_tx_dispatch = device_tx.clone();
-        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
+        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
         let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel::<TransactionCleanup>();
@@ -108,7 +108,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             let mut senders = seg_ack_senders_dispatch.lock().await;
                             if senders
                                 .get(&key)
-                                .is_some_and(|sender| sender.same_channel(&expected_sender))
+                                .is_some_and(|route| {
+                                    route.owner.same_as(&cleanup.owner)
+                                        && route.sender.same_channel(&expected_sender)
+                                })
                             {
                                 senders.remove(&key);
                             }
