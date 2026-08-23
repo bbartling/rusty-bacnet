@@ -24,7 +24,7 @@ use bacnet_encoding::apdu::{
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::segmentation::{
-    max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
+    duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::database::ObjectDatabase;
@@ -674,6 +674,11 @@ struct SegmentedRequestState {
     first_req: bacnet_encoding::apdu::ConfirmedRequest,
     last_activity: Instant,
     expected_seq: u8,
+    /// Last sequence number in the previously completed receive window.
+    initial_sequence_number: u8,
+    /// Duplicates silently discarded in the current receive window.
+    duplicate_count: u8,
+    /// Last segment accepted in order (Clause 5.4.2 LastSequenceNumber).
     last_acked_seq: u8,
     window_pos: u8,
     actual_window_size: u8,
@@ -944,6 +949,7 @@ mod requests;
 pub(crate) use requests::{EXECUTED_CONFIRMED, EXECUTED_UNCONFIRMED};
 mod responses;
 mod segmentation;
+mod segmented_receive;
 
 #[cfg(test)]
 mod cov_notifications_tests;

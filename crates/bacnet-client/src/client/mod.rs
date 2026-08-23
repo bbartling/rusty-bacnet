@@ -34,7 +34,9 @@ use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
 use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice, RoutedDeviceConfig};
-use crate::segmentation::{max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType};
+use crate::segmentation::{
+    duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
+};
 use crate::tsm::{Tsm, TsmConfig, TsmResponse};
 
 /// Default COV notification broadcast channel capacity.
@@ -343,12 +345,18 @@ struct SegmentedReceiveState {
     reply_network: Option<NpduAddress>,
     /// Next expected sequence number (for gap detection).
     expected_next_seq: u8,
+    /// Last sequence number in the previously completed receive window.
+    initial_sequence_number: u8,
+    /// Last segment accepted in order.
+    last_sequence_number: u8,
+    /// Duplicates silently discarded in the current receive window.
+    duplicate_count: u8,
     /// Timestamp of last received segment (for reaping stale sessions).
     last_activity: Instant,
     /// Window position counter for per-window SegmentAck (Clause 5.2.2).
     window_position: u8,
-    /// Proposed window size from the server.
-    proposed_window_size: u8,
+    /// Window size accepted for this receive session.
+    actual_window_size: u8,
     /// How many distinct segments have been stored.
     ///
     /// Monotonic, and deliberately not derived from `expected_next_seq`, which
@@ -810,6 +818,8 @@ mod sc_builder_tests;
 mod sc_max_apdu_tests;
 #[cfg(test)]
 mod segmentation_retransmit_tests;
+#[cfg(test)]
+mod segmented_receive_duplicate_tests;
 #[cfg(test)]
 mod segmented_receive_lifecycle_tests;
 #[cfg(test)]

@@ -8,6 +8,23 @@ use bacnet_types::error::Error;
 use bytes::Bytes;
 use std::collections::HashMap;
 
+/// Return whether `sequence_number` is a duplicate in the current incomplete window.
+///
+/// This is the modulo-256 predicate from ANSI/ASHRAE 135-2020 Clause 5.4.2.2,
+/// as corrected by Addendum 135-2020ch. `initial_sequence_number` is the last
+/// sequence number in the previously completed window, and
+/// `last_sequence_number` is the last segment accepted in order. When those
+/// values are equal, no segment has been accepted in the current window and
+/// the predicate returns `false`.
+pub fn duplicate_in_window(
+    sequence_number: u8,
+    initial_sequence_number: u8,
+    last_sequence_number: u8,
+) -> bool {
+    let received_count = last_sequence_number.wrapping_sub(initial_sequence_number);
+    received_count != 0 && sequence_number.wrapping_sub(initial_sequence_number) <= received_count
+}
+
 /// PDU types that affect segmentation overhead calculation.
 ///
 /// Named `SegmentedPduType` to avoid collision with `bacnet_types::enums::PduType`.
@@ -150,6 +167,35 @@ mod tests {
             max_segment_payload(1476, SegmentedPduType::ConfirmedRequest),
             1470
         );
+    }
+
+    #[test]
+    fn duplicate_in_window_matches_addendum_examples() {
+        assert!(duplicate_in_window(0, 0, 1));
+        assert!(duplicate_in_window(1, 0, 1));
+        assert!(!duplicate_in_window(2, 0, 1));
+        assert!(!duplicate_in_window(3, 0, 1));
+    }
+
+    #[test]
+    fn duplicate_in_window_is_false_before_current_window_receives_a_segment() {
+        assert!(!duplicate_in_window(0, 0, 0));
+        assert!(!duplicate_in_window(255, 0, 0));
+    }
+
+    #[test]
+    fn duplicate_in_window_uses_modulo_256_arithmetic() {
+        assert!(duplicate_in_window(255, 254, 0));
+        assert!(duplicate_in_window(0, 254, 0));
+        assert!(!duplicate_in_window(1, 254, 0));
+    }
+
+    #[test]
+    fn duplicate_in_window_does_not_apply_ordinary_sequence_ordering() {
+        assert!(duplicate_in_window(255, 250, 2));
+        assert!(duplicate_in_window(1, 250, 2));
+        assert!(!duplicate_in_window(249, 250, 2));
+        assert!(!duplicate_in_window(3, 250, 2));
     }
 
     #[test]

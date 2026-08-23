@@ -101,6 +101,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Segmented ComplexACK and ConfirmedRequest receivers now use the corrected
+  modulo-256 `DuplicateInWindow` predicate from Clause 5.4.2.2 and Addendum
+  135-2020ch. Each current incomplete receive window silently discards exactly
+  `ActualWindowSize` duplicates before NAKing the next; gaps and window-one
+  duplicates NAK immediately without changing the reassembled payload (#383).
+
 - The client no longer segments confirmed requests to peers whose
   authoritative `Segmentation_Supported` says they cannot receive segments
   (#371). When request sizing requires segmentation and the selected
