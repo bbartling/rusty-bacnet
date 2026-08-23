@@ -11,17 +11,6 @@ const ISSUED: u8 = 2;
 const FAILED: u8 = 3;
 
 #[derive(Debug)]
-pub(crate) enum SegmentedResponseAdmission {
-    Active(TransactionOwner),
-    FinalSegmentSendPolling {
-        owner: TransactionOwner,
-        issue: FinalSegmentIssue,
-    },
-    PrematureSegmentedRequestAborted,
-    NoTransaction,
-}
-
-#[derive(Debug)]
 pub(crate) enum TerminalResponseAdmission {
     Active(TransactionOwner),
     FinalSegmentSendPolling {

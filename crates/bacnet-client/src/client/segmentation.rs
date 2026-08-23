@@ -120,22 +120,46 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let key = (tsm_mac.clone(), ack.invoke_id);
 
         let mut deferred_owner = None;
-        let admitted_owner = loop {
+        let owner = loop {
             let admission = {
                 let mut tsm = tsm.lock().await;
                 if let Some(owner) = deferred_owner.as_ref() {
-                    tsm.admit_segmented_complex_ack_for_owner(&tsm_mac, ack.invoke_id, seq, owner)
+                    tsm.admit_segmented_complex_ack_for_owner(
+                        &tsm_mac,
+                        ack.invoke_id,
+                        seq,
+                        limits.segmented_response_accepted,
+                        owner,
+                    )
                 } else {
-                    tsm.admit_segmented_complex_ack(&tsm_mac, ack.invoke_id, seq)
+                    tsm.admit_segmented_complex_ack(
+                        &tsm_mac,
+                        ack.invoke_id,
+                        seq,
+                        limits.segmented_response_accepted,
+                    )
                 }
             };
             match admission {
-                SegmentedResponseAdmission::Active(owner) => break Some(owner),
+                SegmentedResponseAdmission::Active(owner) => break owner,
                 SegmentedResponseAdmission::FinalSegmentSendPolling { owner, issue } => {
                     issue.wait_until_polled().await;
                     deferred_owner = Some(owner);
                 }
-                SegmentedResponseAdmission::PrematureSegmentedRequestAborted => {
+                SegmentedResponseAdmission::InitialResponseAborted { wire_reason } => {
+                    seg_state.remove(&key);
+                    Self::send_client_abort(
+                        network,
+                        source_mac,
+                        source_network,
+                        ack.invoke_id,
+                        wire_reason,
+                    )
+                    .await;
+                    return;
+                }
+                SegmentedResponseAdmission::NoTransaction => {
+                    seg_state.remove(&key);
                     Self::send_client_abort(
                         network,
                         source_mac,
@@ -146,7 +170,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await;
                     return;
                 }
-                SegmentedResponseAdmission::NoTransaction => break None,
             }
         };
 
@@ -157,73 +180,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Received segmented ComplexAck"
         );
 
-        // A segmented ComplexACK when this device does not support
-        // segmentation is Clause 5.4.4.3's UnexpectedPDU_Received, which
-        // requires an Abort with 'server' = FALSE. The transmitted reason
-        // follows Clause 18.10, which names SEGMENTATION_NOT_SUPPORTED for
-        // exactly this case.
-        if !limits.segmented_response_accepted {
-            let abort = Apdu::Abort(AbortPdu {
-                sent_by_server: false,
-                invoke_id: ack.invoke_id,
-                abort_reason: bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
-            });
-            let mut buf = BytesMut::with_capacity(4);
-            if let Err(e) = encode_apdu(&mut buf, &abort) {
-                warn!(error = %e, "Failed to encode segmentation-not-supported Abort");
-                return;
-            }
-            let _ = Self::send_reply_apdu(network, &buf, source_mac, source_network).await;
-            return;
-        }
-
-        // A reassembly session lives exactly as long as its transaction, so
-        // the TSM is consulted for EVERY segment, not only at session open.
-        // Clause 5.4's SEGMENTED_CONF is a state of the transaction itself:
-        // once the transaction ends — peer Abort/Error/Reject, or the caller
-        // cancelling on timeout — this device is in IDLE for that invoke ID,
-        // and 5.4.4.1 UnexpectedSegmentInfoReceived names this exact PDU as
-        // "an unexpected PDU indicating the existence of an active server
-        // TSM", prescribing an answer, not silence: "transmit a
-        // BACnet-Abort-PDU with 'server' = FALSE and 'abort-reason' =
-        // INVALID_APDU_IN_THIS_STATE and enter the IDLE state." A session
-        // whose transaction is gone is removed here rather than lingering to
-        // ack segments nobody is waiting on (#367). The per-open version of
-        // this gate also kept an unsolicited peer from occupying all 64
-        // session slots; requiring it per-segment keeps that property.
-        //
-        // Residual, deliberate: `release_invoke_id` drops a peer's allocator
-        // once every ID is free, so the caller's next request to this peer
-        // reuses the same invoke ID and a stale segment stream can alias
-        // onto the new pending transaction. This gate removes the orphaned
-        // session; it cannot tell that aliased stream from a genuine one.
-        //
-        // Bind the guard so its scope is obvious: it must not be held across
-        // the send below, and an `if let` here would extend it silently.
-        let owner = if let Some(owner) = admitted_owner {
-            Some(owner)
-        } else {
-            tsm.lock()
-                .await
-                .owner_and_expected_service(&tsm_mac, ack.invoke_id)
-                .map(|(owner, _)| owner)
-        };
-        let Some(owner) = owner else {
-            seg_state.remove(&key);
-            debug!(
-                invoke_id = ack.invoke_id,
-                "Aborting segmented ComplexAck for a transaction that is not pending"
-            );
-            Self::send_client_abort(
-                network,
-                source_mac,
-                source_network,
-                ack.invoke_id,
-                bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
-            )
-            .await;
-            return;
-        };
+        // Admission is owner-qualified on every segment. A receive session
+        // left by an earlier owner cannot attach to a reused invoke ID.
         if seg_state
             .get(&key)
             .is_some_and(|state| !state.owner.same_as(&owner))
@@ -231,8 +189,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             seg_state.remove(&key);
         }
 
-        // Below the pending gate: a non-pending segment must draw the 5.4.4.1
-        // Abort above even when every session slot is occupied.
+        // Admission precedes this capacity check so an unsolicited segment
+        // draws the Clause 5.4.4.1 Abort even when every slot is occupied.
         const MAX_CONCURRENT_SEG_SESSIONS: usize = 64;
         if !seg_state.contains_key(&key) && seg_state.len() >= MAX_CONCURRENT_SEG_SESSIONS {
             warn!(
