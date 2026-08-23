@@ -62,14 +62,14 @@ const MAX_SEG_RECEIVERS: usize = 128;
 /// A local storage bound, not a protocol one. Clause 20.1.2.7 makes the
 /// request sequence number modulo 256, so a longer request is entirely
 /// representable on the wire — this server simply keys its segment store by
-/// that `u8` and cannot tell segment 256 from segment 0. The Device object
-/// does publish a tighter advertisement — its `Max_Segments_Accepted`
-/// (Clause 12.11) defaults to `Unsigned(65)` — but enforcing it here is
-/// deliberately not done: accepting more segments than advertised is
-/// permissive, not a violation, while the sequence space is the line past
-/// which acceptance silently corrupts. Exactly 256 segments reassemble
-/// correctly and must keep working; 257 is the first that would corrupt the
-/// payload.
+/// that `u8` and cannot tell segment 256 from segment 0. A Device object
+/// configured to receive segments does publish a tighter advertisement — its
+/// `Max_Segments_Accepted` (Clause 12.11) defaults to `Unsigned(65)` — but
+/// enforcing it here is deliberately not done: accepting more segments than
+/// advertised is permissive, not a violation, while the sequence space is the
+/// line past which acceptance silently corrupts. Exactly 256 segments
+/// reassemble correctly and must keep working; 257 is the first that would
+/// corrupt the payload.
 const MAX_REQUEST_SEGMENTS: usize = 256;
 
 /// Maximum number of concurrent segmented response send sessions.

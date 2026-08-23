@@ -56,6 +56,61 @@ fn read_max_apdu_length() {
 }
 
 #[test]
+fn mode_derived_max_segments_accepted() {
+    let cases = [
+        ("none", Segmentation::NONE, None),
+        ("transmit", Segmentation::TRANSMIT, Some(1)),
+        ("receive", Segmentation::RECEIVE, Some(65)),
+        ("both", Segmentation::BOTH, Some(65)),
+        ("unknown", Segmentation::from_raw(64), Some(65)),
+    ];
+
+    for (name, segmentation, expected_max_segments) in cases {
+        let dev = DeviceObject::new(DeviceConfig {
+            segmentation_supported: segmentation,
+            ..DeviceConfig::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            dev.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)
+                .unwrap(),
+            PropertyValue::Enumerated(segmentation.to_raw() as u32),
+            "{name} segmentation readback"
+        );
+
+        let PropertyValue::List(property_list) = dev
+            .read_property(PropertyIdentifier::PROPERTY_LIST, None)
+            .unwrap()
+        else {
+            panic!("{name} Property_List was not a list");
+        };
+        assert_eq!(
+            property_list.contains(&PropertyValue::Enumerated(
+                PropertyIdentifier::MAX_SEGMENTS_ACCEPTED.to_raw(),
+            )),
+            expected_max_segments.is_some(),
+            "{name} Property_List presence"
+        );
+
+        let max_segments = dev.read_property(PropertyIdentifier::MAX_SEGMENTS_ACCEPTED, None);
+        match expected_max_segments {
+            Some(expected) => assert_eq!(
+                max_segments.unwrap(),
+                PropertyValue::Unsigned(expected),
+                "{name} Max_Segments_Accepted"
+            ),
+            None => assert!(matches!(
+                max_segments,
+                Err(Error::Protocol { class, code })
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            )),
+        }
+    }
+}
+
+#[test]
 fn read_unknown_property_fails() {
     let dev = make_device();
     // Use a property that Device doesn't have
