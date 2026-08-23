@@ -275,9 +275,14 @@ impl DeviceObject {
 
         // Max_Segments_Accepted — only included when segmentation is supported.
         if config.segmentation_supported != Segmentation::NONE {
+            let max_segments_accepted = if config.segmentation_supported == Segmentation::TRANSMIT {
+                1
+            } else {
+                65
+            };
             properties.insert(
                 PropertyIdentifier::MAX_SEGMENTS_ACCEPTED,
-                PropertyValue::Unsigned(65), // default: more than 64 segments
+                PropertyValue::Unsigned(max_segments_accepted),
             );
         }
 

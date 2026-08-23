@@ -101,6 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Device objects configured for segmented transmit now advertise
+  `Max_Segments_Accepted` as 1 instead of 65; receive-capable modes retain 65
+  (Clause 12.11, #379).
+
 - Server segmented transactions now identify a routed peer by valid NPDU
   SNET/SADR plus Invoke ID instead of the immediate router MAC (#384).
   ConfirmedRequest continuation segments, SegmentACKs, and client Aborts can

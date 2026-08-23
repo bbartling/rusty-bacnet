@@ -315,6 +315,26 @@
    "notes": "Initial family row only; later work should split high-claim services and object families into detailed rows."
   },
   {
+   "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
+   "standard_anchor": "Clause 12.11, Table 12-13",
+   "priority": "P1",
+   "requirement_summary": "The Device object's mode-derived Max_Segments_Accepted property is present when segmentation is supported and has the value required by the configured segmentation mode.",
+   "status": "implementation-present-needs-conformance-tests",
+   "code_anchors": [
+    "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
+    "crates/bacnet-server/src/server/mod.rs::MAX_REQUEST_SEGMENTS"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::mode_derived_max_segments_accepted"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::mode_derived_max_segments_accepted"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#379). DeviceObject omits Max_Segments_Accepted for NO_SEGMENTATION, derives 1 for exact SEGMENTED_TRANSMIT, and retains 65 for SEGMENTED_RECEIVE, SEGMENTED_BOTH, and unknown non-NONE raw values. DeviceConfig and ServerConfig remain independent; this slice neither changes nor adds enforcement for the server's 256-segment sequence-space limit. Client timers are excluded."
+  },
+  {
    "id": "BACNET-12-RECIPIENT-LIST-FRAMING",
    "standard_anchor": "Clause 12.21, Clause 21",
    "priority": "P1",

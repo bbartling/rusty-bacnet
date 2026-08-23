@@ -13,11 +13,11 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 25 |
+| Priority | P1 | 26 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 12 |
+| Status | implementation-present-needs-conformance-tests | 13 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
@@ -45,6 +45,7 @@
 | `BACNET-10-PTP` | Clause 10 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-11-LONTALK` | Clause 11 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | P1 | implementation-present-needs-conformance-tests | 3 |
+| `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
