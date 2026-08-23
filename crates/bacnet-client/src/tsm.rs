@@ -8,6 +8,7 @@ use bacnet_types::MacAddr;
 use bytes::Bytes;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
 /// TSM configuration.
@@ -121,6 +122,25 @@ pub(crate) enum TransactionProgress {
 pub(crate) struct TransactionRegistration {
     pub(crate) response: oneshot::Receiver<TsmResponse>,
     pub(crate) progress: watch::Receiver<TransactionProgress>,
+    pub(crate) owner: TransactionOwner,
+}
+
+/// Identity of one registration, independent of its reusable wire key.
+///
+/// Pointer identity is stable while delayed work retains a clone. The
+/// allocation therefore cannot be reused for a replacement transaction until
+/// every stale owner reference has gone away.
+#[derive(Clone)]
+pub(crate) struct TransactionOwner(Arc<()>);
+
+impl TransactionOwner {
+    fn new() -> Self {
+        Self(Arc::new(()))
+    }
+
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +169,7 @@ enum TransactionPhase {
 struct PendingTransaction {
     responder: oneshot::Sender<TsmResponse>,
     progress: watch::Sender<TransactionProgress>,
+    owner: TransactionOwner,
     phase: TransactionPhase,
     /// Monotonic token used to reject a SegmentTimer expiry observed before
     /// newer segment activity acquired the TSM lock.
@@ -236,6 +257,7 @@ impl Tsm {
     ) -> TransactionRegistration {
         let (tx, rx) = oneshot::channel();
         let (progress_tx, progress_rx) = watch::channel(TransactionProgress::AwaitingResponse);
+        let owner = TransactionOwner::new();
         debug_assert!(
             !self
                 .pending
@@ -248,6 +270,7 @@ impl Tsm {
             PendingTransaction {
                 responder: tx,
                 progress: progress_tx,
+                owner: owner.clone(),
                 phase: TransactionPhase::AwaitingResponse,
                 segment_generation: 0,
                 expected_service_choice: service_choice,
@@ -256,6 +279,7 @@ impl Tsm {
         TransactionRegistration {
             response: rx,
             progress: progress_rx,
+            owner,
         }
     }
 
@@ -268,9 +292,13 @@ impl Tsm {
         &mut self,
         source_mac: &[u8],
         invoke_id: u8,
+        owner: &TransactionOwner,
     ) -> Option<u64> {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         let pending = self.pending.get_mut(&key)?;
+        if !pending.owner.same_as(owner) {
+            return None;
+        }
         pending.segment_generation = pending.segment_generation.wrapping_add(1);
         pending.phase = TransactionPhase::SegmentedResponse;
         let generation = pending.segment_generation;
@@ -285,10 +313,11 @@ impl Tsm {
         &mut self,
         source_mac: &[u8],
         invoke_id: u8,
+        owner: &TransactionOwner,
     ) -> Option<u64> {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         let pending = self.pending.get_mut(&key)?;
-        if pending.phase != TransactionPhase::SegmentedResponse {
+        if !pending.owner.same_as(owner) || pending.phase != TransactionPhase::SegmentedResponse {
             return None;
         }
         pending.segment_generation = pending.segment_generation.wrapping_add(1);
@@ -301,12 +330,17 @@ impl Tsm {
 
     /// Resume AWAIT_CONFIRMATION when a completed reassembly is not this
     /// transaction's response or cannot be delivered.
-    pub(crate) fn reset_segmented_response(&mut self, source_mac: &[u8], invoke_id: u8) -> bool {
+    pub(crate) fn reset_segmented_response(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+    ) -> bool {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         let Some(pending) = self.pending.get_mut(&key) else {
             return false;
         };
-        if pending.phase != TransactionPhase::SegmentedResponse {
+        if !pending.owner.same_as(owner) || pending.phase != TransactionPhase::SegmentedResponse {
             return false;
         }
         pending.phase = TransactionPhase::AwaitingResponse;
@@ -325,12 +359,16 @@ impl Tsm {
         &mut self,
         destination_mac: &[u8],
         invoke_id: u8,
+        owner: &TransactionOwner,
         final_timeout: bool,
     ) -> RequestTimerExpiration {
         let key = (MacAddr::from_slice(destination_mac), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return RequestTimerExpiration::NoTransaction;
         };
+        if !pending.owner.same_as(owner) {
+            return RequestTimerExpiration::NoTransaction;
+        }
         if pending.phase == TransactionPhase::SegmentedResponse {
             return RequestTimerExpiration::SegmentedResponse {
                 generation: pending.segment_generation,
@@ -349,12 +387,16 @@ impl Tsm {
         &mut self,
         destination_mac: &[u8],
         invoke_id: u8,
+        owner: &TransactionOwner,
         generation: u64,
     ) -> SegmentTimerExpiration {
         let key = (MacAddr::from_slice(destination_mac), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return SegmentTimerExpiration::NoTransaction;
         };
+        if !pending.owner.same_as(owner) {
+            return SegmentTimerExpiration::NoTransaction;
+        }
         if pending.phase == TransactionPhase::AwaitingResponse {
             return SegmentTimerExpiration::AwaitingResponse;
         }
@@ -382,6 +424,29 @@ impl Tsm {
         self.pending.get(&key).map(|p| p.expected_service_choice)
     }
 
+    pub(crate) fn owner_and_expected_service(
+        &self,
+        source_mac: &[u8],
+        invoke_id: u8,
+    ) -> Option<(TransactionOwner, ConfirmedServiceChoice)> {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        self.pending
+            .get(&key)
+            .map(|pending| (pending.owner.clone(), pending.expected_service_choice))
+    }
+
+    pub(crate) fn owner_is_current(
+        &self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+    ) -> bool {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        self.pending
+            .get(&key)
+            .is_some_and(|pending| pending.owner.same_as(owner))
+    }
+
     /// Deliver a response to a pending transaction.
     ///
     /// `observed_service_choice` is the service the response claims to answer,
@@ -400,10 +465,47 @@ impl Tsm {
         observed_service_choice: Option<ConfirmedServiceChoice>,
         response: TsmResponse,
     ) -> CompletionOutcome {
+        self.complete_transaction_inner(
+            source_mac,
+            invoke_id,
+            None,
+            observed_service_choice,
+            response,
+        )
+    }
+
+    pub(crate) fn complete_transaction_for_owner(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+        observed_service_choice: Option<ConfirmedServiceChoice>,
+        response: TsmResponse,
+    ) -> CompletionOutcome {
+        self.complete_transaction_inner(
+            source_mac,
+            invoke_id,
+            Some(owner),
+            observed_service_choice,
+            response,
+        )
+    }
+
+    fn complete_transaction_inner(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        owner: Option<&TransactionOwner>,
+        observed_service_choice: Option<ConfirmedServiceChoice>,
+        response: TsmResponse,
+    ) -> CompletionOutcome {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         let Entry::Occupied(entry) = self.pending.entry(key) else {
             return CompletionOutcome::NoTransaction;
         };
+        if owner.is_some_and(|owner| !entry.get().owner.same_as(owner)) {
+            return CompletionOutcome::NoTransaction;
+        }
         let expected = entry.get().expected_service_choice;
         if let Some(observed) = observed_service_choice {
             if observed != expected {
@@ -420,7 +522,32 @@ impl Tsm {
 
     /// Cancel a pending transaction. Returns `true` if found.
     pub fn cancel_transaction(&mut self, destination_mac: &[u8], invoke_id: u8) -> bool {
+        self.cancel_transaction_inner(destination_mac, invoke_id, None)
+    }
+
+    pub(crate) fn cancel_transaction_for_owner(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+    ) -> bool {
+        self.cancel_transaction_inner(destination_mac, invoke_id, Some(owner))
+    }
+
+    fn cancel_transaction_inner(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        owner: Option<&TransactionOwner>,
+    ) -> bool {
         let key = (MacAddr::from_slice(destination_mac), invoke_id);
+        if owner.is_some_and(|owner| {
+            self.pending
+                .get(&key)
+                .is_none_or(|pending| !pending.owner.same_as(owner))
+        }) {
+            return false;
+        }
         if self.pending.remove(&key).is_some() {
             self.release_invoke_id(destination_mac, invoke_id);
             true
@@ -434,336 +561,5 @@ impl Tsm {
     }
 }
 
-/// Drop guard that cleans up invoke IDs if a confirmed request task is cancelled.
-///
-/// Uses `try_lock` in Drop — best-effort cleanup. If the mutex is contended
-/// at drop time, the invoke ID leaks (acceptable: blocking in Drop is worse).
-pub(crate) struct TsmGuard {
-    tsm: std::sync::Arc<tokio::sync::Mutex<Tsm>>,
-    mac: MacAddr,
-    invoke_id: u8,
-    completed: bool,
-}
-
-impl TsmGuard {
-    pub(crate) fn new(
-        tsm: std::sync::Arc<tokio::sync::Mutex<Tsm>>,
-        mac: MacAddr,
-        invoke_id: u8,
-    ) -> Self {
-        Self {
-            tsm,
-            mac,
-            invoke_id,
-            completed: false,
-        }
-    }
-
-    /// Mark the transaction as completed (prevents cleanup on drop).
-    pub(crate) fn mark_completed(&mut self) {
-        self.completed = true;
-    }
-}
-
-impl Drop for TsmGuard {
-    fn drop(&mut self) {
-        if !self.completed {
-            if let Ok(mut tsm) = self.tsm.try_lock() {
-                tsm.cancel_transaction(&self.mac, self.invoke_id);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn allocate_invoke_id_sequential() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = [127, 0, 0, 1, 0xBA, 0xC0];
-        let id1 = tsm.allocate_invoke_id(&mac);
-        let id2 = tsm.allocate_invoke_id(&mac);
-        assert_eq!(id1, Some(0));
-        assert_eq!(id2, Some(1));
-    }
-
-    #[test]
-    fn allocate_invoke_id_per_destination() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac_a = [10, 0, 0, 1, 0xBA, 0xC0];
-        let mac_b = [10, 0, 0, 2, 0xBA, 0xC0];
-        let id_a = tsm.allocate_invoke_id(&mac_a);
-        let id_b = tsm.allocate_invoke_id(&mac_b);
-        assert_eq!(id_a, Some(0));
-        assert_eq!(id_b, Some(0));
-    }
-
-    #[test]
-    fn allocate_invoke_id_wraps() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = [127, 0, 0, 1, 0xBA, 0xC0];
-        for i in 0..256 {
-            assert_eq!(tsm.allocate_invoke_id(&mac), Some(i as u8));
-        }
-        assert_eq!(tsm.allocate_invoke_id(&mac), None);
-    }
-
-    #[test]
-    fn release_makes_id_available() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = [127, 0, 0, 1, 0xBA, 0xC0];
-        let id0 = tsm.allocate_invoke_id(&mac).unwrap();
-        let id1 = tsm.allocate_invoke_id(&mac).unwrap();
-        assert_eq!(id0, 0);
-        assert_eq!(id1, 1);
-        tsm.release_invoke_id(&mac, id0);
-        let id2 = tsm.allocate_invoke_id(&mac).unwrap();
-        assert_eq!(id2, 2);
-        tsm.release_invoke_id(&mac, id1);
-        tsm.release_invoke_id(&mac, id2);
-        let id3 = tsm.allocate_invoke_id(&mac).unwrap();
-        assert_eq!(id3, 0);
-    }
-
-    #[tokio::test]
-    async fn register_and_complete_transaction() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-
-        let rx = tsm.register_transaction(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-
-        let response = TsmResponse::ComplexAck {
-            service_data: Bytes::from_static(&[0xDE, 0xAD]),
-        };
-        let outcome = tsm.complete_transaction(
-            &mac,
-            invoke_id,
-            Some(ConfirmedServiceChoice::READ_PROPERTY),
-            response,
-        );
-        assert_eq!(outcome, CompletionOutcome::Delivered);
-
-        let result = rx.await.unwrap();
-        match result {
-            TsmResponse::ComplexAck { service_data } => {
-                assert_eq!(service_data, vec![0xDE, 0xAD]);
-            }
-            _ => panic!("Expected ComplexAck"),
-        }
-    }
-
-    #[tokio::test]
-    async fn mismatched_service_choice_leaves_the_transaction_pending() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-        let rx = tsm.register_transaction(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-
-        let outcome = tsm.complete_transaction(
-            &mac,
-            invoke_id,
-            Some(ConfirmedServiceChoice::WRITE_PROPERTY),
-            TsmResponse::ComplexAck {
-                service_data: Bytes::from_static(&[0xBA, 0xD0]),
-            },
-        );
-        assert_eq!(
-            outcome,
-            CompletionOutcome::ServiceChoiceMismatch {
-                expected: ConfirmedServiceChoice::READ_PROPERTY,
-                observed: ConfirmedServiceChoice::WRITE_PROPERTY,
-            }
-        );
-        assert_eq!(tsm.pending_count(), 1, "transaction must stay pending");
-        assert_eq!(
-            tsm.allocate_invoke_id(&mac),
-            Some(invoke_id.wrapping_add(1)),
-            "the invoke ID must not have been handed back for reuse"
-        );
-
-        // The genuine response still completes it.
-        let outcome = tsm.complete_transaction(
-            &mac,
-            invoke_id,
-            Some(ConfirmedServiceChoice::READ_PROPERTY),
-            TsmResponse::ComplexAck {
-                service_data: Bytes::from_static(&[0xDE, 0xAD]),
-            },
-        );
-        assert_eq!(outcome, CompletionOutcome::Delivered);
-        match rx.await.unwrap() {
-            TsmResponse::ComplexAck { service_data } => {
-                assert_eq!(service_data.as_ref(), &[0xDE, 0xAD]);
-            }
-            other => panic!("expected ComplexAck, got {other:?}"),
-        }
-    }
-
-    /// Reject and Abort carry no service choice (Clauses 20.1.8, 20.1.9), and
-    /// Clause 20.1.7.2 lets an Error PDU answer any service with the
-    /// `BACnet-Error` `other [127]` choice. All three correlate by invoke ID
-    /// alone.
-    #[tokio::test]
-    async fn a_response_without_a_service_choice_completes_any_transaction() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-        let rx = tsm.register_transaction(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-
-        let outcome =
-            tsm.complete_transaction(&mac, invoke_id, None, TsmResponse::Reject { reason: 9 });
-        assert_eq!(outcome, CompletionOutcome::Delivered);
-        assert!(matches!(
-            rx.await.unwrap(),
-            TsmResponse::Reject { reason: 9 }
-        ));
-    }
-
-    #[tokio::test]
-    async fn complete_unknown_transaction_reports_no_transaction() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let outcome = tsm.complete_transaction(
-            &mac,
-            42,
-            Some(ConfirmedServiceChoice::READ_PROPERTY),
-            TsmResponse::SimpleAck,
-        );
-        assert_eq!(outcome, CompletionOutcome::NoTransaction);
-    }
-
-    #[test]
-    fn cancel_transaction() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-        let _rx = tsm.register_transaction(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-        assert_eq!(tsm.pending_count(), 1);
-
-        let cancelled = tsm.cancel_transaction(&mac, invoke_id);
-        assert!(cancelled);
-        assert_eq!(tsm.pending_count(), 0);
-    }
-
-    #[test]
-    fn segmented_admission_and_request_timeout_are_serialized() {
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-
-        let mut admitted_first = Tsm::new(TsmConfig::default());
-        let invoke_id = admitted_first.allocate_invoke_id(&mac).unwrap();
-        let registration = admitted_first.register_transaction_with_progress(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-        let generation = admitted_first
-            .begin_segmented_response(&mac, invoke_id)
-            .unwrap();
-        assert_eq!(
-            *registration.progress.borrow(),
-            TransactionProgress::SegmentedResponse { generation }
-        );
-        assert_eq!(
-            admitted_first.expire_request_timer(&mac, invoke_id, true),
-            RequestTimerExpiration::SegmentedResponse { generation }
-        );
-        assert_eq!(admitted_first.pending_count(), 1);
-
-        let mut timeout_first = Tsm::new(TsmConfig::default());
-        let invoke_id = timeout_first.allocate_invoke_id(&mac).unwrap();
-        let _registration = timeout_first.register_transaction_with_progress(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-        assert_eq!(
-            timeout_first.expire_request_timer(&mac, invoke_id, true),
-            RequestTimerExpiration::TimedOut
-        );
-        assert_eq!(
-            timeout_first.begin_segmented_response(&mac, invoke_id),
-            None
-        );
-        assert_eq!(timeout_first.pending_count(), 0);
-    }
-
-    #[test]
-    fn retry_send_failure_recheck_preserves_later_segmented_admission() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-        let _registration = tsm.register_transaction_with_progress(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-
-        assert_eq!(
-            tsm.expire_request_timer(&mac, invoke_id, false),
-            RequestTimerExpiration::Retry
-        );
-        let generation = tsm.begin_segmented_response(&mac, invoke_id).unwrap();
-        assert_eq!(
-            tsm.expire_request_timer(&mac, invoke_id, true),
-            RequestTimerExpiration::SegmentedResponse { generation }
-        );
-        assert_eq!(tsm.pending_count(), 1);
-    }
-
-    #[test]
-    fn stale_segment_timer_generation_cannot_cancel_new_activity() {
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
-        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
-        let registration = tsm.register_transaction_with_progress(
-            mac.clone(),
-            invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-
-        let stale_generation = tsm.begin_segmented_response(&mac, invoke_id).unwrap();
-        let current_generation = tsm
-            .record_segmented_response_activity(&mac, invoke_id)
-            .unwrap();
-        assert_ne!(stale_generation, current_generation);
-        assert_eq!(
-            tsm.expire_segment_timer(&mac, invoke_id, stale_generation),
-            SegmentTimerExpiration::Activity {
-                generation: current_generation
-            }
-        );
-        assert_eq!(tsm.pending_count(), 1);
-        assert_eq!(
-            *registration.progress.borrow(),
-            TransactionProgress::SegmentedResponse {
-                generation: current_generation
-            }
-        );
-
-        assert_eq!(
-            tsm.expire_segment_timer(&mac, invoke_id, current_generation),
-            SegmentTimerExpiration::TimedOut
-        );
-        assert_eq!(tsm.pending_count(), 0);
-        assert_eq!(tsm.allocate_invoke_id(&mac), Some(0));
-    }
-}
+mod tests;

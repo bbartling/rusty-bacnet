@@ -80,19 +80,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// The caller is responsible for having removed the `seg_state` entry —
     /// that is the "enter the IDLE state" half.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn abort_reassembly(
         tsm: &Arc<Mutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
         tsm_mac: &MacAddr,
+        owner: &TransactionOwner,
         reply_mac: &MacAddr,
         reply_network: &Option<NpduAddress>,
         invoke_id: u8,
         reason: bacnet_types::enums::AbortReason,
     ) {
         Self::send_client_abort(network, reply_mac, reply_network, invoke_id, reason).await;
-        tsm.lock().await.complete_transaction(
+        tsm.lock().await.complete_transaction_for_owner(
             tsm_mac,
             invoke_id,
+            owner,
             None,
             TsmResponse::Abort {
                 reason: reason.to_raw(),
@@ -165,13 +168,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         //
         // Bind the guard so its scope is obvious: it must not be held across
         // the send below, and an `if let` here would extend it silently.
-        let transaction_pending = {
+        let owner = {
             tsm.lock()
                 .await
-                .expected_service_choice(&tsm_mac, ack.invoke_id)
-                .is_some()
+                .owner_and_expected_service(&tsm_mac, ack.invoke_id)
+                .map(|(owner, _)| owner)
         };
-        if !transaction_pending {
+        let Some(owner) = owner else {
             seg_state.remove(&key);
             debug!(
                 invoke_id = ack.invoke_id,
@@ -186,6 +189,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             )
             .await;
             return;
+        };
+        if seg_state
+            .get(&key)
+            .is_some_and(|state| !state.owner.same_as(&owner))
+        {
+            seg_state.remove(&key);
         }
 
         // Below the pending gate: a non-pending segment must draw the 5.4.4.1
@@ -205,24 +214,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .entry(key.clone())
             .or_insert_with(|| SegmentedReceiveState {
                 receiver: SegmentReceiver::new(),
+                owner: owner.clone(),
                 reply_mac: MacAddr::from_slice(source_mac),
                 reply_network: source_network.clone(),
                 expected_next_seq: 0,
                 initial_sequence_number: 0,
                 last_sequence_number: 0,
                 duplicate_count: 0,
-                last_activity: Instant::now(),
                 window_position: 0,
                 actual_window_size: proposed_ws,
                 accepted_segments: 0,
             });
 
-        state.last_activity = Instant::now();
         if state.accepted_segments > 0
             && tsm
                 .lock()
                 .await
-                .record_segmented_response_activity(&tsm_mac, ack.invoke_id)
+                .record_segmented_response_activity(&tsm_mac, ack.invoke_id, &state.owner)
                 .is_none()
         {
             seg_state.remove(&key);
@@ -302,11 +310,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             );
             let reply_mac = state.reply_mac.clone();
             let reply_network = state.reply_network.clone();
+            let owner = state.owner.clone();
             seg_state.remove(&key);
             Self::abort_reassembly(
                 tsm,
                 network,
                 &tsm_mac,
+                &owner,
                 &reply_mac,
                 &reply_network,
                 ack.invoke_id,
@@ -326,10 +336,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         } else {
             None
         };
-        if admission_tsm.as_ref().is_some_and(|tsm| {
-            tsm.expected_service_choice(&tsm_mac, ack.invoke_id)
-                .is_none()
-        }) {
+        if admission_tsm
+            .as_ref()
+            .is_some_and(|tsm| !tsm.owner_is_current(&tsm_mac, ack.invoke_id, &state.owner))
+        {
             drop(admission_tsm);
             seg_state.remove(&key);
             Self::send_client_abort(
@@ -349,12 +359,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, "Rejecting oversized segment");
             let reply_mac = state.reply_mac.clone();
             let reply_network = state.reply_network.clone();
+            let owner = state.owner.clone();
             drop(admission_tsm);
             seg_state.remove(&key);
             Self::abort_reassembly(
                 tsm,
                 network,
                 &tsm_mac,
+                &owner,
                 &reply_mac,
                 &reply_network,
                 ack.invoke_id,
@@ -364,7 +376,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
         if let Some(tsm) = admission_tsm.as_mut() {
-            let generation = tsm.begin_segmented_response(&tsm_mac, ack.invoke_id);
+            let generation = tsm.begin_segmented_response(&tsm_mac, ack.invoke_id, &state.owner);
             debug_assert!(
                 generation.is_some(),
                 "pending transaction disappeared while its TSM lock was held"
@@ -412,9 +424,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         "Reassembled segmented ComplexAck"
                     );
                     let mut tsm = tsm.lock().await;
-                    let outcome = tsm.complete_transaction(
+                    let outcome = tsm.complete_transaction_for_owner(
                         &tsm_mac,
                         ack.invoke_id,
+                        &state.owner,
                         Some(ack.service_choice),
                         TsmResponse::ComplexAck {
                             service_data: Bytes::from(service_data),
@@ -422,7 +435,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     if let CompletionOutcome::ServiceChoiceMismatch { expected, observed } = outcome
                     {
-                        tsm.reset_segmented_response(&tsm_mac, ack.invoke_id);
+                        tsm.reset_segmented_response(&tsm_mac, ack.invoke_id, &state.owner);
                         warn!(
                             invoke_id = ack.invoke_id,
                             expected = expected.to_raw(),
@@ -432,9 +445,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     }
                 }
                 Err(e) => {
-                    tsm.lock()
-                        .await
-                        .reset_segmented_response(&tsm_mac, ack.invoke_id);
+                    tsm.lock().await.reset_segmented_response(
+                        &tsm_mac,
+                        ack.invoke_id,
+                        &state.owner,
+                    );
                     warn!(error = %e, "Failed to reassemble segmented ComplexAck");
                 }
             }
@@ -481,7 +496,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             (invoke_id, registration)
         };
 
+        let owner = registration.owner.clone();
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
+        let mut guard = TransactionGuard::new(
+            Arc::clone(&self.tsm),
+            self.cleanup_tx.clone(),
+            tsm_mac.clone(),
+            invoke_id,
+            owner.clone(),
+            Some(seg_ack_tx.clone()),
+        );
         {
             let key = (tsm_mac.clone(), invoke_id);
             self.seg_ack_senders
@@ -666,6 +690,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 target,
                 &tsm_mac,
                 invoke_id,
+                &owner,
                 registration.response,
                 registration.progress,
                 None,
@@ -693,12 +718,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Err(e) => {
                 if owns_tsm_cleanup {
                     let mut tsm = self.tsm.lock().await;
-                    tsm.cancel_transaction(&tsm_mac, invoke_id);
+                    tsm.cancel_transaction_for_owner(&tsm_mac, invoke_id, &owner);
+                    drop(tsm);
+                    self.enqueue_transaction_cleanup(
+                        &tsm_mac,
+                        invoke_id,
+                        &owner,
+                        false,
+                        Some(seg_ack_tx.clone()),
+                    );
                 }
+                guard.mark_completed();
                 return Err(e);
             }
         };
 
+        guard.mark_completed();
         Self::confirmed_response_result(response)
     }
 }

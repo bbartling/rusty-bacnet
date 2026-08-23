@@ -7,14 +7,11 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 #[cfg(feature = "ipv6")]
 use std::net::Ipv6Addr;
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-#[cfg(test)]
-use tokio::sync::Notify;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
@@ -42,9 +39,12 @@ use crate::segmentation::{
     duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
 use crate::tsm::{
-    RequestTimerExpiration, SegmentTimerExpiration, TransactionProgress, Tsm, TsmConfig,
-    TsmResponse,
+    RequestTimerExpiration, SegmentTimerExpiration, TransactionOwner, TransactionProgress, Tsm,
+    TsmConfig, TsmResponse,
 };
+#[cfg(test)]
+use transaction_cleanup::{SegmentedCleanupHook, SegmentedPostWaitCleanupHook};
+use transaction_cleanup::{TransactionCleanup, TransactionGuard};
 
 /// Default COV notification broadcast channel capacity.
 pub const DEFAULT_COV_CHANNEL_CAPACITY: usize = 64;
@@ -344,6 +344,7 @@ struct ResponseLimits {
 /// In-progress segmented receive state.
 struct SegmentedReceiveState {
     receiver: SegmentReceiver,
+    owner: TransactionOwner,
     /// Immediate MAC used to send SegmentAck/Abort PDUs.
     reply_mac: MacAddr,
     /// The peer's SNET/SADR when the segments arrive through a router; the
@@ -358,8 +359,6 @@ struct SegmentedReceiveState {
     last_sequence_number: u8,
     /// Duplicates silently discarded in the current receive window.
     duplicate_count: u8,
-    /// Timestamp of last received segment (for reaping stale sessions).
-    last_activity: Instant,
     /// Window position counter for per-window SegmentAck (Clause 5.2.2).
     window_position: u8,
     /// Window size accepted for this receive session.
@@ -373,41 +372,8 @@ struct SegmentedReceiveState {
     accepted_segments: usize,
 }
 
-/// Timeout for idle segmented reassembly sessions.
-const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
-
 /// Key for tracking in-progress segmented receives: (correlation_mac, invoke_id).
 type SegKey = (MacAddr, u8);
-
-#[cfg(test)]
-#[derive(Default)]
-struct SegmentedPostWaitCleanupHook {
-    enabled: AtomicBool,
-    reached: Notify,
-    release: Notify,
-}
-
-#[cfg(test)]
-impl SegmentedPostWaitCleanupHook {
-    fn enable(&self) {
-        self.enabled.store(true, Ordering::SeqCst);
-    }
-
-    async fn wait_until_reached(&self) {
-        self.reached.notified().await;
-    }
-
-    fn release(&self) {
-        self.release.notify_one();
-    }
-
-    async fn pause_if_enabled(&self) {
-        if self.enabled.swap(false, Ordering::SeqCst) {
-            self.reached.notify_one();
-            self.release.notified().await;
-        }
-    }
-}
 
 /// BACnet client with low-level and high-level request APIs.
 pub struct BACnetClient<T: TransportPort> {
@@ -426,8 +392,11 @@ pub struct BACnetClient<T: TransportPort> {
     /// dispatch go the other way — so the pair is deadlock-free only because
     /// neither is ever held across the other's acquisition.
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
+    cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
     #[cfg(test)]
     segmented_post_wait_cleanup: Arc<SegmentedPostWaitCleanupHook>,
+    #[cfg(test)]
+    segmented_cleanup: Arc<SegmentedCleanupHook>,
     local_mac: MacAddr,
 }
 
@@ -820,6 +789,7 @@ mod object_mgmt;
 mod property;
 mod requests;
 mod segmentation;
+mod transaction_cleanup;
 
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
@@ -863,6 +833,8 @@ mod segmentation_retransmit_tests;
 mod segmented_receive_duplicate_tests;
 #[cfg(test)]
 mod segmented_receive_lifecycle_tests;
+#[cfg(test)]
+mod segmented_timeout_tests;
 #[cfg(test)]
 mod tests;
 
