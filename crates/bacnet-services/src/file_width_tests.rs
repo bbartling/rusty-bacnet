@@ -35,6 +35,19 @@ fn encode_read_ack(count_tag: u8, value: u64, leading_zero: bool) -> BytesMut {
     buf
 }
 
+fn encode_write_record_request(record_count: u32, records: &[&[u8]]) -> BytesMut {
+    let mut buf = BytesMut::new();
+    primitives::encode_app_object_id(&mut buf, &file_oid());
+    tags::encode_opening_tag(&mut buf, 1);
+    primitives::encode_app_signed(&mut buf, 0);
+    primitives::encode_app_unsigned(&mut buf, u64::from(record_count));
+    for record in records {
+        primitives::encode_app_octet_string(&mut buf, record);
+    }
+    tags::encode_closing_tag(&mut buf, 1);
+    buf
+}
+
 fn append_empty_records(mut buf: BytesMut) -> BytesMut {
     buf.truncate(buf.len() - 1);
     for _ in 0..MAX_DECODED_ITEMS {
@@ -42,6 +55,45 @@ fn append_empty_records(mut buf: BytesMut) -> BytesMut {
     }
     tags::encode_closing_tag(&mut buf, 1);
     buf
+}
+
+#[test]
+fn atomic_write_record_short_list_is_missing_required_parameter() {
+    let wire = encode_write_record_request(2, &[&[0x01]]);
+    match AtomicWriteFileRequest::decode(&wire).unwrap_err() {
+        Error::Reject { reason } => {
+            assert_eq!(reason, RejectReason::MISSING_REQUIRED_PARAMETER.to_raw())
+        }
+        other => panic!("expected Reject/MISSING_REQUIRED_PARAMETER, got {other:?}"),
+    }
+}
+
+#[test]
+fn atomic_write_record_extra_element_is_too_many_arguments() {
+    let wire = encode_write_record_request(1, &[&[0x01], &[0x02]]);
+    match AtomicWriteFileRequest::decode(&wire).unwrap_err() {
+        Error::Reject { reason } => {
+            assert_eq!(reason, RejectReason::TOO_MANY_ARGUMENTS.to_raw())
+        }
+        other => panic!("expected Reject/TOO_MANY_ARGUMENTS, got {other:?}"),
+    }
+}
+
+#[test]
+fn atomic_write_record_zero_count_decodes() {
+    let wire = encode_write_record_request(0, &[]);
+    let decoded = AtomicWriteFileRequest::decode(&wire).unwrap();
+    assert_eq!(
+        decoded,
+        AtomicWriteFileRequest {
+            file_identifier: file_oid(),
+            access: FileWriteAccessMethod::Record {
+                file_start_record: 0,
+                record_count: 0,
+                file_record_data: vec![],
+            },
+        }
+    );
 }
 
 #[test]

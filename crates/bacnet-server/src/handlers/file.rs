@@ -324,10 +324,9 @@ pub fn handle_atomic_write_file(
 
     let request = AtomicWriteFileRequest::decode(service_data)?;
 
-    // The decoder accepts a record list shorter than 'Record Count'. Clause
-    // 14.2 writes "the number of records specified by 'Record Count'", so
-    // such a request cannot be honoured in its entirety; refuse it as
-    // missing a required parameter before any gate or mutation.
+    // Wire decoding enforces record cardinality. Keep this cross-check so a
+    // future typed or internal request path cannot bypass the same pre-mutation
+    // refusal.
     if let FileWriteAccessMethod::Record {
         record_count,
         file_record_data,
