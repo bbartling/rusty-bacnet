@@ -512,8 +512,7 @@ fn record_write_negative_start_other_than_minus_one_is_refused() {
     );
 }
 
-/// The decoder accepts a record list shorter than 'Record Count'; the
-/// handler must refuse such a request before any record is written.
+/// Pins decoder rejection through the handler before lookup or mutation.
 #[test]
 fn record_write_with_short_payload_list_is_rejected_without_mutation() {
     use bacnet_encoding::{primitives, tags};

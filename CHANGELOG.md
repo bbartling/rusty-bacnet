@@ -116,6 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `AtomicWriteFileRequest::decode` now requires record-access payloads to
+  contain exactly `Record Count` records (#418). A short list returns Reject
+  `MISSING_REQUIRED_PARAMETER`; an extra record before the closing tag returns
+  Reject `TOO_MANY_ARGUMENTS`.
+
 - `AtomicReadFile` and `AtomicWriteFile` now reach the File object's stored
   contents (#397). Stream and record reads return the stored octets and
   records, with short reads and End Of File per the Clause 14.1 Service

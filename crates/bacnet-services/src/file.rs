@@ -1,8 +1,8 @@
 //! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 15.1–15.2.
 
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::{enums::RejectReason, error::Error};
 use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
@@ -237,12 +237,19 @@ impl AtomicWriteFileRequest {
             let mut file_record_data = Vec::new();
             for i in 0..record_count {
                 if inner >= content.len() {
-                    break;
+                    return Err(Error::Reject {
+                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
+                    });
                 }
                 let (slice, new_inner) =
                     checked_slice(content, inner, &format!("AtomicWriteFile record data[{i}]"))?;
                 file_record_data.push(slice.to_vec());
                 inner = new_inner;
+            }
+            if inner < content.len() {
+                return Err(Error::Reject {
+                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
+                });
             }
             FileWriteAccessMethod::Record {
                 file_start_record,
