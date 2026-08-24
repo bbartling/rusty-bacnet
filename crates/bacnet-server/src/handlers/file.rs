@@ -19,6 +19,22 @@ fn invalid_file_access_method() -> Error {
     }
 }
 
+/// Refuse a request whose 'File Identifier' names a non-File object type.
+///
+/// The Clause 14.1.4.1 and 14.2.4.1 error tables pair "A non-File Object
+/// Identifier was provided" with SERVICES / INCONSISTENT_OBJECT_TYPE, and
+/// Clause 18 gives an AtomicReadFile request for a non-File object as the
+/// code's example. The type is a property of the parameter alone, so it is
+/// classified before the object lookup; the standard does not sequence this
+/// check against "The File object does not exist", so an absent non-File
+/// identifier gets this error rather than OBJECT / UNKNOWN_OBJECT.
+fn inconsistent_object_type() -> Error {
+    Error::Protocol {
+        class: ErrorClass::SERVICES.to_raw() as u32,
+        code: ErrorCode::INCONSISTENT_OBJECT_TYPE.to_raw() as u32,
+    }
+}
+
 fn validate_file_access_method(
     object: &dyn BACnetObject,
     expected: ObjectFileAccessMethod,
@@ -157,17 +173,14 @@ pub fn handle_atomic_read_file(
 
     let request = AtomicReadFileRequest::decode(service_data)?;
 
+    if request.file_identifier.object_type() != ObjectType::FILE {
+        return Err(inconsistent_object_type());
+    }
+
     let object = db.get(&request.file_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
-
-    if request.file_identifier.object_type() != ObjectType::FILE {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32,
-        });
-    }
 
     // Clause 14.1: refuse a mismatched access method before any file read
     // or ACK encoding. The request CHOICE maps semantically — Stream means
@@ -271,17 +284,14 @@ pub fn handle_atomic_write_file(
 
     let request = AtomicWriteFileRequest::decode(service_data)?;
 
+    if request.file_identifier.object_type() != ObjectType::FILE {
+        return Err(inconsistent_object_type());
+    }
+
     let object = db.get(&request.file_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
-
-    if request.file_identifier.object_type() != ObjectType::FILE {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32,
-        });
-    }
 
     let read_only = object
         .read_property(PropertyIdentifier::READ_ONLY, None)

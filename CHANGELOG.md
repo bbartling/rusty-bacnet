@@ -101,6 +101,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `AtomicReadFile` and `AtomicWriteFile` now refuse a non-File object
+  identifier with `SERVICES / INCONSISTENT_OBJECT_TYPE`, the pairing the
+  Clause 14.1.4.1 and 14.2.4.1 error tables assign to "A non-File Object
+  Identifier was provided"; Clause 18 gives an AtomicReadFile request for a
+  non-File object as that code's example. The type check now runs before
+  the object lookup, so an existing non-File target no longer returns
+  `OBJECT / UNSUPPORTED_OBJECT_TYPE` and an absent non-File identifier no
+  longer returns `OBJECT / UNKNOWN_OBJECT`; the standard does not sequence
+  the type and existence checks, so classifying an absent non-File
+  identifier by type is this implementation's choice. A missing File object
+  still returns `OBJECT / UNKNOWN_OBJECT`, and the read-only and
+  access-method precedence for File identifiers is unchanged (#398).
+
 - `AtomicWriteFile` now classifies writes to a read-only File as
   `SERVICES / FILE_ACCESS_DENIED`, as required by Clause 14.2.4.1. The
   read-only gate previously returned the same code under `OBJECT`; it remains
