@@ -33,9 +33,10 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
 /// Bounds the record vector independently of its payload octets, which
 /// [`DEFAULT_MAX_FILE_SIZE`] bounds: extending to a far record index costs
 /// a `Vec` header per intervening empty record even when no octet is
-/// stored. The value equals `bacnet_services::common::MAX_DECODED_ITEMS`,
-/// the largest SEQUENCE OF the workspace decoders accept in one ACK, so a
-/// record file read back at the cap still decodes on the client side.
+/// stored. The value is at most `bacnet_services::common::MAX_DECODED_ITEMS`
+/// — today exactly that ceiling — the largest SEQUENCE OF the workspace
+/// decoders accept in one ACK, so a record file read back at the cap still
+/// decodes on the client side.
 pub const DEFAULT_MAX_RECORD_COUNT: u64 = 10_000;
 
 /// Ceiling for [`FileObject::set_max_record_count`]; see
@@ -260,11 +261,13 @@ impl FileObject {
         self.file_type = ft.into();
     }
 
-    /// Set stream data; File_Size follows it while the object is
-    /// STREAM_ACCESS.
+    /// Set stream data; File_Size follows it unless the object is
+    /// RECORD_ACCESS (any other access-method value, recognised or not,
+    /// is the stream channel, as in
+    /// [`set_file_access_method`](Self::set_file_access_method)).
     pub fn set_data(&mut self, data: Vec<u8>) {
         self.data = data;
-        if self.file_access_method == FileAccessMethod::STREAM_ACCESS.to_raw() {
+        if self.file_access_method != FileAccessMethod::RECORD_ACCESS.to_raw() {
             self.file_size = self.data.len() as u64;
         }
     }
@@ -357,8 +360,10 @@ impl FileObject {
     /// Same growth-only semantics as
     /// [`set_max_file_size`](Self::set_max_file_size): records preloaded
     /// through [`set_records`](Self::set_records) are never refused. Clamped
-    /// to [`DEFAULT_MAX_RECORD_COUNT`], the decoder ceiling, so a read-back
-    /// of the whole file stays decodable.
+    /// to [`DEFAULT_MAX_RECORD_COUNT`], the decoder ceiling, so a file grown
+    /// by network writes stays at or under what one AtomicReadFile-ACK
+    /// carries; a larger preloaded file reads back in windows of at most
+    /// that many records.
     pub fn set_max_record_count(&mut self, max_records: u64) {
         self.max_record_count = max_records.min(MAX_RECORD_CAP).min(MAX_REPRESENTABLE);
     }

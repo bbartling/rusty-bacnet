@@ -4,14 +4,25 @@
 //! Clause 14.1 / 14.2 Service Procedures decide "currently inaccessible for
 //! another reason" in their first step, ahead of the read-only and
 //! access-method gates — and never read it as empty. The same module pins
-//! the write handler's fail-closed Read_Only gate and the record cap's tie
-//! to the decoder ceiling.
+//! the write handler's fail-closed Read_Only gate, the record cap's tie to
+//! the decoder ceiling, the read window one ACK can carry, and the
+//! growth-cap behaviour that needs `set_max_file_size` and
+//! `DEFAULT_MAX_RECORD_COUNT` — API this change adds, which is why those
+//! tests live here rather than in `file_persistence`.
 
 use super::file_access_method::{
-    assert_file_access_denied, read_wire_for, write_wire_for, SENTINEL,
+    assert_file_access_denied, file_oid, read_wire_for, record_file_db, write_wire_for, SENTINEL,
+};
+use super::file_persistence::{
+    assert_protocol_error, file_size, read_records, read_stream, record_count, write_records,
+    write_stream,
 };
 use super::*;
-use bacnet_services::file::{FileAccessMethod, FileWriteAccessMethod};
+use bacnet_objects::file::{FileObject, DEFAULT_MAX_RECORD_COUNT};
+use bacnet_services::common::MAX_DECODED_ITEMS;
+use bacnet_services::file::{
+    AtomicReadFileAck, FileAccessMethod, FileReadAckMethod, FileWriteAccessMethod,
+};
 use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 use std::borrow::Cow;
 
@@ -143,10 +154,7 @@ fn file_object_without_storage_hook_is_file_access_denied() {
 /// back by this workspace's own client.
 #[test]
 fn record_cap_never_exceeds_the_decoder_ceiling() {
-    assert!(
-        bacnet_objects::file::DEFAULT_MAX_RECORD_COUNT
-            <= bacnet_services::common::MAX_DECODED_ITEMS as u64
-    );
+    assert!(DEFAULT_MAX_RECORD_COUNT <= MAX_DECODED_ITEMS as u64);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -412,4 +420,125 @@ fn unreadable_read_only_is_treated_as_read_only() {
         &mut buf,
     )
     .expect("read of the opaque file");
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Growth caps and the read window — these need API this change adds.
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn in_place_stream_write_over_the_cap_succeeds() {
+    let mut db = ObjectDatabase::new();
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_data(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    file.set_max_file_size(4);
+    db.add(Box::new(file)).unwrap();
+    let pos = write_stream(&mut db, 0, &[0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5])
+        .expect("in-place write within preloaded contents must succeed");
+    assert_eq!(pos, 0);
+    assert_eq!(file_size(&db), 8);
+    assert_eq!(
+        read_stream(&db, 0, 8).unwrap().0,
+        vec![0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 7, 8]
+    );
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire_for(
+            file_oid(),
+            FileWriteAccessMethod::Stream {
+                file_start_position: 8,
+                file_data: vec![0x01],
+            },
+        ),
+        &mut buf,
+    );
+    assert_protocol_error(
+        result,
+        ErrorClass::OBJECT,
+        ErrorCode::FILE_FULL,
+        "growth past the cap",
+    );
+    assert_eq!(&buf[..], SENTINEL);
+}
+
+/// The record cap is the decoder's own ceiling, so a file grown to the cap
+/// by one write still reads back through `AtomicReadFileAck::decode`.
+#[test]
+fn record_file_at_the_cap_reads_back_through_the_decoder() {
+    let mut db = record_file_db();
+    let last = (DEFAULT_MAX_RECORD_COUNT - 1) as i32;
+    let pos = write_records(&mut db, last, &[vec![0x5A]]).expect("write at the last index");
+    assert_eq!(pos, last);
+    assert_eq!(record_count(&db), DEFAULT_MAX_RECORD_COUNT);
+    let (records, eof) = read_records(&db, 0, u32::MAX).unwrap();
+    assert_eq!(records.len() as u64, DEFAULT_MAX_RECORD_COUNT);
+    assert_eq!(records[last as usize], vec![0x5A]);
+    assert!(eof);
+
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire_for(
+            file_oid(),
+            FileWriteAccessMethod::Record {
+                file_start_record: last + 1,
+                record_count: 1,
+                file_record_data: vec![vec![0x01]],
+            },
+        ),
+        &mut buf,
+    );
+    assert_protocol_error(
+        result,
+        ErrorClass::OBJECT,
+        ErrorCode::FILE_FULL,
+        "record write at the cap",
+    );
+    assert_eq!(&buf[..], SENTINEL);
+    assert_eq!(record_count(&db), DEFAULT_MAX_RECORD_COUNT);
+}
+
+/// One AtomicReadFile-ACK never carries more records than the workspace
+/// decoder accepts: a larger file is read back in windows, and 'Returned
+/// Record Count' below the request with End Of File FALSE tells the client
+/// to continue from start + returned.
+#[test]
+fn record_read_window_is_bounded_by_the_decoder_ceiling() {
+    let mut db = ObjectDatabase::new();
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_file_access_method(ObjectFileAccessMethod::RECORD_ACCESS.to_raw());
+    file.set_records(vec![vec![0x42]; MAX_DECODED_ITEMS + 1]);
+    db.add(Box::new(file)).unwrap();
+
+    let mut buf = BytesMut::new();
+    handle_atomic_read_file(
+        &db,
+        &read_wire_for(
+            file_oid(),
+            FileAccessMethod::Record {
+                file_start_record: 0,
+                requested_record_count: u32::MAX,
+            },
+        ),
+        &mut buf,
+    )
+    .expect("whole-file read of a file above the ceiling");
+    let ack = AtomicReadFileAck::decode(&buf).expect("one ACK stays decodable");
+    match ack.access {
+        FileReadAckMethod::Record {
+            returned_record_count,
+            file_record_data,
+            ..
+        } => {
+            assert_eq!(returned_record_count as usize, MAX_DECODED_ITEMS);
+            assert_eq!(file_record_data.len(), MAX_DECODED_ITEMS);
+        }
+        other => panic!("expected record ACK, got {other:?}"),
+    }
+    assert!(!ack.end_of_file, "one record remains past the window");
+
+    let (rest, eof) = read_records(&db, MAX_DECODED_ITEMS as i32, 5).unwrap();
+    assert_eq!(rest, vec![vec![0x42]]);
+    assert!(eof);
 }

@@ -221,6 +221,7 @@ pub fn handle_atomic_read_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    use bacnet_services::common::MAX_DECODED_ITEMS;
     use bacnet_services::file::{
         AtomicReadFileAck, AtomicReadFileRequest, FileAccessMethod, FileReadAckMethod,
     };
@@ -280,7 +281,13 @@ pub fn handle_atomic_read_file(
         } => {
             let start =
                 u64::try_from(file_start_record).map_err(|_| invalid_file_start_position())?;
-            let read = storage.read_records(start, u64::from(requested_record_count))?;
+            // The workspace's AtomicReadFile-ACK decoder accepts at most
+            // MAX_DECODED_ITEMS records in one SEQUENCE OF, so one ACK never
+            // carries more: a client sees 'Returned Record Count' below its
+            // request with End Of File FALSE and continues from start +
+            // returned.
+            let count = u64::from(requested_record_count).min(MAX_DECODED_ITEMS as u64);
+            let read = storage.read_records(start, count)?;
             let ack = AtomicReadFileAck {
                 end_of_file: read.end_of_file,
                 access: FileReadAckMethod::Record {
@@ -302,8 +309,8 @@ pub fn handle_atomic_read_file(
 /// per Clause 14. Every refusal the handler itself raises leaves both the
 /// object and the response buffer untouched; a storage that breaks the
 /// [`FileStorage`](bacnet_objects::file::FileStorage) position contract
-/// can leave the object mutated and
-/// still draw DEVICE / INTERNAL_ERROR from the ACK conversion.
+/// can leave the object mutated and still draw DEVICE / INTERNAL_ERROR
+/// from the ACK conversion.
 pub fn handle_atomic_write_file(
     db: &mut ObjectDatabase,
     service_data: &[u8],

@@ -331,6 +331,21 @@ fn payload_setters_follow_the_access_method() {
     assert!(file
         .read_property(PropertyIdentifier::RECORD_COUNT, None)
         .is_err());
+
+    // An unrecognised raw value is the stream channel for both setters, as
+    // it is for set_file_access_method's own recomputation.
+    file.set_file_access_method(99);
+    file.set_data(vec![7; 3]);
+    assert_eq!(
+        file.file_size(),
+        3,
+        "File_Size tracks set_data under raw 99"
+    );
+    file.set_records(vec![vec![1], vec![2]]);
+    assert_eq!(file.file_size(), 3, "records are inert under raw 99");
+    assert!(file
+        .read_property(PropertyIdentifier::RECORD_COUNT, None)
+        .is_err());
 }
 
 struct NoStorageFile;
