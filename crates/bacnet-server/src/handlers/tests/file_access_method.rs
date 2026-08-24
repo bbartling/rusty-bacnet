@@ -456,8 +456,10 @@ fn unknown_access_method_raw_value_fails_closed() {
 
 // ──────────────────────────────────────────────────────────────────────────
 // Non-File identifier classification (#398) — Clauses 14.1.4.1 / 14.2.4.1
-// pair a non-File Object Identifier with SERVICES / INCONSISTENT_OBJECT_TYPE
-// whether or not an object with that identifier exists; only a FILE
+// pair a non-File Object Identifier with SERVICES / INCONSISTENT_OBJECT_TYPE.
+// The standard does not sequence that against "The File object does not
+// exist", so these handlers classify by type first: a non-File identifier
+// gets the type error whether or not it names an object, and only a FILE
 // identifier that names no object gets OBJECT / UNKNOWN_OBJECT.
 // ──────────────────────────────────────────────────────────────────────────
 
