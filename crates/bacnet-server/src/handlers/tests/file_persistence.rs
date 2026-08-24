@@ -14,7 +14,8 @@
 //! hold is OBJECT / FILE_FULL (Clause 18: "filled to a designed limit").
 //!
 //! Every test here uses only the object surface that exists before the
-//! storage hook landed (`set_data`, `set_records`, the two handlers) plus
+//! storage hook landed (`set_data`, `set_read_only`, `read_property`, the
+//! two handlers) plus
 //! the `pub(super)` helpers of `file_access_method`, so the module compiles
 //! against the pre-fix tree, where every test that pins new behaviour
 //! fails on an assertion rather than a compile error. One test is a

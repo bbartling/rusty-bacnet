@@ -119,7 +119,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AtomicReadFile` and `AtomicWriteFile` now reach the File object's stored
   contents (#397). Stream and record reads return the stored octets and
   records, with short reads and End Of File per the Clause 14.1 Service
-  Procedure; stream and record writes persist, extend the file when the
+  Procedure, and a record read returns at most 10,000 records per ACK (the
+  service decoder's SEQUENCE OF ceiling), so a larger preloaded file reads
+  back in windows; stream and record writes persist, extend the file when the
   start is past its end (intervening octets are zero, intervening records
   empty), and keep `File_Size` and `Record_Count` coherent. A start of -1
   appends and the ACK carries the position actually written (Clause 14.2
@@ -1113,9 +1115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FileObject::set_data` and `set_records` now update `File_Size` and
   `Record_Count` only for the channel `File_Access_Method` selects, and
   `set_file_access_method` recomputes both on a switch — Table 12-16
-  footnote 2 makes `Record_Count` present only under RECORD_ACCESS. Callers
-  that populated records before selecting RECORD_ACCESS must now set the
-  access method first (#397).
+  footnote 2 makes `Record_Count` present only under RECORD_ACCESS. A caller
+  that populated records without ever selecting RECORD_ACCESS no longer sees
+  `Record_Count` or `File_Size` follow them; select the access method, in
+  either order, to get the record channel (#397).
 
 - Move the `bacnet-cli` clap surface — `Cli` and `Command` — out of `main.rs` into a sibling `args` module. `main.rs` measured exactly 700 of the 700 non-empty, non-comment lines the file-size cap allows, so any change to the CLI failed CI unless it split the file in the same commit. The first outside contribution to touch it (#213) hit precisely that, which is what prompted the split. Dispatch stays in `main.rs`, now 511 lines; the flags and subcommands — the part that actually grows when the CLI gains a feature — land in `args.rs` at 193. The `Cli` fields move from private to `pub(crate)` because `main.rs` now reads them across a module boundary; `bacnet-cli` is a binary, so no public API changes. The generated CLI surface is untouched, verified by diffing `--help` output for the root command and all 25 subcommands against `dev` (38 KB, byte-for-byte identical).
 

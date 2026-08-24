@@ -283,9 +283,11 @@ pub fn handle_atomic_read_file(
                 u64::try_from(file_start_record).map_err(|_| invalid_file_start_position())?;
             // The workspace's AtomicReadFile-ACK decoder accepts at most
             // MAX_DECODED_ITEMS records in one SEQUENCE OF, so one ACK never
-            // carries more: a client sees 'Returned Record Count' below its
-            // request with End Of File FALSE and continues from start +
-            // returned.
+            // carries more. A client sees 'Returned Record Count' below its
+            // request and, while records remain, End Of File FALSE, so it
+            // continues from start + returned. Clause 14.1's Service
+            // Procedure short-reads only when fewer records remain; this
+            // window is a second, local reason.
             let count = u64::from(requested_record_count).min(MAX_DECODED_ITEMS as u64);
             let read = storage.read_records(start, count)?;
             let ack = AtomicReadFileAck {

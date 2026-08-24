@@ -423,7 +423,8 @@ fn unreadable_read_only_is_treated_as_read_only() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Growth caps and the read window — these need API this change adds.
+// Growth caps (these need `set_max_file_size` / `DEFAULT_MAX_RECORD_COUNT`,
+// API this change adds) and the read window.
 // ──────────────────────────────────────────────────────────────────────────
 
 #[test]
