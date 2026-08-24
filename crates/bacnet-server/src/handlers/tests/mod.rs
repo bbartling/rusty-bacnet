@@ -41,6 +41,8 @@ mod detection_enable_summary;
 mod device_event;
 mod enrollment_summary_filters;
 mod file_access_method;
+mod file_persistence;
+mod file_storage_hook;
 mod framed_properties;
 mod life_safety_operation;
 mod multi_element_writes;

@@ -12,6 +12,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::event::TransitionOutcome;
 use crate::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
+use crate::file::FileStorage;
 
 /// Object-owned state that cannot be reconstructed from property readback.
 ///
@@ -438,6 +439,36 @@ pub trait BACnetObject: Send + Sync {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
+    }
+
+    /// Borrow this object's File storage, if it has any.
+    ///
+    /// This is the read half of the **internal** channel the server's
+    /// AtomicReadFile handler uses to reach file contents. Like
+    /// [`set_event_state_internal`](Self::set_event_state_internal) it
+    /// bypasses the property model on purpose: Table 12-16 (ASHRAE 135-2020
+    /// Clause 12.13) defines no File Data property, so file contents are
+    /// reachable only through the Clause 14 File Access Services.
+    ///
+    /// The **default** returns `None`, so object types without a file opt
+    /// out; the server reports `None` on a File-typed object as SERVICES /
+    /// FILE_ACCESS_DENIED (Clause 18: "a file that is currently locked or
+    /// otherwise not accessible") rather than reading it as empty.
+    /// Applications backing a File object with their own storage — a disk
+    /// file, a firmware partition — implement [`FileStorage`] and return
+    /// `Some`.
+    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+        None
+    }
+
+    /// Mutably borrow this object's File storage, if it has any.
+    ///
+    /// The write half of
+    /// [`file_storage_internal`](Self::file_storage_internal), used by the
+    /// AtomicWriteFile handler after the read-only and access-method gates
+    /// have passed. The **default** returns `None`.
+    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+        None
     }
 
     /// Add a trend log record (only meaningful for TrendLog / TrendLogMultiple).

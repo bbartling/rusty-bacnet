@@ -25,9 +25,9 @@ use bacnet_services::file::{
 };
 use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 
-const SENTINEL: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
+pub(super) const SENTINEL: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
 
-fn stream_file_db() -> ObjectDatabase {
+pub(super) fn stream_file_db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
     file.set_data(vec![1, 2, 3, 4, 5, 6, 7, 8]);
@@ -35,7 +35,7 @@ fn stream_file_db() -> ObjectDatabase {
     db
 }
 
-fn record_file_db() -> ObjectDatabase {
+pub(super) fn record_file_db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
     file.set_file_access_method(ObjectFileAccessMethod::RECORD_ACCESS.to_raw());
@@ -44,11 +44,11 @@ fn record_file_db() -> ObjectDatabase {
     db
 }
 
-fn file_oid() -> ObjectIdentifier {
+pub(super) fn file_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::FILE, 1).unwrap()
 }
 
-fn read_wire_for(oid: ObjectIdentifier, access: FileAccessMethod) -> Vec<u8> {
+pub(super) fn read_wire_for(oid: ObjectIdentifier, access: FileAccessMethod) -> Vec<u8> {
     let request = AtomicReadFileRequest {
         file_identifier: oid,
         access,
@@ -58,7 +58,7 @@ fn read_wire_for(oid: ObjectIdentifier, access: FileAccessMethod) -> Vec<u8> {
     buf.to_vec()
 }
 
-fn write_wire_for(oid: ObjectIdentifier, access: FileWriteAccessMethod) -> Vec<u8> {
+pub(super) fn write_wire_for(oid: ObjectIdentifier, access: FileWriteAccessMethod) -> Vec<u8> {
     let request = AtomicWriteFileRequest {
         file_identifier: oid,
         access,
@@ -76,7 +76,7 @@ fn write_wire(access: FileWriteAccessMethod) -> Vec<u8> {
     write_wire_for(file_oid(), access)
 }
 
-fn assert_invalid_access(result: Result<(), Error>, context: &str) {
+pub(super) fn assert_invalid_access(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
         Error::Protocol { class, code } => {
             assert_eq!(
@@ -94,7 +94,7 @@ fn assert_invalid_access(result: Result<(), Error>, context: &str) {
     }
 }
 
-fn assert_file_access_denied(result: Result<(), Error>, context: &str) {
+pub(super) fn assert_file_access_denied(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
         Error::Protocol { class, code } => {
             assert_eq!(
@@ -373,13 +373,10 @@ fn matched_stream_read_still_succeeds() {
     match ack.access {
         FileReadAckMethod::Stream {
             file_start_position,
-            file_data: _,
+            file_data,
         } => {
             assert_eq!(file_start_position, 2);
-            // Data content is not asserted here: FileObject does not yet
-            // expose File_Data (property 65) through read_property, so the
-            // pre-existing success path returns empty octets. That storage
-            // gap is tracked separately from #287.
+            assert_eq!(file_data, vec![3, 4, 5, 6]);
         }
         other => panic!("expected stream ACK method, got {other:?}"),
     }
@@ -399,10 +396,17 @@ fn matched_record_read_still_succeeds() {
     )
     .expect("matched record read must succeed");
     let ack = AtomicReadFileAck::decode(&buf).unwrap();
-    assert!(matches!(
-        ack.access,
-        bacnet_services::file::FileReadAckMethod::Record { .. }
-    ));
+    match ack.access {
+        FileReadAckMethod::Record {
+            returned_record_count,
+            file_record_data,
+            ..
+        } => {
+            assert_eq!(returned_record_count, 2);
+            assert_eq!(file_record_data, vec![vec![0xCC, 0xDD], vec![0xEE]]);
+        }
+        other => panic!("expected record ACK method, got {other:?}"),
+    }
 }
 
 #[test]
@@ -426,6 +430,16 @@ fn matched_record_write_still_succeeds() {
             file_start_record: 7
         }
     ));
+    let count = db
+        .get(&file_oid())
+        .unwrap()
+        .read_property(PropertyIdentifier::RECORD_COUNT, None)
+        .unwrap();
+    assert_eq!(
+        count,
+        PropertyValue::Unsigned(8),
+        "write at record 7 must extend"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────────────

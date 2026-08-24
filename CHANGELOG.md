@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `bacnet_objects::file::FileStorage`, the internal channel AtomicReadFile
+  and AtomicWriteFile use to reach a File object's contents (#397). Table
+  12-16 defines no File Data property, so the trait is reached through two
+  new defaulted `BACnetObject` hooks, `file_storage_internal` and
+  `file_storage_internal_mut`, never through the property model; an
+  application backing a File object with its own storage implements the
+  trait and returns `Some`. `FileWriteStart` names the Clause 14.2.2.2 and
+  14.2.2.3 append sentinel, and `FileStreamRead` / `FileRecordRead` carry
+  the read window with its End Of File flag. `FileObject` gains growth caps
+  for network writes — `set_max_file_size` (default 1 MiB) and
+  `set_max_record_count` (default 10,000, the service decoder's SEQUENCE OF
+  ceiling, so a file at the cap still reads back) — that bound what a write
+  can add without invalidating preloaded contents; a write past the cap is
+  refused `OBJECT / FILE_FULL`, Clause 18's "designed limit".
+
 - `Time_Delay_Normal` (property 356) on the nine intrinsic-reporting object
   types (#225): Clause 13.3's second, normal-direction delay
   (`pTimeDelayNormal`) is now honored by all three intrinsic event
@@ -100,6 +115,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now; the Python surface is unchanged.
 
 ### Fixed
+
+- `AtomicReadFile` and `AtomicWriteFile` now reach the File object's stored
+  contents (#397). Stream and record reads return the stored octets and
+  records, with short reads and End Of File per the Clause 14.1 Service
+  Procedure, and a record read returns at most 10,000 records per ACK (the
+  service decoder's SEQUENCE OF ceiling), so a larger preloaded file reads
+  back in windows; stream and record writes persist, extend the file when the
+  start is past its end (intervening octets are zero, intervening records
+  empty), and keep `File_Size` and `Record_Count` coherent. A start of -1
+  appends and the ACK carries the position actually written (Clause 14.2
+  Service Procedure; Annex F). A read whose start is negative or past the
+  end, or a write whose start is negative other than -1, is refused
+  `SERVICES / INVALID_FILE_START_POSITION` (Clause 14.1 Service Procedure;
+  Clause 18), and a record write whose payload list is shorter than its
+  'Record Count' is rejected `MISSING_REQUIRED_PARAMETER` before any record
+  changes. A File object without storage is refused
+  `SERVICES / FILE_ACCESS_DENIED` directly after the lookup (the Clause
+  14.1 and 14.2 Service Procedures' "currently inaccessible" step), and the
+  write handler's `Read_Only` gate now fails closed when the property is
+  unreadable. Previously reads returned empty data, stream writes failed
+  `PROPERTY / WRITE_ACCESS_DENIED`, record writes acknowledged without
+  storing anything, negative starts were treated as 0, and a large start
+  position allocated up to 2 GiB before failing; the handlers also no
+  longer read or write property 65 (`Max_Pres_Value`) as a stand-in for
+  file data. Still deferred: `Modification_Date` and `Archive` are not
+  updated on a write (Clause 12.13), `File_Size` / `Record_Count` remain
+  read-only over the network (Table 12-16 footnotes 1 and 2), and
+  `bacnet-cli file-read --output` still writes the raw ACK bytes rather
+  than the payload (#419).
 
 - `AtomicReadFile` and `AtomicWriteFile` now refuse a non-File object
   identifier with `SERVICES / INCONSISTENT_OBJECT_TYPE`, the pairing the
@@ -1067,6 +1111,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Two known non-conformances in this area are deliberately left in place, because fixing them here would be speculative: the enrollment evaluator's same-state skip still discards transitions Clause 13.2.2.1.4 requires to be acted on, since removing it needs a change baseline to distinguish a genuine same-state indication from "nothing changed" (#166, which depends on #137); and the enrollment path does not yet emit notifications at all (#127), so its `distribute` flag is logged rather than acted on. Separately, `CommandFailureDetector::fire` hardcodes `distribute = false` for FAULT where its two siblings consult the `TO_FAULT` bit — an arm unreachable today because that detector never computes FAULT, filed as #200 to be fixed alongside #167, the change that makes it reachable and therefore testable. All seven regression tests (four on the detectors, three on the enrollment evaluator) are proven to fail under a mutation that restores the previous gate.
 
 ### Changed
+
+- `FileObject::set_data` and `set_records` now update `File_Size` and
+  `Record_Count` only for the channel `File_Access_Method` selects, and
+  `set_file_access_method` recomputes both on a switch — Table 12-16
+  footnote 2 makes `Record_Count` present only under RECORD_ACCESS. A caller
+  that populated records without ever selecting RECORD_ACCESS no longer sees
+  `Record_Count` or `File_Size` follow them; select the access method, in
+  either order, to get the record channel (#397).
 
 - Move the `bacnet-cli` clap surface — `Cli` and `Command` — out of `main.rs` into a sibling `args` module. `main.rs` measured exactly 700 of the 700 non-empty, non-comment lines the file-size cap allows, so any change to the CLI failed CI unless it split the file in the same commit. The first outside contribution to touch it (#213) hit precisely that, which is what prompted the split. Dispatch stays in `main.rs`, now 511 lines; the flags and subcommands — the part that actually grows when the CLI gains a feature — land in `args.rs` at 193. The `Cli` fields move from private to `pub(crate)` because `main.rs` now reads them across a module boundary; `bacnet-cli` is a binary, so no public API changes. The generated CLI surface is untouched, verified by diffing `--help` output for the root command and all 25 subcommands against `dev` (38 KB, byte-for-byte identical).
 
