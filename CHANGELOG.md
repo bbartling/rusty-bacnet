@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `bacnet_objects::file::FileStorage`, the internal channel AtomicReadFile
+  and AtomicWriteFile use to reach a File object's contents (#397). Table
+  12-16 defines no File Data property, so the trait is reached through two
+  new defaulted `BACnetObject` hooks, `file_storage_internal` and
+  `file_storage_internal_mut`, never through the property model; an
+  application backing a File object with its own storage implements the
+  trait and returns `Some`. `FileWriteStart` names the Clause 14.2.2.2
+  append sentinel, and `FileStreamRead` / `FileRecordRead` carry the read
+  window with its End Of File flag. `FileObject` gains growth caps for
+  network writes — `set_max_file_size` (default 1 MiB) and
+  `set_max_record_count` (default 65,536) — that bound what a write can add
+  without invalidating preloaded contents; a write past the cap is refused
+  `OBJECT / FILE_FULL`, Clause 18's "designed limit".
+
 - `Time_Delay_Normal` (property 356) on the nine intrinsic-reporting object
   types (#225): Clause 13.3's second, normal-direction delay
   (`pTimeDelayNormal`) is now honored by all three intrinsic event
@@ -100,6 +114,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now; the Python surface is unchanged.
 
 ### Fixed
+
+- `AtomicReadFile` and `AtomicWriteFile` now reach the File object's stored
+  contents (#397). Stream and record reads return the stored octets and
+  records, with short reads and End Of File per the Clause 14.1 Service
+  Procedure; stream and record writes persist, extend the file when the
+  start is past its end (intervening octets are zero, intervening records
+  empty), and keep `File_Size` and `Record_Count` coherent. A start of -1
+  appends and the ACK carries the position actually written (Clause 14.2
+  Service Procedure; Annex F). A read whose start is negative or past the
+  end, or a write whose start is negative other than -1, is refused
+  `SERVICES / INVALID_FILE_START_POSITION` (Clause 14.1 Service Procedure;
+  Clause 18), and a record write whose payload list is shorter than its
+  'Record Count' is rejected `MISSING_REQUIRED_PARAMETER` before any record
+  changes. Previously reads returned empty data, stream writes failed
+  `PROPERTY / WRITE_ACCESS_DENIED`, record writes acknowledged without
+  storing anything, negative starts were treated as 0, and a large start
+  position allocated up to 2 GiB before failing; the handlers also no
+  longer read or write property 65 (`Max_Pres_Value`) as a stand-in for
+  file data. Still deferred: `Modification_Date` and `Archive` are not
+  updated on a write (Clause 12.13), and `File_Size` / `Record_Count`
+  remain read-only over the network (Table 12-16 footnotes 1 and 2).
 
 - `AtomicReadFile` and `AtomicWriteFile` now refuse a non-File object
   identifier with `SERVICES / INCONSISTENT_OBJECT_TYPE`, the pairing the

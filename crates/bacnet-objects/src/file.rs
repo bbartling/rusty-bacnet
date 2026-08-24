@@ -3,13 +3,152 @@
 //! Backs AtomicReadFile and AtomicWriteFile services. Supports both
 //! stream-access and record-access modes.
 
-use bacnet_types::enums::{FileAccessMethod, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
+
+// ---------------------------------------------------------------------------
+// File storage (the Clause 14 service data behind a File object)
+// ---------------------------------------------------------------------------
+
+/// Default growth cap, in octets, for network writes to one File object.
+///
+/// Clause 14.2 requires a write whose 'File Start Position' exceeds the
+/// file size to extend the file to that size, and the position is a signed
+/// 32-bit INTEGER, so an unbounded implementation would zero-fill up to
+/// 2 GiB from one small request. Clause 18 defines FILE_FULL for exactly
+/// this bound: "when a File Object becomes filled to a designed limit, as
+/// opposed to a No Space Available / Out of Memory situation".
+pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
+
+/// Default growth cap, in records, for network writes to one record-access
+/// File object.
+///
+/// Bounds the record vector independently of its payload octets, which
+/// [`DEFAULT_MAX_FILE_SIZE`] bounds: extending to a far record index costs
+/// a `Vec` header per intervening empty record even when no octet is
+/// stored.
+pub const DEFAULT_MAX_RECORD_COUNT: u64 = 65_536;
+
+/// One stream-access read window, as AtomicReadFile returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStreamRead {
+    /// The octets read: never more than requested, fewer when the file
+    /// ends first (Clause 14.1 Service Procedure).
+    pub data: Vec<u8>,
+    /// Clause 14.1.3.1 'End Of File': TRUE when `data` ends at the last
+    /// octet of the file, or when nothing remained to read.
+    pub end_of_file: bool,
+}
+
+/// One record-access read window, as AtomicReadFile returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRecordRead {
+    /// The records read. Its length is the ACK's 'Returned Record Count'
+    /// (Clause 14.1.3.3), which may be less than the requested count.
+    pub records: Vec<Vec<u8>>,
+    /// Clause 14.1.3.1 'End Of File'.
+    pub end_of_file: bool,
+}
+
+/// Where an AtomicWriteFile write starts.
+///
+/// Clause 14.2.2.2 gives 'File Start Position' and 'File Start Record' the
+/// special value -1 for "an append to file operation"; every other value
+/// is an offset from the beginning of the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileWriteStart {
+    /// Write at this octet or record offset, extending the file first if
+    /// the offset is past the current end (Clause 14.2 Service Procedure).
+    At(u64),
+    /// Write at the current end of the file.
+    Append,
+}
+
+/// The octet- and record-addressed storage behind a File object.
+///
+/// This is the **internal** channel AtomicReadFile and AtomicWriteFile use
+/// to reach file contents (Clauses 14.1 and 14.2). It is deliberately not a
+/// property: Table 12-16 (Clause 12.13) defines no File Data property, so
+/// file contents have no network route other than the File Access Services,
+/// and nothing here appears in `Property_List`.
+///
+/// The server reaches an implementation through
+/// [`BACnetObject::file_storage_internal`] and
+/// [`BACnetObject::file_storage_internal_mut`]. Every method has a default
+/// that refuses with SERVICES / INVALID_FILE_ACCESS_METHOD, so a
+/// stream-only implementation overrides only the two stream methods.
+///
+/// Error contract, using the Clause 14 pairs:
+///
+/// - SERVICES / INVALID_FILE_START_POSITION when a read starts past the
+///   current end (Clause 14.1 Service Procedure). Reading *at* the end is
+///   legal and yields an empty window with `end_of_file` TRUE.
+/// - OBJECT / FILE_FULL when a write would grow the file past the
+///   implementation's designed limit (Clause 14.2.4.1; Clause 18).
+/// - SERVICES / INVALID_FILE_ACCESS_METHOD when the method does not match
+///   the object's `File_Access_Method`.
+///
+/// A write that returns `Err` must leave the storage unchanged: the service
+/// fails "in its entirety" (Clause 14.2.4), and the server encodes no ACK on
+/// the error path. Resolved write positions must fit the ACK's INTEGER, so
+/// implementations keep their limit at or below `i32::MAX`.
+pub trait FileStorage: Send + Sync {
+    /// Read up to `count` octets starting `start` octets into the file.
+    fn read_stream(&self, _start: u64, _count: u64) -> Result<FileStreamRead, Error> {
+        Err(invalid_file_access_method())
+    }
+
+    /// Write `data` at `start`, extending the file first when `start` is
+    /// past the end; intervening octets are a local matter. Returns the
+    /// octet offset the data was written at, which for
+    /// [`FileWriteStart::Append`] is the previous file size.
+    fn write_stream(&mut self, _start: FileWriteStart, _data: &[u8]) -> Result<u64, Error> {
+        Err(invalid_file_access_method())
+    }
+
+    /// Read up to `count` records starting at record `start`.
+    fn read_records(&self, _start: u64, _count: u64) -> Result<FileRecordRead, Error> {
+        Err(invalid_file_access_method())
+    }
+
+    /// Write `records` starting at record `start`, replacing records in
+    /// place and extending the file first when `start` is past the end.
+    /// Returns the record index the data was written at.
+    fn write_records(
+        &mut self,
+        _start: FileWriteStart,
+        _records: &[Vec<u8>],
+    ) -> Result<u64, Error> {
+        Err(invalid_file_access_method())
+    }
+}
+
+fn invalid_file_access_method() -> Error {
+    common::protocol_error(ErrorClass::SERVICES, ErrorCode::INVALID_FILE_ACCESS_METHOD)
+}
+
+fn invalid_file_start_position() -> Error {
+    common::protocol_error(ErrorClass::SERVICES, ErrorCode::INVALID_FILE_START_POSITION)
+}
+
+fn file_full() -> Error {
+    common::protocol_error(ErrorClass::OBJECT, ErrorCode::FILE_FULL)
+}
+
+/// Resolved positions travel in the ACK as a BACnet INTEGER; caps above
+/// `i32::MAX` could produce one that does not fit.
+const MAX_REPRESENTABLE: u64 = i32::MAX as u64;
+
+fn octet_total(records: &[Vec<u8>]) -> u64 {
+    records.iter().map(|r| r.len() as u64).sum()
+}
 
 // ---------------------------------------------------------------------------
 // FileObject (type 10)
@@ -43,6 +182,10 @@ pub struct FileObject {
     out_of_service: bool,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
+    /// Growth cap in octets for network writes; not a BACnet property.
+    max_file_size: u64,
+    /// Growth cap in records for network writes; not a BACnet property.
+    max_record_count: u64,
 }
 
 impl FileObject {
@@ -85,6 +228,8 @@ impl FileObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
+            max_file_size: DEFAULT_MAX_FILE_SIZE,
+            max_record_count: DEFAULT_MAX_RECORD_COUNT,
         })
     }
 
@@ -162,6 +307,133 @@ impl FileObject {
     /// Get the read-only flag.
     pub fn read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Set the growth cap, in octets, for network writes to this file.
+    ///
+    /// The cap bounds what AtomicWriteFile can add; it never invalidates
+    /// contents preloaded through [`set_data`](Self::set_data), which may
+    /// exceed it and still be overwritten in place. Clamped to `i32::MAX`
+    /// so every resolved write position fits the ACK.
+    pub fn set_max_file_size(&mut self, max_octets: u64) {
+        self.max_file_size = max_octets.min(MAX_REPRESENTABLE);
+    }
+
+    /// The growth cap, in octets, for network writes to this file.
+    pub fn max_file_size(&self) -> u64 {
+        self.max_file_size
+    }
+
+    /// Set the growth cap, in records, for network writes to this file.
+    ///
+    /// Same growth-only semantics as
+    /// [`set_max_file_size`](Self::set_max_file_size): records preloaded
+    /// through [`set_records`](Self::set_records) are never refused.
+    pub fn set_max_record_count(&mut self, max_records: u64) {
+        self.max_record_count = max_records.min(MAX_REPRESENTABLE);
+    }
+
+    /// The growth cap, in records, for network writes to this file.
+    pub fn max_record_count(&self) -> u64 {
+        self.max_record_count
+    }
+
+    /// The handler gate is normative; this keeps `data` and `records` from
+    /// both filling up when a non-handler caller reaches the storage.
+    fn require_access(&self, method: FileAccessMethod) -> Result<(), Error> {
+        if self.file_access_method == method.to_raw() {
+            Ok(())
+        } else {
+            Err(invalid_file_access_method())
+        }
+    }
+}
+
+impl FileStorage for FileObject {
+    fn read_stream(&self, start: u64, count: u64) -> Result<FileStreamRead, Error> {
+        self.require_access(FileAccessMethod::STREAM_ACCESS)?;
+        let len = self.data.len() as u64;
+        if start > len {
+            return Err(invalid_file_start_position());
+        }
+        let end = start.saturating_add(count).min(len);
+        Ok(FileStreamRead {
+            data: self.data[start as usize..end as usize].to_vec(),
+            end_of_file: end >= len,
+        })
+    }
+
+    fn write_stream(&mut self, start: FileWriteStart, data: &[u8]) -> Result<u64, Error> {
+        self.require_access(FileAccessMethod::STREAM_ACCESS)?;
+        let len = self.data.len() as u64;
+        let start = match start {
+            FileWriteStart::At(offset) => offset,
+            FileWriteStart::Append => len,
+        };
+        let end = start.checked_add(data.len() as u64).ok_or_else(file_full)?;
+        if end > self.max_file_size.max(len) {
+            return Err(file_full());
+        }
+        let (start_idx, end_idx) = (
+            usize::try_from(start).map_err(|_| file_full())?,
+            usize::try_from(end).map_err(|_| file_full())?,
+        );
+        let mut updated = std::mem::take(&mut self.data);
+        if end_idx > updated.len() {
+            updated.resize(end_idx, 0);
+        }
+        updated[start_idx..end_idx].copy_from_slice(data);
+        self.set_data(updated);
+        Ok(start)
+    }
+
+    fn read_records(&self, start: u64, count: u64) -> Result<FileRecordRead, Error> {
+        self.require_access(FileAccessMethod::RECORD_ACCESS)?;
+        let len = self.records.len() as u64;
+        if start > len {
+            return Err(invalid_file_start_position());
+        }
+        let end = start.saturating_add(count).min(len);
+        Ok(FileRecordRead {
+            records: self.records[start as usize..end as usize].to_vec(),
+            end_of_file: end >= len,
+        })
+    }
+
+    fn write_records(&mut self, start: FileWriteStart, records: &[Vec<u8>]) -> Result<u64, Error> {
+        self.require_access(FileAccessMethod::RECORD_ACCESS)?;
+        let len = self.records.len() as u64;
+        let start = match start {
+            FileWriteStart::At(index) => index,
+            FileWriteStart::Append => len,
+        };
+        let end = start
+            .checked_add(records.len() as u64)
+            .ok_or_else(file_full)?;
+        if end > self.max_record_count.max(len) {
+            return Err(file_full());
+        }
+        let (start_idx, end_idx) = (
+            usize::try_from(start).map_err(|_| file_full())?,
+            usize::try_from(end).map_err(|_| file_full())?,
+        );
+        // Octet cap on the projected total: existing octets, minus those
+        // in the records being replaced, plus the incoming payload.
+        let existing = octet_total(&self.records);
+        let replaced = octet_total(
+            &self.records[start_idx.min(self.records.len())..end_idx.min(self.records.len())],
+        );
+        let projected = existing - replaced + octet_total(records);
+        if projected > self.max_file_size.max(existing) {
+            return Err(file_full());
+        }
+        let mut updated = std::mem::take(&mut self.records);
+        if end_idx > updated.len() {
+            updated.resize(end_idx, Vec::new());
+        }
+        updated[start_idx..end_idx].clone_from_slice(records);
+        self.set_records(updated);
+        Ok(start)
     }
 }
 
@@ -279,415 +551,19 @@ impl BACnetObject for FileObject {
         }
         Cow::Owned(props)
     }
+
+    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+        Some(self)
+    }
+
+    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+        Some(self)
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::enums::ErrorCode;
-
-    #[test]
-    fn file_object_creation() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        assert_eq!(file.object_name(), "FILE-1");
-        assert_eq!(file.object_identifier().instance_number(), 1);
-    }
-
-    #[test]
-    fn file_read_object_type() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::OBJECT_TYPE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Enumerated(ObjectType::FILE.to_raw()));
-    }
-
-    #[test]
-    fn file_read_object_identifier() {
-        let file = FileObject::new(42, "FILE-42", "application/octet-stream").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::OBJECT_IDENTIFIER, None)
-            .unwrap();
-        if let PropertyValue::ObjectIdentifier(oid) = val {
-            assert_eq!(oid.instance_number(), 42);
-        } else {
-            panic!("expected ObjectIdentifier");
-        }
-    }
-
-    #[test]
-    fn file_read_object_name() {
-        let file = FileObject::new(1, "MY-FILE", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::OBJECT_NAME, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::CharacterString("MY-FILE".into()));
-    }
-
-    #[test]
-    fn file_read_file_type() {
-        let file = FileObject::new(1, "FILE-1", "text/csv").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::FILE_TYPE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::CharacterString("text/csv".into()));
-    }
-
-    #[test]
-    fn file_read_file_size_default_zero() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::FILE_SIZE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Unsigned(0));
-    }
-
-    #[test]
-    fn file_set_data_updates_file_size() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_data(vec![0x48, 0x65, 0x6C, 0x6C, 0x6F]); // "Hello"
-        let val = file
-            .read_property(PropertyIdentifier::FILE_SIZE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Unsigned(5));
-        assert_eq!(file.data(), &[0x48, 0x65, 0x6C, 0x6C, 0x6F]);
-    }
-
-    #[test]
-    fn file_read_archive_default_false() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::ARCHIVE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(false));
-    }
-
-    #[test]
-    fn file_set_and_read_archive() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_archive(true);
-        assert!(file.archive());
-        let val = file
-            .read_property(PropertyIdentifier::ARCHIVE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(true));
-    }
-
-    #[test]
-    fn file_read_read_only_default_false() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::READ_ONLY, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(false));
-    }
-
-    #[test]
-    fn file_set_and_read_read_only() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_read_only(true);
-        assert!(file.read_only());
-        let val = file
-            .read_property(PropertyIdentifier::READ_ONLY, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(true));
-    }
-
-    #[test]
-    fn file_read_modification_date_default_unspecified() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::MODIFICATION_DATE, None)
-            .unwrap();
-        if let PropertyValue::List(items) = val {
-            assert_eq!(items.len(), 2);
-            let unspec_date = Date {
-                year: 0xFF,
-                month: 0xFF,
-                day: 0xFF,
-                day_of_week: 0xFF,
-            };
-            let unspec_time = Time {
-                hour: 0xFF,
-                minute: 0xFF,
-                second: 0xFF,
-                hundredths: 0xFF,
-            };
-            assert_eq!(items[0], PropertyValue::Date(unspec_date));
-            assert_eq!(items[1], PropertyValue::Time(unspec_time));
-        } else {
-            panic!("expected PropertyValue::List");
-        }
-    }
-
-    #[test]
-    fn file_set_and_read_modification_date() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let d = Date {
-            year: 126,
-            month: 3,
-            day: 1,
-            day_of_week: 7,
-        };
-        let t = Time {
-            hour: 14,
-            minute: 30,
-            second: 0,
-            hundredths: 0,
-        };
-        file.set_modification_date(d, t);
-        let val = file
-            .read_property(PropertyIdentifier::MODIFICATION_DATE, None)
-            .unwrap();
-        if let PropertyValue::List(items) = val {
-            assert_eq!(items[0], PropertyValue::Date(d));
-            assert_eq!(items[1], PropertyValue::Time(t));
-        } else {
-            panic!("expected PropertyValue::List");
-        }
-    }
-
-    #[test]
-    fn file_read_file_access_method_default_stream() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::FILE_ACCESS_METHOD, None)
-            .unwrap();
-        // stream-access is 1 per the Clause 21 production (#273).
-        assert_eq!(
-            val,
-            PropertyValue::Enumerated(FileAccessMethod::STREAM_ACCESS.to_raw())
-        );
-        assert_eq!(
-            val,
-            PropertyValue::Enumerated(1),
-            "stream-access enumeration value"
-        );
-    }
-
-    #[test]
-    fn file_read_file_access_method_record() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
-        let val = file
-            .read_property(PropertyIdentifier::FILE_ACCESS_METHOD, None)
-            .unwrap();
-        // record-access is 0 per the Clause 21 production (#273).
-        assert_eq!(
-            val,
-            PropertyValue::Enumerated(FileAccessMethod::RECORD_ACCESS.to_raw())
-        );
-        assert_eq!(
-            val,
-            PropertyValue::Enumerated(0),
-            "record-access enumeration value"
-        );
-    }
-
-    #[test]
-    fn file_record_count_unavailable_for_stream() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let result = file.read_property(PropertyIdentifier::RECORD_COUNT, None);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn file_set_records_updates_record_count_and_size() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
-        file.set_records(vec![vec![0x01, 0x02], vec![0x03, 0x04, 0x05]]);
-        let count = file
-            .read_property(PropertyIdentifier::RECORD_COUNT, None)
-            .unwrap();
-        assert_eq!(count, PropertyValue::Unsigned(2));
-        let size = file
-            .read_property(PropertyIdentifier::FILE_SIZE, None)
-            .unwrap();
-        assert_eq!(size, PropertyValue::Unsigned(5)); // 2 + 3 bytes
-        assert_eq!(file.records().len(), 2);
-    }
-
-    #[test]
-    fn file_read_status_flags_default() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::STATUS_FLAGS, None)
-            .unwrap();
-        if let PropertyValue::BitString { unused_bits, data } = val {
-            assert_eq!(unused_bits, 4);
-            assert_eq!(data, vec![0x00]);
-        } else {
-            panic!("expected BitString");
-        }
-    }
-
-    #[test]
-    fn file_read_out_of_service_default_false() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(false));
-    }
-
-    #[test]
-    fn file_read_reliability_default() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::RELIABILITY, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Enumerated(0));
-    }
-
-    #[test]
-    fn file_read_description_default_empty() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::DESCRIPTION, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::CharacterString(String::new()));
-    }
-
-    #[test]
-    fn file_write_description() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.write_property(
-            PropertyIdentifier::DESCRIPTION,
-            None,
-            PropertyValue::CharacterString("A test file".into()),
-            None,
-        )
-        .unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::DESCRIPTION, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::CharacterString("A test file".into()));
-    }
-
-    #[test]
-    fn file_write_archive() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.write_property(
-            PropertyIdentifier::ARCHIVE,
-            None,
-            PropertyValue::Boolean(true),
-            None,
-        )
-        .unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::ARCHIVE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(true));
-    }
-
-    #[test]
-    fn file_write_archive_invalid_type() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let result = file.write_property(
-            PropertyIdentifier::ARCHIVE,
-            None,
-            PropertyValue::Unsigned(1),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn file_write_file_type() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.write_property(
-            PropertyIdentifier::FILE_TYPE,
-            None,
-            PropertyValue::CharacterString("application/json".into()),
-            None,
-        )
-        .unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::FILE_TYPE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::CharacterString("application/json".into())
-        );
-    }
-
-    #[test]
-    fn file_write_out_of_service() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.write_property(
-            PropertyIdentifier::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(true),
-            None,
-        )
-        .unwrap();
-        let val = file
-            .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Boolean(true));
-    }
-
-    #[test]
-    fn file_write_read_only_denied() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let result = file.write_property(
-            PropertyIdentifier::READ_ONLY,
-            None,
-            PropertyValue::Boolean(true),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn file_write_file_size_denied() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let result = file.write_property(
-            PropertyIdentifier::FILE_SIZE,
-            None,
-            PropertyValue::Unsigned(100),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn file_property_list_stream() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let props = file.property_list();
-        assert!(props.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
-        assert!(props.contains(&PropertyIdentifier::OBJECT_NAME));
-        assert!(props.contains(&PropertyIdentifier::OBJECT_TYPE));
-        assert!(props.contains(&PropertyIdentifier::FILE_TYPE));
-        assert!(props.contains(&PropertyIdentifier::FILE_SIZE));
-        assert!(props.contains(&PropertyIdentifier::MODIFICATION_DATE));
-        assert!(props.contains(&PropertyIdentifier::ARCHIVE));
-        assert!(props.contains(&PropertyIdentifier::READ_ONLY));
-        assert!(props.contains(&PropertyIdentifier::FILE_ACCESS_METHOD));
-        assert!(props.contains(&PropertyIdentifier::STATUS_FLAGS));
-        assert!(props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
-        assert!(props.contains(&PropertyIdentifier::RELIABILITY));
-        // RECORD_COUNT should NOT be in property list for stream-access files
-        assert!(!props.contains(&PropertyIdentifier::RECORD_COUNT));
-    }
-
-    #[test]
-    fn file_property_list_record_access() {
-        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
-        let props = file.property_list();
-        assert!(props.contains(&PropertyIdentifier::RECORD_COUNT));
-    }
-
-    #[test]
-    fn file_unknown_property_error() {
-        let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        let result = file.read_property(PropertyIdentifier::PRESENT_VALUE, None);
-        assert!(result.is_err());
-        if let Err(Error::Protocol { code, .. }) = result {
-            assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
-        } else {
-            panic!("expected Protocol error");
-        }
-    }
-}
+mod tests;

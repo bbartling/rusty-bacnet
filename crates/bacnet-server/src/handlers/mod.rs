@@ -31,8 +31,6 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
 
-/// Property identifier for File Data (property 65 / 0x41).
-const PROP_FILE_DATA: u32 = 0x0041;
 use bytes::BytesMut;
 
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
