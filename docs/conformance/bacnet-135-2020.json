@@ -384,6 +384,27 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#379). DeviceObject omits Max_Segments_Accepted for NO_SEGMENTATION, derives 1 for exact SEGMENTED_TRANSMIT, and retains 65 for SEGMENTED_RECEIVE, SEGMENTED_BOTH, and unknown non-NONE raw values. DeviceConfig and ServerConfig remain independent; this slice neither changes nor adds enforcement for the server's 256-segment sequence-space limit. Client timers are excluded."
   },
   {
+   "id": "BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL",
+   "standard_anchor": "Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924)",
+   "priority": "P1",
+   "requirement_summary": "Bundled devices do not advertise or expose Notification Forwarder object support until the object implements notification redistribution, subscriptions, filtering, and the required loop, port, and network restrictions.",
+   "status": "unsupported-by-design",
+   "code_anchors": [
+    "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
+    "crates/bacnet-objects/src/lib.rs",
+    "crates/rusty-bacnet/src/server/mod.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/rusty_bacnet.pyi"
+   ],
+   "positive_tests": [],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Type 51 is absent from bundled Device Protocol_Object_Types_Supported values, and the public Rust placeholder plus Python registration method are removed because they provided no forwarding behavior. ObjectType::NOTIFICATION_FORWARDER, the Python enum constant, CLI remote-identifier parsing, and generic recipient codecs remain as wire-level interoperability vocabulary rather than public support claims. Reintroduction requires full Clause 12.51 forwarding, subscription, filtering, and anti-loop/port/network behavior."
+  },
+  {
    "id": "BACNET-12-RECIPIENT-LIST-FRAMING",
    "standard_anchor": "Clause 12.21, Clause 21",
    "priority": "P1",
@@ -407,7 +428,7 @@
    "public_claims": [
     "README BACnet object implementations feature"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL; scope is the modeled NotificationClass path (NotificationForwarder's Recipient_List is a stub today). Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture. Decode is strict end to end: element sequence, fixed-width bit-string members (exactly one content octet with unused_bits 1 for valid-days / 5 for transitions), and whole-list routing (a malformed stored list fails closed with no prefix delivery). The write path and the routing filter share one flat-entry decoder, and the pre-#152 flat application-tagged form remains accepted there as a compatibility fallback. Indexed writes are rejected (Tranche K / #260 family). Remaining work: interop evidence against a second implementation and NotificationForwarder Recipient_List modeling."
+    "notes": "Split child of BACNET-12-OBJECT-MODEL; scope is the modeled NotificationClass path. The generic recipient codec remains interoperability vocabulary and is not Notification Forwarder object support. Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture. Decode is strict end to end: element sequence, fixed-width bit-string members (exactly one content octet with unused_bits 1 for valid-days / 5 for transitions), and whole-list routing (a malformed stored list fails closed with no prefix delivery). The write path and the routing filter share one flat-entry decoder, and the pre-#152 flat application-tagged form remains accepted there as a compatibility fallback. Indexed writes are rejected (Tranche K / #260 family). Remaining work: interop evidence against a second implementation; Notification Forwarder remains unsupported under BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL."
   },
   {
    "id": "BACNET-12-EVENT-PARAMETERS-FRAMING",

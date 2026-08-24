@@ -1060,7 +1060,6 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
-server.add_notification_forwarder(instance=1, name="Forwarder")
 server.add_alert_enrollment(instance=1, name="Alert")
 server.add_event_enrollment(instance=1, name="Event", event_type=0)
 ```

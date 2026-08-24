@@ -1153,6 +1153,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Withdraw the public
+  `bacnet_objects::forwarder::NotificationForwarderObject` placeholder and
+  Python `BACnetServer.add_notification_forwarder` registration method
+  (**breaking**). The object exposed properties but performed no Clause 12.51
+  forwarding, so bundled Device objects no longer advertise type 51 in
+  `Protocol_Object_Types_Supported`. `ObjectType::NOTIFICATION_FORWARDER`, the
+  Python enum constant, CLI remote-identifier parsing, and generic recipient
+  codecs remain as wire-level interoperability vocabulary. (#188)
 - Remove the public `bacnet_server::intrinsic_reporting` module —
   `IntrinsicReportingEngine` and `IntrinsicEvent` (**breaking**: public API
   removal). The engine was a second, uncalled intrinsic-reporting evaluator
