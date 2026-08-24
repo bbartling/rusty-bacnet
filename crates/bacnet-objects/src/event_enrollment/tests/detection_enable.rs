@@ -13,7 +13,7 @@ use super::super::*;
 /// the initial values of properties not named in a CreateObject request "a
 /// local matter". TRUE is chosen because it preserves the always-detecting
 /// behavior this object had before the property existed, and matches
-/// `AlertEnrollmentObject` and `NotificationForwarderObject`.
+/// `AlertEnrollmentObject`.
 #[test]
 fn event_detection_enable_defaults_true() {
     let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();

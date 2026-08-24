@@ -100,7 +100,11 @@ def pics_draft(data: dict) -> str:
         "|---|---|---|---|",
     ]
     for row in rows:
-        if row["id"] in {"BACNET-A-PICS", "BACNET-L-PROFILES", "BACNET-12-OBJECT-MODEL"}:
+        if row["status"] == "unsupported-by-design" or row["id"] in {
+            "BACNET-A-PICS",
+            "BACNET-L-PROFILES",
+            "BACNET-12-OBJECT-MODEL",
+        }:
             lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {row['notes']} |")
     lines.append("")
     return "\n".join(lines)

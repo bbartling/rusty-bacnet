@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 28 |
+| Priority | P1 | 29 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -28,6 +28,7 @@
 | Status | in-progress | 3 |
 | Status | supported-with-clause-evidence | 15 |
 | Status | unknown-pending-source-review | 4 |
+| Status | unsupported-by-design | 1 |
 
 ## Ledger Rows
 
@@ -47,6 +48,7 @@
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | P1 | implementation-present-needs-conformance-tests | 3 |
 | `BACNET-12-ESCALATOR-STATUS-WRITABILITY` | Clause 12 general property conformance rules; Clause 12.60 Table 12-78 and Out_Of_Service; Clause 15.9.1.3; Clause 21 BACnetEscalatorMode, BACnetEscalatorOperationDirection, and BACnetEscalatorFault; Clause 23.1 | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
+| `BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL` | Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924) | P1 | unsupported-by-design | 0 |
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |

@@ -261,25 +261,11 @@ fn read_protocol_object_types_supported() {
     match val {
         PropertyValue::BitString { unused_bits, data } => {
             assert_eq!(unused_bits, 7);
-            assert_eq!(data.len(), 9);
-            // Byte 0 (types 0-7): all set
-            assert_eq!(data[0], 0xFF);
-            // Byte 1 (types 8-15): all set
-            assert_eq!(data[1], 0xFF);
-            // Byte 2 (types 16-23): all set
-            assert_eq!(data[2], 0xFF);
-            // Byte 3 (types 24-31): all set
-            assert_eq!(data[3], 0xFF);
-            // Byte 4 (types 32-39): 32-37,39 set; 38 (NetworkSecurity) unset
-            assert_eq!(data[4], 0xFD);
-            // Byte 5 (types 40-47): all set
-            assert_eq!(data[5], 0xFF);
-            // Byte 6 (types 48-55): all set
-            assert_eq!(data[6], 0xFF);
-            // Byte 7 (types 56-63): all set (56-62 + Color=63)
-            assert_eq!(data[7], 0xFF);
-            // Byte 8 (type 64): ColorTemperature set, 7 unused bits
-            assert_eq!(data[8], 0x80);
+            assert_eq!(
+                data,
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEF, 0xFF, 0x80],
+                "type 51 must stay clear while types 50, 52, and 64 remain set"
+            );
         }
         _ => panic!("Expected BitString"),
     }

@@ -32,5 +32,6 @@ This draft summarizes implementation evidence that may feed a future formal Prot
 | ID | Anchor | Status | Notes |
 |---|---|---|---|
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | implementation-present-needs-conformance-tests | Initial family row only; later work should split high-claim services and object families into detailed rows. |
+| `BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL` | Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924) | unsupported-by-design | Type 51 is absent from bundled Device Protocol_Object_Types_Supported values, and the public Rust placeholder plus Python registration method are removed because they provided no forwarding behavior. ObjectType::NOTIFICATION_FORWARDER, the Python enum constant, CLI remote-identifier parsing, and generic recipient codecs remain as wire-level interoperability vocabulary rather than public support claims. Reintroduction requires full Clause 12.51 forwarding, subscription, filtering, and anti-loop/port/network behavior. |
 | `BACNET-A-PICS` | Annex A | in-progress | This ledger does not claim certification. |
 | `BACNET-L-PROFILES` | Annex L | in-progress | No profile certification claim is made by this seed. |

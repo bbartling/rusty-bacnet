@@ -24,7 +24,6 @@ use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject}
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::file::FileObject;
-use bacnet_objects::forwarder::NotificationForwarderObject;
 use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, ChannelObject, LightingOutputObject};

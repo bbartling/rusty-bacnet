@@ -287,13 +287,6 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Notification Forwarder object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_notification_forwarder(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = NotificationForwarderObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add an Alert Enrollment object to the server (before starting).
     #[pyo3(signature = (instance, name))]
     fn add_alert_enrollment(&self, instance: u32, name: &str) -> PyResult<()> {

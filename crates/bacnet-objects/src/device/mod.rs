@@ -340,7 +340,6 @@ impl DeviceObject {
             ObjectType::POSITIVE_INTEGER_VALUE.to_raw(),
             ObjectType::TIMEPATTERN_VALUE.to_raw(),
             ObjectType::TIME_VALUE.to_raw(),
-            ObjectType::NOTIFICATION_FORWARDER.to_raw(),
             ObjectType::ALERT_ENROLLMENT.to_raw(),
             ObjectType::CHANNEL.to_raw(),
             ObjectType::LIGHTING_OUTPUT.to_raw(),

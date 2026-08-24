@@ -491,7 +491,7 @@ let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 ```
 
-### Object Types (64)
+### Object Types (63)
 
 #### Core I/O (9)
 
@@ -507,14 +507,13 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `MultiStateOutputObject` | `::new(instance, name, number_of_states)` |
 | `MultiStateValueObject` | `::new(instance, name, number_of_states)` |
 
-#### Schedule & Notification (6)
+#### Schedule & Notification (5)
 
 | Type | Constructor |
 |------|-------------|
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
 | `NotificationClass` | `::new(instance, name)` |
-| `NotificationForwarderObject` | `::new(instance, name)` |
 | `AlertEnrollmentObject` | `::new(instance, name)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
