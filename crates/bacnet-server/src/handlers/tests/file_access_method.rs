@@ -77,6 +77,24 @@ fn assert_invalid_access(result: Result<(), Error>, context: &str) {
     }
 }
 
+fn assert_file_access_denied(result: Result<(), Error>, context: &str) {
+    match result.expect_err(&format!("{context}: request must be refused")) {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                ErrorClass::SERVICES.to_raw() as u32,
+                "{context}: wrong error class"
+            );
+            assert_eq!(
+                code,
+                ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
+                "{context}: wrong error code"
+            );
+        }
+        other => panic!("{context}: expected SERVICES/FILE_ACCESS_DENIED, got {other:?}"),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Mismatch matrix (#287) — all four directions refuse with the exact
 // Clause 14 error, leaving the response buffer untouched.
@@ -161,6 +179,74 @@ fn write_record_against_stream_access_file_is_refused() {
         SENTINEL,
         "refused write must not touch the response buffer"
     );
+}
+
+#[test]
+fn read_only_stream_write_returns_services_file_access_denied_without_mutation() {
+    let mut db = ObjectDatabase::new();
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_data(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    file.set_read_only(true);
+    db.add(Box::new(file)).unwrap();
+
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire(FileWriteAccessMethod::Stream {
+            file_start_position: 0,
+            file_data: vec![0x01, 0x02, 0x03],
+        }),
+        &mut buf,
+    );
+    assert_file_access_denied(result, "read-only STREAM_ACCESS file");
+    assert_eq!(
+        &buf[..],
+        SENTINEL,
+        "refused write must not touch the response buffer"
+    );
+
+    let object = db.get(&file_oid()).unwrap();
+    let size = object
+        .read_property(PropertyIdentifier::FILE_SIZE, None)
+        .unwrap();
+    assert_eq!(size, PropertyValue::Unsigned(8), "FILE_SIZE changed");
+}
+
+#[test]
+fn read_only_record_write_returns_services_file_access_denied_without_mutation() {
+    let mut db = ObjectDatabase::new();
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_file_access_method(ObjectFileAccessMethod::RECORD_ACCESS.to_raw());
+    file.set_records(vec![vec![0xAA, 0xBB], vec![0xCC, 0xDD], vec![0xEE]]);
+    file.set_read_only(true);
+    db.add(Box::new(file)).unwrap();
+
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire(FileWriteAccessMethod::Record {
+            file_start_record: 0,
+            record_count: 1,
+            file_record_data: vec![vec![0x01, 0x02, 0x03, 0x04]],
+        }),
+        &mut buf,
+    );
+    assert_file_access_denied(result, "read-only RECORD_ACCESS file");
+    assert_eq!(
+        &buf[..],
+        SENTINEL,
+        "refused write must not touch the response buffer"
+    );
+
+    let object = db.get(&file_oid()).unwrap();
+    let size = object
+        .read_property(PropertyIdentifier::FILE_SIZE, None)
+        .unwrap();
+    assert_eq!(size, PropertyValue::Unsigned(5), "FILE_SIZE changed");
+    let count = object
+        .read_property(PropertyIdentifier::RECORD_COUNT, None)
+        .unwrap();
+    assert_eq!(count, PropertyValue::Unsigned(3), "RECORD_COUNT changed");
 }
 
 // ──────────────────────────────────────────────────────────────────────────
