@@ -5,11 +5,11 @@
 //! - LiftObject (type 59): represents a single lift/elevator car
 
 use bacnet_types::enums::{
-    EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
+    EscalatorFault, EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashSet};
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
@@ -181,8 +181,8 @@ pub struct EscalatorObject {
     /// Escalator mode (BACnetEscalatorMode, Clause 21); proprietary extensions
     /// (Clause 23.1) are preserved as raw values.
     escalator_mode: EscalatorMode,
-    /// List of fault signal codes (Unsigned).
-    fault_signals: Vec<u64>,
+    /// Fault signal set (BACnetEscalatorFault, Clause 21).
+    fault_signals: Vec<EscalatorFault>,
     /// Energy meter reading (Real).
     energy_meter: f32,
     /// Energy meter reference (stored as raw bytes).
@@ -192,6 +192,8 @@ pub struct EscalatorObject {
     /// Operation direction (BACnetEscalatorOperationDirection, Clause 21);
     /// proprietary extensions (Clause 23.1) are preserved as raw values.
     operation_direction: EscalatorOperationDirection,
+    /// Passenger alarm state (Boolean).
+    passenger_alarm: bool,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: u32,
@@ -211,6 +213,7 @@ impl EscalatorObject {
             energy_meter_ref: Vec::new(),
             power_mode: false,
             operation_direction: EscalatorOperationDirection::UNKNOWN,
+            passenger_alarm: false,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
@@ -246,7 +249,7 @@ impl BACnetObject for EscalatorObject {
                 let items: Vec<PropertyValue> = self
                     .fault_signals
                     .iter()
-                    .map(|v| PropertyValue::Unsigned(*v))
+                    .map(|v| PropertyValue::Enumerated(v.to_raw()))
                     .collect();
                 Ok(PropertyValue::List(items))
             }
@@ -259,6 +262,9 @@ impl BACnetObject for EscalatorObject {
             p if p == PropertyIdentifier::POWER_MODE => Ok(PropertyValue::Boolean(self.power_mode)),
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
                 Ok(PropertyValue::Enumerated(self.operation_direction.to_raw()))
+            }
+            p if p == PropertyIdentifier::PASSENGER_ALARM => {
+                Ok(PropertyValue::Boolean(self.passenger_alarm))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -280,6 +286,14 @@ impl BACnetObject for EscalatorObject {
             return result;
         }
         match property {
+            p if p == PropertyIdentifier::POWER_MODE => {
+                if let PropertyValue::Boolean(v) = value {
+                    self.power_mode = v;
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
             p if p == PropertyIdentifier::ESCALATOR_MODE => {
                 if let PropertyValue::Enumerated(v) = value {
                     let named = EscalatorMode::ALL_NAMED
@@ -314,6 +328,52 @@ impl BACnetObject for EscalatorObject {
                     Err(common::invalid_data_type_error())
                 }
             }
+            p if p == PropertyIdentifier::ENERGY_METER => {
+                if let PropertyValue::Real(v) = value {
+                    if !v.is_finite() {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    self.energy_meter = v;
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
+            p if p == PropertyIdentifier::FAULT_SIGNALS => {
+                let values = match value {
+                    PropertyValue::Enumerated(v) => vec![PropertyValue::Enumerated(v)],
+                    PropertyValue::List(values) => values,
+                    _ => return Err(common::invalid_data_type_error()),
+                };
+                let mut faults = Vec::with_capacity(values.len());
+                let mut seen = HashSet::with_capacity(values.len());
+                for value in values {
+                    let PropertyValue::Enumerated(raw) = value else {
+                        return Err(common::invalid_data_type_error());
+                    };
+                    let named = EscalatorFault::ALL_NAMED
+                        .iter()
+                        .any(|&(_, value)| value.to_raw() == raw);
+                    if !(named || (1024..=65535).contains(&raw)) {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    let fault = EscalatorFault::from_raw(raw);
+                    if !seen.insert(fault) {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    faults.push(fault);
+                }
+                self.fault_signals = faults;
+                Ok(())
+            }
+            p if p == PropertyIdentifier::PASSENGER_ALARM => {
+                if let PropertyValue::Boolean(v) = value {
+                    self.passenger_alarm = v;
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
             _ => Err(common::write_access_denied_error()),
         }
     }
@@ -330,11 +390,26 @@ impl BACnetObject for EscalatorObject {
             PropertyIdentifier::ENERGY_METER_REF,
             PropertyIdentifier::POWER_MODE,
             PropertyIdentifier::OPERATION_DIRECTION,
+            PropertyIdentifier::PASSENGER_ALARM,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::POWER_MODE
+                | PropertyIdentifier::OPERATION_DIRECTION
+                | PropertyIdentifier::ESCALATOR_MODE
+                | PropertyIdentifier::ENERGY_METER
+                | PropertyIdentifier::FAULT_SIGNALS
+                | PropertyIdentifier::PASSENGER_ALARM
+        )
     }
 }
 

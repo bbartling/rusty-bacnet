@@ -116,6 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Escalator `Power_Mode`, `Operation_Direction`, `Escalator_Mode`,
+  `Energy_Meter`, `Fault_Signals`, and `Passenger_Alarm` now accept validated
+  writes both in service and while `Out_Of_Service` is TRUE (#401).
+  `Passenger_Alarm` is modeled as Boolean, `Fault_Signals` is a typed
+  duplicate-free list of Enumerated fault values (including an empty list),
+  and the PICS writable flags now match the object's write routes.
+
 - `AtomicWriteFileRequest::decode` now requires record-access payloads to
   contain exactly `Record Count` records (#418). A short list returns Reject
   `MISSING_REQUIRED_PARAMETER`; an extra record before the closing tag returns

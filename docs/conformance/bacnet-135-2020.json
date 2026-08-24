@@ -333,6 +333,37 @@
    "notes": "Initial family row only; later work should split high-claim services and object families into detailed rows."
   },
   {
+   "id": "BACNET-12-ESCALATOR-STATUS-WRITABILITY",
+   "standard_anchor": "Clause 12 general property conformance rules; Clause 12.60 Table 12-78 and Out_Of_Service; Clause 15.9.1.3; Clause 21 BACnetEscalatorMode, BACnetEscalatorOperationDirection, and BACnetEscalatorFault; Clause 23.1",
+   "priority": "P1",
+   "requirement_summary": "The Escalator object's Power_Mode, Operation_Direction, Escalator_Mode, Energy_Meter, Fault_Signals, and Passenger_Alarm properties are writable both in service under the Clause 12 implementor option and while Out_Of_Service is TRUE for simulation. Fault_Signals is a BACnetLIST of unique BACnetEscalatorFault values and may be empty; named values 0..=8 and proprietary values 1024..=65535 are accepted. Reserved, oversized, duplicate, mistyped, and non-finite inputs are refused before mutation with the Clause 15.9.1.3 PROPERTY errors.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/elevator.rs::EscalatorObject",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value",
+    "crates/bacnet-server/src/pics/mod.rs::PicsGenerator::build_object_types"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::all_six_status_properties_write_in_service_and_out_of_service",
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::out_of_service_toggles_preserve_client_status_values",
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::writable_predicate_matches_only_the_escalator_write_routes",
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::fault_signals_accept_empty_singleton_and_typed_multi_value_sets",
+    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_status_family_writes_over_wp_in_service_and_oos",
+    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_empty_singleton_and_multi_reach_the_object_over_wp",
+    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_empty_fault_signals_wpm_write_and_rollback"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::fault_signals_reject_reserved_oversized_and_duplicate_values_atomically",
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::fault_signals_reject_wrong_value_shapes_atomically",
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::non_finite_energy_meter_values_are_rejected_atomically",
+    "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::all_six_status_properties_reject_wrong_datatypes_atomically",
+    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_reject_array_index_before_empty_list_decode"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists. A zero-element propertyValue is admitted only for Fault_Signals; the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it. Energy_Meter_Ref, Reliability simulation, structured references, intrinsic reporting, physical-device arbitration, and the Escalator object's other missing properties remain outside this row, which is not a complete Escalator-object conformance claim."
+  },
+  {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
    "standard_anchor": "Clause 12.11, Table 12-13",
    "priority": "P1",
@@ -754,7 +785,7 @@
    "id": "BACNET-15-STRUCTURED-WRITE-DECODE",
    "standard_anchor": "Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements)",
    "priority": "P1",
-   "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List. Full consumption is required: a partial or undecodable trailing element, and an empty payload, are PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (The encoding is not valid for the datatype of the property) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
+   "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List. Full consumption is required: a partial or undecodable trailing element is PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (The encoding is not valid for the datatype of the property) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. Empty payloads are also INVALID_DATA_ENCODING except for Fault_Signals, whose Clause 12.60 BACnetLIST may be empty and is delivered as PropertyValue::List. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/write_property.rs",
@@ -767,7 +798,8 @@
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_relinquish_default_over_the_wire_recaptures_present_value",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure",
     "crates/bacnet-server/src/handlers/tests/framed_properties.rs::recipient_list_framed_wire_round_trip",
-    "crates/bacnet-server/src/handlers/tests/framed_properties.rs::event_parameters_framed_wire_round_trip"
+    "crates/bacnet-server/src/handlers/tests/framed_properties.rs::event_parameters_framed_wire_round_trip",
+    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_empty_singleton_and_multi_reach_the_object_over_wp"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::scalar_write_with_undecodable_trailing_element_is_refused_and_preserves",
@@ -778,7 +810,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated far enough to break framing is refused earlier by the service request's own [3]/[4] context walk (a framing error, still never silent; pinned by list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode). Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). WPM keeps its validate-all-then-commit-with-rollback semantics for structured values. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated far enough to break framing is refused earlier by the service request's own [3]/[4] context walk (a framing error, still never silent; pinned by list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode). Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM keeps its validate-all-then-commit-with-rollback semantics for structured values. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
   },
   {
    "id": "BACNET-20-ENCODING",

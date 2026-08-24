@@ -432,8 +432,9 @@ fn invalid_data_encoding_error() -> Error {
 /// The whole payload is consumed (#182): elements are decoded with
 /// `decode_application_value` until the input is exhausted, mirroring
 /// `encode_property_value`'s `List` flattening. Exactly one element yields a
-/// scalar `PropertyValue`; more than one yields `PropertyValue::List`. A
-/// partial element at the tail — and any other decode failure — is
+/// scalar `PropertyValue`; more than one yields `PropertyValue::List`.
+/// `Fault_Signals` also admits zero elements because its BACnetLIST may be
+/// empty. A partial element at the tail — and any other decode failure — is
 /// PROPERTY / INVALID_DATA_ENCODING; trailing bytes are never silently
 /// dropped on the floor between the single-element decoder and the object's
 /// write arm.
@@ -481,6 +482,7 @@ pub(crate) fn decode_write_property_value(
         offset = new_offset;
     }
     match values.len() {
+        0 if property == PropertyIdentifier::FAULT_SIGNALS => Ok(PropertyValue::List(values)),
         0 => Err(invalid_data_encoding_error()),
         1 => Ok(values.pop().expect("one element present")),
         _ => Ok(PropertyValue::List(values)),

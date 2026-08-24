@@ -1,6 +1,8 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
 
+mod escalator_status_writability;
+
 /// Escalator write-domain tests run with Out_Of_Service enabled so they do not
 /// set policy for writes while the object is in service.
 fn oos_escalator() -> EscalatorObject {
@@ -164,6 +166,11 @@ fn escalator_create_and_read_defaults() {
             .unwrap(),
         PropertyValue::Boolean(false)
     );
+    assert_eq!(
+        esc.read_property(PropertyIdentifier::PASSENGER_ALARM, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
 }
 
 #[test]
@@ -206,6 +213,7 @@ fn escalator_property_list() {
     assert!(list.contains(&PropertyIdentifier::ENERGY_METER_REF));
     assert!(list.contains(&PropertyIdentifier::POWER_MODE));
     assert!(list.contains(&PropertyIdentifier::OPERATION_DIRECTION));
+    assert!(list.contains(&PropertyIdentifier::PASSENGER_ALARM));
     assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
 }
 
