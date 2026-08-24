@@ -101,6 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `AtomicWriteFile` now classifies writes to a read-only File as
+  `SERVICES / FILE_ACCESS_DENIED`, as required by Clause 14.2.4.1. The
+  read-only gate previously returned the same code under `OBJECT`; it remains
+  ahead of access-method validation, mutation, and ACK encoding (#399).
+
 - Confirmed client requests now stop RequestTimer after accepting segment zero
   of a segmented ComplexACK (Clause 5.4.4.3). Both unsegmented and segmented
   outgoing request paths switch to SEGMENTED_CONF for such responses, using an

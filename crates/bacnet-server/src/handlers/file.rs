@@ -294,7 +294,7 @@ pub fn handle_atomic_write_file(
 
     if read_only {
         return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
+            class: ErrorClass::SERVICES.to_raw() as u32,
             code: ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
         });
     }

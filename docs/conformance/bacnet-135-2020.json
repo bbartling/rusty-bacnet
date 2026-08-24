@@ -1689,9 +1689,9 @@
   },
   {
    "id": "BACNET-14-FILE-ACCESS-METHOD",
-   "standard_anchor": "Clause 12.13 (Table 12-16 File_Access_Method), Clauses 14.1 and 14.2 (Incorrect File access method), Clause 18 (INVALID_FILE_ACCESS_METHOD), Clause 21 (BACnetFileAccessMethod production; AtomicReadFile/AtomicWriteFile access-method CHOICE)",
+   "standard_anchor": "Clause 12.13 (Table 12-16 File_Access_Method), Clauses 14.1 and 14.2 (Incorrect File access method), Clause 14.2.4.1 (Write to a read-only File), Clause 18 (INVALID_FILE_ACCESS_METHOD and FILE_ACCESS_DENIED), Clause 21 (BACnetFileAccessMethod production; AtomicReadFile/AtomicWriteFile access-method CHOICE)",
    "priority": "P1",
-   "requirement_summary": "The bundled server cross-checks each AtomicReadFile and AtomicWriteFile request's access method against the target File object's declared File_Access_Method before any ACK is encoded or object state is mutated. The request CHOICE maps semantically to the property enumeration (stream request -> STREAM_ACCESS, record request -> RECORD_ACCESS), never by CHOICE tag number (stream is CHOICE [0] but enumeration value 1; record is CHOICE [1] but enumeration value 0). A mismatch, an unreadable property, a wrong property datatype, or an out-of-production raw value fails closed with SERVICES / INVALID_FILE_ACCESS_METHOD. This row covers only access-method cross-checking; no broader File service support (stream/record storage completeness, append semantics, ReadRange) is claimed.",
+   "requirement_summary": "The bundled server cross-checks each AtomicReadFile and AtomicWriteFile request's access method against the target File object's declared File_Access_Method before any ACK is encoded or object state is mutated. The request CHOICE maps semantically to the property enumeration (stream request -> STREAM_ACCESS, record request -> RECORD_ACCESS), never by CHOICE tag number (stream is CHOICE [0] but enumeration value 1; record is CHOICE [1] but enumeration value 0). A mismatch, an unreadable property, a wrong property datatype, or an out-of-production raw value fails closed with SERVICES / INVALID_FILE_ACCESS_METHOD. AtomicWriteFile refuses a matching-method File whose Read_Only property is TRUE before access-method validation, mutable object lookup, mutation, or ACK encoding with SERVICES / FILE_ACCESS_DENIED. This row covers only access-method cross-checking and the read-only AtomicWriteFile refusal; no broader File service support (stream/record storage completeness, append semantics, ReadRange) is claimed.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/file.rs",
@@ -1709,11 +1709,13 @@
     "crates/bacnet-server/src/handlers/tests/file_access_method.rs::write_record_against_stream_access_file_is_refused",
     "crates/bacnet-server/src/handlers/tests/file_access_method.rs::mismatched_write_leaves_record_file_state_unchanged",
     "crates/bacnet-server/src/handlers/tests/file_access_method.rs::mismatched_write_leaves_stream_file_state_unchanged",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::read_only_stream_write_returns_services_file_access_denied_without_mutation",
+    "crates/bacnet-server/src/handlers/tests/file_access_method.rs::read_only_record_write_returns_services_file_access_denied_without_mutation",
     "crates/bacnet-server/src/handlers/tests/file_access_method.rs::unknown_access_method_raw_value_fails_closed"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Narrow row added with #287. The four-way mismatch matrix pins the exact SERVICES / INVALID_FILE_ACCESS_METHOD pairing, response-buffer atomicity, and no-mutation on refused writes. Known adjacent gaps deliberately outside this row: FileObject does not expose File_Data (property 65) through read_property/write_property, so stream reads return empty octets and stream writes are refused PROPERTY / WRITE_ACCESS_DENIED downstream of the access-method gate; non-File identifiers use OBJECT / UNSUPPORTED_OBJECT_TYPE rather than the Clause 14 SERVICES / INCONSISTENT_OBJECT_TYPE row; read-only AtomicWriteFile uses OBJECT / FILE_ACCESS_DENIED rather than the Clause 14 SERVICES / FILE_ACCESS_DENIED row."
+   "notes": "Narrow row added with #287. The four-way mismatch matrix pins the exact SERVICES / INVALID_FILE_ACCESS_METHOD pairing, response-buffer atomicity, and no-mutation on refused writes. Matching-method stream and record tests pin the Clause 14.2.4.1 SERVICES / FILE_ACCESS_DENIED read-only refusal, byte-identical sentinel response buffers, and unchanged FILE_SIZE and RECORD_COUNT state. Known adjacent gaps deliberately outside this row: FileObject does not expose File_Data (property 65) through read_property/write_property, so stream reads return empty octets and stream writes are refused PROPERTY / WRITE_ACCESS_DENIED downstream of the access-method gate; non-File identifiers use OBJECT / UNSUPPORTED_OBJECT_TYPE rather than the Clause 14 SERVICES / INCONSISTENT_OBJECT_TYPE row."
   }
  ]
 }
