@@ -231,6 +231,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-Enumerated inputs with PROPERTY / INVALID_DATA_TYPE. Failed writes
   leave the prior value unchanged. No wire-format or service-model change.
 
+- The Escalator object's `escalator_mode` (462) now uses the typed
+  `EscalatorMode` with UNKNOWN as its default (#400). Writes accept all six
+  named values, including OUT_OF_SERVICE, and preserve proprietary values in
+  1024..=65535. Reserved values in 6..=1023 and values above 65535 are refused
+  with PROPERTY / VALUE_OUT_OF_RANGE before mutation. Enumerated readback and
+  the existing in-service write behavior are unchanged. No wire-format,
+  public API, or service-model change.
+
 - The bundled server now enforces a File object's declared
   `File_Access_Method` when executing AtomicReadFile and AtomicWriteFile
   (#287). A stream request against a record-access file, or a record

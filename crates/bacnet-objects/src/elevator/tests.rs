@@ -1,8 +1,8 @@
 use super::*;
-use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorOperationDirection};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
 
-/// Operation_Direction is writable for simulation while Out_Of_Service is
-/// true (Clause 12.60); write-domain tests run with OOS enabled.
+/// Escalator write-domain tests run with Out_Of_Service enabled so they do not
+/// set policy for writes while the object is in service.
 fn oos_escalator() -> EscalatorObject {
     let mut esc = EscalatorObject::new(1, "ESC-1").unwrap();
     esc.write_property(
@@ -48,6 +48,16 @@ fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
             );
         }
         other => panic!("{context}: expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+    }
+}
+
+fn read_mode(esc: &EscalatorObject) -> u32 {
+    match esc
+        .read_property(PropertyIdentifier::ESCALATOR_MODE, None)
+        .unwrap()
+    {
+        PropertyValue::Enumerated(raw) => raw,
+        other => panic!("expected Enumerated readback, got {other:?}"),
     }
 }
 
@@ -197,6 +207,98 @@ fn escalator_property_list() {
     assert!(list.contains(&PropertyIdentifier::POWER_MODE));
     assert!(list.contains(&PropertyIdentifier::OPERATION_DIRECTION));
     assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
+}
+
+// --- Escalator_Mode domain (#400) ---
+
+#[test]
+fn escalator_mode_field_is_typed_and_defaults_to_unknown() {
+    let esc = EscalatorObject::new(1, "ESC-1").unwrap();
+    assert_eq!(esc.escalator_mode, EscalatorMode::UNKNOWN);
+}
+
+#[test]
+fn escalator_all_named_modes_round_trip_with_oos() {
+    let mut esc = oos_escalator();
+
+    for &(name, value) in EscalatorMode::ALL_NAMED {
+        esc.write_property(
+            PropertyIdentifier::ESCALATOR_MODE,
+            None,
+            PropertyValue::Enumerated(value.to_raw()),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("named mode {name} must be accepted: {e:?}"));
+        assert_eq!(read_mode(&esc), value.to_raw(), "{name} round-trip");
+    }
+
+    assert_eq!(read_mode(&esc), EscalatorMode::OUT_OF_SERVICE.to_raw());
+}
+
+#[test]
+fn escalator_proprietary_mode_values_round_trip() {
+    let mut esc = oos_escalator();
+
+    for raw in [1024u32, 65535] {
+        esc.write_property(
+            PropertyIdentifier::ESCALATOR_MODE,
+            None,
+            PropertyValue::Enumerated(raw),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("proprietary raw {raw} must be accepted: {e:?}"));
+        assert_eq!(read_mode(&esc), raw, "raw {raw} must not normalize");
+    }
+}
+
+#[test]
+fn escalator_reserved_and_oversized_mode_values_rejected_atomically() {
+    let prior = EscalatorMode::OUT_OF_SERVICE.to_raw();
+    for raw in [6u32, 1023, 65536, u32::MAX] {
+        let mut esc = oos_escalator();
+        esc.write_property(
+            PropertyIdentifier::ESCALATOR_MODE,
+            None,
+            PropertyValue::Enumerated(prior),
+            None,
+        )
+        .unwrap();
+
+        assert_value_out_of_range(
+            esc.write_property(
+                PropertyIdentifier::ESCALATOR_MODE,
+                None,
+                PropertyValue::Enumerated(raw),
+                None,
+            ),
+            &format!("invalid raw {raw}"),
+        );
+        assert_eq!(read_mode(&esc), prior, "raw {raw} changed the mode");
+    }
+}
+
+#[test]
+fn escalator_mode_wrong_datatype_rejected_atomically() {
+    let mut esc = oos_escalator();
+    let prior = EscalatorMode::STOP.to_raw();
+    esc.write_property(
+        PropertyIdentifier::ESCALATOR_MODE,
+        None,
+        PropertyValue::Enumerated(prior),
+        None,
+    )
+    .unwrap();
+
+    assert_invalid_data_type(
+        esc.write_property(
+            PropertyIdentifier::ESCALATOR_MODE,
+            None,
+            PropertyValue::Unsigned(4),
+            None,
+        ),
+        "Unsigned instead of Enumerated",
+    );
+    assert_eq!(read_mode(&esc), prior, "wrong datatype changed the mode");
 }
 
 // --- Operation_Direction typed behavior (#284) ---

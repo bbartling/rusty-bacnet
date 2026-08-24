@@ -4,7 +4,9 @@
 //! - EscalatorObject (type 58): represents an escalator
 //! - LiftObject (type 59): represents a single lift/elevator car
 
-use bacnet_types::enums::{EscalatorOperationDirection, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -176,8 +178,9 @@ pub struct EscalatorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Escalator mode (Enumerated: 0=unknown, 1=stop, 2=up, 3=down, 4=inspection).
-    escalator_mode: u32,
+    /// Escalator mode (BACnetEscalatorMode, Clause 21); proprietary extensions
+    /// (Clause 23.1) are preserved as raw values.
+    escalator_mode: EscalatorMode,
     /// List of fault signal codes (Unsigned).
     fault_signals: Vec<u64>,
     /// Energy meter reading (Real).
@@ -202,7 +205,7 @@ impl EscalatorObject {
             oid,
             name: name.into(),
             description: String::new(),
-            escalator_mode: 0, // unknown
+            escalator_mode: EscalatorMode::UNKNOWN,
             fault_signals: Vec::new(),
             energy_meter: 0.0,
             energy_meter_ref: Vec::new(),
@@ -237,7 +240,7 @@ impl BACnetObject for EscalatorObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ESCALATOR.to_raw()))
             }
             p if p == PropertyIdentifier::ESCALATOR_MODE => {
-                Ok(PropertyValue::Enumerated(self.escalator_mode))
+                Ok(PropertyValue::Enumerated(self.escalator_mode.to_raw()))
             }
             p if p == PropertyIdentifier::FAULT_SIGNALS => {
                 let items: Vec<PropertyValue> = self
@@ -279,10 +282,13 @@ impl BACnetObject for EscalatorObject {
         match property {
             p if p == PropertyIdentifier::ESCALATOR_MODE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    if v > 4 {
+                    let named = EscalatorMode::ALL_NAMED
+                        .iter()
+                        .any(|&(_, value)| value.to_raw() == v);
+                    if !(named || (1024..=65535).contains(&v)) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.escalator_mode = v;
+                    self.escalator_mode = EscalatorMode::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
