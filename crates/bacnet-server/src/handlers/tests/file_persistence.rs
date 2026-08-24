@@ -4,16 +4,23 @@
 //!
 //! Clause 14.1 Service Procedure: a start position or record that is less
 //! than 0 or exceeds the file size is refused with SERVICES /
-//! INVALID_FILE_START_POSITION; a short read returns what remains and
-//! reports End Of File. Clause 14.2 Service Procedure: a start beyond the
-//! file extends it (intervening contents are a local matter — zero octets
-//! or empty records here), -1 appends, and the ACK carries the resolved
-//! position (Annex F shows 14, not -1). A write the object cannot hold is
-//! OBJECT / FILE_FULL (Clause 18: "filled to a designed limit").
+//! INVALID_FILE_START_POSITION; a short read returns what remains, and End
+//! Of File is TRUE only when the window includes the last octet or record
+//! (Clause 14.1.3.1: "TRUE if this response includes the last octet of the
+//! file and FALSE otherwise"). Clause 14.2 Service Procedure: a start beyond
+//! the file extends it (intervening contents are a local matter — zero
+//! octets or empty records here), -1 appends, and the ACK carries the
+//! resolved position (Annex F shows 14, not -1). A write the object cannot
+//! hold is OBJECT / FILE_FULL (Clause 18: "filled to a designed limit").
 //!
 //! Every test here uses only the object surface that exists before the
-//! storage hook landed (`set_data`, `set_records`, the two handlers), so the
-//! whole module compiles against the pre-fix tree and fails on assertions.
+//! storage hook landed (`set_data`, `set_records`, the two handlers) plus
+//! the `pub(super)` helpers of `file_access_method`, so the module compiles
+//! against the pre-fix tree, where every test that pins new behaviour
+//! fails on an assertion rather than a compile error. One test is a
+//! regression pin that already held there:
+//! `non_file_identifier_and_unknown_object_precede_start_position_gate`
+//! (gate order from #398).
 
 use super::file_access_method::{
     assert_file_access_denied, assert_invalid_access, file_oid, read_wire_for, record_file_db,
@@ -245,12 +252,53 @@ fn stream_append_writes_at_end_and_ack_reports_resolved_position() {
     assert_eq!(head, vec![1], "append must not touch the head of the file");
 }
 
+/// The pre-fix handler answered TRUE here from `start + count >= size`; the
+/// window includes no octet, so Clause 14.1.3.1 gives FALSE.
 #[test]
-fn stream_read_at_end_returns_empty_with_end_of_file() {
+fn stream_read_at_end_returns_empty_without_end_of_file() {
     let db = stream_file_db();
     let (data, eof) = read_stream(&db, 8, 4).unwrap();
     assert!(data.is_empty());
-    assert!(eof);
+    assert!(!eof, "an empty window includes no last octet");
+    let (data, eof) = read_stream(&db, 2, 0).unwrap();
+    assert!(data.is_empty());
+    assert!(!eof, "a zero-count read mid-file is not at end of file");
+}
+
+#[test]
+fn in_place_stream_write_over_the_cap_succeeds() {
+    let mut db = ObjectDatabase::new();
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_data(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    file.set_max_file_size(4);
+    db.add(Box::new(file)).unwrap();
+    let pos = write_stream(&mut db, 0, &[0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5])
+        .expect("in-place write within preloaded contents must succeed");
+    assert_eq!(pos, 0);
+    assert_eq!(file_size(&db), 8);
+    assert_eq!(
+        read_stream(&db, 0, 8).unwrap().0,
+        vec![0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 7, 8]
+    );
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire_for(
+            file_oid(),
+            FileWriteAccessMethod::Stream {
+                file_start_position: 8,
+                file_data: vec![0x01],
+            },
+        ),
+        &mut buf,
+    );
+    assert_protocol_error(
+        result,
+        ErrorClass::OBJECT,
+        ErrorCode::FILE_FULL,
+        "growth past the cap",
+    );
+    assert_eq!(&buf[..], SENTINEL);
 }
 
 #[test]
@@ -440,7 +488,94 @@ fn record_read_beyond_end_is_invalid_file_start_position() {
 
     let (records, eof) = read_records(&db, 3, 1).unwrap();
     assert!(records.is_empty(), "reading at the end is legal and empty");
+    assert!(!eof, "an empty window includes no last record");
+}
+
+#[test]
+fn record_read_negative_start_is_invalid_file_start_position() {
+    let db = record_file_db();
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_read_file(
+        &db,
+        &read_wire_for(
+            file_oid(),
+            FileAccessMethod::Record {
+                file_start_record: -1,
+                requested_record_count: 4,
+            },
+        ),
+        &mut buf,
+    );
+    assert_invalid_start(result, "record read at -1");
+    assert_eq!(&buf[..], SENTINEL, "refused read must not touch the buffer");
+}
+
+#[test]
+fn record_write_negative_start_other_than_minus_one_is_refused() {
+    let mut db = record_file_db();
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire_for(
+            file_oid(),
+            FileWriteAccessMethod::Record {
+                file_start_record: -5,
+                record_count: 1,
+                file_record_data: vec![vec![0x01]],
+            },
+        ),
+        &mut buf,
+    );
+    assert_invalid_start(result, "record write at -5");
+    assert_eq!(
+        &buf[..],
+        SENTINEL,
+        "refused write must not touch the buffer"
+    );
+    assert_eq!(record_count(&db), 3);
+    assert_eq!(
+        read_records(&db, 0, 3).unwrap().0,
+        vec![vec![0xAA, 0xBB], vec![0xCC, 0xDD], vec![0xEE]]
+    );
+}
+
+/// The record cap is the decoder's own ceiling, so a file grown to the cap
+/// by one write still reads back through `AtomicReadFileAck::decode`.
+#[test]
+fn record_file_at_the_cap_reads_back_through_the_decoder() {
+    use bacnet_objects::file::DEFAULT_MAX_RECORD_COUNT;
+
+    let mut db = record_file_db();
+    let last = (DEFAULT_MAX_RECORD_COUNT - 1) as i32;
+    let pos = write_records(&mut db, last, &[vec![0x5A]]).expect("write at the last index");
+    assert_eq!(pos, last);
+    assert_eq!(record_count(&db), DEFAULT_MAX_RECORD_COUNT);
+    let (records, eof) = read_records(&db, 0, u32::MAX).unwrap();
+    assert_eq!(records.len() as u64, DEFAULT_MAX_RECORD_COUNT);
+    assert_eq!(records[last as usize], vec![0x5A]);
     assert!(eof);
+
+    let mut buf = BytesMut::from(SENTINEL);
+    let result = handle_atomic_write_file(
+        &mut db,
+        &write_wire_for(
+            file_oid(),
+            FileWriteAccessMethod::Record {
+                file_start_record: last + 1,
+                record_count: 1,
+                file_record_data: vec![vec![0x01]],
+            },
+        ),
+        &mut buf,
+    );
+    assert_protocol_error(
+        result,
+        ErrorClass::OBJECT,
+        ErrorCode::FILE_FULL,
+        "record write at the cap",
+    );
+    assert_eq!(&buf[..], SENTINEL);
+    assert_eq!(record_count(&db), DEFAULT_MAX_RECORD_COUNT);
 }
 
 /// The decoder accepts a record list shorter than 'Record Count'; the

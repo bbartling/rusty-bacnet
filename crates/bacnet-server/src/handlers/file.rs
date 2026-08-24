@@ -177,12 +177,15 @@ fn invalid_file_start_position() -> Error {
     }
 }
 
-/// Refuse access to a File object that exposes no storage.
+/// Refuse access to a File object the handler cannot safely use.
 ///
 /// Clause 18 scopes FILE_ACCESS_DENIED to a file "that is currently locked
-/// or otherwise not accessible"; a File-typed object whose
-/// `file_storage_internal` hook returns `None` is reported that way rather
-/// than read as empty.
+/// or otherwise not accessible", and Clause 14.2.4.1 pairs it with "Write
+/// to a read-only File". Both handlers report a File-typed object whose
+/// `file_storage_internal` hook returns `None` this way rather than reading
+/// it as empty, and the write handler also reports a `Read_Only` that is
+/// TRUE, unreadable, or not a BOOLEAN: like the access-method gate, it
+/// fails closed instead of assuming the file is writable.
 fn file_access_denied() -> Error {
     Error::Protocol {
         class: ErrorClass::SERVICES.to_raw() as u32,
@@ -210,8 +213,9 @@ fn ack_position(actual: u64) -> Result<i32, Error> {
 /// Handle an AtomicReadFile request.
 ///
 /// The dispatcher holds the object database's read guard for the whole
-/// handler, which is what makes the Clause 14 "no other AtomicReadFile or
-/// AtomicWriteFile operations" atomicity hold.
+/// handler, so no AtomicWriteFile can interleave the read (Clause 14
+/// atomicity); concurrent AtomicReadFile handlers are admitted and see the
+/// same unmodified contents.
 pub fn handle_atomic_read_file(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -230,6 +234,13 @@ pub fn handle_atomic_read_file(
     let object = db
         .get(&request.file_identifier)
         .ok_or_else(unknown_object)?;
+
+    // Clause 14.1 Service Procedure, first step: a File object "currently
+    // inaccessible for another reason" is refused before its properties are
+    // consulted; an object without storage is that case.
+    if object.file_storage_internal().is_none() {
+        return Err(file_access_denied());
+    }
 
     // Clause 14.1: refuse a mismatched access method before any file read
     // or ACK encoding. The request CHOICE maps semantically — Stream means
@@ -287,9 +298,12 @@ pub fn handle_atomic_read_file(
 /// Handle an AtomicWriteFile request.
 ///
 /// The dispatcher holds the object database's write guard for the whole
-/// handler, so the read-only and access-method gates, the write, and the
-/// ACK are one atomic operation per Clause 14. A refused request leaves
-/// both the object and the response buffer untouched.
+/// handler, so the gates, the write, and the ACK are one atomic operation
+/// per Clause 14. Every refusal the handler itself raises leaves both the
+/// object and the response buffer untouched; a storage that breaks the
+/// [`FileStorage`](bacnet_objects::file::FileStorage) position contract
+/// can leave the object mutated and
+/// still draw DEVICE / INTERNAL_ERROR from the ACK conversion.
 pub fn handle_atomic_write_file(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -326,20 +340,20 @@ pub fn handle_atomic_write_file(
         .get_mut(&request.file_identifier)
         .ok_or_else(unknown_object)?;
 
-    let read_only = object
-        .read_property(PropertyIdentifier::READ_ONLY, None)
-        .ok()
-        .and_then(|v| match v {
-            PropertyValue::Boolean(b) => Some(b),
-            _ => None,
-        })
-        .unwrap_or(false);
+    // Clause 14.2 Service Procedure, first step: a File object "currently
+    // inaccessible for another reason" is refused before its properties are
+    // consulted; an object without storage is that case.
+    if object.file_storage_internal().is_none() {
+        return Err(file_access_denied());
+    }
 
-    if read_only {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
-        });
+    // Clause 14.2.4.1 "Write to a read-only File". Reading the property
+    // fails closed, as the access-method gate below does: a missing,
+    // undecodable, or non-BOOLEAN Read_Only is treated as read-only rather
+    // than as permission to write.
+    match object.read_property(PropertyIdentifier::READ_ONLY, None) {
+        Ok(PropertyValue::Boolean(false)) => {}
+        _ => return Err(file_access_denied()),
     }
 
     // Clause 14.2: refuse a mismatched access method before any mutation or
@@ -390,8 +404,9 @@ pub fn handle_atomic_write_file(
 }
 
 /// Map a request's 'File Start Position' / 'File Start Record' to a write
-/// start: -1 is the Clause 14.2.2.2 append sentinel, other negatives are
-/// invalid, and the ACK later carries the position actually written.
+/// start: -1 is the Clauses 14.2.2.2 / 14.2.2.3 append sentinel, other
+/// negatives are invalid, and the ACK later carries the position actually
+/// written.
 fn write_start(requested: i32) -> Result<FileWriteStart, Error> {
     match requested {
         -1 => Ok(FileWriteStart::Append),

@@ -33,8 +33,14 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
 /// Bounds the record vector independently of its payload octets, which
 /// [`DEFAULT_MAX_FILE_SIZE`] bounds: extending to a far record index costs
 /// a `Vec` header per intervening empty record even when no octet is
-/// stored.
-pub const DEFAULT_MAX_RECORD_COUNT: u64 = 65_536;
+/// stored. The value equals `bacnet_services::common::MAX_DECODED_ITEMS`,
+/// the largest SEQUENCE OF the workspace decoders accept in one ACK, so a
+/// record file read back at the cap still decodes on the client side.
+pub const DEFAULT_MAX_RECORD_COUNT: u64 = 10_000;
+
+/// Ceiling for [`FileObject::set_max_record_count`]; see
+/// [`DEFAULT_MAX_RECORD_COUNT`] for why it is the decoder's limit.
+const MAX_RECORD_CAP: u64 = DEFAULT_MAX_RECORD_COUNT;
 
 /// One stream-access read window, as AtomicReadFile returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,8 +48,9 @@ pub struct FileStreamRead {
     /// The octets read: never more than requested, fewer when the file
     /// ends first (Clause 14.1 Service Procedure).
     pub data: Vec<u8>,
-    /// Clause 14.1.3.1 'End Of File': TRUE when `data` ends at the last
-    /// octet of the file, or when nothing remained to read.
+    /// Clause 14.1.3.1 'End Of File': "TRUE if this response includes the
+    /// last octet of the file and FALSE otherwise", so an empty window is
+    /// never at end of file.
     pub end_of_file: bool,
 }
 
@@ -53,15 +60,16 @@ pub struct FileRecordRead {
     /// The records read. Its length is the ACK's 'Returned Record Count'
     /// (Clause 14.1.3.3), which may be less than the requested count.
     pub records: Vec<Vec<u8>>,
-    /// Clause 14.1.3.1 'End Of File'.
+    /// 'End Of File' per the Clause 14.1 Service Procedure: TRUE only when
+    /// `records` includes the last record of the file.
     pub end_of_file: bool,
 }
 
 /// Where an AtomicWriteFile write starts.
 ///
-/// Clause 14.2.2.2 gives 'File Start Position' and 'File Start Record' the
-/// special value -1 for "an append to file operation"; every other value
-/// is an offset from the beginning of the file.
+/// Clauses 14.2.2.2 and 14.2.2.3 give 'File Start Position' and 'File
+/// Start Record' the special value -1 for "an append to file operation";
+/// every other value is an offset from the beginning of the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileWriteStart {
     /// Write at this octet or record offset, extending the file first if
@@ -82,18 +90,23 @@ pub enum FileWriteStart {
 /// The server reaches an implementation through
 /// [`BACnetObject::file_storage_internal`] and
 /// [`BACnetObject::file_storage_internal_mut`]. Every method has a default
-/// that refuses with SERVICES / INVALID_FILE_ACCESS_METHOD, so a
-/// stream-only implementation overrides only the two stream methods.
+/// that refuses with SERVICES / FILE_ACCESS_DENIED — there is no
+/// implementation behind it, so the file is "otherwise not accessible" in
+/// Clause 18's words — and a stream-only implementation overrides only the
+/// two stream methods.
 ///
 /// Error contract, using the Clause 14 pairs:
 ///
 /// - SERVICES / INVALID_FILE_START_POSITION when a read starts past the
 ///   current end (Clause 14.1 Service Procedure). Reading *at* the end is
-///   legal and yields an empty window with `end_of_file` TRUE.
+///   legal and yields an empty window with `end_of_file` FALSE, since the
+///   window includes no octet at all.
 /// - OBJECT / FILE_FULL when a write would grow the file past the
 ///   implementation's designed limit (Clause 14.2.4.1; Clause 18).
 /// - SERVICES / INVALID_FILE_ACCESS_METHOD when the method does not match
-///   the object's `File_Access_Method`.
+///   the object's `File_Access_Method`; only a genuine mismatch, never a
+///   missing implementation, reports this.
+/// - SERVICES / FILE_ACCESS_DENIED from the defaults above.
 ///
 /// A write that returns `Err` must leave the storage unchanged: the service
 /// fails "in its entirety" (Clause 14.2.4), and the server encodes no ACK on
@@ -102,7 +115,7 @@ pub enum FileWriteStart {
 pub trait FileStorage: Send + Sync {
     /// Read up to `count` octets starting `start` octets into the file.
     fn read_stream(&self, _start: u64, _count: u64) -> Result<FileStreamRead, Error> {
-        Err(invalid_file_access_method())
+        Err(file_access_denied())
     }
 
     /// Write `data` at `start`, extending the file first when `start` is
@@ -110,12 +123,12 @@ pub trait FileStorage: Send + Sync {
     /// octet offset the data was written at, which for
     /// [`FileWriteStart::Append`] is the previous file size.
     fn write_stream(&mut self, _start: FileWriteStart, _data: &[u8]) -> Result<u64, Error> {
-        Err(invalid_file_access_method())
+        Err(file_access_denied())
     }
 
     /// Read up to `count` records starting at record `start`.
     fn read_records(&self, _start: u64, _count: u64) -> Result<FileRecordRead, Error> {
-        Err(invalid_file_access_method())
+        Err(file_access_denied())
     }
 
     /// Write `records` starting at record `start`, replacing records in
@@ -126,12 +139,16 @@ pub trait FileStorage: Send + Sync {
         _start: FileWriteStart,
         _records: &[Vec<u8>],
     ) -> Result<u64, Error> {
-        Err(invalid_file_access_method())
+        Err(file_access_denied())
     }
 }
 
 fn invalid_file_access_method() -> Error {
     common::protocol_error(ErrorClass::SERVICES, ErrorCode::INVALID_FILE_ACCESS_METHOD)
+}
+
+fn file_access_denied() -> Error {
+    common::protocol_error(ErrorClass::SERVICES, ErrorCode::FILE_ACCESS_DENIED)
 }
 
 fn invalid_file_start_position() -> Error {
@@ -243,10 +260,13 @@ impl FileObject {
         self.file_type = ft.into();
     }
 
-    /// Set stream data and update file_size accordingly.
+    /// Set stream data; File_Size follows it while the object is
+    /// STREAM_ACCESS.
     pub fn set_data(&mut self, data: Vec<u8>) {
-        self.file_size = data.len() as u64;
         self.data = data;
+        if self.file_access_method == FileAccessMethod::STREAM_ACCESS.to_raw() {
+            self.file_size = self.data.len() as u64;
+        }
     }
 
     /// Get a reference to the stream data.
@@ -257,21 +277,29 @@ impl FileObject {
     /// Set the file access method. Accepts the raw `BACnetFileAccessMethod`
     /// value: [`FileAccessMethod::STREAM_ACCESS`] (1) or
     /// [`FileAccessMethod::RECORD_ACCESS`] (0).
+    ///
+    /// File_Size and Record_Count are recomputed from the channel the
+    /// object switches to: Table 12-16 footnote 2 has Record_Count present
+    /// only under RECORD_ACCESS, and File_Size counts that channel's octets.
     pub fn set_file_access_method(&mut self, method: u32) {
         self.file_access_method = method;
         if method == FileAccessMethod::RECORD_ACCESS.to_raw() {
             self.record_count = Some(self.records.len() as u64);
+            self.file_size = octet_total(&self.records);
         } else {
             self.record_count = None;
+            self.file_size = self.data.len() as u64;
         }
     }
 
-    /// Set the records (for record-access files) and update record_count.
+    /// Set the records; Record_Count and File_Size follow them while the
+    /// object is RECORD_ACCESS (Table 12-16 footnote 2).
     pub fn set_records(&mut self, records: Vec<Vec<u8>>) {
-        let total_size: u64 = records.iter().map(|r| r.len() as u64).sum();
-        self.file_size = total_size;
-        self.record_count = Some(records.len() as u64);
         self.records = records;
+        if self.file_access_method == FileAccessMethod::RECORD_ACCESS.to_raw() {
+            self.record_count = Some(self.records.len() as u64);
+            self.file_size = octet_total(&self.records);
+        }
     }
 
     /// Get a reference to the records.
@@ -328,9 +356,11 @@ impl FileObject {
     ///
     /// Same growth-only semantics as
     /// [`set_max_file_size`](Self::set_max_file_size): records preloaded
-    /// through [`set_records`](Self::set_records) are never refused.
+    /// through [`set_records`](Self::set_records) are never refused. Clamped
+    /// to [`DEFAULT_MAX_RECORD_COUNT`], the decoder ceiling, so a read-back
+    /// of the whole file stays decodable.
     pub fn set_max_record_count(&mut self, max_records: u64) {
-        self.max_record_count = max_records.min(MAX_REPRESENTABLE);
+        self.max_record_count = max_records.min(MAX_RECORD_CAP).min(MAX_REPRESENTABLE);
     }
 
     /// The growth cap, in records, for network writes to this file.
@@ -359,7 +389,7 @@ impl FileStorage for FileObject {
         let end = start.saturating_add(count).min(len);
         Ok(FileStreamRead {
             data: self.data[start as usize..end as usize].to_vec(),
-            end_of_file: end >= len,
+            end_of_file: end >= len && end > start,
         })
     }
 
@@ -396,7 +426,7 @@ impl FileStorage for FileObject {
         let end = start.saturating_add(count).min(len);
         Ok(FileRecordRead {
             records: self.records[start as usize..end as usize].to_vec(),
-            end_of_file: end >= len,
+            end_of_file: end >= len && end > start,
         })
     }
 
@@ -565,5 +595,7 @@ impl BACnetObject for FileObject {
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+mod storage_tests;
 #[cfg(test)]
 mod tests;
