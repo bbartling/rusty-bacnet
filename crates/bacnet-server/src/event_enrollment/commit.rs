@@ -84,7 +84,10 @@ pub enum EventEnrollmentDetailedEvaluationOutcome {
     CancellationCommitted,
     /// A required local or remote observation was temporarily unavailable.
     ///
-    /// No Reliability, event, history, or private evaluator state is changed.
+    /// No public Reliability, Event_State, acknowledgement, event-history,
+    /// timestamp, or sequence transition is committed. The repository-local
+    /// D4 policy may clear private continuity state and monitored-source
+    /// ownership.
     ObservationUnavailable,
     /// A required internal mutation was rejected.
     Rejected,
@@ -304,6 +307,18 @@ impl EnrollmentUpdate {
         self.eval_source = Some(source);
     }
 
+    /// Replace every source mutation staged earlier in this pass with the
+    /// minimal owner-clear required by the pre-pass source coordinate.
+    pub(super) fn reset_eval_source_for_observation_gap(
+        &mut self,
+        previous: Option<Option<EventEnrollmentMonitoredSource>>,
+    ) {
+        self.eval_source = match previous {
+            Some(Some(_)) => Some(None),
+            Some(None) | None => None,
+        };
+    }
+
     pub(super) fn fire(&mut self, fired: FiredTransition) {
         debug_assert!(
             self.fired.is_none(),
@@ -321,6 +336,11 @@ impl EnrollmentUpdate {
     }
 
     pub(super) fn observation_unavailable(&mut self) {
+        // A terminal gap cannot leak a transition staged earlier in the same
+        // deterministic phase-1 flow.
+        self.fired = None;
+        self.reliability = None;
+        self.canceled = false;
         self.observation_unavailable = true;
     }
 }
@@ -396,15 +416,6 @@ pub(super) fn apply_updates(
             continue;
         };
 
-        if update.observation_unavailable {
-            report.diagnostics.push(diagnostic(
-                oid,
-                EventEnrollmentDetailedEvaluationStage::Reliability,
-                EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable,
-            ));
-            continue;
-        }
-
         let mut source_failed = false;
         let mut state_failed = false;
         if let Some(source) = update.eval_source {
@@ -445,7 +456,7 @@ pub(super) fn apply_updates(
                 state_committed = true;
             }
         } else if let Some(state) = update.eval_state {
-            let state_failed = db
+            state_failed = db
                 .get_mut(&oid)
                 .is_none_or(|object| object.set_enrollment_eval_state_internal(state).is_err());
             if state_failed {
@@ -456,19 +467,31 @@ pub(super) fn apply_updates(
                     EventEnrollmentDetailedEvaluationStage::EvaluationState,
                     EventEnrollmentDetailedEvaluationOutcome::Rejected,
                 ));
-                continue;
-            }
-            state_committed = true;
-            if update.clears_invalidation {
-                db.set_enrollment_eval_state_invalidated(oid, false);
+            } else {
+                state_committed = true;
+                if update.clears_invalidation {
+                    db.set_enrollment_eval_state_invalidated(oid, false);
+                }
             }
         }
 
-        if let Some(reliability) = update.reliability {
-            if state_failed {
-                continue;
+        if update.observation_unavailable {
+            if source_failed || state_failed {
+                db.set_enrollment_eval_state_invalidated(oid, true);
             }
+            report.diagnostics.push(diagnostic(
+                oid,
+                EventEnrollmentDetailedEvaluationStage::Reliability,
+                EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable,
+            ));
+            continue;
+        }
 
+        if state_failed {
+            continue;
+        }
+
+        if let Some(reliability) = update.reliability {
             let coordinate = EventTransition::for_target_state(reliability.to);
             let staged_timestamp = stage_event_timestamp(db);
             let change = EventStateChange {
@@ -535,10 +558,6 @@ pub(super) fn apply_updates(
             ));
             continue;
         };
-
-        if state_failed {
-            continue;
-        }
 
         // A same-state normal-event transition depends on private source
         // ownership to distinguish the new indication from the previous one.
