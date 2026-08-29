@@ -61,11 +61,14 @@ fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
 const N_RETRY_TOKEN: u8 = 1;
 /// Maximum frame buffer size: preamble(2) + header(6) + max data(1497) + CRC16(2)
 pub(crate) const MSTP_MAX_FRAME_BUF: usize = 1507;
-/// Maximum inter-byte gap within a frame before aborting reception.
-/// Spec Clause 9.5.5: minimum 60 bit times. Computed per baud rate.
-fn calculate_t_frame_abort_us(baud_rate: u32) -> u64 {
-    // 60 bit times in microseconds, rounded up
-    60_000_000u64.div_ceil(baud_rate as u64)
+/// Host-side stale partial-frame timeout for USB/chunked serial reassembly.
+///
+/// This is **not** Clause 9 `T_frame_abort` (wire inter-byte silence). Host async reads
+/// often arrive with multi-millisecond gaps that would falsely abort mid-frame assembly.
+fn calculate_host_stale_partial_timeout_us(baud_rate: u32) -> u64 {
+    const USB_CHUNK_SLACK_US: u64 = 100_000;
+    let wire_us = (MSTP_MAX_FRAME_BUF as u64 * 10 * 1_000_000).div_ceil(baud_rate as u64);
+    wire_us.saturating_add(USB_CHUNK_SLACK_US)
 }
 /// Maximum number of queued outgoing frames before rejecting new sends.
 const MAX_TX_QUEUE_DEPTH: usize = 256;

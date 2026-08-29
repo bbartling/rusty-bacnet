@@ -6,13 +6,14 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, warn};
 
 use crate::mstp_frame::{
-    decode_frame, encode_frame, find_preamble, FrameType, MstpFrame, BROADCAST_MAC,
+    decode_frame_stream, encode_frame, find_preamble, retain_lone_preamble_byte, FrameType,
+    MstpFrame, StreamDecode, BROADCAST_MAC,
 };
 use crate::port::{ReceivedNpdu, TransportPort};
 
 use super::{
-    calculate_t_frame_abort_us, calculate_t_turnaround_us, next_addr, MasterNode, MasterState,
-    MstpConfig, SerialPort, MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS,
+    calculate_host_stale_partial_timeout_us, calculate_t_turnaround_us, next_addr, MasterNode,
+    MasterState, MstpConfig, SerialPort, MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS,
     T_REPLY_TIMEOUT_MS, T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
 };
 
@@ -65,7 +66,9 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         let serial = Arc::new(serial);
         let serial_clone = serial.clone();
         let t_turnaround_us = calculate_t_turnaround_us(self.config.baud_rate);
-        let t_frame_abort_us = calculate_t_frame_abort_us(self.config.baud_rate);
+        // Host reassembly policy: tolerate USB read chunk gaps, not wire T_frame_abort.
+        let host_stale_partial_timeout_us =
+            calculate_host_stale_partial_timeout_us(self.config.baud_rate);
         let reply_decision_delay_ms = T_REPLY_DELAY_MS
             .saturating_sub(t_turnaround_us.div_ceil(1_000) + T_REPLY_TRANSMIT_MARGIN_MS);
 
@@ -123,14 +126,19 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         match result {
                             Ok(0) => continue,
                             Ok(n) => {
-                                // T_frame_abort: discard partial frame if inter-byte gap
-                                // exceeds the spec limit (60 bit times).
+                                // Host stale-partial timeout: drop abandoned assembly if no
+                                // bytes arrive for a long host-side gap (USB scheduling, not
+                                // Clause 9 wire T_frame_abort).
                                 let now = tokio::time::Instant::now();
                                 if !frame_buf.is_empty() {
                                     let gap = now.duration_since(last_byte_time);
-                                    if gap > tokio::time::Duration::from_micros(t_frame_abort_us) {
+                                    if gap
+                                        > tokio::time::Duration::from_micros(
+                                            host_stale_partial_timeout_us,
+                                        )
+                                    {
                                         debug!(
-                                            "MS/TP: T_frame_abort exceeded ({gap:?}), discarding partial frame"
+                                            "MS/TP: host stale partial frame timeout ({gap:?}), discarding partial assembly"
                                         );
                                         frame_buf.clear();
                                     }
@@ -160,7 +168,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             let preamble_pos = match find_preamble(&frame_buf) {
                                 Some(pos) => pos,
                                 None => {
-                                    frame_buf.clear();
+                                    retain_lone_preamble_byte(&mut frame_buf);
                                     break;
                                 }
                             };
@@ -170,8 +178,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 frame_buf.drain(..preamble_pos);
                             }
 
-                            match decode_frame(&frame_buf) {
-                                Ok((frame, consumed)) => {
+                            match decode_frame_stream(&frame_buf) {
+                                StreamDecode::Complete { frame, consumed } => {
                                     frame_buf.drain(..consumed);
 
                                     // Process through state machine — collect
@@ -274,12 +282,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                         }),
                                     );
                                 }
-                                Err(_) => {
-                                    // Incomplete frame or bad CRC — skip first preamble byte
-                                    if frame_buf.len() > 2 {
-                                        frame_buf.drain(..1);
-                                    }
-                                    break;
+                                StreamDecode::NeedMore => break,
+                                StreamDecode::Invalid { discard } => {
+                                    let discard = discard.min(frame_buf.len()).max(1);
+                                    frame_buf.drain(..discard);
                                 }
                             }
                         }
