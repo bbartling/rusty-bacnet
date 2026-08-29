@@ -246,6 +246,109 @@ pub fn encode_frame(
     Ok(())
 }
 
+/// Result of incremental/streaming MS/TP frame decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamDecode {
+    /// A complete, validated frame was decoded.
+    Complete { frame: MstpFrame, consumed: usize },
+    /// More bytes are required before a decode decision can be made.
+    NeedMore,
+    /// The buffer contains invalid data; discard at least `discard` bytes and resync.
+    Invalid { discard: usize },
+}
+
+/// Incrementally decode an MS/TP frame from a receive buffer (starting at the preamble).
+///
+/// Unlike [`decode_frame`], incomplete input returns [`StreamDecode::NeedMore`] instead of
+/// an error. Real corruption (bad CRC, invalid header) returns [`StreamDecode::Invalid`].
+pub fn decode_frame_stream(data: &[u8]) -> StreamDecode {
+    if data.is_empty() {
+        return StreamDecode::NeedMore;
+    }
+
+    if data[0] != PREAMBLE[0] {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+    if data.len() < 2 {
+        return StreamDecode::NeedMore;
+    }
+    if data[1] != PREAMBLE[1] {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    // Preamble(2) + header fields(5) + header_crc(1)
+    if data.len() < 2 + HEADER_LENGTH {
+        return StreamDecode::NeedMore;
+    }
+
+    if !crc8_valid(&data[2..8]) {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    let frame_type = FrameType::from_raw(data[2]);
+    let destination = data[3];
+    let source = data[4];
+
+    if source > MAX_MASTER && source != BROADCAST_MAC {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+    if source == BROADCAST_MAC {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    let data_length = ((data[5] as usize) << 8) | (data[6] as usize);
+    if data_length > MAX_MPDU_DATA {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    let mut consumed = 2 + HEADER_LENGTH;
+
+    if data_length > 0 {
+        let needed = consumed + data_length + 2;
+        if data.len() < needed {
+            return StreamDecode::NeedMore;
+        }
+
+        if !crc16_valid(&data[consumed..consumed + data_length + 2]) {
+            return StreamDecode::Invalid { discard: needed };
+        }
+
+        let payload = Bytes::copy_from_slice(&data[consumed..consumed + data_length]);
+        consumed += data_length + 2;
+
+        StreamDecode::Complete {
+            frame: MstpFrame {
+                frame_type,
+                destination,
+                source,
+                data: payload,
+            },
+            consumed,
+        }
+    } else {
+        StreamDecode::Complete {
+            frame: MstpFrame {
+                frame_type,
+                destination,
+                source,
+                data: Bytes::new(),
+            },
+            consumed,
+        }
+    }
+}
+
+/// When no full preamble is found, retain a trailing lone `0x55` for the next chunk.
+pub fn retain_lone_preamble_byte(buf: &mut Vec<u8>) {
+    if buf.last() == Some(&PREAMBLE[0]) {
+        let lone = PREAMBLE[0];
+        buf.clear();
+        buf.push(lone);
+    } else {
+        buf.clear();
+    }
+}
+
 /// Decode an MS/TP frame from raw bytes (starting at the preamble).
 ///
 /// Returns the decoded frame and the number of bytes consumed.
@@ -726,5 +829,143 @@ mod tests {
 
         let (decoded, _) = decode_frame(&buf).unwrap();
         assert_eq!(decoded.source, MAX_MASTER);
+    }
+
+    // -----------------------------------------------------------------------
+    // Streaming decode tests
+    // -----------------------------------------------------------------------
+
+    fn encode_token_frame() -> Vec<u8> {
+        let frame = MstpFrame {
+            frame_type: FrameType::Token,
+            destination: 1,
+            source: 0,
+            data: Bytes::new(),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&mut buf, &frame).unwrap();
+        buf.to_vec()
+    }
+
+    fn encode_data_frame() -> (MstpFrame, Vec<u8>) {
+        let frame = MstpFrame {
+            frame_type: FrameType::BACnetDataNotExpectingReply,
+            destination: 5,
+            source: 0,
+            data: Bytes::from_static(&[0x01, 0x02, 0x03, 0x04]),
+        };
+        let mut buf = BytesMut::new();
+        encode_frame(&mut buf, &frame).unwrap();
+        (frame, buf.to_vec())
+    }
+
+    #[test]
+    fn stream_decode_token_complete() {
+        let wire = encode_token_frame();
+        assert_eq!(
+            decode_frame_stream(&wire),
+            StreamDecode::Complete {
+                frame: MstpFrame {
+                    frame_type: FrameType::Token,
+                    destination: 1,
+                    source: 0,
+                    data: Bytes::new(),
+                },
+                consumed: 8,
+            }
+        );
+    }
+
+    #[test]
+    fn stream_decode_split_header_then_body() {
+        let (_frame, wire) = encode_data_frame();
+        let split = wire.len() - 3;
+
+        assert_eq!(decode_frame_stream(&wire[..split]), StreamDecode::NeedMore);
+
+        let mut assembled = wire[..split].to_vec();
+        assembled.extend_from_slice(&wire[split..]);
+        let StreamDecode::Complete { frame, consumed } = decode_frame_stream(&assembled) else {
+            panic!("expected complete frame after reassembly");
+        };
+        assert_eq!(consumed, wire.len());
+        assert_eq!(frame.data.len(), 4);
+    }
+
+    #[test]
+    fn stream_decode_preamble_split_across_chunks() {
+        let wire = encode_token_frame();
+        assert_eq!(decode_frame_stream(&wire[..1]), StreamDecode::NeedMore);
+
+        let mut assembled = wire[..1].to_vec();
+        assembled.extend_from_slice(&wire[1..]);
+        assert!(matches!(
+            decode_frame_stream(&assembled),
+            StreamDecode::Complete { .. }
+        ));
+    }
+
+    #[test]
+    fn stream_decode_host_gap_simulation_without_clear() {
+        let wire = encode_token_frame();
+        let mut buf = wire[..4].to_vec();
+        assert_eq!(decode_frame_stream(&buf), StreamDecode::NeedMore);
+
+        // Simulate a host gap far beyond wire T_frame_abort without clearing the buffer.
+        buf.extend_from_slice(&wire[4..]);
+        assert!(matches!(
+            decode_frame_stream(&buf),
+            StreamDecode::Complete { .. }
+        ));
+    }
+
+    #[test]
+    fn retain_lone_preamble_byte_preserves_trailing_0x55() {
+        let mut buf = vec![0x00, 0x12, 0x55];
+        retain_lone_preamble_byte(&mut buf);
+        assert_eq!(buf, vec![0x55]);
+
+        let mut no_preamble = vec![0x00, 0x12, 0x34];
+        retain_lone_preamble_byte(&mut no_preamble);
+        assert!(no_preamble.is_empty());
+    }
+
+    #[test]
+    fn stream_decode_bad_header_crc_invalid() {
+        let mut wire = encode_token_frame();
+        wire[7] ^= 0xFF;
+        assert_eq!(
+            decode_frame_stream(&wire),
+            StreamDecode::Invalid { discard: 1 }
+        );
+    }
+
+    #[test]
+    fn stream_decode_bad_data_crc_invalid_discards_frame() {
+        let (_frame, mut wire) = encode_data_frame();
+        let last = wire.len() - 1;
+        wire[last] ^= 0xFF;
+        assert_eq!(
+            decode_frame_stream(&wire),
+            StreamDecode::Invalid {
+                discard: wire.len()
+            }
+        );
+    }
+
+    #[test]
+    fn stream_decode_need_more_on_short_header() {
+        assert_eq!(
+            decode_frame_stream(&[0x55, 0xFF, 0x00, 0x01]),
+            StreamDecode::NeedMore
+        );
+    }
+
+    #[test]
+    fn stream_decode_invalid_on_bad_second_preamble_byte() {
+        assert_eq!(
+            decode_frame_stream(&[0x55, 0x00]),
+            StreamDecode::Invalid { discard: 1 }
+        );
     }
 }
