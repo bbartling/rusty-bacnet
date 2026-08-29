@@ -2,7 +2,7 @@
 
 This repository uses focused skills and subagents for research and review. Prefer the installed skills under `.agents/skills/` and custom agents under `.codex/agents/`.
 
-Use `codex-id.json` as the local Aionforge Memory identity when it exists. Read and write memory with the `rusty-bacnet-team` team asserted, and keep durable work items current for long-running compliance work.
+Use local Codebase Memory as the first structural code-intelligence layer. The canonical project is `Users-justin-Development-rusty-bacnet`, rooted at `/Users/justin/Development/rusty-bacnet`; verify it with `list_projects` and `index_status` when entering a fresh repository context, then use focused graph tools and check coverage for cited scopes. Codebase Memory is not a durable work ledger. Long-running compliance continuity lives in the ignored `_spec/rusty-bacnet-compliance-execution-plan/{Handoff.md,CURRENT_STATUS.md,NEXT_HANDOFF.md}` documents, with `codex-overnight-status.md` retained as an additional local historical log. Refresh live Git/GitHub state before acting on those snapshots. No external memory service, agent identity, namespace, or team assertion is a prerequisite.
 
 Default behavior:
 
