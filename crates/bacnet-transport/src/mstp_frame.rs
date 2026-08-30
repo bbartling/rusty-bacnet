@@ -111,7 +111,8 @@ pub struct MstpFrame {
 // CRC-8 (Header CRC)
 // ---------------------------------------------------------------------------
 
-/// CRC-8 lookup table.
+/// BACnet Clause 9.6 Frame Header CRC — reflected poly `G(x)=x^8+x^7+1` → `0x81`.
+/// (Prior incorrect table used `0xE0`, which passes self-round-trip but rejects live trunk frames.)
 const CRC8_TABLE: [u8; 256] = {
     let mut table = [0u8; 256];
     let mut i = 0usize;
@@ -120,7 +121,7 @@ const CRC8_TABLE: [u8; 256] = {
         let mut j = 0;
         while j < 8 {
             if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xE0;
+                crc = (crc >> 1) ^ 0x81;
             } else {
                 crc >>= 1;
             }
@@ -132,13 +133,25 @@ const CRC8_TABLE: [u8; 256] = {
     table
 };
 
-/// Compute CRC-8 over the given data. Initial value 0xFF, result inverted.
+/// Good header-CRC receiver residual (Clause 9.6), including the CRC octet.
+pub const HEADER_CRC_RESIDUAL: u8 = 0x55;
+
+/// Compute CRC-8 over the given data. Initial value 0xFF, result ones-complemented.
 pub fn crc8(data: &[u8]) -> u8 {
     let mut crc: u8 = 0xFF;
     for &b in data {
         crc = CRC8_TABLE[(crc ^ b) as usize];
     }
     !crc
+}
+
+/// Running header CRC including the transmitted CRC octet (no final invert).
+pub fn crc8_accumulate_all(data_with_crc: &[u8]) -> u8 {
+    let mut crc: u8 = 0xFF;
+    for &b in data_with_crc {
+        crc = CRC8_TABLE[(crc ^ b) as usize];
+    }
+    crc
 }
 
 /// Verify CRC-8: recomputes CRC over data (excluding last byte) and compares
@@ -155,7 +168,8 @@ pub fn crc8_valid(data_with_crc: &[u8]) -> bool {
 // CRC-16 (Data CRC)
 // ---------------------------------------------------------------------------
 
-/// CRC-16 lookup table.
+/// BACnet Clause 9.6 Data CRC — CRC-16-CCITT reflected poly `0x8408`.
+/// (Prior incorrect table used Modbus `0xA001`.)
 const CRC16_TABLE: [u16; 256] = {
     let mut table = [0u16; 256];
     let mut i = 0usize;
@@ -164,7 +178,7 @@ const CRC16_TABLE: [u16; 256] = {
         let mut j = 0;
         while j < 8 {
             if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xA001;
+                crc = (crc >> 1) ^ 0x8408;
             } else {
                 crc >>= 1;
             }
@@ -176,7 +190,10 @@ const CRC16_TABLE: [u16; 256] = {
     table
 };
 
-/// Compute CRC-16 over the given data. Initial value 0xFFFF, result inverted.
+/// Good data-CRC receiver residual (Clause 9.6), including the CRC octets.
+pub const DATA_CRC_RESIDUAL: u16 = 0xF0B8;
+
+/// Compute CRC-16 over the given data. Initial value 0xFFFF, result ones-complemented.
 pub fn crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
     for &b in data {
@@ -185,8 +202,17 @@ pub fn crc16(data: &[u8]) -> u16 {
     !crc
 }
 
+/// Running data CRC including the transmitted CRC octets (no final invert).
+pub fn crc16_accumulate_all(data_with_crc: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for &b in data_with_crc {
+        crc = (crc >> 8) ^ CRC16_TABLE[((crc ^ b as u16) & 0xFF) as usize];
+    }
+    crc
+}
+
 /// Verify CRC-16: recomputes CRC over data (excluding last 2 bytes) and compares
-/// to the stored CRC (little-endian).
+/// to the stored CRC (little-endian; LS octet first on the wire).
 pub fn crc16_valid(data_with_crc: &[u8]) -> bool {
     if data_with_crc.len() < 3 {
         return false;
@@ -459,18 +485,54 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // CRC tests
+    // CRC tests — Clause 9.6 golden vectors (literal expected bytes; not from crc8/crc16)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn crc8_known_value() {
-        // Token frame header: type=0x00, dest=0x01, src=0x00, len=0x0000
-        let header = [0x00, 0x01, 0x00, 0x00, 0x00];
-        let crc = crc8(&header);
-        // Verify by appending CRC and checking validity
+    fn crc8_clause9_header_vectors() {
+        // [frame_type, dest, src, len_hi, len_lo] -> header CRC
+        let vectors: &[([u8; 5], u8)] = &[
+            ([0x00, 0x00, 0x07, 0x00, 0x00], 0x37),
+            ([0x00, 0x07, 0x00, 0x00, 0x00], 0x40),
+            ([0x01, 0x00, 0x07, 0x00, 0x00], 0xB1),
+            ([0x01, 0x07, 0x00, 0x00, 0x00], 0xC6),
+        ];
+        for (header, expected) in vectors {
+            assert_eq!(crc8(header), *expected, "header={header:02X?}");
+            let mut with_crc = header.to_vec();
+            with_crc.push(*expected);
+            assert!(crc8_valid(&with_crc));
+            assert_eq!(crc8_accumulate_all(&with_crc), HEADER_CRC_RESIDUAL);
+        }
+    }
+
+    #[test]
+    fn crc8_one_bit_corruption_rejected() {
+        let header = [0x00, 0x00, 0x07, 0x00, 0x00];
         let mut with_crc = header.to_vec();
-        with_crc.push(crc);
+        with_crc.push(0x37);
         assert!(crc8_valid(&with_crc));
+        with_crc[0] ^= 0x01;
+        assert!(!crc8_valid(&with_crc));
+        assert_ne!(crc8_accumulate_all(&with_crc), HEADER_CRC_RESIDUAL);
+    }
+
+    #[test]
+    fn crc16_clause9_data_vector_01_00() {
+        // Data 01 00 → CRC 0x169F, wire order LS first: 9F 16
+        assert_eq!(crc16(&[0x01, 0x00]), 0x169F);
+        let with_crc = [0x01, 0x00, 0x9F, 0x16];
+        assert!(crc16_valid(&with_crc));
+        assert_eq!(crc16_accumulate_all(&with_crc), DATA_CRC_RESIDUAL);
+    }
+
+    #[test]
+    fn crc16_one_bit_corruption_rejected() {
+        let mut with_crc = [0x01, 0x00, 0x9F, 0x16];
+        assert!(crc16_valid(&with_crc));
+        with_crc[0] ^= 0x01;
+        assert!(!crc16_valid(&with_crc));
+        assert_ne!(crc16_accumulate_all(&with_crc), DATA_CRC_RESIDUAL);
     }
 
     #[test]
@@ -480,25 +542,7 @@ mod tests {
         let mut with_crc = data.to_vec();
         with_crc.push(crc);
         assert!(crc8_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc8_invalid_detects_corruption() {
-        let data = [0x05, 0xFF, 0x03, 0x00, 0x0C];
-        let crc = crc8(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc ^ 0x01); // corrupt
-        assert!(!crc8_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc16_known_value() {
-        let data = [0x01, 0x00, 0x10, 0x02];
-        let crc = crc16(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc as u8);
-        with_crc.push((crc >> 8) as u8);
-        assert!(crc16_valid(&with_crc));
+        assert_eq!(crc8_accumulate_all(&with_crc), HEADER_CRC_RESIDUAL);
     }
 
     #[test]
@@ -509,16 +553,56 @@ mod tests {
         with_crc.push(crc as u8);
         with_crc.push((crc >> 8) as u8);
         assert!(crc16_valid(&with_crc));
+        assert_eq!(crc16_accumulate_all(&with_crc), DATA_CRC_RESIDUAL);
     }
 
     #[test]
-    fn crc16_invalid_detects_corruption() {
-        let data = [0x01, 0x02, 0x03];
-        let crc = crc16(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc as u8);
-        with_crc.push((crc >> 8) as u8 ^ 0x01); // corrupt
-        assert!(!crc16_valid(&with_crc));
+    fn literal_token_frame_0_from_7() {
+        // Live trunk Token: dest BASRT(0) <- FEC(7), header CRC 0x37
+        let wire: &[u8] = &[0x55, 0xFF, 0x00, 0x00, 0x07, 0x00, 0x00, 0x37];
+        let (frame, consumed) = decode_frame(wire).expect("decode Token 0<-7");
+        assert_eq!(consumed, 8);
+        assert_eq!(frame.frame_type, FrameType::Token);
+        assert_eq!(frame.destination, 0);
+        assert_eq!(frame.source, 7);
+        assert!(frame.data.is_empty());
+
+        let mut enc = BytesMut::new();
+        encode_frame(&mut enc, &frame).unwrap();
+        assert_eq!(&enc[..], wire);
+    }
+
+    #[test]
+    fn literal_data_not_expecting_reply_frame() {
+        // Frame type 06, dest 0, src 7, len 2, HDR D9, data 01 00, DCRC 9F 16
+        let wire: &[u8] = &[
+            0x55, 0xFF, 0x06, 0x00, 0x07, 0x00, 0x02, 0xD9, 0x01, 0x00, 0x9F, 0x16,
+        ];
+        let (frame, consumed) = decode_frame(wire).expect("decode data frame");
+        assert_eq!(consumed, 12);
+        assert_eq!(frame.frame_type, FrameType::BACnetDataNotExpectingReply);
+        assert_eq!(frame.destination, 0);
+        assert_eq!(frame.source, 7);
+        assert_eq!(&frame.data[..], &[0x01, 0x00]);
+
+        let mut enc = BytesMut::new();
+        encode_frame(&mut enc, &frame).unwrap();
+        assert_eq!(&enc[..], wire);
+    }
+
+    #[test]
+    fn truncated_header_need_more_or_err() {
+        let partial = [0x55, 0xFF, 0x00, 0x00, 0x07];
+        assert!(decode_frame(&partial).is_err());
+        assert_eq!(decode_frame_stream(&partial), StreamDecode::NeedMore);
+    }
+
+    #[test]
+    fn truncated_data_crc_need_more() {
+        // Header complete for len=2 but missing data CRC octets
+        let partial = [0x55, 0xFF, 0x06, 0x00, 0x07, 0x00, 0x02, 0xD9, 0x01, 0x00];
+        assert_eq!(decode_frame_stream(&partial), StreamDecode::NeedMore);
+        assert!(decode_frame(&partial).is_err());
     }
 
     // -----------------------------------------------------------------------
