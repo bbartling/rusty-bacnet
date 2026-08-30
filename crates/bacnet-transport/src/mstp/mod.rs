@@ -14,6 +14,7 @@ use tracing::debug;
 
 use crate::mstp_frame::{
     FrameType, MstpFrame, BROADCAST_MAC, MAX_MASTER, MAX_STANDARD_FRAME_LENGTH,
+    MAX_STANDARD_MPDU_DATA,
 };
 use crate::port::ReceivedNpdu;
 
@@ -333,11 +334,26 @@ impl MasterNode {
     }
 
     /// Complete AnswerDataRequest with application data or ReplyPostponed.
-    pub(crate) fn finish_data_request(&mut self, reply_data: Option<Bytes>) -> Option<MstpFrame> {
-        let destination = self.pending_reply_source.take()?;
+    pub(crate) fn finish_data_request(
+        &mut self,
+        reply_data: Option<Bytes>,
+    ) -> Result<MstpFrame, Error> {
+        if let Some(data) = reply_data.as_ref() {
+            if data.len() > MAX_STANDARD_MPDU_DATA {
+                return Err(Error::Encoding(format!(
+                    "MS/TP application reply length {} exceeds standard-frame maximum {}",
+                    data.len(),
+                    MAX_STANDARD_MPDU_DATA
+                )));
+            }
+        }
+
+        let destination = self.pending_reply_source.take().ok_or_else(|| {
+            Error::Encoding("MS/TP has no pending data request to complete".into())
+        })?;
         self.reply_rx = None;
         self.state = MasterState::Idle;
-        Some(match reply_data {
+        Ok(match reply_data {
             Some(data) => MstpFrame {
                 frame_type: FrameType::BACnetDataNotExpectingReply,
                 destination,
@@ -351,6 +367,13 @@ impl MasterNode {
                 data: Bytes::new(),
             },
         })
+    }
+
+    /// Abandon an application reply after a transport-boundary completion error.
+    fn abandon_data_request(&mut self) {
+        self.pending_reply_source = None;
+        self.reply_rx = None;
+        self.state = MasterState::Idle;
     }
 
     /// Decide what to send when we have the token. Returns a frame to send.
@@ -583,8 +606,16 @@ impl MasterNode {
 
     /// Queue an NPDU for transmission.
     ///
-    /// Returns an error if the TX queue has reached [`MAX_TX_QUEUE_DEPTH`].
+    /// Returns an error if the NPDU exceeds the supported standard-frame limit
+    /// or the TX queue has reached [`MAX_TX_QUEUE_DEPTH`].
     pub fn queue_npdu(&mut self, dest: u8, npdu: Bytes) -> Result<(), Error> {
+        if npdu.len() > MAX_STANDARD_MPDU_DATA {
+            return Err(Error::Encoding(format!(
+                "MS/TP NPDU length {} exceeds standard-frame maximum {}",
+                npdu.len(),
+                MAX_STANDARD_MPDU_DATA
+            )));
+        }
         if self.tx_queue.len() >= MAX_TX_QUEUE_DEPTH {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,

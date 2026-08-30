@@ -71,6 +71,20 @@ fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8]) -> Vec<MstpFrame> 
     frames
 }
 
+fn finish_data_request_at_transport_boundary(
+    node: &mut MasterNode,
+    reply_data: Option<Bytes>,
+) -> Option<MstpFrame> {
+    match node.finish_data_request(reply_data) {
+        Ok(frame) => Some(frame),
+        Err(error) => {
+            warn!("MS/TP application reply rejected: {error}");
+            node.abandon_data_request();
+            None
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MS/TP Transport
 // ---------------------------------------------------------------------------
@@ -155,7 +169,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         pending_reply_rx = None;
                         pending_reply_deadline = None;
                         let mut node_guard = node.lock().await;
-                        let response = node_guard.finish_data_request(reply.ok());
+                        let response = finish_data_request_at_transport_boundary(
+                            &mut node_guard,
+                            reply.ok(),
+                        );
                         drop(node_guard);
 
                         if let Some(response) = response {
@@ -385,9 +402,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 let reply_data = pending_reply_rx
                                     .take()
                                     .and_then(|mut rx| rx.try_recv().ok());
-                                if let Some(reply_frame) =
-                                    node_guard.finish_data_request(reply_data)
-                                {
+                                if let Some(reply_frame) = finish_data_request_at_transport_boundary(
+                                    &mut node_guard,
+                                    reply_data,
+                                ) {
                                     encode_buf.clear();
                                     if encode_frame(&mut encode_buf, &reply_frame).is_ok() {
                                         pending_writes.push(encode_buf.to_vec());

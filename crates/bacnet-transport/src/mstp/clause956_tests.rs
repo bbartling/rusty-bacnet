@@ -4,8 +4,11 @@
 //! that allowed the invalid ring 0→3→0 and excluded FEC MAC 7.
 
 use super::*;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
+
+use crate::mstp_frame::{encode_frame, MAX_STANDARD_MPDU_DATA};
+use crate::port::TransportPort;
 
 fn cfg(ts: u8, max_master: u8) -> MstpConfig {
     MstpConfig {
@@ -286,4 +289,122 @@ fn pass_token_self_destination_enters_pfm_at_runtime() {
     assert_eq!(retry.frame_type, FrameType::PollForMaster);
     assert_eq!(retry.destination, 4);
     assert_ne!(retry.frame_type, FrameType::Token);
+}
+
+fn pending_data_request_node() -> MasterNode {
+    let (tx, _rx) = mpsc::channel(4);
+    let mut node = MasterNode::new(cfg(3, 127)).unwrap();
+    let request = MstpFrame {
+        frame_type: FrameType::BACnetDataExpectingReply,
+        destination: 3,
+        source: 7,
+        data: Bytes::from_static(&[0x01, 0x04, 0x10]),
+    };
+    assert!(node.handle_received_frame(&request, &tx).is_none());
+    assert_eq!(node.state, MasterState::AnswerDataRequest);
+    node
+}
+
+#[test]
+fn outbound_queue_rejects_oversize_before_mutation() {
+    let mut node = MasterNode::new(cfg(3, 127)).unwrap();
+    let accepted = Bytes::from(vec![0x11; MAX_STANDARD_MPDU_DATA]);
+    node.queue_npdu(7, accepted.clone()).unwrap();
+
+    let state_before = node.state;
+    let frame_count_before = node.frame_count;
+    let error = node
+        .queue_npdu(8, Bytes::from(vec![0x22; MAX_STANDARD_MPDU_DATA + 1]))
+        .expect_err("502-byte NPDU must be rejected");
+    assert!(error
+        .to_string()
+        .contains("MS/TP NPDU length 502 exceeds standard-frame maximum 501"));
+    assert_eq!(node.tx_queue.len(), 1);
+    assert_eq!(node.tx_queue.front(), Some(&(7, accepted)));
+    assert_eq!(node.state, state_before);
+    assert_eq!(node.frame_count, frame_count_before);
+
+    node.state = MasterState::UseToken;
+    let frame = node.use_token();
+    assert_eq!(frame.data.len(), MAX_STANDARD_MPDU_DATA);
+    let mut wire = BytesMut::new();
+    encode_frame(&mut wire, &frame).expect("accepted queued NPDU remains encodable");
+    assert!(node.tx_queue.is_empty());
+}
+
+#[test]
+fn oversized_application_reply_preserves_state_until_explicit_abandon() {
+    let mut node = pending_data_request_node();
+    assert!(node.reply_rx.is_some());
+
+    let error = node
+        .finish_data_request(Some(Bytes::from(vec![0x33; MAX_STANDARD_MPDU_DATA + 1])))
+        .expect_err("502-byte application reply must be rejected");
+    assert!(error
+        .to_string()
+        .contains("MS/TP application reply length 502 exceeds standard-frame maximum 501"));
+    assert_eq!(node.state, MasterState::AnswerDataRequest);
+    assert_eq!(node.pending_reply_source, Some(7));
+    assert!(node.reply_rx.is_some());
+
+    node.abandon_data_request();
+    assert_eq!(node.state, MasterState::Idle);
+    assert!(node.pending_reply_source.is_none());
+    assert!(node.reply_rx.is_none());
+}
+
+#[test]
+fn max_standard_application_reply_remains_encodable() {
+    let mut node = pending_data_request_node();
+    let reply = node
+        .finish_data_request(Some(Bytes::from(vec![0x44; MAX_STANDARD_MPDU_DATA])))
+        .unwrap();
+
+    assert_eq!(reply.frame_type, FrameType::BACnetDataNotExpectingReply);
+    assert_eq!(reply.destination, 7);
+    assert_eq!(reply.data.len(), MAX_STANDARD_MPDU_DATA);
+    assert_eq!(node.state, MasterState::Idle);
+    let mut wire = BytesMut::new();
+    encode_frame(&mut wire, &reply).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn transport_abandons_oversized_reply_without_wire_output() {
+    let (serial_transport, serial_peer) = LoopbackSerial::pair();
+    let mut transport = MstpTransport::new(serial_transport, cfg(3, 127));
+    let mut npdu_rx = transport.start().await.unwrap();
+    let request = MstpFrame {
+        frame_type: FrameType::BACnetDataExpectingReply,
+        destination: 3,
+        source: 7,
+        data: Bytes::from_static(&[0x01, 0x04, 0x10]),
+    };
+    let mut wire = BytesMut::new();
+    encode_frame(&mut wire, &request).unwrap();
+    serial_peer.write(&wire).await.unwrap();
+
+    let received = npdu_rx.recv().await.expect("application request");
+    received
+        .reply_tx
+        .expect("reply sender")
+        .send(Bytes::from(vec![0x55; MAX_STANDARD_MPDU_DATA + 1]))
+        .unwrap();
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+
+    {
+        let node = transport.node_state().unwrap().lock().await;
+        assert_eq!(node.state, MasterState::Idle);
+        assert!(node.pending_reply_source.is_none());
+        assert!(node.reply_rx.is_none());
+    }
+    let mut response = [0u8; MSTP_MAX_FRAME_BUF];
+    let read = tokio::time::timeout(
+        tokio::time::Duration::from_millis(1),
+        serial_peer.read(&mut response),
+    )
+    .await;
+    assert!(read.is_err(), "oversized reply produced wire output");
+    transport.stop().await.unwrap();
 }
