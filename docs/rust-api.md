@@ -60,8 +60,17 @@ use bacnet_types::error::Error;
 // Protocol error from a remote device
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
-// Other variants: Timeout, Reject, Abort, Io, Encoding, InvalidState, etc.
+// Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
+// RoutedPathCapacityExceeded, Encoding, etc.
 ```
+
+`Error::RoutedPathTooLong { dnet }` identifies the destination network from a
+matching network-layer rejection; it does not claim an exact supported length.
+`Error::RoutedPathCapacityExceeded { capacity }` reports that all bounded path
+state is protected by a held/waiting gate or configured/learned evidence, so a
+new path was rejected before transaction registration or frame emission.
+`Error` is a public enum, so these variants can require new arms in downstream
+exhaustive matches. Matchers with a wildcard arm are unaffected.
 
 ---
 
@@ -652,6 +661,57 @@ let client = BACnetClient::sc_builder()
 
 `BACnetClient::builder()` is an alias for `bip_builder()`.
 
+### Routed Confirmed-Request Limits
+
+Routed confirmed requests size each outgoing APDU to the smallest applicable
+peer, local-transport, and routed-path allowance before registering a
+transaction or emitting a frame. The local allowance retains the transport's
+live maximum and the current routed destination-header cost. The routed-path
+allowance is an NPDU limit: an unknown path starts from a conservative
+228-octet NPDU envelope, then subtracts the forwarded header containing both
+the destination address and the client's actual local source MAC. For example,
+six-octet destination and source addresses leave 207 APDU octets.
+
+Applications with path-specific evidence can configure the NPDU envelope
+without changing `ClientConfig`:
+
+```rust
+client
+    .configure_routed_path_max_npdu(&router_mac, dnet, 1497)
+    .await?;
+
+// Restore the conservative unknown-path policy.
+client.clear_routed_path_limit(&router_mac, dnet).await?;
+```
+
+State is keyed by the immediate router MAC together with DNET. One confirmed
+request at a time owns that path; requests through a different router or to a
+different DNET remain independent, and direct requests bypass this state. A
+matching Reject-Message-To-Network reason 4 completes only the active owner as
+`Error::RoutedPathTooLong { dnet }` and records the attempted NPDU length as an
+exclusive upper bound. Learned negative evidence lasts for the client lifetime
+and has no widening TTL. Both configuration methods wait for an active owner;
+configuring replaces the prior value and deliberately resets learned evidence,
+while clearing removes configured and learned evidence. Active Clause 19.4
+path probing and cache persistence across process restarts are not provided.
+
+The client retains at most 256 routed-path entries. At capacity it
+deterministically reclaims the least-recently-used entry only when it has no
+configured or learned evidence and its gate has neither an owner nor waiters.
+Configured and learned safety evidence is never silently evicted. If no entry
+is safely reclaimable, the operation returns
+`Error::RoutedPathCapacityExceeded { capacity: 256 }` before TSM registration
+or frame emission.
+
+An ambiguously terminated send (including cancellation, timeout, or send
+failure) quarantines its path for the configured APDU timeout multiplied by
+the configured attempt count. The same-path gate remains exclusive during
+that interval, and network controls already observed at ingress before the
+next generation activates are discarded using a monotonic ingress sequence.
+A source-correlated terminal response after one attempted frame can end the
+generation without quarantine; multi-frame or retried generations remain
+conservative.
+
 ### Property Access
 
 ```rust
@@ -979,6 +1039,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Timeout(msg)` | APDU retry exhausted |
 | `Error::Reject { reason }` | Remote device rejected request |
 | `Error::Abort { reason }` | Remote device aborted request |
+| `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
+| `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::Encoding(msg)` | Malformed packet |
 | `Error::Io(io_error)` | Transport I/O failure |
 
