@@ -18,9 +18,8 @@ pub fn build_mstp_transport(
     mstp_max_master: u8,
     mstp_max_info_frames: u8,
 ) -> PyResult<AnyTransport<PySerial>> {
-    let path = serial_port.ok_or_else(|| {
-        PyRuntimeError::new_err("serial_port is required for transport='mstp'")
-    })?;
+    let path = serial_port
+        .ok_or_else(|| PyRuntimeError::new_err("serial_port is required for transport='mstp'"))?;
     if mstp_mac > 127 {
         return Err(PyRuntimeError::new_err(
             "mstp_mac must be in 0..=127 (Clause 9 Max_Master range)",

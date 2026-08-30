@@ -12,7 +12,8 @@ use tokio::sync::Mutex;
 use bacnet_client::client;
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
-type ClientInner = Arc<Mutex<Option<Arc<client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>>>>>;
+type ClientInner =
+    Arc<Mutex<Option<Arc<client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>>>>>;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
