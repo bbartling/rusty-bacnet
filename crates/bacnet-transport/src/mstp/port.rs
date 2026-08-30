@@ -217,20 +217,15 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     while node_guard.state == MasterState::UseToken
                                         || node_guard.state == MasterState::DoneWithToken
                                     {
-                                        // DoneWithToken: max_info_frames reached, pass token immediately
-                                        if node_guard.state == MasterState::DoneWithToken {
-                                            let token = node_guard.pass_token();
-                                            encode_buf.clear();
-                                            if let Err(e) = encode_frame(&mut encode_buf, &token) {
-                                                warn!("MS/TP encode error: {}", e);
+                                        let frame_to_send =
+                                            if node_guard.state == MasterState::DoneWithToken {
+                                                node_guard.done_with_token()
                                             } else {
-                                                pending_writes.push(encode_buf.to_vec());
-                                            }
-                                            break;
-                                        }
-                                        let frame_to_send = node_guard.use_token();
+                                                node_guard.use_token()
+                                            };
                                         encode_buf.clear();
-                                        if let Err(e) = encode_frame(&mut encode_buf, &frame_to_send) {
+                                        if let Err(e) = encode_frame(&mut encode_buf, &frame_to_send)
+                                        {
                                             warn!("MS/TP encode error: {}", e);
                                             break;
                                         }
@@ -242,8 +237,20 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                             node_guard.state = MasterState::WaitForReply;
                                             break;
                                         }
-                                        // After sending Token, we're done
-                                        if frame_to_send.frame_type == FrameType::Token {
+                                        // After Token or PFM, leave the use/done loop
+                                        if matches!(
+                                            frame_to_send.frame_type,
+                                            FrameType::Token | FrameType::PollForMaster
+                                        ) {
+                                            break;
+                                        }
+                                        // SoleMaster may return to UseToken with no wire
+                                        // progress; break if still UseToken after empty cycle
+                                        if node_guard.state == MasterState::UseToken
+                                            && node_guard.tx_queue.is_empty()
+                                            && node_guard.frame_count
+                                                >= node_guard.config.max_info_frames
+                                        {
                                             break;
                                         }
                                     }
@@ -336,12 +343,21 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 }
                             }
                             MasterState::WaitForReply => {
-                                // ReplyTimeout: enter DoneWithToken.
+                                // ReplyTimeout: enter DoneWithToken then run transitions.
                                 node_guard.expected_reply_source = None;
                                 node_guard.frame_count = node_guard.config.max_info_frames;
                                 node_guard.state = MasterState::DoneWithToken;
-                                // Fall through to DoneWithToken handling on next iteration
-                                T_USAGE_TIMEOUT_MS
+                                let frame_to_send = node_guard.done_with_token();
+                                encode_buf.clear();
+                                if let Ok(()) = encode_frame(&mut encode_buf, &frame_to_send) {
+                                    pending_writes.push(encode_buf.to_vec());
+                                }
+                                match node_guard.state {
+                                    MasterState::PassToken => T_USAGE_TIMEOUT_MS,
+                                    MasterState::PollForMaster => node_guard.t_slot_ms,
+                                    MasterState::UseToken => T_USAGE_TIMEOUT_MS,
+                                    _ => T_USAGE_TIMEOUT_MS,
+                                }
                             }
                             MasterState::AnswerDataRequest => {
                                 // The timer fires early enough to include
@@ -381,14 +397,20 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             }
                             MasterState::UseToken
                             | MasterState::DoneWithToken => {
-                                // Should not typically timeout in UseToken/DoneWithToken;
-                                // pass the token and treat as idle
-                                let token = node_guard.pass_token();
+                                // Should not typically timeout here; run DONE_WITH_TOKEN
+                                // transitions (never unconditional pass_token).
+                                node_guard.state = MasterState::DoneWithToken;
+                                let frame_to_send = node_guard.done_with_token();
                                 encode_buf.clear();
-                                if let Ok(()) = encode_frame(&mut encode_buf, &token) {
+                                if let Ok(()) = encode_frame(&mut encode_buf, &frame_to_send) {
                                     pending_writes.push(encode_buf.to_vec());
                                 }
-                                T_USAGE_TIMEOUT_MS
+                                match node_guard.state {
+                                    MasterState::PassToken => T_USAGE_TIMEOUT_MS,
+                                    MasterState::PollForMaster => node_guard.t_slot_ms,
+                                    MasterState::UseToken => T_USAGE_TIMEOUT_MS,
+                                    _ => T_USAGE_TIMEOUT_MS,
+                                }
                             }
                         };
                         if was_answering_data_request {

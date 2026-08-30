@@ -158,8 +158,6 @@ pub struct MasterNode {
 
 /// How many tokens between PollForMaster attempts.
 const NPOLL: u8 = 50;
-/// Max retries for PollForMaster.
-const MAX_POLL_RETRIES: u8 = 3;
 
 impl MasterNode {
     pub fn new(config: MstpConfig) -> Result<Self, Error> {
@@ -213,10 +211,11 @@ impl MasterNode {
                         return None;
                     }
                     debug!(src = frame.source, "received token");
+                    // Clause 9.5.6 ReceivedToken: FrameCount=0, SoleMaster=false,
+                    // enter USE_TOKEN. TokenCount advances only in DONE_WITH_TOKEN.
                     self.sole_master = false;
                     self.state = MasterState::UseToken;
                     self.frame_count = 0;
-                    self.token_count = self.token_count.wrapping_add(1);
                     self.retry_token_count = 0;
                 }
                 None
@@ -238,13 +237,14 @@ impl MasterNode {
                 if self.state == MasterState::PollForMaster
                     && frame.destination == self.config.this_station
                 {
+                    // ReplyToPFM: NS=source, PS=TS, TokenCount=0, pass to new NS
                     debug!(src = frame.source, "PFM reply — new successor");
                     self.next_station = frame.source;
                     self.sole_master = false;
                     self.poll_station = self.config.this_station;
                     self.token_count = 0;
                     self.poll_count = 0;
-                    // Send Token to the new successor and enter PassToken
+                    self.retry_token_count = 0;
                     return Some(self.pass_token());
                 }
                 None
@@ -370,7 +370,7 @@ impl MasterNode {
                 }
 
                 // If we've hit max_info_frames, transition to DoneWithToken
-                // so the caller knows to pass the token next.
+                // so the caller knows to run done_with_token() next.
                 if self.frame_count >= self.config.max_info_frames {
                     self.state = MasterState::DoneWithToken;
                 }
@@ -382,127 +382,200 @@ impl MasterNode {
                     data: npdu,
                 };
             }
-        } else {
-            // Frame limit reached — transition to DoneWithToken and pass immediately.
-            self.state = MasterState::DoneWithToken;
-            return self.pass_token();
         }
 
-        // Time to poll?
-        if self.token_count >= NPOLL {
-            self.token_count = 0;
-            self.state = MasterState::PollForMaster;
-            // Scan from this_station+1 through next_station-1 (wrapping at max_master)
-            // Start polling at next_station (the first address after our known successor range)
-            self.poll_station = next_addr(self.next_station, self.config.max_master);
-            // If poll_station wraps to us, skip — we already know about next_station
-            if self.poll_station == self.config.this_station {
-                // Only us and next_station exist; no gap to scan
+        // Nothing (more) to send — Clause 9.5.6 DONE_WITH_TOKEN transitions.
+        self.state = MasterState::DoneWithToken;
+        self.done_with_token()
+    }
+
+    /// Clause 9.5.6 DONE_WITH_TOKEN state transitions.
+    ///
+    /// Chooses SendAnotherFrame / NextStationUnknown / SendToken /
+    /// SendMaintenancePFM / ResetMaintenancePFM / SoleMaster paths.
+    /// Never emits a Token with source == destination.
+    pub fn done_with_token(&mut self) -> MstpFrame {
+        let ts = self.config.this_station;
+        let max_master = self.config.max_master;
+
+        // SoleMaster can reuse the token for several DONE_WITH_TOKEN iterations
+        // without putting a frame on the wire — loop until a real frame exists.
+        loop {
+            let next_ts = next_addr(ts, max_master);
+            let next_ps = next_addr(self.poll_station, max_master);
+
+            // SendAnotherFrame
+            if self.frame_count < self.config.max_info_frames && !self.tx_queue.is_empty() {
+                self.state = MasterState::UseToken;
+                return self.use_token();
+            }
+
+            // NextStationUnknown (Addendum 135-2008v-1): NS == TS and not sole master
+            if !self.sole_master && self.next_station == ts {
+                self.poll_station = next_ts;
+                self.retry_token_count = 0;
+                self.state = MasterState::PollForMaster;
+                return MstpFrame {
+                    frame_type: FrameType::PollForMaster,
+                    destination: self.poll_station,
+                    source: ts,
+                    data: Bytes::new(),
+                };
+            }
+
+            // SendToken while TokenCount < Npoll - 1
+            if self.token_count < NPOLL.saturating_sub(1) {
+                if self.sole_master && self.next_station != next_ts {
+                    // SoleMaster: reuse token; never Token(TS→TS)
+                    self.frame_count = 0;
+                    self.token_count = self.token_count.saturating_add(1);
+                    self.state = MasterState::UseToken;
+                    continue;
+                }
+                // SendToken (also when NS == TS+1 — no gap to poll)
+                self.token_count = self.token_count.saturating_add(1);
                 return self.pass_token();
             }
+
+            // Maintenance / reset when TokenCount >= Npoll - 1
+            if next_ps == self.next_station {
+                if self.sole_master {
+                    // SoleMasterRestartMaintenancePFM
+                    self.poll_station = next_addr(self.next_station, max_master);
+                    self.next_station = ts;
+                    self.retry_token_count = 0;
+                    self.token_count = 1;
+                    self.state = MasterState::PollForMaster;
+                    return MstpFrame {
+                        frame_type: FrameType::PollForMaster,
+                        destination: self.poll_station,
+                        source: ts,
+                        data: Bytes::new(),
+                    };
+                }
+                // ResetMaintenancePFM: PS = TS, Token to NS, TokenCount = 1
+                self.poll_station = ts;
+                self.retry_token_count = 0;
+                self.token_count = 1;
+                self.event_count = 0;
+                return self.pass_token();
+            }
+
+            // SendMaintenancePFM: advance PS toward NS only (never begin at NS+1)
+            self.poll_station = next_ps;
+            self.retry_token_count = 0;
+            self.state = MasterState::PollForMaster;
             return MstpFrame {
                 frame_type: FrameType::PollForMaster,
                 destination: self.poll_station,
-                source: self.config.this_station,
+                source: ts,
                 data: Bytes::new(),
             };
         }
-
-        // Pass the token
-        self.pass_token()
     }
 
     /// Generate a token-pass frame to next_station.
+    ///
+    /// Must not be used when `next_station == this_station` (Clause 9.5.6.5
+    /// requires PFM to TS+1 instead — handled by [`Self::done_with_token`]).
     pub fn pass_token(&mut self) -> MstpFrame {
+        let ts = self.config.this_station;
+        debug_assert_ne!(
+            self.next_station, ts,
+            "pass_token must not emit Token TS→TS; use done_with_token / PFM"
+        );
         self.state = MasterState::PassToken;
         self.retry_token_count = 0;
+        self.event_count = 0;
         MstpFrame {
             frame_type: FrameType::Token,
             destination: self.next_station,
-            source: self.config.this_station,
+            source: ts,
             data: Bytes::new(),
         }
     }
 
-    /// Handle PassToken timeout.
+    /// Handle PassToken timeout (Clause 9.5.6 PASS_TOKEN).
     ///
-    /// Called when T_usage_timeout expires after passing the token.
-    /// Returns a frame to send (retry Token or PFM), or None if we should go to Idle.
+    /// After `Nretry_token` Token retries, FindNewSuccessor: PS = NS+1, NS = TS,
+    /// send PFM — never Token frames to unverified addresses.
     pub fn pass_token_timeout(&mut self) -> Option<MstpFrame> {
         let ts = self.config.this_station;
+        let max_master = self.config.max_master;
         if self.retry_token_count < N_RETRY_TOKEN {
-            // RetrySendToken: resend Token to NS
+            // RetrySendToken: resend Token to NS exactly Nretry_token times
             self.retry_token_count += 1;
+            self.event_count = 0;
             Some(MstpFrame {
                 frame_type: FrameType::Token,
                 destination: self.next_station,
                 source: ts,
                 data: Bytes::new(),
             })
-        } else if self.next_station == ts {
-            // FindNewSuccessorUnknown: NS wrapped back to TS
-            // No other stations found — go to NoToken to try again
-            self.state = MasterState::NoToken;
-            None
         } else {
-            // FindNewSuccessor: NS didn't respond, try next address
-            self.next_station = next_addr(self.next_station, self.config.max_master);
-            if self.next_station == ts {
-                // Wrapped all the way around — declare sole master
+            // FindNewSuccessor
+            let failed_ns = self.next_station;
+            self.poll_station = next_addr(failed_ns, max_master);
+            self.next_station = ts;
+            self.retry_token_count = 0;
+            self.token_count = 0;
+            if self.poll_station == ts {
+                // Would PFM self — declare sole master without Token TS→TS
                 self.sole_master = true;
                 self.state = MasterState::UseToken;
                 self.frame_count = 0;
-                None
-            } else {
-                // Try passing token to the new next_station
-                self.retry_token_count = 0;
-                Some(MstpFrame {
-                    frame_type: FrameType::Token,
-                    destination: self.next_station,
-                    source: ts,
-                    data: Bytes::new(),
-                })
+                return None;
             }
+            self.state = MasterState::PollForMaster;
+            Some(MstpFrame {
+                frame_type: FrameType::PollForMaster,
+                destination: self.poll_station,
+                source: ts,
+                data: Bytes::new(),
+            })
         }
     }
 
-    /// Handle PollForMaster timeout (no reply received).
+    /// Handle PollForMaster timeout (no ReplyToPFM).
+    ///
+    /// Known NS → DoneWithPFM: pass token to NS (one PFM per token use).
+    /// Unknown NS → SendNextPFM or DeclareSoleMaster (no Token TS→TS).
     pub fn poll_timeout(&mut self) -> MstpFrame {
-        self.poll_count += 1;
-        if self.poll_count >= MAX_POLL_RETRIES {
-            // No one answered — move to next poll station
-            self.poll_count = 0;
-            self.poll_station = next_addr(self.poll_station, self.config.max_master);
-            if self.poll_station == self.config.this_station {
-                // We've scanned the entire range — no other stations
-                if self.next_station == self.config.this_station {
-                    // Sole master: claim token directly
-                    self.sole_master = true;
-                    self.state = MasterState::UseToken;
-                    self.frame_count = 0;
-                    self.token_count = 0;
-                    return MstpFrame {
-                        frame_type: FrameType::Token,
-                        destination: self.config.this_station,
-                        source: self.config.this_station,
-                        data: Bytes::new(),
-                    };
-                }
-                // Have a known successor — pass token to them
-                return self.pass_token();
-            }
-            if self.poll_station == self.next_station {
-                // Reached our known successor — done scanning the gap
-                return self.pass_token();
-            }
+        let ts = self.config.this_station;
+        let max_master = self.config.max_master;
+        self.poll_count = 0;
+
+        if self.sole_master {
+            // SoleMaster: resume USE_TOKEN without emitting Token TS→TS
+            self.frame_count = 0;
+            self.state = MasterState::UseToken;
+            return self.use_token();
         }
-        // Poll the next station
-        self.state = MasterState::PollForMaster;
-        MstpFrame {
-            frame_type: FrameType::PollForMaster,
-            destination: self.poll_station,
-            source: self.config.this_station,
-            data: Bytes::new(),
+
+        if self.next_station != ts {
+            // DoneWithPFM — maintenance timed out; pass token back to known NS
+            return self.pass_token();
+        }
+
+        // Searching for a successor (NS == TS)
+        let next_ps = next_addr(self.poll_station, max_master);
+        if next_ps != ts {
+            // SendNextPFM
+            self.poll_station = next_ps;
+            self.retry_token_count = 0;
+            self.state = MasterState::PollForMaster;
+            MstpFrame {
+                frame_type: FrameType::PollForMaster,
+                destination: self.poll_station,
+                source: ts,
+                data: Bytes::new(),
+            }
+        } else {
+            // DeclareSoleMaster — no Token with source==destination
+            self.sole_master = true;
+            self.frame_count = 0;
+            self.state = MasterState::UseToken;
+            self.use_token()
         }
     }
 
@@ -533,6 +606,8 @@ fn next_addr(current: u8, max_master: u8) -> u8 {
 mod port;
 pub use port::{LoopbackSerial, MstpTransport, NoSerial};
 
+#[cfg(test)]
+mod clause956_tests;
 #[cfg(test)]
 mod port_timing_tests;
 #[cfg(test)]
