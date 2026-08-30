@@ -8,6 +8,10 @@ These examples demonstrate using `rusty_bacnet` from Python.
 pip install rusty-bacnet
 ```
 
+The MS/TP example requires a serial-enabled package, an RS-485 adapter that
+provides automatic transmit-direction control (adapter and driver behavior
+varies), and an unused local master MAC in `0..=127`.
+
 ## Examples
 
 | Example | Description |
@@ -25,7 +29,7 @@ pip install rusty-bacnet
 # BIP example (works immediately)
 python bip_client_server.py
 
-# MS/TP mini-device (USB RS-485 adapter required)
+# Standalone MS/TP mini-device (serial-enabled package and USB RS-485 adapter required)
 python mstp_mini_device.py --serial /dev/serial/by-id/usb-... --mac 3
 
 # IPv6 example

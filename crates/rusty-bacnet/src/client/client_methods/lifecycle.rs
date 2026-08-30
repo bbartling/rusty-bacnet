@@ -17,6 +17,7 @@ impl BACnetClient {
         sc_heartbeat_interval_ms=None,
         sc_heartbeat_timeout_ms=None,
         ipv6_interface=None,
+        *,
         serial_port=None,
         mstp_baud=38400,
         mstp_mac=1,

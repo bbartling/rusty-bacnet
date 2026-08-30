@@ -4,6 +4,16 @@ use super::super::*;
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        if self.transport_type == "mstp" {
+            crate::mstp_py::validate_mstp_config(
+                self.serial_port.as_deref(),
+                self.mstp_baud,
+                self.mstp_mac,
+                self.mstp_max_master,
+                self.mstp_max_info_frames,
+            )?;
+        }
+
         let inner = self.inner.clone();
         let started = self.started.clone();
         let device_instance = self.device_instance;

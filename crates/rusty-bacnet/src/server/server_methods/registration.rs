@@ -18,13 +18,14 @@ impl BACnetServer {
         sc_heartbeat_interval_ms=None,
         sc_heartbeat_timeout_ms=None,
         ipv6_interface=None,
+        dcc_password=None,
+        reinit_password=None,
+        *,
         serial_port=None,
         mstp_baud=38400,
         mstp_mac=1,
         mstp_max_master=127,
-        mstp_max_info_frames=1,
-        dcc_password=None,
-        reinit_password=None
+        mstp_max_info_frames=1
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -42,13 +43,13 @@ impl BACnetServer {
         sc_heartbeat_interval_ms: Option<u64>,
         sc_heartbeat_timeout_ms: Option<u64>,
         ipv6_interface: Option<String>,
+        dcc_password: Option<String>,
+        reinit_password: Option<String>,
         serial_port: Option<String>,
         mstp_baud: u32,
         mstp_mac: u8,
         mstp_max_master: u8,
         mstp_max_info_frames: u8,
-        dcc_password: Option<String>,
-        reinit_password: Option<String>,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),

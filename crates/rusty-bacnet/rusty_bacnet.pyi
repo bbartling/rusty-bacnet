@@ -827,6 +827,7 @@ class BACnetClient:
         sc_heartbeat_interval_ms: Optional[int] = None,
         sc_heartbeat_timeout_ms: Optional[int] = None,
         ipv6_interface: Optional[str] = None,
+        *,
         serial_port: Optional[str] = None,
         mstp_baud: int = 38400,
         mstp_mac: int = 1,
@@ -1481,13 +1482,14 @@ class BACnetServer:
         sc_heartbeat_interval_ms: Optional[int] = None,
         sc_heartbeat_timeout_ms: Optional[int] = None,
         ipv6_interface: Optional[str] = None,
+        dcc_password: Optional[str] = None,
+        reinit_password: Optional[str] = None,
+        *,
         serial_port: Optional[str] = None,
         mstp_baud: int = 38400,
         mstp_mac: int = 1,
         mstp_max_master: int = 127,
         mstp_max_info_frames: int = 1,
-        dcc_password: Optional[str] = None,
-        reinit_password: Optional[str] = None,
     ) -> None: ...
 
     # --- Analog objects ---

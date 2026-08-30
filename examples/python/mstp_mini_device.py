@@ -5,16 +5,18 @@ BACnet/IP ``bip_client_server`` sample but over RS-485.
 
 Hardware notes
 --------------
-- Prefer a Waveshare / FTDI USB-RS485 adapter with automatic direction control.
-- Pick a free station MAC (never steal MAC 0 if a BAS router owns it).
-- Live trunk coexistence with commercial masters needs the Clause 9 CRC / USB
-  stream / 9.5.6 token fixes (see upstream PR #467).
+- Use a USB-RS485 adapter that provides automatic transmit-direction control;
+  adapter and driver behavior varies.
+- Pick a free local master MAC in 0..=127 (do not reuse another station's MAC).
+- Use a serial-enabled ``rusty_bacnet`` package. This is a standalone transport
+  example, not a full Clause 9 conformance or combined-endpoint claim.
 
 Usage::
 
     python mstp_mini_device.py --serial /dev/serial/by-id/usb-... --mac 3
 
-Requires a build of ``rusty_bacnet`` that includes this PR (``transport=\"mstp\"``).
+Serial path syntax examples include ``/dev/serial/by-id/...`` on Linux,
+``/dev/cu.usbserial-*`` on macOS, and ``COM3`` on Windows.
 """
 
 from __future__ import annotations
@@ -23,15 +25,12 @@ import argparse
 import asyncio
 import signal
 
-from rusty_bacnet import BACnetServer
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="MS/TP BACnet mini-device example")
     p.add_argument(
         "--serial",
         required=True,
-        help="Serial device path (prefer /dev/serial/by-id/...)",
+        help="Serial device path (for example /dev/serial/by-id/..., /dev/cu.usbserial-*, or COM3)",
     )
     p.add_argument("--baud", type=int, default=38400, help="MS/TP baud (default 38400)")
     p.add_argument("--mac", type=int, default=3, help="This station MAC (default 3)")
@@ -58,6 +57,7 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     args = parse_args()
+    from rusty_bacnet import BACnetServer
 
     server = BACnetServer(
         device_instance=args.instance,

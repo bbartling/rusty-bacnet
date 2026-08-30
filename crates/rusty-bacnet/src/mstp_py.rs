@@ -1,14 +1,45 @@
 //! Helpers for constructing MS/TP transports from Python kwargs.
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::PyResult;
 
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::mstp::{MstpConfig, MstpTransport};
 use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
+use bacnet_types::error::Error;
 
 /// Serial port type used by the Python bindings' [`AnyTransport`] parameter.
 pub type PySerial = TokioSerialPort;
+
+/// Validate Python-owned MS/TP configuration without opening the serial device.
+pub(crate) fn validate_mstp_config(
+    serial_port: Option<&str>,
+    mstp_baud: u32,
+    mstp_mac: u8,
+    mstp_max_master: u8,
+    mstp_max_info_frames: u8,
+) -> PyResult<&str> {
+    let path = serial_port
+        .ok_or_else(|| PyValueError::new_err("serial_port is required for transport='mstp'"))?;
+    if mstp_baud == 0 {
+        return Err(PyValueError::new_err("mstp_baud must be nonzero"));
+    }
+    if mstp_mac > 127 {
+        return Err(PyValueError::new_err("mstp_mac must be in 0..=127"));
+    }
+    if mstp_max_master > 127 {
+        return Err(PyValueError::new_err("mstp_max_master must be in 0..=127"));
+    }
+    if mstp_mac > mstp_max_master {
+        return Err(PyValueError::new_err("mstp_mac must be <= mstp_max_master"));
+    }
+    if mstp_max_info_frames == 0 {
+        return Err(PyValueError::new_err(
+            "mstp_max_info_frames must be in 1..=255",
+        ));
+    }
+    Ok(path)
+}
 
 /// Open an MS/TP transport from Python kwargs.
 pub fn build_mstp_transport(
@@ -18,33 +49,126 @@ pub fn build_mstp_transport(
     mstp_max_master: u8,
     mstp_max_info_frames: u8,
 ) -> PyResult<AnyTransport<PySerial>> {
-    let path = serial_port
-        .ok_or_else(|| PyRuntimeError::new_err("serial_port is required for transport='mstp'"))?;
-    if mstp_mac > 127 {
-        return Err(PyRuntimeError::new_err(
-            "mstp_mac must be in 0..=127 (Clause 9 Max_Master range)",
-        ));
-    }
-    if mstp_max_master > 127 {
-        return Err(PyRuntimeError::new_err(
-            "mstp_max_master must be in 0..=127",
-        ));
-    }
-    if mstp_mac > mstp_max_master {
-        return Err(PyRuntimeError::new_err(
-            "mstp_mac must be <= mstp_max_master",
-        ));
-    }
+    let path = validate_mstp_config(
+        serial_port,
+        mstp_baud,
+        mstp_mac,
+        mstp_max_master,
+        mstp_max_info_frames,
+    )?;
     let serial = TokioSerialPort::open(&SerialConfig {
         port_name: path.to_string(),
         baud_rate: mstp_baud,
     })
-    .map_err(|e| PyRuntimeError::new_err(format!("serial open failed: {e}")))?;
+    .map_err(|error| {
+        let message = match error {
+            Error::Encoding(message) => message,
+            other => other.to_string(),
+        };
+        PyRuntimeError::new_err(message)
+    })?;
     let config = MstpConfig {
         this_station: mstp_mac,
         max_master: mstp_max_master,
-        max_info_frames: mstp_max_info_frames.max(1),
+        max_info_frames: mstp_max_info_frames,
         baud_rate: mstp_baud,
     };
     Ok(AnyTransport::Mstp(MstpTransport::new(serial, config)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use pyo3::exceptions::{PyRuntimeError, PyValueError};
+    use pyo3::{PyErr, Python};
+
+    use super::*;
+
+    fn assert_py_error<T>(result: PyResult<T>, message: &str, is_value_error: bool) {
+        let err = match result {
+            Ok(_) => panic!("expected Python error"),
+            Err(err) => err,
+        };
+        Python::attach(|py| {
+            if is_value_error {
+                assert!(err.is_instance_of::<PyValueError>(py));
+            } else {
+                assert!(err.is_instance_of::<PyRuntimeError>(py));
+            }
+            assert_eq!(err.value(py).to_string(), message);
+        });
+    }
+
+    fn validate(
+        baud: u32,
+        mac: u8,
+        max_master: u8,
+        max_info_frames: u8,
+    ) -> Result<&'static str, PyErr> {
+        validate_mstp_config(
+            Some("intentionally-nonexistent-serial-device"),
+            baud,
+            mac,
+            max_master,
+            max_info_frames,
+        )
+    }
+
+    #[test]
+    fn rejects_invalid_configuration_before_open() {
+        assert_py_error(
+            validate_mstp_config(None, 38_400, 1, 127, 1),
+            "serial_port is required for transport='mstp'",
+            true,
+        );
+        assert_py_error(validate(0, 1, 127, 1), "mstp_baud must be nonzero", true);
+        assert_py_error(
+            validate(38_400, 128, 127, 1),
+            "mstp_mac must be in 0..=127",
+            true,
+        );
+        assert_py_error(
+            validate(38_400, 1, 128, 1),
+            "mstp_max_master must be in 0..=127",
+            true,
+        );
+        assert_py_error(
+            validate(38_400, 4, 3, 1),
+            "mstp_mac must be <= mstp_max_master",
+            true,
+        );
+        assert_py_error(
+            validate(38_400, 1, 127, 0),
+            "mstp_max_info_frames must be in 1..=255",
+            true,
+        );
+    }
+
+    #[test]
+    fn valid_configuration_reaches_serial_open() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir()
+            .join(format!("rusty-bacnet-missing-{unique}"))
+            .join("serial-device");
+        let result =
+            build_mstp_transport(Some(path.to_string_lossy().as_ref()), 12_345, 1, 127, 255);
+        let err = match result {
+            Ok(_) => panic!("nonexistent serial device unexpectedly opened"),
+            Err(err) => err,
+        };
+        Python::attach(|py| {
+            assert!(err.is_instance_of::<PyRuntimeError>(py));
+            let message = err.value(py).to_string();
+            assert!(message.starts_with("Serial open failed"), "{message}");
+            assert_eq!(
+                message.matches("Serial open failed").count(),
+                1,
+                "{message}"
+            );
+        });
+    }
 }
