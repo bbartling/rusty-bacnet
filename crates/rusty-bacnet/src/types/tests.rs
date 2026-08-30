@@ -32,6 +32,12 @@ fn parse_address_hex_mac() {
 }
 
 #[test]
+fn parse_address_mstp_decimal() {
+    assert_eq!(parse_address("7").unwrap(), vec![7]);
+    assert_eq!(parse_address("mstp:3").unwrap(), vec![3]);
+}
+
+#[test]
 fn parse_address_rejects_garbage() {
     assert!(parse_address("not_an_address").is_err());
 }

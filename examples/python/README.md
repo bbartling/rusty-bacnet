@@ -13,6 +13,7 @@ pip install rusty-bacnet
 | Example | Description |
 |---------|-------------|
 | [`bip_client_server.py`](bip_client_server.py) | BACnet/IP client and server — read, write, RPM, discovery |
+| [`mstp_mini_device.py`](mstp_mini_device.py) | BACnet MS/TP mini-device over USB RS-485 (`transport="mstp"`) |
 | [`cov_subscriptions.py`](cov_subscriptions.py) | COV subscription and real-time notifications |
 | [`sc_secure_connect.py`](sc_secure_connect.py) | BACnet/SC with hub, TLS, and VMAC addressing |
 | [`ipv6_client_server.py`](ipv6_client_server.py) | BACnet/IPv6 client and server |
@@ -23,6 +24,9 @@ pip install rusty-bacnet
 ```bash
 # BIP example (works immediately)
 python bip_client_server.py
+
+# MS/TP mini-device (USB RS-485 adapter required)
+python mstp_mini_device.py --serial /dev/serial/by-id/usb-... --mac 3
 
 # IPv6 example
 python ipv6_client_server.py

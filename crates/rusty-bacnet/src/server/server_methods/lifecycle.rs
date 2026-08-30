@@ -20,6 +20,11 @@ impl BACnetServer {
         let sc_heartbeat_interval_ms = self.sc_heartbeat_interval_ms;
         let sc_heartbeat_timeout_ms = self.sc_heartbeat_timeout_ms;
         let ipv6_interface = self.ipv6_interface.clone();
+        let serial_port = self.serial_port.clone();
+        let mstp_baud = self.mstp_baud;
+        let mstp_mac = self.mstp_mac;
+        let mstp_max_master = self.mstp_max_master;
+        let mstp_max_info_frames = self.mstp_max_info_frames;
         let dcc_password = self.dcc_password.clone();
         let reinit_password = self.reinit_password.clone();
 
@@ -64,7 +69,7 @@ impl BACnetServer {
             })?;
 
             // Build transport based on type
-            let transport: AnyTransport<NoSerial> = match transport_type.as_str() {
+            let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
                     let interface: Ipv4Addr = interface_str
                         .parse()
@@ -114,9 +119,16 @@ impl BACnetServer {
                     }
                     AnyTransport::Sc(Box::new(sc))
                 }
+                "mstp" => crate::mstp_py::build_mstp_transport(
+                    serial_port.as_deref(),
+                    mstp_baud,
+                    mstp_mac,
+                    mstp_max_master,
+                    mstp_max_info_frames,
+                )?,
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
-                        "unknown transport: '{other}'. Use 'bip', 'ipv6', or 'sc'"
+                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
                     )));
                 }
             };
@@ -188,6 +200,15 @@ impl BACnetServer {
                     let ip = std::net::Ipv6Addr::from(ip_bytes);
                     let port = u16::from_be_bytes([mac[16], mac[17]]);
                     Ok(format!("[{ip}]:{port}"))
+                }
+                "mstp" => {
+                    if mac.len() != 1 {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "unexpected MS/TP MAC length: {}",
+                            mac.len()
+                        )));
+                    }
+                    Ok(mac[0].to_string())
                 }
                 _ => {
                     // SC, Ethernet, or other: hex-encode
