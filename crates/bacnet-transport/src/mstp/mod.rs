@@ -12,7 +12,9 @@ use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
-use crate::mstp_frame::{FrameType, MstpFrame, BROADCAST_MAC, MAX_MASTER};
+use crate::mstp_frame::{
+    FrameType, MstpFrame, BROADCAST_MAC, MAX_MASTER, MAX_STANDARD_FRAME_LENGTH,
+};
 use crate::port::ReceivedNpdu;
 
 // ---------------------------------------------------------------------------
@@ -59,8 +61,8 @@ fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
 }
 /// Number of retries for token pass before declaring token lost.
 const N_RETRY_TOKEN: u8 = 1;
-/// Maximum frame buffer size: preamble(2) + header(6) + max data(1497) + CRC16(2)
-pub(crate) const MSTP_MAX_FRAME_BUF: usize = 1507;
+/// Maximum standard frame buffer size: preamble + header + data + data CRC.
+pub(crate) const MSTP_MAX_FRAME_BUF: usize = MAX_STANDARD_FRAME_LENGTH;
 /// Host-side stale partial-frame timeout for USB/chunked serial reassembly.
 ///
 /// This is **not** Clause 9 `T_frame_abort` (wire inter-byte silence). Host async reads
@@ -161,10 +163,16 @@ const NPOLL: u8 = 50;
 
 impl MasterNode {
     pub fn new(config: MstpConfig) -> Result<Self, Error> {
-        if config.this_station > MAX_MASTER {
+        if config.max_master > MAX_MASTER {
             return Err(Error::Encoding(format!(
-                "MS/TP this_station {} exceeds MAX_MASTER ({})",
-                config.this_station, MAX_MASTER
+                "MS/TP max_master {} exceeds MAX_MASTER ({})",
+                config.max_master, MAX_MASTER
+            )));
+        }
+        if config.this_station > config.max_master {
+            return Err(Error::Encoding(format!(
+                "MS/TP this_station {} exceeds configured max_master ({})",
+                config.this_station, config.max_master
             )));
         }
         let ts = config.this_station;
@@ -410,17 +418,9 @@ impl MasterNode {
                 return self.use_token();
             }
 
-            // NextStationUnknown (Addendum 135-2008v-1): NS == TS and not sole master
+            // Clause 9.5.6 NextStationUnknown: NS == TS and not sole master
             if !self.sole_master && self.next_station == ts {
-                self.poll_station = next_ts;
-                self.retry_token_count = 0;
-                self.state = MasterState::PollForMaster;
-                return MstpFrame {
-                    frame_type: FrameType::PollForMaster,
-                    destination: self.poll_station,
-                    source: ts,
-                    data: Bytes::new(),
-                };
+                return self.start_unknown_successor_poll();
             }
 
             // SendToken while TokenCount < Npoll - 1
@@ -476,14 +476,13 @@ impl MasterNode {
 
     /// Generate a token-pass frame to next_station.
     ///
-    /// Must not be used when `next_station == this_station` (Clause 9.5.6.5
-    /// requires PFM to TS+1 instead — handled by [`Self::done_with_token`]).
+    /// When the successor is unknown (`next_station == this_station`), this
+    /// enters the Clause 9.5.6 PFM flow rather than emitting Token TS→TS.
     pub fn pass_token(&mut self) -> MstpFrame {
         let ts = self.config.this_station;
-        debug_assert_ne!(
-            self.next_station, ts,
-            "pass_token must not emit Token TS→TS; use done_with_token / PFM"
-        );
+        if self.next_station == ts {
+            return self.start_unknown_successor_poll();
+        }
         self.state = MasterState::PassToken;
         self.retry_token_count = 0;
         self.event_count = 0;
@@ -502,6 +501,9 @@ impl MasterNode {
     pub fn pass_token_timeout(&mut self) -> Option<MstpFrame> {
         let ts = self.config.this_station;
         let max_master = self.config.max_master;
+        if self.next_station == ts {
+            return Some(self.start_unknown_successor_poll());
+        }
         if self.retry_token_count < N_RETRY_TOKEN {
             // RetrySendToken: resend Token to NS exactly Nretry_token times
             self.retry_token_count += 1;
@@ -591,6 +593,19 @@ impl MasterNode {
         }
         self.tx_queue.push_back((dest, npdu));
         Ok(())
+    }
+
+    fn start_unknown_successor_poll(&mut self) -> MstpFrame {
+        let ts = self.config.this_station;
+        self.poll_station = next_addr(ts, self.config.max_master);
+        self.retry_token_count = 0;
+        self.state = MasterState::PollForMaster;
+        MstpFrame {
+            frame_type: FrameType::PollForMaster,
+            destination: self.poll_station,
+            source: ts,
+            data: Bytes::new(),
+        }
     }
 }
 

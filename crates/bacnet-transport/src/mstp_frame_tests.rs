@@ -43,6 +43,16 @@ fn crc16_clause9_data_vector_01_00() {
 }
 
 #[test]
+fn crc16_annex_g_data_vector() {
+    // Annex G: data 01 22 30 has complemented CRC 0xBD10,
+    // transmitted least-significant octet first as 10 BD.
+    assert_eq!(crc16(&[0x01, 0x22, 0x30]), 0xBD10);
+    let with_crc = [0x01, 0x22, 0x30, 0x10, 0xBD];
+    assert!(crc16_valid(&with_crc));
+    assert_eq!(crc16_accumulate_all(&with_crc), DATA_CRC_RESIDUAL);
+}
+
+#[test]
 fn crc16_one_bit_corruption_rejected() {
     let mut with_crc = [0x01, 0x00, 0x9F, 0x16];
     assert!(crc16_valid(&with_crc));
@@ -86,6 +96,22 @@ fn literal_token_frame_0_from_7() {
     let mut enc = BytesMut::new();
     encode_frame(&mut enc, &frame).unwrap();
     assert_eq!(&enc[..], wire);
+}
+
+#[test]
+fn literal_annex_g_token_frame() {
+    // Annex G: Token, DA 10, SA 05, length 0000, header CRC 8C.
+    let wire: &[u8] = &[0x55, 0xFF, 0x00, 0x10, 0x05, 0x00, 0x00, 0x8C];
+    let (frame, consumed) = decode_frame(wire).expect("decode Annex G Token");
+    assert_eq!(consumed, wire.len());
+    assert_eq!(frame.frame_type, FrameType::Token);
+    assert_eq!(frame.destination, 0x10);
+    assert_eq!(frame.source, 0x05);
+    assert!(frame.data.is_empty());
+
+    let mut encoded = BytesMut::new();
+    encode_frame(&mut encoded, &frame).unwrap();
+    assert_eq!(&encoded[..], wire);
 }
 
 #[test]
@@ -344,10 +370,116 @@ fn frame_type_has_data() {
     assert!(!FrameType::ReplyPostponed.has_data());
 }
 
+fn data_frame_with_length(data_len: usize) -> MstpFrame {
+    MstpFrame {
+        frame_type: FrameType::BACnetDataNotExpectingReply,
+        destination: BROADCAST_MAC,
+        source: 0,
+        data: Bytes::from(vec![0xAA; data_len]),
+    }
+}
+
+fn header_only_wire(frame_type: u8, data_len: usize) -> Vec<u8> {
+    let header = [
+        frame_type,
+        1,
+        0,
+        (data_len >> 8) as u8,
+        (data_len & 0xFF) as u8,
+    ];
+    let mut wire = PREAMBLE.to_vec();
+    wire.extend_from_slice(&header);
+    wire.push(crc8(&header));
+    wire
+}
+
 #[test]
-fn large_data_frame() {
-    // Near-maximum data size
-    let npdu = vec![0xAA; 1024];
+fn encode_standard_data_length_boundary() {
+    let frame = data_frame_with_length(MAX_STANDARD_MPDU_DATA);
+    let mut buf = BytesMut::new();
+    encode_frame(&mut buf, &frame).unwrap();
+    assert_eq!(buf.len(), MAX_STANDARD_FRAME_LENGTH);
+
+    let oversized = data_frame_with_length(MAX_STANDARD_MPDU_DATA + 1);
+    let mut oversized_buf = BytesMut::new();
+    assert!(encode_frame(&mut oversized_buf, &oversized).is_err());
+    assert!(oversized_buf.is_empty(), "oversized frame wrote wire bytes");
+}
+
+#[test]
+fn decode_standard_data_length_boundary() {
+    let frame = data_frame_with_length(MAX_STANDARD_MPDU_DATA);
+    let mut wire = BytesMut::new();
+    encode_frame(&mut wire, &frame).unwrap();
+
+    let (decoded, consumed) = decode_frame(&wire).unwrap();
+    assert_eq!(decoded, frame);
+    assert_eq!(consumed, MAX_STANDARD_FRAME_LENGTH);
+
+    let oversized = header_only_wire(0x06, MAX_STANDARD_MPDU_DATA + 1);
+    assert!(decode_frame(&oversized).is_err());
+}
+
+#[test]
+fn stream_decode_standard_data_length_boundary() {
+    let frame = data_frame_with_length(MAX_STANDARD_MPDU_DATA);
+    let mut wire = BytesMut::new();
+    encode_frame(&mut wire, &frame).unwrap();
+
+    assert_eq!(
+        decode_frame_stream(&wire),
+        StreamDecode::Complete {
+            frame,
+            consumed: MAX_STANDARD_FRAME_LENGTH,
+        }
+    );
+
+    let oversized = header_only_wire(0x06, MAX_STANDARD_MPDU_DATA + 1);
+    assert_eq!(
+        decode_frame_stream(&oversized),
+        StreamDecode::Invalid { discard: 1 }
+    );
+}
+
+#[test]
+fn cobs_encoded_frame_type_range_is_rejected() {
+    for (raw, cobs_encoded) in [(0x1F, false), (0x20, true), (0x7F, true), (0x80, false)] {
+        let frame = MstpFrame {
+            frame_type: FrameType::Unknown(raw),
+            destination: 1,
+            source: 0,
+            data: Bytes::new(),
+        };
+        let mut encoded = BytesMut::new();
+        let wire = header_only_wire(raw, 0);
+        if cobs_encoded {
+            assert!(encode_frame(&mut encoded, &frame).is_err(), "raw={raw}");
+            assert!(encoded.is_empty());
+            assert!(decode_frame(&wire).is_err(), "raw={raw}");
+            assert_eq!(
+                decode_frame_stream(&wire),
+                StreamDecode::Invalid { discard: 1 },
+                "raw={raw}"
+            );
+        } else {
+            encode_frame(&mut encoded, &frame).unwrap();
+            assert_eq!(&encoded[..], wire, "raw={raw}");
+            assert_eq!(decode_frame(&wire).unwrap(), (frame.clone(), wire.len()));
+            assert_eq!(
+                decode_frame_stream(&wire),
+                StreamDecode::Complete {
+                    frame,
+                    consumed: wire.len(),
+                },
+                "raw={raw}"
+            );
+        }
+    }
+}
+
+#[test]
+fn max_standard_data_frame_round_trip() {
+    let npdu = vec![0xAA; MAX_STANDARD_MPDU_DATA];
     let frame = MstpFrame {
         frame_type: FrameType::BACnetDataNotExpectingReply,
         destination: BROADCAST_MAC,
@@ -367,7 +499,7 @@ fn encode_oversized_data_returns_error() {
         frame_type: FrameType::BACnetDataNotExpectingReply,
         destination: 1,
         source: 0,
-        data: Bytes::from_static(&[0xAA; MAX_MPDU_DATA + 1]),
+        data: Bytes::from_static(&[0xAA; MAX_STANDARD_MPDU_DATA + 1]),
     };
     let mut buf = BytesMut::new();
     assert!(encode_frame(&mut buf, &frame).is_err());

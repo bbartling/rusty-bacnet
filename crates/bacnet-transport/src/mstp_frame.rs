@@ -18,13 +18,20 @@ pub const PREAMBLE: [u8; 2] = [0x55, 0xFF];
 /// Header length after preamble: frame_type(1) + dest(1) + src(1) + length(2) + header_crc(1).
 pub const HEADER_LENGTH: usize = 6;
 
-/// Maximum NPDU data length per MS/TP extended frame.
-/// Standard frames are limited to MAX_STANDARD_MPDU_DATA (501 bytes).
-pub const MAX_MPDU_DATA: usize = 1497;
-
 /// Maximum NPDU data length per standard MS/TP frame.
-/// Legacy devices only support this smaller limit.
 pub const MAX_STANDARD_MPDU_DATA: usize = 501;
+
+/// Maximum NPDU data length supported by this non-encoded MS/TP codec.
+///
+/// This remains as the public compatibility name for
+/// [`MAX_STANDARD_MPDU_DATA`]. COBS-encoded frame types 32..=127 are not supported.
+pub const MAX_MPDU_DATA: usize = MAX_STANDARD_MPDU_DATA;
+
+const DATA_CRC_LENGTH: usize = 2;
+
+/// Maximum wire length supported by this standard-frame codec.
+pub(crate) const MAX_STANDARD_FRAME_LENGTH: usize =
+    PREAMBLE.len() + HEADER_LENGTH + MAX_STANDARD_MPDU_DATA + DATA_CRC_LENGTH;
 
 /// Broadcast MAC address.
 pub const BROADCAST_MAC: u8 = 0xFF;
@@ -95,6 +102,10 @@ impl FrameType {
                 | Self::BACnetDataNotExpectingReply
         )
     }
+}
+
+fn is_unsupported_cobs_frame_type(raw: u8) -> bool {
+    (0x20..=0x7F).contains(&raw)
 }
 
 /// A decoded MS/TP frame.
@@ -234,15 +245,22 @@ pub fn encode_frame(
     frame: &MstpFrame,
 ) -> Result<(), bacnet_types::error::Error> {
     let data_len = frame.data.len();
-    if data_len > MAX_MPDU_DATA {
+    let frame_type = frame.frame_type.to_raw();
+    if is_unsupported_cobs_frame_type(frame_type) {
+        return Err(bacnet_types::error::Error::Encoding(format!(
+            "MS/TP COBS-encoded frame type {frame_type} is unsupported"
+        )));
+    }
+    if data_len > MAX_STANDARD_MPDU_DATA {
         return Err(bacnet_types::error::Error::Encoding(format!(
             "MS/TP data length {} exceeds maximum {}",
-            data_len, MAX_MPDU_DATA
+            data_len, MAX_STANDARD_MPDU_DATA
         )));
     }
 
     // Reserve space
-    let total = 2 + HEADER_LENGTH + data_len + if data_len > 0 { 2 } else { 0 };
+    let total =
+        PREAMBLE.len() + HEADER_LENGTH + data_len + if data_len > 0 { DATA_CRC_LENGTH } else { 0 };
     buf.reserve(total);
 
     // Preamble
@@ -250,7 +268,7 @@ pub fn encode_frame(
 
     // Header: frame_type, dest, src, length(2)
     let header = [
-        frame.frame_type.to_raw(),
+        frame_type,
         frame.destination,
         frame.source,
         (data_len >> 8) as u8,
@@ -311,6 +329,10 @@ pub fn decode_frame_stream(data: &[u8]) -> StreamDecode {
         return StreamDecode::Invalid { discard: 1 };
     }
 
+    if is_unsupported_cobs_frame_type(data[2]) {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
     let frame_type = FrameType::from_raw(data[2]);
     let destination = data[3];
     let source = data[4];
@@ -323,24 +345,24 @@ pub fn decode_frame_stream(data: &[u8]) -> StreamDecode {
     }
 
     let data_length = ((data[5] as usize) << 8) | (data[6] as usize);
-    if data_length > MAX_MPDU_DATA {
+    if data_length > MAX_STANDARD_MPDU_DATA {
         return StreamDecode::Invalid { discard: 1 };
     }
 
     let mut consumed = 2 + HEADER_LENGTH;
 
     if data_length > 0 {
-        let needed = consumed + data_length + 2;
+        let needed = consumed + data_length + DATA_CRC_LENGTH;
         if data.len() < needed {
             return StreamDecode::NeedMore;
         }
 
-        if !crc16_valid(&data[consumed..consumed + data_length + 2]) {
+        if !crc16_valid(&data[consumed..consumed + data_length + DATA_CRC_LENGTH]) {
             return StreamDecode::Invalid { discard: needed };
         }
 
         let payload = Bytes::copy_from_slice(&data[consumed..consumed + data_length]);
-        consumed += data_length + 2;
+        consumed += data_length + DATA_CRC_LENGTH;
 
         StreamDecode::Complete {
             frame: MstpFrame {
@@ -400,6 +422,13 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
         return Err(Error::decoding(7, "MS/TP header CRC mismatch"));
     }
 
+    if is_unsupported_cobs_frame_type(data[2]) {
+        return Err(Error::decoding(
+            2,
+            format!("MS/TP COBS-encoded frame type {} is unsupported", data[2]),
+        ));
+    }
+
     let frame_type = FrameType::from_raw(data[2]);
     let destination = data[3];
     let source = data[4];
@@ -423,12 +452,12 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
 
     let data_length = ((data[5] as usize) << 8) | (data[6] as usize);
 
-    if data_length > MAX_MPDU_DATA {
+    if data_length > MAX_STANDARD_MPDU_DATA {
         return Err(Error::decoding(
             5,
             format!(
                 "MS/TP data length {} exceeds maximum {}",
-                data_length, MAX_MPDU_DATA
+                data_length, MAX_STANDARD_MPDU_DATA
             ),
         ));
     }
@@ -437,7 +466,7 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
 
     let frame_data = if data_length > 0 {
         // Need data + 2-byte CRC
-        let needed = consumed + data_length + 2;
+        let needed = consumed + data_length + DATA_CRC_LENGTH;
         if data.len() < needed {
             return Err(Error::decoding(
                 consumed,
@@ -450,7 +479,7 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
         }
 
         // Verify data CRC (covers data bytes + 2 CRC bytes)
-        if !crc16_valid(&data[consumed..consumed + data_length + 2]) {
+        if !crc16_valid(&data[consumed..consumed + data_length + DATA_CRC_LENGTH]) {
             return Err(Error::decoding(
                 consumed + data_length,
                 "MS/TP data CRC mismatch",
@@ -458,7 +487,7 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
         }
 
         let payload = Bytes::copy_from_slice(&data[consumed..consumed + data_length]);
-        consumed += data_length + 2;
+        consumed += data_length + DATA_CRC_LENGTH;
         payload
     } else {
         Bytes::new()

@@ -238,11 +238,52 @@ fn e_failed_successor_uses_pfm_not_blind_tokens() {
     assert_eq!(node.next_station, 3); // NS = TS
     assert_ne!(find.frame_type, FrameType::Token);
 
-    // Must never blindly Token to unverified addresses after failure
-    assert!(
-        node.pass_token_timeout().is_none() || {
-            // still in PollForMaster — timeout handled by poll_timeout, not more Tokens
-            true
-        }
-    );
+    // The node is now in PFM, and a PFM timeout advances the search rather
+    // than invoking another token retry against an unverified address.
+    assert_eq!(node.state, MasterState::PollForMaster);
+    assert_eq!(node.poll_station, 0);
+    let next_poll = node.poll_timeout();
+    assert_eq!(next_poll.frame_type, FrameType::PollForMaster);
+    assert_eq!(next_poll.source, 3);
+    assert_eq!(next_poll.destination, 1);
+    assert_eq!(node.state, MasterState::PollForMaster);
+}
+
+#[test]
+fn master_node_rejects_max_master_above_standard_limit() {
+    let error = MasterNode::new(cfg(3, MAX_MASTER + 1))
+        .err()
+        .expect("invalid max_master");
+    assert!(error
+        .to_string()
+        .contains("max_master 128 exceeds MAX_MASTER (127)"));
+}
+
+#[test]
+fn master_node_rejects_station_above_configured_max_master() {
+    let error = MasterNode::new(cfg(5, 4))
+        .err()
+        .expect("invalid this_station");
+    assert!(error
+        .to_string()
+        .contains("this_station 5 exceeds configured max_master (4)"));
+}
+
+#[test]
+fn pass_token_self_destination_enters_pfm_at_runtime() {
+    let mut node = MasterNode::new(cfg(3, 7)).unwrap();
+    node.next_station = node.config.this_station;
+
+    let frame = node.pass_token();
+    assert_eq!(frame.frame_type, FrameType::PollForMaster);
+    assert_eq!(frame.source, 3);
+    assert_eq!(frame.destination, 4);
+    assert_eq!(node.state, MasterState::PollForMaster);
+
+    node.state = MasterState::PassToken;
+    node.next_station = node.config.this_station;
+    let retry = node.pass_token_timeout().expect("PFM recovery frame");
+    assert_eq!(retry.frame_type, FrameType::PollForMaster);
+    assert_eq!(retry.destination, 4);
+    assert_ne!(retry.frame_type, FrameType::Token);
 }

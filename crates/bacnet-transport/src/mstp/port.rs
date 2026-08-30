@@ -17,6 +17,60 @@ use super::{
     T_REPLY_TIMEOUT_MS, T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
 };
 
+/// Add one host read to the persistent receive buffer and drain all complete frames.
+///
+/// The persistent buffer never exceeds one maximum standard frame. A host read may
+/// contain any number of coalesced frames; complete frames are drained before more
+/// bytes from that same read are appended.
+fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8]) -> Vec<MstpFrame> {
+    let mut frames = Vec::new();
+    let mut remaining = chunk;
+
+    while !remaining.is_empty() {
+        let available = MSTP_MAX_FRAME_BUF.saturating_sub(frame_buf.len());
+        if available == 0 {
+            // A valid standard frame is decidable at this size. This fallback
+            // guarantees progress if malformed input somehow remains NeedMore.
+            warn!("MS/TP: full incomplete host assembly, discarding one byte");
+            frame_buf.drain(..1);
+            continue;
+        }
+
+        let take = available.min(remaining.len());
+        frame_buf.extend_from_slice(&remaining[..take]);
+        remaining = &remaining[take..];
+
+        loop {
+            let preamble_pos = match find_preamble(frame_buf) {
+                Some(pos) => pos,
+                None => {
+                    retain_lone_preamble_byte(frame_buf);
+                    break;
+                }
+            };
+
+            if preamble_pos > 0 {
+                frame_buf.drain(..preamble_pos);
+            }
+
+            match decode_frame_stream(frame_buf) {
+                StreamDecode::Complete { frame, consumed } => {
+                    frame_buf.drain(..consumed);
+                    frames.push(frame);
+                }
+                StreamDecode::NeedMore => break,
+                StreamDecode::Invalid { discard } => {
+                    let discard = discard.min(frame_buf.len()).max(1);
+                    frame_buf.drain(..discard);
+                }
+            }
+        }
+    }
+
+    debug_assert!(frame_buf.len() <= MSTP_MAX_FRAME_BUF);
+    frames
+}
+
 // ---------------------------------------------------------------------------
 // MS/TP Transport
 // ---------------------------------------------------------------------------
@@ -75,7 +129,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         // Receive loop using tokio::select! with timer
         let task = tokio::spawn(async move {
             let mut recv_buf = vec![0u8; 2048];
-            let mut frame_buf = Vec::with_capacity(2048);
+            let mut frame_buf = Vec::with_capacity(MSTP_MAX_FRAME_BUF);
             let mut last_byte_time = tokio::time::Instant::now();
 
             // Start with T_NO_TOKEN timeout — if we don't see anything, claim the token
@@ -123,7 +177,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                     }
                     // Branch 1: serial data arrives
                     result = serial_clone.read(&mut recv_buf) => {
-                        match result {
+                        let frames = match result {
                             Ok(0) => continue,
                             Ok(n) => {
                                 // Host stale-partial timeout: drop abandoned assembly if no
@@ -144,44 +198,15 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     }
                                 }
                                 last_byte_time = now;
-
-                                // Prevent unbounded growth from malformed input:
-                                // check BEFORE extending to avoid a large allocation.
-                                if frame_buf.len() + n > MSTP_MAX_FRAME_BUF {
-                                    warn!(
-                                        "MS/TP: frame buffer would overflow ({} + {} bytes), resetting",
-                                        frame_buf.len(), n
-                                    );
-                                    frame_buf.clear();
-                                    continue;
-                                }
-                                frame_buf.extend_from_slice(&recv_buf[..n]);
+                                assemble_host_chunk(&mut frame_buf, &recv_buf[..n])
                             }
                             Err(e) => {
                                 warn!("MS/TP serial read error: {}", e);
                                 break;
                             }
-                        }
+                        };
 
-                        // Try to find and decode frames
-                        loop {
-                            let preamble_pos = match find_preamble(&frame_buf) {
-                                Some(pos) => pos,
-                                None => {
-                                    retain_lone_preamble_byte(&mut frame_buf);
-                                    break;
-                                }
-                            };
-
-                            // Discard bytes before preamble
-                            if preamble_pos > 0 {
-                                frame_buf.drain(..preamble_pos);
-                            }
-
-                            match decode_frame_stream(&frame_buf) {
-                                StreamDecode::Complete { frame, consumed } => {
-                                    frame_buf.drain(..consumed);
-
+                        for frame in frames {
                                     // Process through state machine — collect
                                     // frames under lock, drop before writing.
                                     let mut node_guard = node.lock().await;
@@ -288,13 +313,6 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                                 + tokio::time::Duration::from_millis(timeout_ms)
                                         }),
                                     );
-                                }
-                                StreamDecode::NeedMore => break,
-                                StreamDecode::Invalid { discard } => {
-                                    let discard = discard.min(frame_buf.len()).max(1);
-                                    frame_buf.drain(..discard);
-                                }
-                            }
                         }
                     }
                     // Branch 2: timeout
@@ -591,5 +609,75 @@ impl SerialPort for NoSerial {
 
     async fn read(&self, _buf: &mut [u8]) -> Result<usize, Error> {
         Err(Error::Encoding("NoSerial: MS/TP not available".into()))
+    }
+}
+
+#[cfg(test)]
+mod assembly_tests {
+    use super::*;
+    use crate::mstp_frame::{MAX_STANDARD_MPDU_DATA, PREAMBLE};
+
+    fn encode_host_data_frame(source: u8, fill: u8, data_len: usize) -> Vec<u8> {
+        let frame = MstpFrame {
+            frame_type: FrameType::BACnetDataNotExpectingReply,
+            destination: 3,
+            source,
+            data: Bytes::from(vec![fill; data_len]),
+        };
+        let mut wire = BytesMut::new();
+        encode_frame(&mut wire, &frame).unwrap();
+        wire.to_vec()
+    }
+
+    #[test]
+    fn drains_coalesced_frames_larger_than_one_frame() {
+        let first = encode_host_data_frame(1, 0xA1, 300);
+        let second = encode_host_data_frame(2, 0xB2, 300);
+        let mut chunk = first;
+        chunk.extend_from_slice(&second);
+        assert!(chunk.len() > MSTP_MAX_FRAME_BUF);
+
+        let mut frame_buf = Vec::new();
+        let frames = assemble_host_chunk(&mut frame_buf, &chunk);
+
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].source, 1);
+        assert_eq!(frames[0].data, Bytes::from(vec![0xA1; 300]));
+        assert_eq!(frames[1].source, 2);
+        assert_eq!(frames[1].data, Bytes::from(vec![0xB2; 300]));
+        assert!(frame_buf.is_empty());
+    }
+
+    #[test]
+    fn bounds_malformed_input_and_retains_max_partial() {
+        let malformed = vec![0xAA; MSTP_MAX_FRAME_BUF * 4 + 17];
+        let mut frame_buf = Vec::new();
+        assert!(assemble_host_chunk(&mut frame_buf, &malformed).is_empty());
+        assert!(frame_buf.len() <= MSTP_MAX_FRAME_BUF);
+
+        let wire = encode_host_data_frame(1, 0xCC, MAX_STANDARD_MPDU_DATA);
+        assert_eq!(wire.len(), MSTP_MAX_FRAME_BUF);
+        let split = wire.len() - 1;
+        assert!(assemble_host_chunk(&mut frame_buf, &wire[..split]).is_empty());
+        assert_eq!(frame_buf.len(), split);
+
+        let frames = assemble_host_chunk(&mut frame_buf, &wire[split..]);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data.len(), MAX_STANDARD_MPDU_DATA);
+        assert!(frame_buf.is_empty());
+
+        let token = MstpFrame {
+            frame_type: FrameType::Token,
+            destination: 3,
+            source: 1,
+            data: Bytes::new(),
+        };
+        let mut token_wire = BytesMut::new();
+        encode_frame(&mut token_wire, &token).unwrap();
+        assert!(assemble_host_chunk(&mut frame_buf, &[0xAA, PREAMBLE[0]]).is_empty());
+        assert_eq!(frame_buf, PREAMBLE[..1]);
+        let frames = assemble_host_chunk(&mut frame_buf, &token_wire[1..]);
+        assert_eq!(frames, vec![token]);
+        assert!(frame_buf.is_empty());
     }
 }

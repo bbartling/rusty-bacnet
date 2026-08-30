@@ -706,8 +706,8 @@ fn test_poll_for_master_scan_range_adjacent() {
 
 #[test]
 fn mstp_frame_buf_max_size() {
-    // The maximum valid MS/TP frame is: 2 (preamble) + 6 (header) + 1497 (data) + 2 (CRC16) = 1507
-    assert_eq!(MSTP_MAX_FRAME_BUF, 1507);
+    // Standard frame: 2 (preamble) + 6 (header) + 501 (data) + 2 (CRC16).
+    assert_eq!(MSTP_MAX_FRAME_BUF, 511);
 }
 
 #[test]
