@@ -126,7 +126,8 @@ async fn max_retry_budget_sends_exactly_255_retransmissions() {
     });
 
     let result = timeout(
-        Duration::from_secs(3),
+        // Windows CI runners can take >3s to schedule 256×1ms retries.
+        Duration::from_secs(30),
         client.confirmed_request(SERVER_MAC, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C]),
     )
     .await
