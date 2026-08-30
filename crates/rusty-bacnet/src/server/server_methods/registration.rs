@@ -79,6 +79,12 @@ impl BACnetServer {
         }
     }
 
+    /// Test seam for verifying that fallible startup leaves registrations intact.
+    #[doc(hidden)]
+    fn _pending_registration_count(&self) -> PyResult<usize> {
+        Ok(self.lock_pending()?.len())
+    }
+
     /// Add an Analog Input object to the server (before starting).
     #[pyo3(signature = (instance, name, units=62, present_value=0.0))]
     fn add_analog_input(

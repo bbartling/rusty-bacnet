@@ -61,6 +61,10 @@ MSTP_KEYWORD_ONLY = [
     "mstp_max_master",
     "mstp_max_info_frames",
 ]
+SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
+SUPPORTED_BAUD_ERROR = (
+    "mstp_baud must be one of 9600, 19200, 38400, 57600, 76800, or 115200"
+)
 
 
 def nonexistent_serial_path() -> str:
@@ -193,8 +197,49 @@ class SignatureCompatibilityTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             BACnetClient(*client_args)
 
+    def test_mstp_construction_does_not_open_serial(self) -> None:
+        path = nonexistent_serial_path()
+        self.assertIsInstance(make_client(path), BACnetClient)
+        self.assertIsInstance(make_server(path), BACnetServer)
+
 
 class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_supported_baud_rates_reach_serial_open_for_client_and_server(
+        self,
+    ) -> None:
+        path = nonexistent_serial_path()
+        for baud in SUPPORTED_BAUD_RATES:
+            client = make_client(path, mstp_baud=baud)
+            with self.subTest(kind="client", baud=baud), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await client.__aenter__()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+            server = make_server(path, mstp_baud=baud)
+            with self.subTest(kind="server", baud=baud), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await server.start()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+    async def test_unsupported_baud_rates_fail_before_io_for_client_and_server(
+        self,
+    ) -> None:
+        path = nonexistent_serial_path()
+        for baud in (0, 12_345):
+            client = make_client(path, mstp_baud=baud)
+            with self.subTest(kind="client", baud=baud), self.assertRaisesRegex(
+                ValueError, f"^{re.escape(SUPPORTED_BAUD_ERROR)}$"
+            ):
+                await client.__aenter__()
+
+            server = make_server(path, mstp_baud=baud)
+            with self.subTest(kind="server", baud=baud), self.assertRaisesRegex(
+                ValueError, f"^{re.escape(SUPPORTED_BAUD_ERROR)}$"
+            ):
+                await server.start()
+
     async def test_peer_boundaries_in_both_syntaxes_and_legacy_addresses(self) -> None:
         client = BACnetClient()
         oid = ObjectIdentifier(ObjectType.DEVICE, 1)
@@ -242,7 +287,6 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         path = nonexistent_serial_path()
         cases = [
-            ({"mstp_baud": 0}, "mstp_baud must be nonzero"),
             (
                 {"mstp_max_info_frames": 0},
                 "mstp_max_info_frames must be in 1..=255",
@@ -268,7 +312,6 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_client_uses_the_same_pure_validation(self) -> None:
         path = nonexistent_serial_path()
         for overrides, message in [
-            ({"mstp_baud": 0}, "mstp_baud must be nonzero"),
             (
                 {"mstp_max_info_frames": 0},
                 "mstp_max_info_frames must be in 1..=255",
@@ -280,21 +323,23 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await client.__aenter__()
 
-    async def test_construction_is_lazy_and_valid_config_reaches_serial_open(
-        self,
-    ) -> None:
-        path = nonexistent_serial_path()
-        client = make_client(path, mstp_baud=12_345, mstp_max_info_frames=255)
-        server = make_server(path, mstp_baud=12_345, mstp_max_info_frames=255)
+    async def test_serial_open_failure_keeps_server_retryable(self) -> None:
+        server = make_server(nonexistent_serial_path())
+        pending_count = getattr(server, "_pending_registration_count")
+        server.add_binary_value(77, "Pending registration")
+        self.assertEqual(pending_count(), 1)
 
-        for start in (client.__aenter__, server.start):
-            with self.subTest(start=start.__qualname__), self.assertRaises(
-                RuntimeError
-            ) as caught:
-                await start()
+        for attempt in range(2):
+            with self.subTest(attempt=attempt), self.assertRaises(RuntimeError) as caught:
+                await server.start()
             message = str(caught.exception)
             self.assertTrue(message.startswith("Serial open failed"), message)
             self.assertEqual(message.count("Serial open failed"), 1)
+            self.assertEqual(pending_count(), 1)
+
+        # A failed open must also leave the registration phase usable.
+        server.add_binary_input(78, "Registered after retry")
+        self.assertEqual(pending_count(), 2)
 
 
 if __name__ == "__main__":

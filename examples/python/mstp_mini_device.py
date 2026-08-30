@@ -32,7 +32,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Serial device path (for example /dev/serial/by-id/..., /dev/cu.usbserial-*, or COM3)",
     )
-    p.add_argument("--baud", type=int, default=38400, help="MS/TP baud (default 38400)")
+    p.add_argument(
+        "--baud",
+        type=int,
+        default=38400,
+        help="MS/TP baud: 9600, 19200, 38400, 57600, 76800, or 115200",
+    )
     p.add_argument("--mac", type=int, default=3, help="This station MAC (default 3)")
     p.add_argument(
         "--max-master",

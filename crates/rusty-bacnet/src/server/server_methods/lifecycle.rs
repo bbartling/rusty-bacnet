@@ -4,15 +4,20 @@ use super::super::*;
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        if self.transport_type == "mstp" {
-            crate::mstp_py::validate_mstp_config(
-                self.serial_port.as_deref(),
-                self.mstp_baud,
-                self.mstp_mac,
-                self.mstp_max_master,
-                self.mstp_max_info_frames,
-            )?;
-        }
+        // MS/TP serial open is synchronous and must succeed before pending
+        // registrations are moved into the startup future.
+        let mut mstp_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
+            if self.transport_type == "mstp" {
+                Some(crate::mstp_py::build_mstp_transport(
+                    self.serial_port.as_deref(),
+                    self.mstp_baud,
+                    self.mstp_mac,
+                    self.mstp_max_master,
+                    self.mstp_max_info_frames,
+                )?)
+            } else {
+                None
+            };
 
         let inner = self.inner.clone();
         let started = self.started.clone();
@@ -30,15 +35,9 @@ impl BACnetServer {
         let sc_heartbeat_interval_ms = self.sc_heartbeat_interval_ms;
         let sc_heartbeat_timeout_ms = self.sc_heartbeat_timeout_ms;
         let ipv6_interface = self.ipv6_interface.clone();
-        let serial_port = self.serial_port.clone();
-        let mstp_baud = self.mstp_baud;
-        let mstp_mac = self.mstp_mac;
-        let mstp_max_master = self.mstp_max_master;
-        let mstp_max_info_frames = self.mstp_max_info_frames;
         let dcc_password = self.dcc_password.clone();
         let reinit_password = self.reinit_password.clone();
 
-        // Take pending objects (synchronous, before async block)
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
             let mut guard = self.lock_pending()?;
             guard.drain(..).collect()
@@ -129,13 +128,9 @@ impl BACnetServer {
                     }
                     AnyTransport::Sc(Box::new(sc))
                 }
-                "mstp" => crate::mstp_py::build_mstp_transport(
-                    serial_port.as_deref(),
-                    mstp_baud,
-                    mstp_mac,
-                    mstp_max_master,
-                    mstp_max_info_frames,
-                )?,
+                "mstp" => mstp_transport
+                    .take()
+                    .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?,
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
                         "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"

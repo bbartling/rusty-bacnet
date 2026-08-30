@@ -10,7 +10,8 @@ pip install rusty-bacnet
 
 The MS/TP example requires a serial-enabled package, an RS-485 adapter that
 provides automatic transmit-direction control (adapter and driver behavior
-varies), and an unused local master MAC in `0..=127`.
+varies), and an unused local master MAC in `0..=127`. The Python transport
+accepts configured baud rates of 9600, 19200, 38400, 57600, 76800, or 115200.
 
 ## Examples
 

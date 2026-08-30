@@ -11,6 +11,14 @@ use bacnet_types::error::Error;
 /// Serial port type used by the Python bindings' [`AnyTransport`] parameter.
 pub type PySerial = TokioSerialPort;
 
+const SUPPORTED_MSTP_BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
+const SUPPORTED_MSTP_BAUD_ERROR: &str =
+    "mstp_baud must be one of 9600, 19200, 38400, 57600, 76800, or 115200";
+
+fn is_supported_mstp_baud(rate: u32) -> bool {
+    SUPPORTED_MSTP_BAUD_RATES.contains(&rate)
+}
+
 /// Validate Python-owned MS/TP configuration without opening the serial device.
 pub(crate) fn validate_mstp_config(
     serial_port: Option<&str>,
@@ -21,8 +29,8 @@ pub(crate) fn validate_mstp_config(
 ) -> PyResult<&str> {
     let path = serial_port
         .ok_or_else(|| PyValueError::new_err("serial_port is required for transport='mstp'"))?;
-    if mstp_baud == 0 {
-        return Err(PyValueError::new_err("mstp_baud must be nonzero"));
+    if !is_supported_mstp_baud(mstp_baud) {
+        return Err(PyValueError::new_err(SUPPORTED_MSTP_BAUD_ERROR));
     }
     if mstp_mac > 127 {
         return Err(PyValueError::new_err("mstp_mac must be in 0..=127"));
@@ -122,7 +130,9 @@ mod tests {
             "serial_port is required for transport='mstp'",
             true,
         );
-        assert_py_error(validate(0, 1, 127, 1), "mstp_baud must be nonzero", true);
+        for baud in [0, 12_345] {
+            assert_py_error(validate(baud, 1, 127, 1), SUPPORTED_MSTP_BAUD_ERROR, true);
+        }
         assert_py_error(
             validate(38_400, 128, 127, 1),
             "mstp_mac must be in 0..=127",
@@ -146,6 +156,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_all_supported_baud_rates() {
+        for baud in SUPPORTED_MSTP_BAUD_RATES {
+            assert!(validate(baud, 1, 127, 1).is_ok(), "baud {baud}");
+        }
+    }
+
+    #[test]
     fn valid_configuration_reaches_serial_open() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -155,7 +172,7 @@ mod tests {
             .join(format!("rusty-bacnet-missing-{unique}"))
             .join("serial-device");
         let result =
-            build_mstp_transport(Some(path.to_string_lossy().as_ref()), 12_345, 1, 127, 255);
+            build_mstp_transport(Some(path.to_string_lossy().as_ref()), 115_200, 1, 127, 255);
         let err = match result {
             Ok(_) => panic!("nonexistent serial device unexpectedly opened"),
             Err(err) => err,
