@@ -121,7 +121,10 @@ fn b_three_master_ring_2000_rotations() {
     }
 
     assert_eq!(forbidden_self_token, 0, "no Token source==destination");
-    assert!(receipts.iter().all(|&n| n > 0), "every master must receive token: {receipts:?}");
+    assert!(
+        receipts.iter().all(|&n| n > 0),
+        "every master must receive token: {receipts:?}"
+    );
     // Rough fairness: each master should see a large share of 2000 holds
     for (i, &n) in receipts.iter().enumerate() {
         assert!(
@@ -197,7 +200,9 @@ fn d_new_master_in_gap() {
         source: 5,
         data: Bytes::new(),
     };
-    let out = node.handle_received_frame(&reply, &tx).expect("Token to new NS");
+    let out = node
+        .handle_received_frame(&reply, &tx)
+        .expect("Token to new NS");
     assert_eq!(node.next_station, 5);
     assert_eq!(node.poll_station, 3);
     assert_eq!(node.token_count, 0);
@@ -234,8 +239,10 @@ fn e_failed_successor_uses_pfm_not_blind_tokens() {
     assert_ne!(find.frame_type, FrameType::Token);
 
     // Must never blindly Token to unverified addresses after failure
-    assert!(node.pass_token_timeout().is_none() || {
-        // still in PollForMaster — timeout handled by poll_timeout, not more Tokens
-        true
-    });
+    assert!(
+        node.pass_token_timeout().is_none() || {
+            // still in PollForMaster — timeout handled by poll_timeout, not more Tokens
+            true
+        }
+    );
 }
