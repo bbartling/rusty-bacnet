@@ -68,61 +68,6 @@ fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) ->
     )))
 }
 
-#[cfg(test)]
-mod transmittable_length_tests {
-    use super::{check_transmittable_length, LengthBoundedBy};
-
-    #[test]
-    fn conformant_lengths_pass() {
-        for advertised in [50u16, 128, 206, 480, 1024, 1476] {
-            assert!(
-                check_transmittable_length(LengthBoundedBy::DiscoveredPeer(advertised), 1476)
-                    .is_ok(),
-                "{advertised} is at or above MinimumMessageSize"
-            );
-        }
-    }
-
-    /// I-Am carries an Unsigned octet count, not the four-bit code, and Clause
-    /// 20.1.2.5 says the true value "may be larger than indicated in this
-    /// parameter" — so values outside the six encodings are legitimate.
-    #[test]
-    fn lengths_outside_the_encoded_set_are_not_rejected() {
-        for advertised in [51u16, 600, 1500, u16::MAX] {
-            assert!(
-                check_transmittable_length(LengthBoundedBy::DiscoveredPeer(advertised), u16::MAX)
-                    .is_ok(),
-                "{advertised} is conformant even though it is not one of the six encodings"
-            );
-        }
-    }
-
-    /// The error must blame whichever term actually bound the minimum. The peer
-    /// is only sometimes that term: BACnet/SC recomputes its own limit from the
-    /// hub's Connect-Accept, so a transport can fall below the floor while the
-    /// peer is entirely conformant.
-    #[test]
-    fn the_error_names_the_binding_term() {
-        let peer_bound =
-            check_transmittable_length(LengthBoundedBy::DiscoveredPeer(3), 1476).unwrap_err();
-        assert!(
-            peer_bound.to_string().contains("peer's advertised"),
-            "peer is the binding term here, got: {peer_bound}"
-        );
-
-        let transport_bound =
-            check_transmittable_length(LengthBoundedBy::DiscoveredPeer(1476), 48).unwrap_err();
-        assert!(
-            transport_bound.to_string().contains("transport's limit"),
-            "transport is the binding term here and the peer is conformant, got: {transport_bound}"
-        );
-        assert!(
-            !transport_bound.to_string().contains("peer's advertised"),
-            "must not blame a conformant peer for the transport's limit"
-        );
-    }
-}
-
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send a confirmed request and wait for the response.
     ///
@@ -175,12 +120,41 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
+        // The lease serializes one active request per (immediate router, DNET)
+        // and remains live through every return path, including cancellation.
+        let path_lease = match target {
+            ConfirmedTarget::Local { .. } => None,
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                ..
+            } => Some(
+                self.routed_path_limits
+                    .acquire(router_mac, dest_network)
+                    .await?,
+            ),
+        };
+        let (routed_path_max_apdu, routed_forwarded_npci_len) = match (path_lease.as_ref(), target)
+        {
+            (
+                Some(lease),
+                ConfirmedTarget::Routed {
+                    dest_mac,
+                    dest_network: _,
+                    router_mac: _,
+                },
+            ) => (
+                Some(lease.max_apdu(dest_mac.len(), self.local_mac.len())?),
+                Some(lease.forwarded_npci_len(dest_mac.len(), self.local_mac.len())?),
+            ),
+            _ => (None, None),
+        };
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let unsegmented_apdu_size = 4 + service_data.len();
         let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
-        let (remote_max_apdu, remote_max_segments, advertised, peer_segmentation) = {
+        let (peer_max_apdu, remote_max_segments, advertised, peer_segmentation) = {
             let dt = self.device_table.lock().await;
             // A routed peer is recorded under the router's MAC, so only the
             // SNET/SADR of the NPDU that carried its I-Am identifies it
@@ -208,14 +182,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             } else {
                 LengthBoundedBy::LocalConfig(max_apdu)
             };
-            (
-                max_apdu.min(target_transport_max_apdu),
-                max_seg,
-                advertised,
-                peer_segmentation,
-            )
+            (max_apdu, max_seg, advertised, peer_segmentation)
         };
         check_transmittable_length(advertised, target_transport_max_apdu)?;
+        if routed_path_max_apdu.is_some_and(|path_max_apdu| {
+            path_max_apdu < MINIMUM_MESSAGE_SIZE
+                && path_max_apdu <= peer_max_apdu.min(target_transport_max_apdu)
+        }) {
+            let ConfirmedTarget::Routed { dest_network, .. } = target else {
+                unreachable!("a routed path limit exists only for a routed target")
+            };
+            return Err(Error::RoutedPathTooLong { dnet: dest_network });
+        }
+        let remote_max_apdu = peer_max_apdu
+            .min(target_transport_max_apdu)
+            .min(routed_path_max_apdu.unwrap_or(u16::MAX));
         if unsegmented_apdu_size > remote_max_apdu as usize {
             // Clause 12.11: a NO_SEGMENTATION or SEGMENTED_TRANSMIT peer
             // accepts exactly one segment — only unsegmented requests — and
@@ -244,6 +225,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     service_data,
                     remote_max_apdu,
                     remote_max_segments,
+                    routed_forwarded_npci_len,
+                    path_lease.as_ref(),
                 )
                 .await;
         }
@@ -286,6 +269,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(6 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        if let Some(forwarded_npci_len) = routed_forwarded_npci_len {
+            self.routed_path_limits.install_active(
+                target,
+                tsm_mac.clone(),
+                invoke_id,
+                owner.clone(),
+                forwarded_npci_len,
+                self.network.network_control_ingress_sequence(),
+            );
+        }
+        if !self.routed_path_limits.authorize_attempt(
+            target,
+            &tsm_mac,
+            invoke_id,
+            &owner,
+            buf.len(),
+        ) {
+            guard.mark_completed();
+            self.tsm
+                .lock()
+                .await
+                .cancel_transaction_for_owner(&tsm_mac, invoke_id, &owner);
+            self.enqueue_transaction_cleanup(&tsm_mac, invoke_id, &owner, false, None);
+            return Err(Error::Encoding(
+                "routed send lost its active path authorization".into(),
+            ));
+        }
+
         if let Err(e) = self.send_confirmed_target_apdu(target, &buf).await {
             guard.mark_completed();
             let mut tsm = self.tsm.lock().await;
@@ -306,6 +317,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Some(&buf),
             )
             .await;
+        if response.is_ok() {
+            if let Some(lease) = path_lease.as_ref() {
+                lease.mark_terminal_observed();
+            }
+        }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)
     }
@@ -380,6 +396,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     };
                                     retries_sent += 1;
                                     drop(tsm);
+                                    if !self.routed_path_limits.authorize_attempt(
+                                        target,
+                                        tsm_mac,
+                                        invoke_id,
+                                        owner,
+                                        retry_apdu.len(),
+                                    ) {
+                                        return (&mut response_rx).await.map_err(|_| {
+                                            Error::Encoding("TSM response channel closed".into())
+                                        });
+                                    }
                                     let send_result = self
                                         .send_confirmed_target_apdu(target, retry_apdu)
                                         .await;
@@ -627,3 +654,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "requests_tests.rs"]
+mod transmittable_length_tests;
