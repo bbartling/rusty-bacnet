@@ -2238,7 +2238,9 @@
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_every_truncated_vector_and_invalid_start_without_panic",
     "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_malformed_choices_members_and_framing",
-    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_oid_width_is_atomic_for_both_reference_fields"
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_oid_width_is_atomic_for_both_reference_fields",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_device_instance_is_atomic",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_object_instance_is_atomic"
    ],
    "benchmarks": [],
    "public_claims": [

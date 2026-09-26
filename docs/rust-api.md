@@ -103,8 +103,9 @@ The Object payload contains a required object identifier and an optional device
 identifier; it replaces the earlier bare ObjectIdentifier payload.
 
 `bacnet_encoding::constructed::encode_value_source(&mut BytesMut, &BACnetValueSource)`
-returns `Result<(), Error>` and appends one framed CHOICE. Invalid object-type
-widths and unencodable MAC lengths are rejected before changing the buffer.
+returns `Result<(), Error>` and appends one framed CHOICE. Invalid object-type or
+instance widths in either reference field, and unencodable MAC lengths, are rejected
+before changing the buffer.
 `decode_value_source(&[u8], offset)` returns `Result<(BACnetValueSource, usize), Error>`;
 the second value is the next absolute offset, and suffix bytes remain available.
 A consumer decoding a complete property payload must check that this offset equals
