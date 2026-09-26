@@ -28,7 +28,7 @@ const BASE: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(
         P::CURRENT_COMMAND_PRIORITY,

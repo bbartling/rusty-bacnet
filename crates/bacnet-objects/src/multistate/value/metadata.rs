@@ -60,7 +60,7 @@ const BASE: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::NUMBER_OF_STATES, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(
         P::CURRENT_COMMAND_PRIORITY,
@@ -102,7 +102,7 @@ mod tests {
         for mut object in objects {
             let readbacks = [P::VALUE_SOURCE, P::LAST_COMMAND_TIME]
                 .map(|p| object.read_property(p, None).unwrap());
-            for p in [P::PRESENT_VALUE, P::PRIORITY_ARRAY, P::RELINQUISH_DEFAULT] {
+            for p in [P::PRESENT_VALUE, P::RELINQUISH_DEFAULT] {
                 let index = (p == P::PRIORITY_ARRAY).then_some(8);
                 for invalid in [0, 4, u64::from(u32::MAX) + 1] {
                     let before = object.read_property(p, index).unwrap();

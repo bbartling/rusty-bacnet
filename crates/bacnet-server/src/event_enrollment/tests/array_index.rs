@@ -409,10 +409,10 @@ fn null_indexed_element_interrupts_the_pending_delay() {
     db.get_mut(&value_oid)
         .unwrap()
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Null,
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Null,
+            Some(1),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -427,10 +427,10 @@ fn null_indexed_element_interrupts_the_pending_delay() {
     db.get_mut(&value_oid)
         .unwrap()
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Real(90.0),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Real(90.0),
+            Some(1),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -531,10 +531,10 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
     db.get_mut(&setpoint_oid)
         .unwrap()
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Null,
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Null,
+            Some(1),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -549,10 +549,10 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
     db.get_mut(&setpoint_oid)
         .unwrap()
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Real(50.0),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Real(50.0),
+            Some(1),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());

@@ -1378,6 +1378,14 @@ Admission-time overflow returns RESOURCES/NO_SPACE_TO_ADD_LIST_ELEMENT before
 replacement/context refresh. A later unavailable or oversized value is skipped
 without advancing its baseline. Independent notification traffic budgets remain.
 
+The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
+Set or relinquish a priority slot by writing a value or NULL to `Present_Value`
+with the desired priority. Whole-array and indexed `Priority_Array` writes are
+denied, including index 0 (the element count); indexed reads remain available.
+A refused direct array write does not change the effective value or terminate
+an active lighting operation. WPM preserves valid earlier writes when it reaches
+such a denied element. This does not impose a write policy on custom objects.
+
 The selected local property profile compares Real, Double, Signed and Unsigned
 values in their own types. Only numeric Present_Value inherits the object's
 COV_Increment when omitted; other numeric coordinates without an increment report

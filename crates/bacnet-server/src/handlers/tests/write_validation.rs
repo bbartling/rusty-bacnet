@@ -425,10 +425,10 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     // Occupy priority 8 so PV tracks the command, not the default.
     let slot = WritePropertyRequest {
         object_identifier: ao_oid,
-        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-        property_array_index: Some(8),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
         property_value: encode_value(PropertyValue::Real(55.0)),
-        priority: None,
+        priority: Some(8),
     };
     let mut buf = BytesMut::new();
     slot.encode(&mut buf).unwrap();
@@ -469,10 +469,10 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     // Relinquish priority 8: PV falls back to the new default.
     let slot = WritePropertyRequest {
         object_identifier: ao_oid,
-        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-        property_array_index: Some(8),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
         property_value: encode_value(PropertyValue::Null),
-        priority: None,
+        priority: Some(8),
     };
     let mut buf = BytesMut::new();
     slot.encode(&mut buf).unwrap();

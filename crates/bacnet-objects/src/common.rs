@@ -784,44 +784,6 @@ macro_rules! write_priority_array {
 }
 pub(crate) use write_priority_array;
 
-/// Handle direct writes to PRIORITY_ARRAY[index].
-///
-/// If `property` is PRIORITY_ARRAY and `array_index` is Some(1..=16),
-/// writes to that priority slot. Null relinquishes; otherwise `$extract`
-/// converts the value. Calls `recalculate_present_value()` after write.
-///
-/// Index validation follows Clause 12.1.5.1: an out-of-range index is
-/// PROPERTY / INVALID_ARRAY_INDEX; an omitted index means whole-array
-/// access, and whole-array writes are not supported on commandable objects,
-/// so it is PROPERTY / WRITE_ACCESS_DENIED — a protocol error that the
-/// service layer can return as Result(-) (Clause 15.9.1.3).
-///
-/// Returns early with `Ok(())` or `Err(...)` if the property is PRIORITY_ARRAY.
-/// Falls through (does nothing) if the property is not PRIORITY_ARRAY.
-macro_rules! write_priority_array_direct {
-    ($self:expr, $property:expr, $array_index:expr, $value:expr, $extract:expr) => {
-        if $property == bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY {
-            let idx = match $array_index {
-                Some(n) if (1..=16).contains(&n) => (n - 1) as usize,
-                Some(_) => return Err($crate::common::invalid_array_index_error()),
-                None => return Err($crate::common::write_access_denied_error()),
-            };
-            match $value {
-                bacnet_types::primitives::PropertyValue::Null => {
-                    $self.priority_array[idx] = None;
-                }
-                other => {
-                    let extracted = ($extract)(other)?;
-                    $self.priority_array[idx] = Some(extracted);
-                }
-            }
-            $self.recalculate_present_value();
-            return Ok(());
-        }
-    };
-}
-pub(crate) use write_priority_array_direct;
-
 /// Write COV_INCREMENT with non-negative validation.
 ///
 /// Returns `Some(Ok(()))` if handled, `Some(Err(...))` for type/range errors,
@@ -856,7 +818,7 @@ pub(crate) fn write_cov_increment(
 // on the core object types. Each predicate mirrors the arms of the matching
 // `write_property` implementation (via the `write_generic_event_properties!` and
 // `write_analog_event_properties!` macros and
-// the `write_priority_array!` / `write_priority_array_direct!` macros) so PICS
+// the `write_priority_array!` macro) so PICS
 // and runtime dispatch share one truth source. Keep these in lock-step with
 // the macros below.
 
@@ -899,22 +861,20 @@ pub(crate) fn is_event_property_writable(
 
 /// Writable commandable-object properties shared by all commandable types
 /// (AnalogOutput, AnalogValue, BinaryOutput, BinaryValue, MultiStateOutput,
-/// MultiStateValue): `PRIORITY_ARRAY` direct writes, commandable
-/// `PRESENT_VALUE` writes, and the validated `RELINQUISH_DEFAULT` write arm
+/// MultiStateValue): commandable `PRESENT_VALUE` writes and the validated
+/// `RELINQUISH_DEFAULT` write arm
 /// (#270 — the standard permits Relinquish_Default to be writable; the
 /// conformance tables carry it R or O, and the writability implemented here
 /// is permitted, not required).
 ///
-/// `CURRENT_COMMAND_PRIORITY` stays read-only: it is derived from the
-/// priority array, so no `write_property` arm accepts it.
+/// `PRIORITY_ARRAY` and derived `CURRENT_COMMAND_PRIORITY` stay read-only.
 #[inline]
 pub(crate) fn is_commandable_property_writable(
     property: bacnet_types::enums::PropertyIdentifier,
 ) -> bool {
     matches!(
         property,
-        bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY
-            | bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
+        bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
             | bacnet_types::enums::PropertyIdentifier::RELINQUISH_DEFAULT
     )
 }
@@ -934,8 +894,8 @@ pub(crate) fn is_common_writable(property: bacnet_types::enums::PropertyIdentifi
 }
 
 /// Writable properties for commandable Multi-State objects (MSO, MSV):
-/// commandable (PRIORITY_ARRAY + PRESENT_VALUE) + common + STATE_TEXT.
-/// Mirrors the `write_property` arms of MultiStateOutput/Value.
+/// PRESENT_VALUE + RELINQUISH_DEFAULT + common + STATE_TEXT. Priority_Array
+/// remains read-only, matching the MultiStateOutput/Value write dispatch.
 #[inline]
 pub(crate) fn is_multistate_commandable_writable(
     property: bacnet_types::enums::PropertyIdentifier,

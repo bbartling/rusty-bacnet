@@ -617,8 +617,9 @@ fn write_property_omitted_index_priority_array_is_write_access_denied() {
 }
 
 #[test]
-fn priority_array_out_of_range_index_stays_invalid_array_index() {
-    // Indexes 0 and 17 are outside the fixed 1..=16 array: INVALID_ARRAY_INDEX.
+fn priority_array_count_and_out_of_range_write_are_read_only() {
+    // Index 0 is the count; 17 is beyond the slots. Read-only denial precedes
+    // property-specific range validation for both (§19.2.1).
     let mut db = gating_db();
     let ao = oid(ObjectType::ANALOG_OUTPUT, 1);
     for index in [Some(0), Some(17)] {
@@ -631,7 +632,7 @@ fn priority_array_out_of_range_index_stays_invalid_array_index() {
                 index,
                 value.clone(),
             ),
-            ErrorCode::INVALID_ARRAY_INDEX,
+            ErrorCode::WRITE_ACCESS_DENIED,
             &format!("WPM PRIORITY_ARRAY index {index:?}"),
         );
         assert_protocol_error(
@@ -642,7 +643,7 @@ fn priority_array_out_of_range_index_stays_invalid_array_index() {
                 index,
                 value,
             ),
-            ErrorCode::INVALID_ARRAY_INDEX,
+            ErrorCode::WRITE_ACCESS_DENIED,
             &format!("WriteProperty PRIORITY_ARRAY index {index:?}"),
         );
     }

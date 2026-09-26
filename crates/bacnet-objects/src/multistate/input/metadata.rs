@@ -280,7 +280,6 @@ mod tests {
                         | P::DESCRIPTION
                         | P::PRESENT_VALUE
                         | P::OUT_OF_SERVICE
-                        | P::PRIORITY_ARRAY
                         | P::RELINQUISH_DEFAULT
                         | P::EVENT_DETECTION_ENABLE
                         | P::EVENT_ENABLE

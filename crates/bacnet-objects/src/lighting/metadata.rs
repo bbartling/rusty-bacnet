@@ -72,7 +72,7 @@ const LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
     PropertyMetadata::new(P::DEFAULT_FADE_TIME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -90,7 +90,7 @@ const BINARY_LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -335,7 +335,6 @@ mod tests {
                     P::LIGHTING_COMMAND_DEFAULT_PRIORITY,
                     P::BLINK_WARN_ENABLE,
                     P::EGRESS_TIME,
-                    P::PRIORITY_ARRAY,
                     P::RELINQUISH_DEFAULT,
                 ],
             ),
@@ -347,7 +346,6 @@ mod tests {
                     P::PRESENT_VALUE,
                     P::BLINK_WARN_ENABLE,
                     P::EGRESS_TIME,
-                    P::PRIORITY_ARRAY,
                     P::RELINQUISH_DEFAULT,
                 ],
             ),
@@ -377,9 +375,7 @@ mod tests {
                         capability.is_writable(),
                         "{p:?}"
                     );
-                    // Priority_Array whole-array writes are denied by design;
-                    // exercise an indexed slot instead so the Always route is
-                    // proven without the whole-array denial.
+                    // Indexed reads remain valid even though Priority_Array is read-only.
                     let (value, index) = if p == P::PRIORITY_ARRAY {
                         let value = object.read_property(p, Some(8)).unwrap();
                         (value, Some(8))

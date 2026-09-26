@@ -319,14 +319,14 @@ fn ao_priority_array_read_all_slots_none_by_default() {
 }
 
 #[test]
-fn ao_direct_priority_array_write_value() {
+fn ao_present_value_priority_write_value() {
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
-    // Write directly to PRIORITY_ARRAY[5]
+    // Command Present_Value at priority 5
     ao.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(42.0),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(42.0),
+        Some(5),
     )
     .unwrap();
     // present_value should reflect the written value
@@ -344,22 +344,22 @@ fn ao_direct_priority_array_write_value() {
 }
 
 #[test]
-fn ao_direct_priority_array_relinquish() {
+fn ao_present_value_priority_relinquish() {
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
     // Write a value at priority 5
     ao.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(42.0),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(42.0),
+        Some(5),
     )
     .unwrap();
     // Relinquish with Null
     ao.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
     // Should fall back to relinquish default (0.0)
@@ -407,8 +407,7 @@ fn ao_direct_priority_array_no_index_error() {
 
 #[test]
 fn ao_direct_priority_array_index_zero_error() {
-    // Element 0 is the read-only array size: outside the writable 1..=16
-    // slots → INVALID_ARRAY_INDEX.
+    // Element 0 is the read-only array count; all direct array writes are denied.
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
     match ao
         .write_property(
@@ -426,10 +425,10 @@ fn ao_direct_priority_array_index_zero_error() {
             );
             assert_eq!(
                 code,
-                bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
             );
         }
-        other => panic!("expected PROPERTY/INVALID_ARRAY_INDEX, got {other:?}"),
+        other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
 }
 
@@ -452,10 +451,10 @@ fn ao_direct_priority_array_index_17_error() {
             );
             assert_eq!(
                 code,
-                bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
             );
         }
-        other => panic!("expected PROPERTY/INVALID_ARRAY_INDEX, got {other:?}"),
+        other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
 }
 
@@ -471,7 +470,7 @@ fn ao_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
     // Commandable.
-    assert!(ao.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!ao.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(ao.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     // Event + common.
     assert!(ao.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));

@@ -312,16 +312,16 @@ fn msv_read_reliability_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // NO_FAULT_DETECTED
 }
 
-// --- MultiStateValue direct PRIORITY_ARRAY writes ---
+// --- MultiStateValue commands and read-only Priority_Array writes ---
 
 #[test]
-fn msv_direct_priority_array_write_value() {
+fn msv_present_value_priority_write_value() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
     msv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Unsigned(3),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(3),
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -337,20 +337,20 @@ fn msv_direct_priority_array_write_value() {
 }
 
 #[test]
-fn msv_direct_priority_array_relinquish() {
+fn msv_present_value_priority_relinquish() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
     msv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Unsigned(3),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(3),
+        Some(5),
     )
     .unwrap();
     msv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -397,13 +397,13 @@ fn msv_direct_priority_array_index_17_error() {
 }
 
 #[test]
-fn msv_direct_priority_array_range_validation() {
+fn msv_present_value_priority_range_validation() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
     // Value 0 is out of range (valid: 1..=5)
     assert!(msv
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
             PropertyValue::Unsigned(0),
             None
         )
@@ -411,32 +411,32 @@ fn msv_direct_priority_array_range_validation() {
     // Value 6 is out of range
     assert!(msv
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
             PropertyValue::Unsigned(6),
             None
         )
         .is_err());
     // Value 5 is valid
     msv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(1),
-        PropertyValue::Unsigned(5),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(5),
+        Some(1),
     )
     .unwrap();
 }
 
-// --- Direct PRIORITY_ARRAY writes ---
+// --- Present_Value commands and read-only Priority_Array writes ---
 
 #[test]
-fn mso_direct_priority_array_write_value() {
+fn mso_present_value_priority_write_value() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
     mso.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Unsigned(3),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(3),
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -452,20 +452,20 @@ fn mso_direct_priority_array_write_value() {
 }
 
 #[test]
-fn mso_direct_priority_array_relinquish() {
+fn mso_present_value_priority_relinquish() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
     mso.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Unsigned(3),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(3),
+        Some(5),
     )
     .unwrap();
     mso.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
     // Fall back to relinquish default (1)
@@ -542,7 +542,7 @@ fn mso_is_createable_and_writable_match_factory() {
         "MultiStateOutput is factory-constructable"
     );
     // Commandable + STATE_TEXT + common.
-    assert!(mso.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!mso.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(mso.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(mso.is_writable_property(PropertyIdentifier::STATE_TEXT));
     assert!(mso.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
@@ -562,7 +562,7 @@ fn msv_is_createable_and_writable_match_factory() {
         "MultiStateValue is factory-constructable"
     );
     // Commandable + STATE_TEXT + common.
-    assert!(msv.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!msv.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(msv.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(msv.is_writable_property(PropertyIdentifier::STATE_TEXT));
     assert!(msv.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
@@ -641,10 +641,10 @@ fn mso_one_state_initial_and_relinquish_default_in_range() {
     // the effective value genuinely falls back to the in-range default (not a
     // no-op relinquish of an already-empty slot).
     mso.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(8),
-        PropertyValue::Unsigned(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(1),
+        Some(8),
     )
     .unwrap();
     assert_eq!(
@@ -653,10 +653,10 @@ fn mso_one_state_initial_and_relinquish_default_in_range() {
         PropertyValue::Unsigned(1)
     );
     mso.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(8),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(8),
     )
     .unwrap();
     assert_eq!(
@@ -682,10 +682,10 @@ fn msv_one_state_initial_and_relinquish_default_in_range() {
     // Command the only valid state (1) at priority 8, then relinquish slot 8 so
     // the effective value genuinely falls back to the in-range default.
     msv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(8),
-        PropertyValue::Unsigned(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Unsigned(1),
+        Some(8),
     )
     .unwrap();
     assert_eq!(
@@ -694,10 +694,10 @@ fn msv_one_state_initial_and_relinquish_default_in_range() {
         PropertyValue::Unsigned(1)
     );
     msv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(8),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(8),
     )
     .unwrap();
     assert_eq!(

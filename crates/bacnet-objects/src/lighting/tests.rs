@@ -126,13 +126,13 @@ fn lighting_output_priority_array_read() {
 }
 
 #[test]
-fn lighting_output_priority_array_direct_write() {
+fn lighting_output_priority_array_tracks_present_value_command() {
     let mut obj = LightingOutputObject::new(1, "LO-1").unwrap();
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(33.0),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(33.0),
+        Some(5),
     )
     .unwrap();
     let pv = obj
@@ -371,13 +371,13 @@ fn binary_lighting_output_priority_array() {
 }
 
 #[test]
-fn binary_lighting_output_priority_array_direct_write() {
+fn binary_lighting_output_priority_array_tracks_present_value_command() {
     let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(3),
-        PropertyValue::Enumerated(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Enumerated(1),
+        Some(3),
     )
     .unwrap();
     let pv = obj

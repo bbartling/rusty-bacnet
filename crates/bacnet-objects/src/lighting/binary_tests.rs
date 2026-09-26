@@ -426,7 +426,7 @@ fn invalid_commands_are_side_effect_free_before_halt() {
                 None,
             )
             .unwrap_err(),
-        ErrorCode::VALUE_OUT_OF_RANGE,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_eq!(
         read(&object, PropertyIdentifier::EGRESS_ACTIVE),
@@ -437,16 +437,19 @@ fn invalid_commands_are_side_effect_free_before_halt() {
 }
 
 #[test]
-fn direct_priority_array_accepts_only_off_on_and_null_with_exact_errors() {
+fn direct_priority_array_denies_all_values_with_exact_errors() {
     let mut object = BinaryLightingOutputObject::new(1, "BLO").unwrap();
     for value in [
         PropertyValue::Enumerated(OFF),
         PropertyValue::Enumerated(ON),
         PropertyValue::Null,
     ] {
-        object
-            .write_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8), value, None)
-            .unwrap();
+        assert_property_error(
+            object
+                .write_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8), value, None)
+                .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
     }
     for value in [2, 3, 4, 5, 63, 64, 255, u32::MAX] {
         assert_property_error(
@@ -458,7 +461,7 @@ fn direct_priority_array_accepts_only_off_on_and_null_with_exact_errors() {
                     None,
                 )
                 .unwrap_err(),
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_eq!(slot(&object, 8), PropertyValue::Null);
     }
@@ -471,7 +474,7 @@ fn direct_priority_array_accepts_only_off_on_and_null_with_exact_errors() {
                 None,
             )
             .unwrap_err(),
-        ErrorCode::INVALID_DATA_TYPE,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
     for index in [Some(0), Some(17)] {
         assert_property_error(
@@ -483,7 +486,7 @@ fn direct_priority_array_accepts_only_off_on_and_null_with_exact_errors() {
                     None,
                 )
                 .unwrap_err(),
-            ErrorCode::INVALID_ARRAY_INDEX,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
     }
     assert_property_error(

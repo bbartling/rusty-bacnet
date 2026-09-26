@@ -166,11 +166,22 @@ async fn wpm_allow_all_preserves_order_index_priority_and_raw_value() {
         true
     })));
     let absent = Fixture::new(None);
-    let mut spec = description(oid(ObjectType::BINARY_VALUE, 1), "first");
+    for fixture in [&allow, &absent] {
+        fixture
+            .db
+            .write()
+            .await
+            .add(Box::new(
+                bacnet_objects::multistate::MultiStateValueObject::new(1, "array-policy", 8)
+                    .unwrap(),
+            ))
+            .unwrap();
+    }
+    let mut spec = description(oid(ObjectType::MULTI_STATE_VALUE, 1), "first");
     spec.list_of_properties.push(BACnetPropertyValue {
-        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
+        property_identifier: PropertyIdentifier::STATE_TEXT,
         property_array_index: Some(8),
-        value: value(PropertyValue::Enumerated(1)),
+        value: value(PropertyValue::CharacterString("eighth".into())),
         priority: Some(4),
     });
     let bytes = wpm(vec![
@@ -198,15 +209,18 @@ async fn wpm_allow_all_preserves_order_index_priority_and_raw_value() {
     };
     assert_eq!(
         second.reference.object_identifier,
-        oid(ObjectType::BINARY_VALUE, 1)
+        oid(ObjectType::MULTI_STATE_VALUE, 1)
     );
     assert_eq!(
         second.reference.property_identifier,
-        PropertyIdentifier::PRIORITY_ARRAY.to_raw()
+        PropertyIdentifier::STATE_TEXT.to_raw()
     );
     assert_eq!(second.reference.property_array_index, Some(8));
     assert_eq!(second.priority, Some(4));
-    assert_eq!(second.value, value(PropertyValue::Enumerated(1)));
+    assert_eq!(
+        second.value,
+        value(PropertyValue::CharacterString("eighth".into()))
+    );
 }
 
 #[tokio::test]

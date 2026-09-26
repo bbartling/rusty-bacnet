@@ -189,18 +189,18 @@ fn mso_configuration_sources_are_scanned_and_dominate_invalid_present_value() {
     let mut priority = MultiStateOutputObject::new(1, "MSO-priority", 3).unwrap();
     priority
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(3),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(3),
+            Some(16),
         )
         .unwrap();
     priority
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(8),
-            PropertyValue::Unsigned(1),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(1),
+            Some(8),
         )
         .unwrap();
     priority.set_number_of_states(2).unwrap();
@@ -211,10 +211,10 @@ fn mso_configuration_sources_are_scanned_and_dominate_invalid_present_value() {
     );
     priority
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(2),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(2),
+            Some(16),
         )
         .unwrap();
     assert_eq!(
@@ -280,18 +280,18 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
     let mut priority = MultiStateValueObject::new(1, "MSV-priority", 3).unwrap();
     priority
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(3),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(3),
+            Some(16),
         )
         .unwrap();
     priority
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(8),
-            PropertyValue::Unsigned(1),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(1),
+            Some(8),
         )
         .unwrap();
     priority.set_number_of_states(2).unwrap();
@@ -301,10 +301,10 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
     );
     priority
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(2),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(2),
+            Some(16),
         )
         .unwrap();
     assert_eq!(
