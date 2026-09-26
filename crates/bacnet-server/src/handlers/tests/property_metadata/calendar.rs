@@ -108,7 +108,7 @@ mod pics {
 
     #[test]
     fn calendar_property_metadata_rows_and_createability_are_exact() {
-        let expected = [
+        let mut expected = [
             (P::OBJECT_IDENTIFIER, false, false),
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
@@ -137,6 +137,7 @@ mod pics {
                     (row.property_id, row.access.optional, row.access.writable)
                 })
                 .collect();
+            expected.sort_by_key(|row| row.0.to_raw());
             assert_eq!(rows, expected);
         }
     }

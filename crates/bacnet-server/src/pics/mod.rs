@@ -14,6 +14,8 @@ use bacnet_types::primitives::PropertyValue;
 
 use crate::server::ServerConfig;
 
+const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configured instances: a row or access flag means at least one instance supports it. Actual availability and access depend on the concrete object. Optional is the metadata conformance classification; a required declaration wins, and absent rows do not vote.";
+
 // ───────────────────────────── Data model ──────────────────────────────────
 
 /// Complete PICS document per ASHRAE 135-2020 Annex A.
@@ -80,7 +82,9 @@ impl fmt::Display for DeviceProfile {
     }
 }
 
-/// Property access flags for a supported property.
+/// Property capabilities across configured instances of an object type.
+/// Read/write flags mean at least one instance supports that access. Optional is
+/// true only when every present metadata row is optional; absent rows do not vote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PropertyAccess {
     pub readable: bool,
@@ -110,6 +114,7 @@ pub struct ObjectTypeSupport {
     pub object_type: ObjectType,
     pub createable: bool,
     pub deleteable: bool,
+    /// Union of effective instance rows in ascending property-ID order.
     pub supported_properties: Vec<PropertySupport>,
 }
 
@@ -286,19 +291,24 @@ impl<'a> PicsGenerator<'a> {
         for (raw_type, objects) in &by_type {
             let object_type = ObjectType::from_raw(*raw_type);
             let representative = objects[0];
+            let view = (self.served && object_type == ObjectType::DEVICE).then(|| {
+                crate::device_view::DeviceReadContext::new(
+                    self.db,
+                    crate::device_view::DeviceExecution::FullServer,
+                    None,
+                )
+            });
             let supported_properties =
-                if object_type == ObjectType::AUDIT_REPORTER && objects.len() > 1 {
-                    Self::audit_reporter_property_support(objects)
-                } else if self.served && object_type == ObjectType::DEVICE {
-                    let view = crate::device_view::DeviceReadContext::new(
-                        self.db,
-                        crate::device_view::DeviceExecution::FullServer,
-                        None,
-                    );
-                    Self::object_property_support(&view.object(representative))
-                } else {
-                    Self::object_property_support(representative)
-                };
+                Self::union_property_support(objects.iter().flat_map(|object| {
+                    if let Some(view) = &view {
+                        Self::object_property_support(&view.object(*object))
+                    } else {
+                        Self::object_property_support(*object)
+                    }
+                }));
+
+            // Factory/deletion capabilities are type-level declarations, not
+            // per-instance property capabilities. Preserve that separate policy.
 
             let createable = representative.is_createable();
             let deleteable = representative.is_deleteable();
@@ -346,27 +356,22 @@ impl<'a> PicsGenerator<'a> {
         }
     }
 
-    fn audit_reporter_property_support(
-        objects: &[&dyn bacnet_objects::traits::BACnetObject],
+    fn union_property_support(
+        rows: impl IntoIterator<Item = PropertySupport>,
     ) -> Vec<PropertySupport> {
-        // PICS describes object-type capabilities, not just the selected audit
-        // producer. Union effective rows so another instance's optional property
-        // is neither hidden nor advertised when absent from every instance.
-        // Property-ID ordering is independent of database iteration order.
+        // A type row records capabilities across all configured instances.
+        // Missing properties do not vote on conformance; a required present row
+        // wins over optional rows. Sort even a single instance by property ID.
         let mut properties: BTreeMap<u32, PropertySupport> = BTreeMap::new();
-        for object in objects {
-            for row in Self::object_property_support(*object) {
-                properties
-                    .entry(row.property_id.to_raw())
-                    .and_modify(|existing| {
-                        existing.access.readable |= row.access.readable;
-                        existing.access.writable |= row.access.writable;
-                        // Keep the base conformance classification: a required
-                        // row is not made optional by another instance's absence.
-                        existing.access.optional &= row.access.optional;
-                    })
-                    .or_insert(row);
-            }
+        for row in rows {
+            properties
+                .entry(row.property_id.to_raw())
+                .and_modify(|existing| {
+                    existing.access.readable |= row.access.readable;
+                    existing.access.writable |= row.access.writable;
+                    existing.access.optional &= row.access.optional;
+                })
+                .or_insert(row);
         }
         properties.into_values().collect()
     }
@@ -484,6 +489,8 @@ impl Pics {
         out.push_str(&format!("Profile: {}\n\n", self.device_profile));
 
         out.push_str("--- Supported Object Types ---\n");
+        out.push_str(PROPERTY_CAPABILITIES_EXPLANATION);
+        out.push('\n');
         for ot in &self.supported_object_types {
             out.push_str(&format!(
                 "\n  Object Type: {} (createable={}, deleteable={})\n",
@@ -590,6 +597,8 @@ impl Pics {
         out.push_str(&format!("**{}**\n\n", self.device_profile));
 
         out.push_str("## Supported Object Types\n\n");
+        out.push_str(PROPERTY_CAPABILITIES_EXPLANATION);
+        out.push_str("\n\n");
         for ot in &self.supported_object_types {
             out.push_str(&format!(
                 "### {}\n\n- Createable: {}\n- Deleteable: {}\n\n",
@@ -726,3 +735,6 @@ mod acked_transitions_policy_tests;
 
 #[cfg(test)]
 mod truth_source_tests;
+
+#[cfg(test)]
+mod property_union_tests;

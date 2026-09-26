@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- PICS property rows now aggregate every configured instance of each object type
+  (#838), including mixed stream/record and read-only File objects. Presence and
+  read/write capabilities are unions; required declarations win over optional
+  ones. All rows sort by property ID, including single-instance output. Text and
+  Markdown explain that availability and access depend on the concrete object.
+  Served Device rows retain the executor-owned view before aggregation.
+
 - Served Device service bits, COV property presence, Property_List and RPM
   classification now come from the actual executor (#834). Full-server reads,
   local reads and PICS remain coherent after Device profile mutation, replacement

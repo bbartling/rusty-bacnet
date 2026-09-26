@@ -23,7 +23,7 @@ impl AuditLogPersistence for MemoryPersistence {
 
 #[test]
 fn pics_audit_log_property_metadata_is_exact() {
-    // Independent (identifier, optional, writable) rows in projection order.
+    // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     let expected = [
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, false),
@@ -55,12 +55,12 @@ fn pics_audit_log_property_metadata_is_exact() {
             (row.property_id, row.access.optional, row.access.writable)
         })
         .collect();
-    assert_eq!(rows, expected);
+    assert_eq!(rows, sorted_rows(&expected));
     assert_eq!(
         rows.iter()
             .filter_map(|&(p, optional, _)| (!optional).then_some(p))
             .collect::<Vec<_>>(),
-        required.as_ref()
+        sorted_required(required.as_ref())
     );
 }
 

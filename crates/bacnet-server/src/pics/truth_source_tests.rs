@@ -620,7 +620,7 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
 }
 
 #[test]
-fn pics_file_resize_writability_uses_the_isolated_representative() {
+fn pics_file_resize_writability_matches_single_instance_metadata() {
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_objects::file::FileObject;
     use bacnet_types::enums::FileAccessMethod;

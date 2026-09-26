@@ -7,7 +7,7 @@ use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
 fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
-    // Independent (identifier, optional, writable) rows in projection order.
+    // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     match kind {
         ObjectType::ACCESS_DOOR => vec![
             (P::OBJECT_IDENTIFIER, false, false),
@@ -126,14 +126,15 @@ fn pics_access_topology_property_metadata_is_exact() {
                     })
                     .collect();
                 assert_eq!(
-                    rows, expected,
+                    rows,
+                    sorted_rows(&expected),
                     "{kind:?}, configured={configured}, OOS={out_of_service}"
                 );
                 assert_eq!(
                     rows.iter()
                         .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                         .collect::<Vec<_>>(),
-                    required.as_ref()
+                    sorted_required(required.as_ref())
                 );
             }
         }
