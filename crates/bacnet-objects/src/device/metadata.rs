@@ -51,8 +51,8 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::MAX_SEGMENTS_ACCEPTED, Optional, None, ReadOnly),
     PropertyMetadata::new(P::LAST_RESTART_REASON, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
-    // Table 12-13 footnote 18: present because the bundled server executes
-    // SubscribeCOVPropertyMultiple; its live value is the server COV table's.
+    // Table 12-13 footnote 18: included below only for a declared Multiple
+    // executor. The standalone value is empty; runtime views own live state.
     PropertyMetadata::new(
         P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
         Optional,
@@ -62,8 +62,8 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DEVICE_UUID, Optional, None, ReadOnly),
 ];
 
-// Precompute the four effective sets from one source so every call can borrow
-// rows without caching clock availability or adding per-object metadata state.
+// Precompute clock/segment base sets without caching clock availability.
+// Declared-service filtering below allocates only for narrower COV profiles.
 const fn effective<const N: usize>(clock: bool, segments: bool) -> [PropertyMetadata; N] {
     let mut rows = [BASE[0]; N];
     let mut source = 0;
@@ -98,16 +98,26 @@ pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
         (true, false) => CLOCKED,
         (true, true) => BASE,
     };
+    let mut rows = if base
+        .iter()
+        .all(|row| object.cov_property_present(row.property_identifier))
+    {
+        Cow::Borrowed(base)
+    } else {
+        Cow::Owned(
+            base.iter()
+                .copied()
+                .filter(|row| object.cov_property_present(row.property_identifier))
+                .collect(),
+        )
+    };
     if object.audit_recipient_present() {
-        let mut rows = base.to_vec();
-        rows.push(PropertyMetadata::new(
+        rows.to_mut().push(PropertyMetadata::new(
             P::AUDIT_NOTIFICATION_RECIPIENT,
             Optional,
             Some(crate::property_metadata::PropertyPresenceCondition::AuditReporting),
             Always,
         ));
-        Cow::Owned(rows)
-    } else {
-        Cow::Borrowed(base)
     }
+    rows
 }

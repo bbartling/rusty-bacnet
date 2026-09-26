@@ -1261,6 +1261,31 @@ methods already supply the mode and retain their optional lifetime signatures.
 Python exposes ordinary COV and PropertyMultiple, not the single-property API.
 These boundaries are tracked in the [COV subscription ledger](conformance/support-summary.md).
 
+The full server owns the served Device execution profile. Every Device's
+`Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
+existing clock-dependent time-service filter. Both `Active_COV_Subscriptions`
+and `Active_COV_Multiple_Subscriptions` are present: the selected lowest Device
+gets live lists and other Devices get empty lists. Network RP, budgeted RPM,
+`read_local` and `generate_pics` share effective Device definitions, including
+Property_List, ALL/OPTIONAL/REQUIRED classification and array-index behavior.
+Normal public Device profile mutation, same-OID replacement and custom object
+readers cannot change this served contract. Other properties retain their object
+behavior. WP, WPM and network-equivalent `write_local` reject writes to Device
+`Protocol_Services_Supported`, both COV lists and `Property_List` before calling
+a custom writer. Existing object/index/value validation and authorization remain
+in force; WPM retains its successful prefix and first failed write coordinate.
+Direct object/database mutation remains the raw declaration boundary. Device
+membership changes still do not rebind discovery identity.
+
+`DeviceObject::set_services_supported` is a standalone declaration, not a
+runtime service toggle. Raw built-in Device metadata and reads include property
+152 only for declared SubscribeCOV or SubscribeCOVProperty, and property 481
+only for declared SubscribeCOVPropertyMultiple; present standalone lists are empty.
+Direct database reads, context-free `handle_read_property`/`handle_read_property_multiple`
+and standalone `PicsGenerator` use raw object declarations. Use the full server's
+read and PICS methods for its execution view. This Device correction does not
+change mixed-File property aggregation in PICS (#838).
+
 The bundled server keeps ordinary object, Single-property and Multiple-reference
 subscriptions independent. Ordinary and Single identities include the exact immediate
 transport endpoint and optional routed NPDU source. Multiple contexts instead match
@@ -2045,6 +2070,12 @@ no bench or on-wire conformance; timing is RB-26).
 Notes: the endpoint server role defaults to `ReadProperty` (+ `Reject`/`Abort`
 + segmentation-`Abort`). The explicit Device-write opt-in below adds one
 bounded WriteProperty path; full `bacnet-server` parity is out of scope.
+The responder supplies exactly RP or RP+WP service bits and exposes neither COV
+list property, even for a custom database Device. Server-role identity service
+lists must include RP and contain no unsupported bits; validation runs before
+ingress even when writes are disabled. WP opt-in accepts RP or RP+WP declarations
+and commits RP+WP only after all validation succeeds. ClientOnly creates no
+responder and retains its services vector as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport`; the endpoint BBMD setters only stage
 pre-start state and are experimental (construction-only, no wire proof).

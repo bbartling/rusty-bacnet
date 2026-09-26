@@ -195,6 +195,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 confirmed_response::read_property_response_observed(
                     db,
                     Some(cov_table.as_ref()),
+                    crate::device_view::DeviceExecution::FullServer,
                     &req,
                     |db, oid, req, result| {
                         let result = match result {

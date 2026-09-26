@@ -386,6 +386,16 @@ await client.write_property_multiple("192.168.1.100:47808", [
 
 ### COV Subscriptions
 
+The full server's network Device reads use its actual execution profile:
+service bits reflect the fixed dispatcher with clock-dependent time services,
+and both COV list properties remain present after underlying Device declaration
+changes. The selected Device receives live lists; other Devices receive empty
+lists. Property_List and RPM selector/index behavior follow the same definitions.
+WP and WPM reject assignment to Device service bits, both COV lists and
+Property_List, including custom Device writers. Other custom properties retain
+their existing write behavior. Changing a Device's declaration is not a runtime
+service-disable switch.
+
 The bundled server distinguishes ordinary, Single-property and Multiple-reference
 subscriptions by their requested coordinates. Ordinary and Single identities include
 the exact transport/routed endpoint. Multiple contexts match the original client
@@ -2028,6 +2038,12 @@ the client initiates `read_property`, `read_range` and `read_property_multiple`;
 `is_session_alive()` polling — never Rust-calls-Python. Interpreter
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.
+
+Endpoint server roles advertise their actual RP or explicitly enabled RP+WP
+profile and expose neither Device COV list property. A supplied `services` list
+must include RP and cannot claim unsupported execution; incompatible server-role
+profiles fail startup before ingress, including when Device writes are disabled.
+ClientOnly has no responder and keeps its service list as a local declaration.
 
 ### Endpoint ReadPropertyMultiple
 

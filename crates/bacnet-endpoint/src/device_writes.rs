@@ -1,4 +1,4 @@
-//! Pre-start authority and service profile for the narrow Device write owner.
+//! Pre-start execution profile and authority for the endpoint Device responder.
 
 use super::*;
 use bacnet_server::mutation::MutationAuthorizer;
@@ -34,24 +34,37 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
-    pub(super) fn validate_device_writes(&mut self) -> Result<Option<ObjectIdentifier>, Error> {
-        if self.device_write_authorizer.is_none() {
-            return Ok(None);
-        }
+    pub(super) fn validate_device_execution(&mut self) -> Result<Option<ObjectIdentifier>, Error> {
+        let writes = self.device_write_authorizer.is_some();
         if self.role == SessionRole::ClientOnly {
-            return Err(Error::Encoding(
-                "Device writes require a server role".into(),
-            ));
+            return if writes {
+                Err(Error::Encoding(
+                    "Device writes require a server role".into(),
+                ))
+            } else {
+                Ok(None)
+            };
         }
+        let allowed = if writes {
+            SERVICES
+        } else {
+            &[ServiceSupported::READ_PROPERTY]
+        };
         if self.identity.as_ref().is_some_and(|identity| {
-            identity
+            !identity
                 .services()
-                .iter()
-                .any(|service| !SERVICES.contains(service))
+                .contains(&ServiceSupported::READ_PROPERTY)
+                || identity
+                    .services()
+                    .iter()
+                    .any(|service| !allowed.contains(service))
         }) {
             return Err(Error::Encoding(
-                "Device writes identity advertises unsupported services".into(),
+                "Endpoint identity services do not match the RP[/WP] responder".into(),
             ));
+        }
+        if !writes {
+            return Ok(None);
         }
         let db = self.database.as_mut().ok_or_else(|| {
             Error::Encoding("Device writes require an attached local database".into())

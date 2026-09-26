@@ -79,6 +79,7 @@ fn plan(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
     limit: usize,
+    view: Option<&DeviceReadContext<'_>>,
 ) -> Result<Vec<PlannedObject>, RpmFailure> {
     let mut plan = Vec::new();
     let mut count = 0usize;
@@ -102,7 +103,11 @@ fn plan(
                 Ok(())
             };
             match db.get(&lookup_oid) {
-                Some(object) => expand(object, reference, push)?,
+                Some(object) => {
+                    let served = view.map(|view| view.object(object));
+                    let object: &dyn BACnetObject = served.as_ref().map_or(object, |served| served);
+                    expand(object, reference, push)?;
+                }
                 None => push(reference.property_identifier)?,
             }
         }
@@ -116,13 +121,9 @@ fn plan(
     Ok(plan)
 }
 
-/// `live` is the request-local Device projection for this row, if it applies;
-/// lookup and array-index precedence stay ahead of it, as in ReadProperty.
-fn element(
-    object: Option<&dyn BACnetObject>,
-    reference: &PropertyReference,
-    live: Option<PropertyValue>,
-) -> ReadResultElement {
+/// `object` is the effective read view for this row, if the object exists.
+/// Lookup and canonical array-index precedence match ReadProperty.
+fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> ReadResultElement {
     let id = reference.property_identifier;
     let index = reference.property_array_index;
     let response_index = super::read_property::rpm_response_index(object, id, index);
@@ -131,7 +132,7 @@ fn element(
         Some(object) if index.is_some() && !object.is_array_property(id) => {
             Err((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
         }
-        Some(object) => match live.map_or_else(|| object.read_property(id, index), Ok) {
+        Some(object) => match object.read_property(id, index) {
             Ok(value) => {
                 // One property may return/encode an arbitrarily large owned
                 // value. Only accumulated service bytes are bounded here.
@@ -209,11 +210,11 @@ pub(crate) fn handle_rpm_budgeted_observed(
 /// Atomic with respect to the caller's buffer, not object read side effects.
 /// Observations are provisional until this entire call succeeds. The caller
 /// must discard them on failure; callbacks carry the requested index (which may
-/// differ from the response index) and no property values. `live` is the one
-/// request-local set of Device COV list values reused by every row.
+/// differ from the response index) and no property values. `view` owns the
+/// effective Device definitions and request-local COV values for every row.
 pub(crate) fn rpm_budgeted_request_observed(
     db: &ObjectDatabase,
-    live: Option<&LiveDeviceCov>,
+    view: Option<&DeviceReadContext<'_>>,
     request: &ReadPropertyMultipleRequest,
     buf: &mut BytesMut,
     budget: ReadPropertyMultipleBudget,
@@ -224,7 +225,7 @@ pub(crate) fn rpm_budgeted_request_observed(
         Option<(ErrorClass, ErrorCode)>,
     ),
 ) -> Result<(), RpmFailure> {
-    let plan = plan(db, request, budget.max_result_elements)?;
+    let plan = plan(db, request, budget.max_result_elements, view)?;
     let mut scratch = Scratch {
         bytes: BytesMut::new(),
         limit: budget.max_service_ack_bytes,
@@ -236,9 +237,13 @@ pub(crate) fn rpm_budgeted_request_observed(
         ReadAccessResult::encode_header(&mut header, &spec.lookup_oid);
         scratch.append(&header, footer.len())?;
         for reference in spec.properties {
-            let row_live =
-                live.and_then(|live| live.resolve(spec.lookup_oid, reference.property_identifier));
-            let result = element(db.get(&spec.lookup_oid), &reference, row_live);
+            let object = db.get(&spec.lookup_oid);
+            let served = object.and_then(|object| view.map(|view| view.object(object)));
+            let object = served
+                .as_ref()
+                .map(|served| served as &dyn BACnetObject)
+                .or(object);
+            let result = element(object, &reference);
             let mut encoded = BytesMut::new();
             result.encode(&mut encoded);
             scratch.append(&encoded, footer.len())?;

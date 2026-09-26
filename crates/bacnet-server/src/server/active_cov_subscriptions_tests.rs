@@ -6,6 +6,7 @@ use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use support::*;
 
+mod device_execution;
 mod device_selection;
 mod multiple_route;
 mod support;

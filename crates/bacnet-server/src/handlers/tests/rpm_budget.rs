@@ -151,7 +151,7 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
         ]);
         let decoded = ReadPropertyMultipleRequest::decode(&data).unwrap();
         assert!(matches!(
-            plan(&db, &decoded, count * 2),
+            plan(&db, &decoded, count * 2, None),
             Err(RpmFailure::Work)
         ));
         assert!(matches!(
@@ -160,7 +160,7 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
         ));
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         assert_eq!(
-            plan(&db, &decoded, count * 2 + 1)
+            plan(&db, &decoded, count * 2 + 1, None)
                 .unwrap()
                 .iter()
                 .map(|p| p.properties.len())

@@ -490,6 +490,7 @@ fn write_with_source(
     priority: Option<u8>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
 ) -> Result<(), Error> {
+    crate::device_view::check_executor_owned_write(object.object_identifier(), property)?;
     if matches!(
         property,
         PropertyIdentifier::DESCRIPTION

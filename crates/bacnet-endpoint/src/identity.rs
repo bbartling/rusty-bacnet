@@ -247,7 +247,10 @@ impl DeviceIdentity {
     ///
     /// Default `[READ_PROPERTY]` matches the narrow endpoint responder.
     /// `EndpointSession::with_device_writes` adds `WRITE_PROPERTY` and rejects
-    /// other service bits. Broader profiles require a matching full server.
+    /// other service bits. Server-role startup also rejects missing ReadProperty
+    /// or unsupported bits when writes are disabled, before ingress starts.
+    /// ClientOnly has no responder and retains this as a local declaration.
+    /// Broader executing profiles require a matching full server.
     pub fn with_services(mut self, services: &[ServiceSupported]) -> Self {
         self.services = services.to_vec();
         self

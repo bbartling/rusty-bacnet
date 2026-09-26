@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::device::EXECUTED_SERVICES;
 use bacnet_objects::property_metadata::PropertyConformance;
 use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
@@ -218,11 +217,14 @@ impl Default for PicsConfig {
 
 // ────────────────────────────── Generator ──────────────────────────────────
 
-/// Generates a [`Pics`] document from an [`ObjectDatabase`] and configuration.
+/// Generates PICS from raw object declarations and configuration. This standalone
+/// generator does not establish service execution; use `BACnetServer::generate_pics`
+/// for the full server's effective Device contract.
 pub struct PicsGenerator<'a> {
     db: &'a ObjectDatabase,
     server_config: &'a ServerConfig,
     pics_config: &'a PicsConfig,
+    served: bool,
 }
 
 impl<'a> PicsGenerator<'a> {
@@ -235,7 +237,13 @@ impl<'a> PicsGenerator<'a> {
             db,
             server_config,
             pics_config,
+            served: false,
         }
+    }
+
+    pub(crate) fn for_server(mut self) -> Self {
+        self.served = true;
+        self
     }
 
     /// Generate the complete PICS document.
@@ -281,6 +289,13 @@ impl<'a> PicsGenerator<'a> {
             let supported_properties =
                 if object_type == ObjectType::AUDIT_REPORTER && objects.len() > 1 {
                     Self::audit_reporter_property_support(objects)
+                } else if self.served && object_type == ObjectType::DEVICE {
+                    let view = crate::device_view::DeviceReadContext::new(
+                        self.db,
+                        crate::device_view::DeviceExecution::FullServer,
+                        None,
+                    );
+                    Self::object_property_support(&view.object(representative))
                 } else {
                     Self::object_property_support(representative)
                 };
@@ -359,7 +374,7 @@ impl<'a> PicsGenerator<'a> {
     /// Build the service support list based on what the server actually handles.
     /// Services this server initiates (the PICS initiator column): replies
     /// and notifications constructed outbound by `bacnet-server`. Distinct
-    /// from [`EXECUTED_SERVICES`], which Clause 12.11 ties to execution.
+    /// from [`EXECUTED_SERVICES`](bacnet_objects::device::EXECUTED_SERVICES), which Clause 12.11 ties to execution.
     const INITIATED_SERVICES: &'static [ServiceSupported] = &[
         ServiceSupported::I_AM,
         ServiceSupported::I_HAVE,
@@ -372,34 +387,34 @@ impl<'a> PicsGenerator<'a> {
     ];
 
     fn build_services(&self) -> Vec<ServiceSupport> {
-        // Prefer the effective Device bit string so runtime modes such as an
-        // explicitly clockless server cannot drift from generated PICS. The
-        // static dispatch contract remains the fallback for databases without
-        // a readable Device service property, filtered by database clock mode.
-        let effective_executed = self
-            .db
-            .iter_objects()
-            .filter(|(oid, _)| oid.object_type() == ObjectType::DEVICE)
-            .find_map(|(_, device)| {
-                match device
-                    .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
-                    .ok()?
-                {
-                    PropertyValue::BitString { data, .. } => {
-                        Some(ServicesSupported::from_bacnet(&data))
-                    }
-                    _ => None,
-                }
-            });
+        // Standalone callers inspect raw Device declarations. The full server
+        // always uses its fixed execution profile, filtered by database clock
+        // availability; a mutable/custom Device cannot override that contract.
+        let effective_executed = (!self.served)
+            .then(|| {
+                self.db
+                    .iter_objects()
+                    .filter(|(oid, _)| oid.object_type() == ObjectType::DEVICE)
+                    .find_map(|(_, device)| {
+                        match device
+                            .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+                            .ok()?
+                        {
+                            PropertyValue::BitString { data, .. } => {
+                                Some(ServicesSupported::from_bacnet(&data))
+                            }
+                            _ => None,
+                        }
+                    })
+            })
+            .flatten();
         let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
         let clock_available = self.db.clock_frame().is_some();
         let executed: Box<dyn Iterator<Item = ServiceSupported> + '_> = match &effective_executed {
             Some(services) => Box::new(services.iter()),
-            None => Box::new(EXECUTED_SERVICES.iter().copied().filter(move |service| {
-                clock_available
-                    || (*service != ServiceSupported::TIME_SYNCHRONIZATION
-                        && *service != ServiceSupported::UTC_TIME_SYNCHRONIZATION)
-            })),
+            None => {
+                Box::new(crate::device_view::DeviceExecution::FullServer.services(clock_available))
+            }
         };
         for service in executed {
             service_map

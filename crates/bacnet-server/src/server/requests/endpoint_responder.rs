@@ -219,7 +219,12 @@ impl EndpointResponder {
                 abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
             })
         } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
-            confirmed_response::read_property_response(&self.db, &request).await
+            confirmed_response::read_property_response(
+                &self.db,
+                &request,
+                self.device_writes.is_some(),
+            )
+            .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
             && self.device_writes.is_some()
         {
