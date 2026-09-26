@@ -262,20 +262,23 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
 #[test]
 fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
     let (mut db, oid) = database();
-    for accepted in [
+    for denied in [
         PropertyValue::Enumerated(0),
         PropertyValue::Enumerated(1),
         PropertyValue::Null,
     ] {
-        wp(
-            &mut db,
-            oid,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(8),
-            accepted,
-            None,
-        )
-        .unwrap();
+        assert_property_error(
+            wp(
+                &mut db,
+                oid,
+                PropertyIdentifier::PRIORITY_ARRAY,
+                Some(8),
+                denied,
+                None,
+            )
+            .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
     }
     for value in [2, 3, 4, 5, 64, 255] {
         assert_property_error(
@@ -288,7 +291,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
                 None,
             )
             .unwrap_err(),
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_eq!(
             read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(8)),
@@ -305,7 +308,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
             None,
         )
         .unwrap_err(),
-        ErrorCode::INVALID_DATA_TYPE,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_property_error(
         wp(
@@ -317,7 +320,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
             None,
         )
         .unwrap_err(),
-        ErrorCode::INVALID_ARRAY_INDEX,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
 
     assert_property_error(
@@ -340,7 +343,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
             ],
         )
         .unwrap_err(),
-        ErrorCode::VALUE_OUT_OF_RANGE,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
@@ -534,7 +537,7 @@ fn failed_wpm_keeps_new_timer_from_successful_prefix() {
 }
 
 #[test]
-fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
+fn present_value_priority_wpm_halts_and_failed_wpm_keeps_prefix() {
     let (mut successful_db, successful_oid) = database();
     configure_eligible_warn_off(&mut successful_db, successful_oid, 5);
     wp(
@@ -550,10 +553,10 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
         &mut successful_db,
         successful_oid,
         vec![(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(4),
-            PropertyValue::Enumerated(1),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Enumerated(1),
+            Some(4),
         )],
     )
     .unwrap();
@@ -603,10 +606,10 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
             oid,
             vec![
                 (
-                    PropertyIdentifier::PRIORITY_ARRAY,
-                    Some(4),
-                    PropertyValue::Enumerated(1),
+                    PropertyIdentifier::PRESENT_VALUE,
                     None,
+                    PropertyValue::Enumerated(1),
+                    Some(4),
                 ),
                 (
                     PropertyIdentifier::PRESENT_VALUE,
@@ -623,7 +626,7 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
         PropertyValue::Enumerated(1),
-        "the successful direct priority write stays committed"
+        "the successful prioritized Present_Value write stays committed"
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),

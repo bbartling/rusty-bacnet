@@ -187,7 +187,7 @@ fn property_metadata_contract_time_value() {
     );
     assert_eq!(
         priority_array.write_capability,
-        PropertyWriteCapability::Always
+        PropertyWriteCapability::ReadOnly
     );
 
     let status_flags = metadata_row(&object, PropertyIdentifier::STATUS_FLAGS);

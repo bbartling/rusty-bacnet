@@ -40,7 +40,7 @@ pub(crate) const INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -54,7 +54,7 @@ pub(crate) const POSITIVE_INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -68,7 +68,7 @@ pub(crate) const LARGE_ANALOG_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -82,7 +82,7 @@ pub(crate) const CHARACTERSTRING_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -96,7 +96,7 @@ pub(crate) const OCTETSTRING_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -110,7 +110,7 @@ pub(crate) const BITSTRING_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -124,7 +124,7 @@ pub(crate) const DATE_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -138,7 +138,7 @@ pub(crate) const DATETIME_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -152,7 +152,7 @@ pub(crate) const DATEPATTERN_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -166,7 +166,7 @@ pub(crate) const TIMEPATTERN_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -180,7 +180,7 @@ pub(crate) const DATETIMEPATTERN_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];

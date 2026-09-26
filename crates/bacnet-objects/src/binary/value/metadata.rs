@@ -60,7 +60,7 @@ const BASE: &[PropertyMetadata] = &[
         ReadOnly,
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(
         P::CURRENT_COMMAND_PRIORITY,
@@ -258,7 +258,6 @@ mod tests {
                         | P::DESCRIPTION
                         | P::PRESENT_VALUE
                         | P::OUT_OF_SERVICE
-                        | P::PRIORITY_ARRAY
                         | P::RELINQUISH_DEFAULT
                         | P::EVENT_DETECTION_ENABLE
                         | P::EVENT_ENABLE
@@ -289,7 +288,7 @@ mod tests {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
                     }
                 }
-                for p in [P::PRESENT_VALUE, P::PRIORITY_ARRAY, P::RELINQUISH_DEFAULT] {
+                for p in [P::PRESENT_VALUE, P::RELINQUISH_DEFAULT] {
                     let index = (p == P::PRIORITY_ARRAY).then_some(8);
                     let before = object.read_property(p, index).unwrap();
                     assert_error(
@@ -318,7 +317,7 @@ mod tests {
                     .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(8))
                     .unwrap();
                 object
-                    .write_property(P::PRIORITY_ARRAY, Some(16), PropertyValue::Null, None)
+                    .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(16))
                     .unwrap();
                 object
                     .write_property(

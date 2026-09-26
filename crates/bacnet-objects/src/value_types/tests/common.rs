@@ -87,15 +87,15 @@ fn value_object_relinquish_default() {
 }
 
 #[test]
-fn value_object_priority_array_direct_write() {
+fn value_object_priority_array_tracks_present_value_commands() {
     let mut obj = IntegerValueObject::new(1, "IV-1").unwrap();
 
-    // Write directly to priority array slot 5
+    // Command Present_Value at priority 5
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Signed(77),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Signed(77),
+        Some(5),
     )
     .unwrap();
 
@@ -113,10 +113,10 @@ fn value_object_priority_array_direct_write() {
 
     // Relinquish slot 5
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
 

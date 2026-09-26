@@ -596,12 +596,12 @@ fn pics_event_properties_writable_on_binary_and_multistate_types() {
 }
 
 #[test]
-fn pics_priority_array_writable_on_commandable_types() {
+fn pics_priority_array_read_only_on_commandable_types() {
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // Commandable types accept PRIORITY_ARRAY (direct) and PRESENT_VALUE
-    // (via the priority array). RELINQUISH_DEFAULT grew a validated write arm
+    // Commandable types accept PRESENT_VALUE commands; PRIORITY_ARRAY is read-only.
+    // RELINQUISH_DEFAULT grew a validated write arm
     // in #270 (the standard permits writability), so the PICS advertises it.
     for ot in [
         ObjectType::ANALOG_OUTPUT,
@@ -612,8 +612,8 @@ fn pics_priority_array_writable_on_commandable_types() {
         ObjectType::MULTI_STATE_VALUE,
     ] {
         assert!(
-            pics_writable(&pics, ot, PropertyIdentifier::PRIORITY_ARRAY),
-            "{ot:?}: PRIORITY_ARRAY should be writable"
+            !pics_writable(&pics, ot, PropertyIdentifier::PRIORITY_ARRAY),
+            "{ot:?}: PRIORITY_ARRAY should be read-only"
         );
         assert!(
             pics_writable(&pics, ot, PropertyIdentifier::PRESENT_VALUE),

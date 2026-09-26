@@ -119,7 +119,7 @@ fn pics_projects_migrated_property_metadata() {
             ObjectType::TIME_VALUE,
             PropertyIdentifier::PRIORITY_ARRAY,
             true,
-            true,
+            false,
         ),
         (
             ObjectType::TIME_VALUE,
@@ -395,7 +395,7 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
                 expected.splice(
                     10..10,
                     [
-                        (P::PRIORITY_ARRAY, optional, true),
+                        (P::PRIORITY_ARRAY, optional, false),
                         (P::RELINQUISH_DEFAULT, optional, true),
                         (P::CURRENT_COMMAND_PRIORITY, optional, false),
                     ],
@@ -496,7 +496,7 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                 expected.splice(
                     17..17,
                     [
-                        (P::PRIORITY_ARRAY, optional, true),
+                        (P::PRIORITY_ARRAY, optional, false),
                         (P::RELINQUISH_DEFAULT, optional, true),
                         (P::CURRENT_COMMAND_PRIORITY, optional, false),
                     ],
@@ -592,7 +592,7 @@ fn pics_multistate_property_metadata_is_exact() {
                     expected.splice(
                         18..18,
                         [
-                            (P::PRIORITY_ARRAY, optional, true),
+                            (P::PRIORITY_ARRAY, optional, false),
                             (P::RELINQUISH_DEFAULT, optional, true),
                             (P::CURRENT_COMMAND_PRIORITY, optional, false),
                         ],

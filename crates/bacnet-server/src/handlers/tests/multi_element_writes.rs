@@ -308,8 +308,7 @@ fn datetime_value_present_value_and_priority_array_over_the_wire() {
         datetime_pv()
     );
 
-    // A priority-array ENTRY write of a different datetime: indexed write to
-    // slot 2 wins over the earlier priority-16 command.
+    // A direct Priority_Array write must not replace the valid priority-16 command.
     let later = PropertyValue::List(vec![
         PropertyValue::Date(TEST_DATE),
         PropertyValue::Time(Time {
@@ -317,17 +316,20 @@ fn datetime_value_present_value_and_priority_array_over_the_wire() {
             ..TEST_TIME
         }),
     ]);
-    write_raw(
+    let error = write_raw(
         &mut db,
         oid,
         PropertyIdentifier::PRIORITY_ARRAY,
         Some(2),
         encode_value(later.clone()),
     )
-    .unwrap();
+    .unwrap_err();
+    assert!(
+        matches!(error, Error::Protocol { class, code } if class == u32::from(ErrorClass::PROPERTY.to_raw()) && code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
+    );
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),
-        later
+        datetime_pv()
     );
 }
 

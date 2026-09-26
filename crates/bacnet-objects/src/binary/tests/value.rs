@@ -218,13 +218,13 @@ fn bv_priority_array_in_property_list() {
 }
 
 #[test]
-fn bv_direct_priority_array_write() {
+fn bv_present_value_priority_write() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
     bv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Enumerated(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Enumerated(1),
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -240,20 +240,20 @@ fn bv_direct_priority_array_write() {
 }
 
 #[test]
-fn bv_direct_priority_array_relinquish() {
+fn bv_present_value_priority_relinquish() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
     bv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Enumerated(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Enumerated(1),
+        Some(5),
     )
     .unwrap();
     bv.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
     assert_eq!(

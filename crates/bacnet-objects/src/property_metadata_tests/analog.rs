@@ -211,7 +211,7 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                 }
             }
             if commandable {
-                for p in [P::PRESENT_VALUE, P::PRIORITY_ARRAY, P::RELINQUISH_DEFAULT] {
+                for p in [P::PRESENT_VALUE, P::RELINQUISH_DEFAULT] {
                     let index = (p == P::PRIORITY_ARRAY).then_some(8);
                     object
                         .write_property(p, index, PropertyValue::Real(12.5), Some(8))

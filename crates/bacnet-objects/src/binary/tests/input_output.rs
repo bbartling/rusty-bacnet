@@ -425,16 +425,16 @@ fn bo_priority_array_read_all_slots_none_by_default() {
     }
 }
 
-// --- Direct PRIORITY_ARRAY writes ---
+// --- Present_Value commands and read-only Priority_Array writes ---
 
 #[test]
-fn bo_direct_priority_array_write_value() {
+fn bo_present_value_priority_write_value() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     bo.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Enumerated(1), // active
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Enumerated(1), // active
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -450,20 +450,20 @@ fn bo_direct_priority_array_write_value() {
 }
 
 #[test]
-fn bo_direct_priority_array_relinquish() {
+fn bo_present_value_priority_relinquish() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     bo.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Enumerated(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Enumerated(1),
+        Some(5),
     )
     .unwrap();
     bo.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
     // Fall back to relinquish default (0 = inactive)
@@ -558,7 +558,7 @@ fn bo_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
     // Commandable.
-    assert!(bo.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!bo.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(bo.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     // Text + common.
     assert!(bo.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));

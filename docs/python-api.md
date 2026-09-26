@@ -315,6 +315,15 @@ print(value.value)  # 72.5
 
 #### `write_property(address, object_id, property_id, value, priority=None, array_index=None)`
 
+The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
+Set or relinquish a priority slot by writing a value or NULL to `Present_Value`
+with the desired priority. Whole-array and indexed `Priority_Array` writes are
+denied, including index 0 (the element count); indexed reads remain available.
+A refused direct array write does not change the effective value or terminate
+an active lighting operation. WPM preserves valid earlier writes when it reaches
+such a denied element. This does not impose a write policy on custom objects.
+
+
 All three single-property entrypoints (`write_property`, `write_property_to_device`,
 and `write_property_to_devices`) accept omitted priority or 1–16. Values 0 or
 17–255 raise synchronous `ValueError` before a future, device lookup, or traffic;

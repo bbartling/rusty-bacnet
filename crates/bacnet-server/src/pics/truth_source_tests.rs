@@ -71,8 +71,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         );
     }
 
-    // Helper: like assert_accepts but supplies an array_index (PRIORITY_ARRAY
-    // requires Some(1..=16); STATE_TEXT similarly takes an element index).
+    // Helper: like assert_accepts but supplies an array_index for STATE_TEXT.
     fn assert_accepts_indexed(
         obj: &mut dyn BACnetObject,
         pid: PropertyIdentifier,
@@ -129,7 +128,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     );
     assert_rejects(&mut ai, READ_ONLY, "AI");
 
-    // AnalogOutput — commandable: PRIORITY_ARRAY + PRESENT_VALUE + event set.
+    // AnalogOutput — commandable Present_Value with a read-only Priority_Array.
     let mut ao = AnalogOutputObject::new(1, "ao", 95).unwrap();
     ao.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
@@ -144,13 +143,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Real(50.0),
         "AO",
     );
-    assert_accepts_indexed(
-        &mut ao,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "AO",
-    );
+    assert_rejects(&mut ao, PropertyIdentifier::PRIORITY_ARRAY, "AO");
     assert_accepts(
         &mut ao,
         PropertyIdentifier::COV_INCREMENT,
@@ -186,13 +179,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Real(50.0),
         "AV",
     );
-    assert_accepts_indexed(
-        &mut av,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "AV",
-    );
+    assert_rejects(&mut av, PropertyIdentifier::PRIORITY_ARRAY, "AV");
     assert_accepts(
         &mut av,
         PropertyIdentifier::COV_INCREMENT,
@@ -262,13 +249,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Enumerated(1),
         "BO",
     );
-    assert_accepts_indexed(
-        &mut bo,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "BO",
-    );
+    assert_rejects(&mut bo, PropertyIdentifier::PRIORITY_ARRAY, "BO");
     assert_accepts(
         &mut bo,
         PropertyIdentifier::ACTIVE_TEXT,
@@ -292,13 +273,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Enumerated(1),
         "BV",
     );
-    assert_accepts_indexed(
-        &mut bv,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "BV",
-    );
+    assert_rejects(&mut bv, PropertyIdentifier::PRIORITY_ARRAY, "BV");
     assert_accepts(
         &mut bv,
         PropertyIdentifier::ACTIVE_TEXT,
@@ -357,13 +332,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Unsigned(1),
         "MSO",
     );
-    assert_accepts_indexed(
-        &mut mso,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "MSO",
-    );
+    assert_rejects(&mut mso, PropertyIdentifier::PRIORITY_ARRAY, "MSO");
     assert_accepts_indexed(
         &mut mso,
         PropertyIdentifier::STATE_TEXT,
@@ -381,13 +350,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Unsigned(1),
         "MSV",
     );
-    assert_accepts_indexed(
-        &mut msv,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "MSV",
-    );
+    assert_rejects(&mut msv, PropertyIdentifier::PRIORITY_ARRAY, "MSV");
     assert_accepts_indexed(
         &mut msv,
         PropertyIdentifier::STATE_TEXT,

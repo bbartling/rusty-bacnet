@@ -282,20 +282,6 @@ impl BACnetObject for MultiStateValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        {
-            let num_states = self.number_of_states;
-            common::write_priority_array_direct!(self, property, array_index, value, |v| {
-                if let PropertyValue::Unsigned(u) = v {
-                    if u < 1 || u > num_states as u64 {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(u as u32)
-                    }
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            });
-        }
         if property == PropertyIdentifier::PRESENT_VALUE {
             let num_states = self.number_of_states;
             return common::write_priority_array!(self, value, priority, |v| {

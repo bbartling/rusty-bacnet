@@ -6,10 +6,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
-use crate::common::{
-    self, read_common_properties, read_priority_array, write_priority_array,
-    write_priority_array_direct,
-};
+use crate::common::{self, read_common_properties, read_priority_array, write_priority_array};
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -152,25 +149,11 @@ impl BACnetObject for LightingOutputObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        array_index: Option<u32>,
+        _array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        // Direct writes to PRIORITY_ARRAY[index]
-        write_priority_array_direct!(self, property, array_index, value, |v| {
-            match v {
-                PropertyValue::Real(f) => {
-                    if !(0.0..=100.0).contains(&f) {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(f)
-                    }
-                }
-                _ => Err(common::invalid_data_type_error()),
-            }
-        });
-
-        // PRESENT_VALUE — commandable via priority array
+        // Commands update priority slots only through Present_Value.
         if property == PropertyIdentifier::PRESENT_VALUE {
             return write_priority_array!(self, value, priority, |v| {
                 match v {

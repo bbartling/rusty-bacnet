@@ -141,32 +141,10 @@ macro_rules! define_value_object_commandable {
             fn write_property(
                 &mut self,
                 property: PropertyIdentifier,
-                array_index: Option<u32>,
+                _array_index: Option<u32>,
                 value: PropertyValue,
                 priority: Option<u8>,
             ) -> Result<(), Error> {
-                // Handle PRIORITY_ARRAY direct writes. Index validation
-                // follows Clause 12.1.5.1: an omitted index means whole-array
-                // access, and whole-array writes are not supported here, so
-                // it is PROPERTY / WRITE_ACCESS_DENIED (Clause 15.9.1.3).
-                if property == PropertyIdentifier::PRIORITY_ARRAY {
-                    let idx = match array_index {
-                        Some(n) if (1..=16).contains(&n) => (n - 1) as usize,
-                        Some(_) => return Err(common::invalid_array_index_error()),
-                        None => return Err(common::write_access_denied_error()),
-                    };
-                    match value {
-                        PropertyValue::Null => {
-                            self.priority_array[idx] = None;
-                        }
-                        other => {
-                            let extracted = ($prop_to_pv)(other)?;
-                            self.priority_array[idx] = Some(extracted);
-                        }
-                    }
-                    self.recalculate_present_value();
-                    return Ok(());
-                }
                 // Handle PRESENT_VALUE via priority array
                 if property == PropertyIdentifier::PRESENT_VALUE {
                     let prio = priority.unwrap_or(16);
@@ -529,7 +507,7 @@ const TIME_VALUE_PROPERTY_METADATA: &[PropertyMetadata] = &[
         PropertyIdentifier::PRIORITY_ARRAY,
         PropertyConformance::Optional,
         Some(PropertyPresenceCondition::Commandable),
-        PropertyWriteCapability::Always,
+        PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::RELINQUISH_DEFAULT,

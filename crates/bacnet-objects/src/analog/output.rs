@@ -185,20 +185,10 @@ impl BACnetObject for AnalogOutputObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        array_index: Option<u32>,
+        _array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        common::write_priority_array_direct!(self, property, array_index, value, |v| {
-            if let PropertyValue::Real(f) = v {
-                if !f.is_finite() {
-                    return Err(common::value_out_of_range_error());
-                }
-                Ok(f)
-            } else {
-                Err(common::invalid_data_type_error())
-            }
-        });
         if property == PropertyIdentifier::PRESENT_VALUE {
             return common::write_priority_array!(self, value, priority, |v| {
                 if let PropertyValue::Real(f) = v {

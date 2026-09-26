@@ -122,24 +122,6 @@ impl BinaryLightingOutputObject {
         Ok((priority, command))
     }
 
-    fn validate_priority_array_write(
-        array_index: Option<u32>,
-        value: PropertyValue,
-    ) -> Result<(usize, Option<u32>), Error> {
-        let index = match array_index {
-            Some(index) if (1..=16).contains(&index) => (index - 1) as usize,
-            Some(_) => return Err(common::invalid_array_index_error()),
-            None => return Err(common::write_access_denied_error()),
-        };
-        let value = match value {
-            PropertyValue::Null => None,
-            PropertyValue::Enumerated(value @ (OFF | ON)) => Some(value),
-            PropertyValue::Enumerated(_) => return Err(common::value_out_of_range_error()),
-            _ => return Err(common::invalid_data_type_error()),
-        };
-        Ok((index, value))
-    }
-
     fn highest_active_priority(&self) -> Option<u8> {
         self.priority_array
             .iter()
@@ -312,17 +294,10 @@ impl BACnetObject for BinaryLightingOutputObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        array_index: Option<u32>,
+        _array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        if property == PropertyIdentifier::PRIORITY_ARRAY {
-            let (index, value) = Self::validate_priority_array_write(array_index, value)?;
-            self.complete_active_operation_for_write(index as u8 + 1);
-            self.priority_array[index] = value;
-            self.recalculate_present_value();
-            return Ok(());
-        }
         if property == PropertyIdentifier::PRESENT_VALUE {
             let (priority, command) = Self::validate_present_value_command(value, priority)?;
             self.write_present_value(priority, command);

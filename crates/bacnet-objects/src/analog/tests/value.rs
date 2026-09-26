@@ -218,13 +218,13 @@ fn av_write_with_all_valid_priorities() {
 }
 
 #[test]
-fn av_direct_priority_array_write_value() {
+fn av_present_value_priority_write_value() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
     av.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(42.0),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(42.0),
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -240,20 +240,20 @@ fn av_direct_priority_array_write_value() {
 }
 
 #[test]
-fn av_direct_priority_array_relinquish() {
+fn av_present_value_priority_relinquish() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
     av.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(42.0),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(42.0),
+        Some(5),
     )
     .unwrap();
     av.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
     assert_eq!(
@@ -618,7 +618,7 @@ fn av_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
     // Commandable (same as AO).
-    assert!(av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(av.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     // Event properties.
     assert!(av.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
