@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Schedule execution retains each local target's array index through the public
+  `BACnetObject::tick_schedule` hook, endpoint forwarding and server write queue
+  (#845). The hook now returns `Vec<BACnetObjectPropertyReference>` instead of
+  object/property pairs. `List_Of_Object_Property_References` reads return
+  `ApplicationData` containing concatenated context-tagged local reference bodies,
+  including optional indices. Failed targets do not stop later writes; the list
+  remains non-array, and write priority remains fixed at 16. Remote targets,
+  configurable priority and source-origin propagation are not added.
+
 - `ObjectIdentifier` now validates both its 10-bit object type and 22-bit
   instance at construction (#847). `new_addressable` shares these checks and
   still rejects wildcard instances. The safe `new_unchecked` constructor is

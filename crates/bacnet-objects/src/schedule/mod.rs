@@ -1,5 +1,6 @@
 //! Schedule (type 17) and Calendar (type 6) objects per ASHRAE 135-2020.
 
+use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
     BACnetTimeValue,
@@ -7,6 +8,7 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bytes::BytesMut;
 use std::borrow::Cow;
 
 use crate::common::{self, read_property_list_property};
@@ -240,7 +242,7 @@ impl ScheduleObject {
         self.effective_period = Some(period);
     }
 
-    /// Append an object property reference to the list.
+    /// Append a local target reference, retaining its optional array index.
     pub fn add_object_property_reference(&mut self, r: BACnetObjectPropertyReference) {
         self.list_of_object_property_references.push(r);
     }
@@ -438,17 +440,12 @@ impl BACnetObject for ScheduleObject {
                 None => Ok(PropertyValue::Null),
             },
             p if p == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-                Ok(PropertyValue::List(
-                    self.list_of_object_property_references
-                        .iter()
-                        .map(|r| {
-                            PropertyValue::List(vec![
-                                PropertyValue::ObjectIdentifier(r.object_identifier),
-                                PropertyValue::Enumerated(r.property_identifier),
-                            ])
-                        })
-                        .collect(),
-                ))
+                let mut encoded = BytesMut::new();
+                for reference in &self.list_of_object_property_references {
+                    // Local DeviceObjectPropertyReference: no optional Device member.
+                    encode_object_property_reference(&mut encoded, reference);
+                }
+                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
             }
             p if p == PropertyIdentifier::PRIORITY_FOR_WRITING => {
                 Ok(PropertyValue::Unsigned(self.priority_for_writing as u64))
@@ -544,7 +541,7 @@ impl BACnetObject for ScheduleObject {
         day_of_week: u8,
         hour: u8,
         minute: u8,
-    ) -> Option<(PropertyValue, Vec<(ObjectIdentifier, u32)>)> {
+    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
         if self.out_of_service || self.list_of_object_property_references.is_empty() {
             return None;
         }
@@ -556,11 +553,7 @@ impl BACnetObject for ScheduleObject {
 
         self.present_value = new_value.clone();
 
-        let refs = self
-            .list_of_object_property_references
-            .iter()
-            .map(|r| (r.object_identifier, r.property_identifier))
-            .collect();
+        let refs = self.list_of_object_property_references.clone();
 
         Some((new_value, refs))
     }

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_types::constructed::BACnetLogRecord;
+use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
 };
@@ -492,14 +492,14 @@ pub trait BACnetObject: Send + Sync {
     /// Evaluate this object's schedule for the given time.
     ///
     /// Returns `Some((new_value, refs))` if the present value changed, where `refs`
-    /// is the list of (object_identifier, property_identifier) pairs to write to.
+    /// is the list of complete local references, including target array indices.
     /// Only meaningful for Schedule objects; default returns `None`.
     fn tick_schedule(
         &mut self,
         _day_of_week: u8,
         _hour: u8,
         _minute: u8,
-    ) -> Option<(PropertyValue, Vec<(ObjectIdentifier, u32)>)> {
+    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
         None
     }
 

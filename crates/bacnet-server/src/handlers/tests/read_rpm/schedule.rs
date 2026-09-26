@@ -10,7 +10,7 @@ use bacnet_types::primitives::{Date, PropertyValue, Time};
 use PropertyIdentifier as P;
 
 #[test]
-fn rpm_schedule_indexed_reads_and_constructed_bytes_are_unchanged() {
+fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
     for configured in [false, true] {
         let mut object = ScheduleObject::new(7, "SCH-7", PropertyValue::Unsigned(42)).unwrap();
         if configured {
@@ -39,11 +39,16 @@ fn rpm_schedule_indexed_reads_and_constructed_bytes_are_unchanged() {
                 ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
                 P::PRESENT_VALUE.to_raw(),
             ));
+            object.add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
+                ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 7).unwrap(),
+                P::STATE_TEXT.to_raw(),
+                2,
+            ));
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Pin the existing application-value representation, not a new wire codec.
+        // Pin reference members as context-tagged local DOPR bodies.
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let day: &[u8] = if configured {
             &[0xb4, 8, 30, 0, 0, 0x62, 0x21, 42]
@@ -113,7 +118,9 @@ fn rpm_schedule_indexed_reads_and_constructed_bytes_are_unchanged() {
                 P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
                 None,
                 Ok(if configured {
-                    &[0xc4, 0, 0x40, 0, 2, 0x91, 85]
+                    &[
+                        0x0c, 0, 0x40, 0, 2, 0x19, 85, 0x0c, 3, 0x80, 0, 7, 0x19, 110, 0x29, 2,
+                    ]
                 } else {
                     &[]
                 }),

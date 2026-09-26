@@ -525,7 +525,7 @@ fn schedule_opr_list_empty_by_default() {
     let val = sched
         .read_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+    assert_eq!(val, PropertyValue::ApplicationData(vec![]));
 }
 
 #[test]
@@ -538,20 +538,10 @@ fn schedule_opr_list_add_and_read() {
     let val = sched
         .read_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES, None)
         .unwrap();
-    if let PropertyValue::List(items) = val {
-        assert_eq!(items.len(), 1);
-        if let PropertyValue::List(pair) = &items[0] {
-            assert_eq!(pair[0], PropertyValue::ObjectIdentifier(oid));
-            assert_eq!(
-                pair[1],
-                PropertyValue::Enumerated(PropertyIdentifier::PRESENT_VALUE.to_raw())
-            );
-        } else {
-            panic!("expected pair list");
-        }
-    } else {
-        panic!("expected PropertyValue::List");
-    }
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![0x0c, 0, 0, 0, 1, 0x19, 85])
+    );
 }
 
 #[test]
@@ -571,11 +561,12 @@ fn schedule_opr_list_multiple_references() {
     let val = sched
         .read_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES, None)
         .unwrap();
-    if let PropertyValue::List(items) = val {
-        assert_eq!(items.len(), 2);
-    } else {
-        panic!("expected PropertyValue::List");
-    }
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x0c, 0, 0, 0, 1, 0x19, 85, 0x0c, 0x01, 0, 0, 5, 0x19, 85,
+        ])
+    );
 }
 
 // --- Schedule property_list ---
@@ -736,15 +727,26 @@ fn tick_schedule_returns_value_and_refs_on_change() {
         target_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     ));
+    let indexed = BACnetObjectPropertyReference::new_indexed(
+        ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 7).unwrap(),
+        PropertyIdentifier::STATE_TEXT.to_raw(),
+        2,
+    );
+    sched.add_object_property_reference(indexed.clone());
     sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
 
     let result = sched.tick_schedule(0, 12, 0);
     assert!(result.is_some());
     let (value, refs) = result.unwrap();
     assert_eq!(value, PropertyValue::OctetString(vec![0x01]));
-    assert_eq!(refs.len(), 1);
-    assert_eq!(refs[0].0, target_oid);
-    assert_eq!(refs[0].1, PropertyIdentifier::PRESENT_VALUE.to_raw());
+    assert_eq!(refs.len(), 2);
+    assert_eq!(refs[1], indexed);
+    assert_eq!(refs[0].object_identifier, target_oid);
+    assert_eq!(
+        refs[0].property_identifier,
+        PropertyIdentifier::PRESENT_VALUE.to_raw()
+    );
+    assert_eq!(refs[0].property_array_index, None);
 }
 
 #[test]
