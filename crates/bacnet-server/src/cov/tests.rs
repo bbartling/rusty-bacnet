@@ -271,12 +271,18 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
     table.subscribe(single).unwrap();
 
     let context = MultipleContextKey {
-        endpoint: SubscriberEndpoint::new(&[1, 2, 3], None),
+        recipient: MultipleRecipient::from_endpoint(&[1, 2, 3], None),
         process_id: 1,
         confirmed: false,
     };
     table
-        .subscribe_multiple(&context, refreshed_expiry, 9, vec![])
+        .subscribe_multiple(
+            &context,
+            &SubscriberEndpoint::new(&[1, 2, 3], None),
+            refreshed_expiry,
+            9,
+            vec![],
+        )
         .unwrap();
 
     // The refresh point updates the whole context's expiry and reported
@@ -296,7 +302,13 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
             && sub.max_notification_delay().is_none()));
 
     table
-        .subscribe_multiple(&context, Instant::now() - Duration::from_secs(1), 9, vec![])
+        .subscribe_multiple(
+            &context,
+            &SubscriberEndpoint::new(&[1, 2, 3], None),
+            Instant::now() - Duration::from_secs(1),
+            9,
+            vec![],
+        )
         .unwrap();
 
     assert_eq!(table.purge_expired(), 2);

@@ -20,25 +20,37 @@ impl CovSubscriptionTable {
             existing.as_deref(),
         )?;
         let generation = self.reserve_generations(1)?;
-        Ok(self.publish(key, sub, generation, None))
+        Ok(self.publish(key, sub, generation, None, None))
     }
 
     /// Atomically accept final unique Multiple references and refresh their exact context.
     /// All identities/options are validated before quota/generation reservation or refresh.
     /// The request's expiry and maximum notification delay become the whole
     /// context's (last write wins); the delay is reported, never acted on.
+    /// The admitted route also replaces the route of every retained reference,
+    /// including empty renewals. A changed route fences old snapshots while
+    /// preserving unreplaced observations; same-route refresh retains authority.
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
+        route: &SubscriberEndpoint,
         expires_at: Instant,
         max_notification_delay: u32,
         mut subscriptions: Vec<CovSubscription>,
     ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
+        if MultipleRecipient::from_endpoint(&route.mac, route.network.as_ref()) != context.recipient
+        {
+            return Err(Error::Encoding(
+                "Multiple route does not match its recipient".into(),
+            ));
+        }
         for sub in &subscriptions {
-            if sub.key()?.multiple_context() != Some(context) || sub.expires_at != Some(expires_at)
+            if sub.key()?.multiple_context() != Some(context)
+                || sub.expires_at != Some(expires_at)
+                || sub.endpoint() != *route
             {
                 return Err(Error::Encoding(
-                    "Multiple subscription does not match its context/expiry".into(),
+                    "Multiple subscription does not match its context/route/expiry".into(),
                 ));
             }
         }
@@ -52,17 +64,26 @@ impl CovSubscriptionTable {
             .iter()
             .filter(|key| !self.subs.contains_key(key))
             .count();
-        let peer =
-            CovPeerKey::from_endpoint(&context.endpoint.mac, context.endpoint.network.as_ref());
+        let peer = CovPeerKey::from_endpoint(&route.mac, route.network.as_ref());
         self.check_admission_multiple(&peer, new_count, 0)?;
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
+        let route_owner = self
+            .subs
+            .values()
+            .find(|entry| entry.key.multiple_context() == Some(context))
+            .filter(|entry| entry.endpoint() == *route)
+            .and_then(|entry| entry.route_owner.clone())
+            .unwrap_or_else(|| Arc::new(()));
         let mut previously_indefinite = 0;
         for entry in self.subs.values_mut() {
             if entry.key.multiple_context() == Some(context) {
                 previously_indefinite += usize::from(entry.expires_at.is_none());
                 entry.subscription.expires_at = Some(expires_at);
                 entry.max_notification_delay = Some(max_notification_delay);
+                entry.subscription.subscriber_mac = route.mac.clone();
+                entry.subscription.subscriber_network = route.network.clone();
+                entry.route_owner = Some(Arc::clone(&route_owner));
             }
         }
         if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
@@ -80,6 +101,7 @@ impl CovSubscriptionTable {
                     sub,
                     first_generation + offset as u64,
                     Some(max_notification_delay),
+                    Some(Arc::clone(&route_owner)),
                 )
             })
             .collect())
@@ -101,8 +123,13 @@ impl CovSubscriptionTable {
         let expires_at = sub
             .expires_at
             .expect("Multiple contexts always have a finite lifetime");
-        let mut accepted =
-            self.subscribe_multiple(&context, expires_at, max_notification_delay, vec![sub])?;
+        let mut accepted = self.subscribe_multiple(
+            &context,
+            &sub.endpoint(),
+            expires_at,
+            max_notification_delay,
+            vec![sub],
+        )?;
         Ok(accepted.remove(0))
     }
 
@@ -133,11 +160,13 @@ impl CovSubscriptionTable {
         sub: CovSubscription,
         generation: u64,
         max_notification_delay: Option<u32>,
+        route_owner: Option<Arc<()>>,
     ) -> CovSubscriptionSnapshot {
         let snapshot = CovSubscriptionSnapshot {
             key,
             generation,
             owner: Arc::clone(&self.owner),
+            route_owner,
             subscription: sub.clone(),
             max_notification_delay,
         };

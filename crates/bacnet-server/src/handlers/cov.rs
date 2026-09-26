@@ -273,8 +273,9 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
 ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     let confirmed = request.issue_confirmed_notifications;
+    let route = SubscriberEndpoint::new(source_mac, source_network);
     let context = MultipleContextKey {
-        endpoint: SubscriberEndpoint::new(source_mac, source_network),
+        recipient: crate::cov::MultipleRecipient::from_endpoint(source_mac, source_network),
         process_id: request.subscriber_process_identifier,
         confirmed,
     };
@@ -378,5 +379,11 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         }
     }
 
-    table.subscribe_multiple(&context, expires_at, max_notification_delay, subscriptions)
+    table.subscribe_multiple(
+        &context,
+        &route,
+        expires_at,
+        max_notification_delay,
+        subscriptions,
+    )
 }

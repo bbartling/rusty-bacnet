@@ -29,9 +29,11 @@ pub(super) const MULTIPLE: PropertyIdentifier =
     PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
 pub(super) const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 
+pub(super) type SentFrames = Arc<std::sync::Mutex<Vec<(MacAddr, Bytes)>>>;
+
 pub(super) struct WireTransport {
     incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent: Arc<std::sync::Mutex<Vec<Bytes>>>,
+    sent: SentFrames,
 }
 
 impl TransportPort for WireTransport {
@@ -41,12 +43,18 @@ impl TransportPort for WireTransport {
     async fn stop(&mut self) -> Result<(), Error> {
         Ok(())
     }
-    async fn send_unicast(&self, npdu: &[u8], _: &[u8]) -> Result<(), Error> {
-        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((MacAddr::from_slice(mac), Bytes::copy_from_slice(npdu)));
         Ok(())
     }
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
+        self.sent
+            .lock()
+            .unwrap()
+            .push((MacAddr::new(), Bytes::copy_from_slice(npdu)));
         Ok(())
     }
     fn local_mac(&self) -> &[u8] {
@@ -269,7 +277,7 @@ pub(super) async fn exchange(
 pub(super) struct Wire {
     pub(super) server: BACnetServer<WireTransport>,
     pub(super) tx: mpsc::Sender<ReceivedNpdu>,
-    pub(super) sent: Arc<std::sync::Mutex<Vec<Bytes>>>,
+    pub(super) sent: SentFrames,
     invoke_id: u8,
 }
 

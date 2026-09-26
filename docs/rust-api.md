@@ -1262,12 +1262,31 @@ Python exposes ordinary COV and PropertyMultiple, not the single-property API.
 These boundaries are tracked in the [COV subscription ledger](conformance/support-summary.md).
 
 The bundled server keeps ordinary object, Single-property and Multiple-reference
-subscriptions independent. Their identity includes the exact immediate transport
-endpoint and optional routed NPDU source, process, object, property and optional
-array index. Absent, zero and element indexes differ. Confirmed mode is mutable
-for ordinary/Single renewal; confirmed and unconfirmed Multiple contexts coexist.
+subscriptions independent. Ordinary and Single identities include the exact immediate
+transport endpoint and optional routed NPDU source. Multiple contexts instead match
+the original BACnet client address (local MAC or remote SNET/SADR), process identifier
+and confirmed form, independently of the immediate router. Object, property and
+optional array index identify each reference; absent, zero and element indexes differ.
+Confirmed mode is mutable for ordinary/Single renewal; Multiple forms coexist.
 Exact duplicates in a Multiple request use the last options once, with quota and
 generation capacity reserved before any accepted context refresh.
+
+The latest successfully admitted finite Multiple request sets the current delivery
+route, lifetime and delay for every retained reference. An empty finite renewal
+updates an existing context but creates none. Cancellation through either router
+removes canonical targets without retargeting survivors. Rejected admission preserves
+the live target context; unrelated expired-entry purging and counters may still run.
+Changing route preserves unreplaced selected-value/flags observations and reference
+generations, while a private route ownership token fences every old-route snapshot.
+The routed address is a claimed protocol identity, not authentication; existing
+mutation authorization still precedes subscription handling.
+
+The pre-1.0 Rust API uses `MultipleContextKey::recipient: MultipleRecipient` in
+place of its former `endpoint` field. `subscribe_multiple` takes an explicit
+`&SubscriberEndpoint` route after the context argument and validates it against
+the recipient and proposals. The removed `CovSubscriptionKey::endpoint()` accessor
+is replaced by `CovSubscription::endpoint()` on subscription data (also available
+through accepted snapshots), which reports the current captured delivery route.
 
 The public `CovSubscriptionTable` accepts proposed `CovSubscription` values through
 fallible `subscribe`/`subscribe_multiple` methods and returns immutable
@@ -1280,14 +1299,15 @@ indefinite, positive finite and expired lifetimes. Positive finite fractions rou
 up, saturating at `u32::MAX`; only indefinite state projects to wire zero. This is
 our local representation policy, not a Standard-prescribed rounding formula.
 `CovSubscriptionTable::remaining_lifetime(snapshot, now)` checks the captured
-owner/key/generation and resolves the live expiry, including context-only renewal.
+owner/key/generation/route authority and resolves the live expiry, including context-only renewal.
 Initial and later notifications recheck eligibility after property reads and before
 fresh admission. This is a point-in-time check, not byte retraction if cancellation
 races afterward. Multiple retains only values with their own current authority;
 a failed live read cannot authorize a stale sibling's payload or companion.
 Already admitted confirmed notifications retain their APDU and retry/ACK lifecycle.
 `BACnetServer::remove_peer_subscriptions` removes
-only the exact immediate endpoint plus routed source. `CovPeerKey` continues to
+only entries using the exact current immediate endpoint plus routed source; cleanup
+of an obsolete router does not remove migrated Multiple references. `CovPeerKey` continues to
 group quota/rate accounting and does not authorize cross-router cleanup.
 
 Property subscriptions now prepare one selected-coordinate `CovSample` for comparison,

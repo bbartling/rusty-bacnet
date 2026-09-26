@@ -102,6 +102,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                 table
                     .subscribe_multiple(
                         snapshots[0].key().multiple_context().unwrap(),
+                        &snapshots[0].endpoint(),
                         Instant::now() + Duration::from_secs(1000),
                         0,
                         vec![],

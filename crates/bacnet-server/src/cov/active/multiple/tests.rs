@@ -30,7 +30,7 @@ fn routed() -> SubscriberEndpoint {
 
 fn context(endpoint: SubscriberEndpoint, process_id: u32, confirmed: bool) -> MultipleContextKey {
     MultipleContextKey {
-        endpoint,
+        recipient: MultipleRecipient::from_endpoint(&endpoint.mac, endpoint.network.as_ref()),
         process_id,
         confirmed,
     }
@@ -38,13 +38,14 @@ fn context(endpoint: SubscriberEndpoint, process_id: u32, confirmed: bool) -> Mu
 
 fn reference(
     context: &MultipleContextKey,
+    route: &SubscriberEndpoint,
     property: Option<PropertyIdentifier>,
     expires_at: Option<Instant>,
     kind: CovNotificationKind,
 ) -> CovSubscription {
     CovSubscription {
-        subscriber_mac: context.endpoint.mac.clone(),
-        subscriber_network: context.endpoint.network.clone(),
+        subscriber_mac: route.mac.clone(),
+        subscriber_network: route.network.clone(),
         subscriber_process_identifier: context.process_id,
         monitored_object_identifier: av(1),
         issue_confirmed_notifications: context.confirmed,
@@ -64,7 +65,13 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
     let unconfirmed = context(direct(), 2, false);
     let confirmed = context(direct(), 2, true);
     let mut table = CovSubscriptionTable::new();
-    let single = reference(&unconfirmed, Some(PV), None, CovNotificationKind::Single);
+    let single = reference(
+        &unconfirmed,
+        &direct(),
+        Some(PV),
+        None,
+        CovNotificationKind::Single,
+    );
     table.subscribe(single.clone()).unwrap();
     // Generic admission cannot bypass the context owner.
     let mut bypass = single;
@@ -76,6 +83,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
     let first = now + Duration::from_millis(1_500);
     let mut status = reference(
         &unconfirmed,
+        &direct(),
         Some(PV),
         Some(first),
         CovNotificationKind::Multiple,
@@ -83,22 +91,24 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
     status.monitored_property = Some(PropertyIdentifier::STATUS_FLAGS);
     let present = reference(
         &unconfirmed,
+        &direct(),
         Some(PV),
         Some(first),
         CovNotificationKind::Multiple,
     );
     table
-        .subscribe_multiple(&unconfirmed, first, 5, vec![present, status])
+        .subscribe_multiple(&unconfirmed, &direct(), first, 5, vec![present, status])
         .unwrap();
     let later = now + Duration::from_secs(60);
     let other_form = reference(
         &confirmed,
+        &direct(),
         Some(PV),
         Some(later),
         CovNotificationKind::Multiple,
     );
     table
-        .subscribe_multiple(&confirmed, later, 7, vec![other_form])
+        .subscribe_multiple(&confirmed, &direct(), later, 7, vec![other_form])
         .unwrap();
 
     let rows = |table: &CovSubscriptionTable, at| {
@@ -128,7 +138,13 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
     // An expiry-only renewal refreshes the whole unconfirmed context's
     // lifetime and delay (last write wins) and leaves the other form alone.
     table
-        .subscribe_multiple(&unconfirmed, now + Duration::from_secs(10), 9, vec![])
+        .subscribe_multiple(
+            &unconfirmed,
+            &direct(),
+            now + Duration::from_secs(10),
+            9,
+            vec![],
+        )
         .unwrap();
     assert_eq!(
         rows(&table, now),
@@ -201,7 +217,7 @@ fn active_cov_multiple_projection_groups_contexts_and_omits_deleted_objects() {
     };
     let expected = |context: &MultipleContextKey, specs| BACnetCOVMultipleSubscription {
         recipient: BACnetRecipientProcess {
-            recipient: recipient(&context.endpoint),
+            recipient: multiple_recipient(&context.recipient),
             process_identifier: context.process_id,
         },
         issue_confirmed_notifications: context.confirmed,
@@ -245,7 +261,7 @@ fn active_cov_multiple_projection_groups_contexts_and_omits_deleted_objects() {
         network_number: 7,
         mac_address: MacAddr::from_slice(&[0x33]),
     });
-    assert_eq!(recipient(&routed_two.endpoint), routed_recipient);
+    assert_eq!(multiple_recipient(&routed_two.recipient), routed_recipient);
     assert_eq!(
         projected.resolve(device(), MULTIPLE),
         Some(PropertyValue::ApplicationData(encoded.to_vec()))

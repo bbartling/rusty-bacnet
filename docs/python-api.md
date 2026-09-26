@@ -387,7 +387,15 @@ await client.write_property_multiple("192.168.1.100:47808", [
 ### COV Subscriptions
 
 The bundled server distinguishes ordinary, Single-property and Multiple-reference
-subscriptions by exact transport/routed endpoint and requested coordinates.
+subscriptions by their requested coordinates. Ordinary and Single identities include
+the exact transport/routed endpoint. Multiple contexts match the original client
+BACnet address, process and confirmed form independently of the immediate router.
+The latest accepted finite request, including an empty renewal of an existing
+context, retargets every retained reference. Cancellation from another router
+removes matching targets without retargeting survivors; rejected requests preserve
+the live target context. Route changes fence old snapshots while preserving
+unreplaced selected-value/flags observations. Peer cleanup uses the current route.
+Claimed BACnet addresses do not establish authentication.
 Ordinary renewal may change confirmed mode; confirmed and unconfirmed Multiple
 contexts coexist independently. Different accepted array indexes stay distinct,
 and exact duplicate Multiple references use the final options once. Stale initial

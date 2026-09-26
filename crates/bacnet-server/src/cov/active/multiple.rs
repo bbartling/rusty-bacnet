@@ -1,12 +1,12 @@
 //! Live Device `Active_COV_Multiple_Subscriptions` projection (Clause 12.11;
 //! Table 12-13 footnote 18).
 //!
-//! Each list entry is one COV-multiple context: an exact subscriber endpoint,
+//! Each list entry is one COV-multiple context: an original BACnet client address,
 //! process identifier and notification form, with one remaining lifetime and
 //! one maximum notification delay, nesting its accepted references by
 //! monitored object. The server COV table is the canonical owner:
-//! `subscribe_multiple` refreshes the expiry and delay of every reference in a
-//! context together, so the references of one context agree on both.
+//! `subscribe_multiple` refreshes the route, expiry and delay of every reference
+//! in a context together. The route is delivery state, not projected identity.
 use super::*;
 use bacnet_encoding::constructed::encode_cov_multiple_subscription_list;
 use bacnet_types::constructed::{
@@ -115,7 +115,7 @@ impl ActiveCovMultipleSubscriptions {
                 current = Some(&entry.context);
                 contexts.push(BACnetCOVMultipleSubscription {
                     recipient: BACnetRecipientProcess {
-                        recipient: recipient(&entry.context.endpoint),
+                        recipient: multiple_recipient(&entry.context.recipient),
                         process_identifier: entry.context.process_id,
                     },
                     issue_confirmed_notifications: entry.context.confirmed,
@@ -162,8 +162,7 @@ impl ActiveCovMultipleSubscriptions {
     }
 }
 
-/// Contexts in recipient order (the endpoint order shared with
-/// `Active_COV_Subscriptions`, then process and form); within a context,
+/// Contexts in canonical recipient order, then process and form; within a context,
 /// references in the shared object/property/index coordinate order. The table
 /// identity is unique, so the order is total and deterministic.
 fn order(a: &ActiveCovMultipleEntry, b: &ActiveCovMultipleEntry) -> CmpOrdering {
@@ -175,10 +174,31 @@ fn order(a: &ActiveCovMultipleEntry, b: &ActiveCovMultipleEntry) -> CmpOrdering 
             entry.index,
         )
     };
-    endpoint_order(&a.context.endpoint, &b.context.endpoint)
+    recipient_order(&a.context.recipient, &b.context.recipient)
         .then_with(|| a.context.process_id.cmp(&b.context.process_id))
         .then_with(|| a.context.confirmed.cmp(&b.context.confirmed))
         .then_with(|| coordinates(a).cmp(&coordinates(b)))
+}
+
+fn multiple_recipient(recipient: &MultipleRecipient) -> BACnetRecipient {
+    BACnetRecipient::Address(match recipient {
+        MultipleRecipient::Direct(mac) => BACnetAddress {
+            network_number: 0,
+            mac_address: mac.clone(),
+        },
+        MultipleRecipient::Routed(source) => BACnetAddress {
+            network_number: source.network,
+            mac_address: source.mac_address.clone(),
+        },
+    })
+}
+
+fn recipient_order(a: &MultipleRecipient, b: &MultipleRecipient) -> CmpOrdering {
+    let coordinates = |recipient: &MultipleRecipient| match recipient {
+        MultipleRecipient::Direct(mac) => (None, mac.clone()),
+        MultipleRecipient::Routed(source) => (Some(source.network), source.mac_address.clone()),
+    };
+    coordinates(a).cmp(&coordinates(b))
 }
 
 #[cfg(test)]
