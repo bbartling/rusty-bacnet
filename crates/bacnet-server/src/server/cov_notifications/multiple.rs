@@ -307,7 +307,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         if representative.issue_confirmed_notifications {
             let guard = match in_flight_tracker.try_acquire(
-                representative.peer_key(),
+                representative.recipient(),
                 config.cov_policy.max_confirmed_in_flight_per_peer,
                 cov_in_flight,
             ) {

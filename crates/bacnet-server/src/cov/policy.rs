@@ -1,10 +1,11 @@
-//! COV policies, rate accounting keys, and telemetry counters.
+//! COV policies, canonical-recipient accounting, and telemetry counters.
+
+use super::CovRecipient;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::MacAddr;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -20,7 +21,7 @@ pub struct CovPolicy {
     /// List of MAC addresses of direct peers permitted to use reserved subscription capacity.
     pub reserved_peers: Vec<MacAddr>,
     /// List of canonical peer keys permitted to use reserved subscription capacity.
-    pub reserved_peer_keys: Vec<CovPeerKey>,
+    pub reserved_recipients: Vec<CovRecipient>,
     /// Whether indefinite (infinite lifetime) subscriptions are permitted.
     pub allow_indefinite_subscriptions: bool,
     /// Maximum number of indefinite subscriptions allowed for a single peer.
@@ -40,7 +41,7 @@ impl Default for CovPolicy {
             max_subscriptions_per_peer: 64,
             reserved_capacity: 64,
             reserved_peers: Vec::new(),
-            reserved_peer_keys: Vec::new(),
+            reserved_recipients: Vec::new(),
             allow_indefinite_subscriptions: true,
             max_indefinite_per_peer: 16,
             max_notifications_per_event: 64,
@@ -58,7 +59,7 @@ impl CovPolicy {
             max_subscriptions_per_peer: usize::MAX,
             reserved_capacity: 0,
             reserved_peers: Vec::new(),
-            reserved_peer_keys: Vec::new(),
+            reserved_recipients: Vec::new(),
             allow_indefinite_subscriptions: true,
             max_indefinite_per_peer: usize::MAX,
             max_notifications_per_event: usize::MAX,
@@ -80,23 +81,23 @@ impl CovPolicy {
     }
 
     /// Check if a peer is in the reserved peers list.
-    pub fn is_peer_reserved(&self, peer: &CovPeerKey) -> bool {
-        if self.reserved_peer_keys.contains(peer) {
+    pub fn is_peer_reserved(&self, peer: &CovRecipient) -> bool {
+        if self.reserved_recipients.contains(peer) {
             return true;
         }
         match peer {
-            CovPeerKey::Direct(mac) => self.reserved_peers.contains(mac),
-            CovPeerKey::Routed(_, _) => false,
+            CovRecipient::Direct(mac) => self.reserved_peers.contains(mac),
+            CovRecipient::Routed(_) => false,
         }
     }
 
     /// Return the effective unreserved capacity available to unreserved peers.
     ///
-    /// When neither `reserved_peers` nor `reserved_peer_keys` is configured or
+    /// When neither `reserved_peers` nor `reserved_recipients` is configured or
     /// `reserved_capacity` is 0, no capacity is set aside, and the entire global
     /// capacity is available to unreserved peers.
     pub fn effective_unreserved_capacity(&self) -> usize {
-        if (self.reserved_peers.is_empty() && self.reserved_peer_keys.is_empty())
+        if (self.reserved_peers.is_empty() && self.reserved_recipients.is_empty())
             || self.reserved_capacity == 0
         {
             self.max_subscriptions_global
@@ -196,51 +197,6 @@ impl AtomicCovCounters {
     }
 }
 
-/// Canonical representation of peer identity for COV quota and rate accounting.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CovPeerKey {
-    /// Directly connected peer identified by its local MAC address.
-    Direct(MacAddr),
-    /// Routed peer identified by its network number and remote MAC address.
-    Routed(u16, MacAddr),
-}
-
-impl CovPeerKey {
-    /// Create a direct peer key.
-    pub fn direct(mac: MacAddr) -> Self {
-        Self::Direct(mac)
-    }
-
-    /// Create a routed peer key.
-    pub fn routed(network: u16, mac: MacAddr) -> Self {
-        Self::Routed(network, mac)
-    }
-
-    /// Derive canonical peer key from local MAC and optional routed network address.
-    pub fn from_endpoint(mac: &MacAddr, network: Option<&NpduAddress>) -> Self {
-        match network {
-            Some(dest) if !dest.mac_address.is_empty() => {
-                Self::Routed(dest.network, MacAddr::from_slice(&dest.mac_address))
-            }
-            _ => Self::Direct(mac.clone()),
-        }
-    }
-
-    /// Get a reference to the underlying MAC address.
-    pub fn mac(&self) -> &MacAddr {
-        match self {
-            Self::Direct(mac) => mac,
-            Self::Routed(_, mac) => mac,
-        }
-    }
-}
-
-impl From<MacAddr> for CovPeerKey {
-    fn from(mac: MacAddr) -> Self {
-        Self::Direct(mac)
-    }
-}
-
 /// Error returned when acquiring an in-flight confirmed notification slot fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InFlightAcquireError {
@@ -253,12 +209,12 @@ pub enum InFlightAcquireError {
 /// Tracker for concurrent in-flight confirmed notifications per peer.
 #[derive(Debug, Default)]
 pub struct CovInFlightTracker {
-    peer_in_flight: Mutex<HashMap<CovPeerKey, usize>>,
+    peer_in_flight: Mutex<HashMap<CovRecipient, usize>>,
 }
 
 /// RAII permit for an in-flight confirmed notification holding both a peer slot and a global permit.
 pub struct CovInFlightGuard {
-    peer: CovPeerKey,
+    peer: CovRecipient,
     tracker: Arc<CovInFlightTracker>,
     _global_permit: OwnedSemaphorePermit,
 }
@@ -281,7 +237,7 @@ impl CovInFlightTracker {
     /// Attempt to acquire an in-flight confirmed notification slot.
     pub fn try_acquire(
         self: &Arc<Self>,
-        peer: CovPeerKey,
+        peer: CovRecipient,
         max_per_peer: usize,
         global_semaphore: &Arc<Semaphore>,
     ) -> Result<CovInFlightGuard, InFlightAcquireError> {
@@ -307,7 +263,7 @@ impl CovInFlightTracker {
         self.peer_in_flight.lock().unwrap().len()
     }
 
-    fn release(&self, peer: &CovPeerKey) {
+    fn release(&self, peer: &CovRecipient) {
         let mut guard = self.peer_in_flight.lock().unwrap();
         if let Some(count) = guard.get_mut(peer) {
             *count = count.saturating_sub(1);

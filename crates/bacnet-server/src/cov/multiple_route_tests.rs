@@ -170,11 +170,11 @@ fn cov_multiple_route_distinct_contexts_and_cleanup_remain_independent() {
         .subscribe_multiple(&context(&base), &b.endpoint(), Instant::now(), 0, vec![])
         .unwrap();
     assert_eq!(table.purge_expired(), 1);
-    assert_eq!(table.peer_subscription_count(&base.peer_key()), 0);
+    assert_eq!(table.peer_subscription_count(&base.recipient()), 0);
 }
 
 #[test]
-fn cov_ordinary_and_single_keep_distinct_immediate_router_identities() {
+fn cov_ordinary_and_single_share_recipient_with_current_route_cleanup() {
     let mut table = CovSubscriptionTable::new();
     for property in [None, Some(PropertyIdentifier::PRESENT_VALUE)] {
         for router in [1, 2] {
@@ -184,11 +184,11 @@ fn cov_ordinary_and_single_keep_distinct_immediate_router_identities() {
             table.subscribe(sub).unwrap();
         }
     }
-    assert_eq!(table.len(), 4);
+    assert_eq!(table.len(), 2);
     let a = routed_proposal(1, None);
     assert_eq!(
         table.remove_peer_subscriptions(&a.subscriber_mac, a.subscriber_network.as_ref()),
-        2
+        0
     );
     assert_eq!(table.len(), 2);
 }

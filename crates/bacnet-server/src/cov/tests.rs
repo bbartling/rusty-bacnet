@@ -271,7 +271,7 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
     table.subscribe(single).unwrap();
 
     let context = MultipleContextKey {
-        recipient: MultipleRecipient::from_endpoint(&[1, 2, 3], None),
+        recipient: CovRecipient::from_endpoint(&[1, 2, 3], None),
         process_id: 1,
         confirmed: false,
     };
@@ -335,7 +335,7 @@ fn default_policy_allows_1024th_subscription() {
     // 16 peers * 64 subscriptions each = 1024 subscriptions
     for peer_idx in 0..16u8 {
         let mac = [192, 168, 1, peer_idx];
-        let peer_key = CovPeerKey::direct(MacAddr::from_slice(&mac));
+        let peer_key = CovRecipient::Direct(MacAddr::from_slice(&mac));
         for proc_id in 0..64u32 {
             table
                 .check_admission(&peer_key, false, None)
@@ -349,7 +349,7 @@ fn default_policy_allows_1024th_subscription() {
 
     // 1025th subscription from a 17th peer fails due to global capacity
     let mac17 = [192, 168, 1, 17];
-    let peer17 = CovPeerKey::direct(MacAddr::from_slice(&mac17));
+    let peer17 = CovRecipient::Direct(MacAddr::from_slice(&mac17));
     assert!(table.check_admission(&peer17, false, None).is_err());
 }
 
@@ -377,7 +377,7 @@ fn effective_unreserved_capacity_respects_reserved_peers() {
 fn in_flight_tracker_does_not_leak_zero_count_entries_on_failure() {
     let tracker = Arc::new(CovInFlightTracker::default());
     let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
-    let peer = CovPeerKey::direct(MacAddr::from_slice(&[1, 2, 3, 4]));
+    let peer = CovRecipient::Direct(MacAddr::from_slice(&[1, 2, 3, 4]));
 
     // Acquisition fails due to global pool exhausted
     let err = tracker
@@ -388,7 +388,7 @@ fn in_flight_tracker_does_not_leak_zero_count_entries_on_failure() {
 
     // Acquisition fails due to peer limit exceeded (max_per_peer = 0)
     let semaphore2 = Arc::new(tokio::sync::Semaphore::new(10));
-    let peer2 = CovPeerKey::direct(MacAddr::from_slice(&[5, 6, 7, 8]));
+    let peer2 = CovRecipient::Direct(MacAddr::from_slice(&[5, 6, 7, 8]));
     let err2 = tracker.try_acquire(peer2, 0, &semaphore2).unwrap_err();
     assert_eq!(err2, InFlightAcquireError::PeerLimitExceeded);
     assert_eq!(tracker.active_peer_count(), 0);
@@ -402,7 +402,7 @@ fn expired_subscriptions_immediately_release_quota_on_admission() {
     };
     let mut table =
         CovSubscriptionTable::with_policy(policy, Arc::new(AtomicCovCounters::default()));
-    let peer = CovPeerKey::direct(MacAddr::from_slice(&[1, 2, 3]));
+    let peer = CovRecipient::Direct(MacAddr::from_slice(&[1, 2, 3]));
 
     // Create a subscription with an expiry in the past
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
@@ -421,21 +421,33 @@ fn is_peer_reserved_checks_canonical_peer_identity() {
     let direct_mac = MacAddr::from_slice(&[1, 2, 3]);
     let policy = CovPolicy {
         reserved_peers: vec![direct_mac.clone()],
-        reserved_peer_keys: vec![CovPeerKey::routed(10, direct_mac.clone())],
+        reserved_recipients: vec![CovRecipient::Routed(NpduAddress {
+            network: 10,
+            mac_address: direct_mac.clone(),
+        })],
         ..Default::default()
     };
 
     // Direct peer matching reserved_peers is reserved
-    assert!(policy.is_peer_reserved(&CovPeerKey::direct(direct_mac.clone())));
+    assert!(policy.is_peer_reserved(&CovRecipient::Direct(direct_mac.clone())));
 
-    // Routed peer on network 10 matching reserved_peer_keys is reserved
-    assert!(policy.is_peer_reserved(&CovPeerKey::routed(10, direct_mac.clone())));
+    // Routed peer on network 10 matching reserved_recipients is reserved
+    assert!(policy.is_peer_reserved(&CovRecipient::Routed(NpduAddress {
+        network: 10,
+        mac_address: direct_mac.clone()
+    })));
 
     // Routed peer on different network (20) with same MAC is NOT reserved
-    assert!(!policy.is_peer_reserved(&CovPeerKey::routed(20, direct_mac.clone())));
+    assert!(!policy.is_peer_reserved(&CovRecipient::Routed(NpduAddress {
+        network: 20,
+        mac_address: direct_mac.clone()
+    })));
 
     // Unconfigured direct peer is NOT reserved
     let other_mac = MacAddr::from_slice(&[4, 5, 6]);
-    assert!(!policy.is_peer_reserved(&CovPeerKey::direct(other_mac.clone())));
-    assert!(!policy.is_peer_reserved(&CovPeerKey::routed(10, other_mac)));
+    assert!(!policy.is_peer_reserved(&CovRecipient::Direct(other_mac.clone())));
+    assert!(!policy.is_peer_reserved(&CovRecipient::Routed(NpduAddress {
+        network: 10,
+        mac_address: other_mac
+    })));
 }

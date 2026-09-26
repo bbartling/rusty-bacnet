@@ -9,6 +9,7 @@ use support::*;
 mod device_execution;
 mod device_selection;
 mod multiple_route;
+mod recipient_route;
 mod support;
 
 // Shares this suite's wire harness; Multiple contexts are a separate property.

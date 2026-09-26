@@ -72,7 +72,10 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
             );
             let current = table
                 .get_subscription(&crate::cov::CovSubscriptionKey::Property {
-                    endpoint: crate::cov::SubscriberEndpoint::new(&MacAddr::from_slice(&mac), None),
+                    recipient: crate::cov::CovRecipient::from_endpoint(
+                        &MacAddr::from_slice(&mac),
+                        None,
+                    ),
                     process_id: 7,
                     object: object(1),
                     property: PropertyIdentifier::PRESENT_VALUE,
@@ -85,8 +88,8 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
                 expired.issue_confirmed_notifications
             );
             assert_eq!(current.cov_increment, expired.cov_increment);
-            assert_eq!(table.peer_subscription_count(&expired.peer_key()), 1);
-            assert_eq!(table.peer_indefinite_count(&expired.peer_key()), 0);
+            assert_eq!(table.peer_subscription_count(&expired.recipient()), 1);
+            assert_eq!(table.peer_indefinite_count(&expired.recipient()), 0);
         }
     }
     assert_eq!(table.purge_expired(), 1);
@@ -115,7 +118,7 @@ async fn subscribe_cov_property_positive_renewal_expiry_and_nonexistent_cancel()
     assert!(renewed.expires_at.unwrap() > first.expires_at.unwrap() + Duration::from_secs(28000));
     assert!(renewed.issue_confirmed_notifications);
     assert_eq!(table.len(), 1);
-    assert_eq!(table.peer_indefinite_count(&renewed.peer_key()), 0);
+    assert_eq!(table.peer_indefinite_count(&renewed.recipient()), 0);
     assert!(handle_subscribe_cov_property_with_initial(
         &mut table,
         &db,
@@ -162,7 +165,7 @@ fn subscribe_cov_ordinary_none_and_zero_lifetimes_remain_indefinite() {
         let initial = handle_subscribe_cov_with_initial(&mut table, &db, &[1], &bytes).unwrap();
         assert_eq!(initial.len(), 1);
         assert!(initial[0].expires_at.is_none());
-        assert_eq!(table.peer_indefinite_count(&initial[0].peer_key()), 1);
+        assert_eq!(table.peer_indefinite_count(&initial[0].recipient()), 1);
     }
     assert_eq!(table.len(), 1);
     // Single-property decode remains structural even for the service-invalid form.

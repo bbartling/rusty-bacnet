@@ -1,8 +1,8 @@
 use super::*;
 
 /// Delivery endpoint, including the immediate router for routed traffic.
-/// Ordinary and Single keys use it as identity; Multiple keys use the recipient.
-/// Quota grouping deliberately uses the separate [`CovPeerKey`].
+/// All COV family keys use the original client recipient as identity.
+/// Quota and notification accounting use that same [`CovRecipient`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SubscriberEndpoint {
     /// Immediate transport destination (the router when routed).
@@ -21,18 +21,18 @@ impl SubscriberEndpoint {
     }
 }
 
-/// Original BACnet client address used to match a Multiple context.
+/// Original BACnet client address for COV identity, quota and notification accounting.
 /// A routed address is independent of the immediate router; it is a claimed
 /// protocol address, not an authentication credential.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MultipleRecipient {
+pub enum CovRecipient {
     /// A local-network client, identified by its source MAC.
     Direct(MacAddr),
     /// The original SNET/SADR of a client behind a router.
     Routed(NpduAddress),
 }
 
-impl MultipleRecipient {
+impl CovRecipient {
     /// Derive client identity separately from the current delivery route.
     pub fn from_endpoint(mac: &[u8], network: Option<&NpduAddress>) -> Self {
         match network {
@@ -40,13 +40,22 @@ impl MultipleRecipient {
             None => Self::Direct(MacAddr::from_slice(mac)),
         }
     }
+    /// Table admission requires the same nonempty routed source MAC as NPDU decoding.
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if matches!(self, Self::Routed(source) if source.mac_address.is_empty()) {
+            return Err(Error::Encoding(
+                "COV routed recipient requires a nonempty source MAC".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Multiple notification context. Confirmed and unconfirmed forms are independent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MultipleContextKey {
     /// Original client address, without the immediate router.
-    pub recipient: MultipleRecipient,
+    pub recipient: CovRecipient,
     /// Subscriber's process identifier.
     pub process_id: u32,
     /// Multiple notification form, unlike mutable ordinary/Single mode.
@@ -58,8 +67,8 @@ pub struct MultipleContextKey {
 pub enum CovSubscriptionKey {
     /// Ordinary whole-object subscription.
     Object {
-        /// Exact transport and routed endpoint.
-        endpoint: SubscriberEndpoint,
+        /// Original client address, without the immediate router.
+        recipient: CovRecipient,
         /// Subscriber's process identifier.
         process_id: u32,
         /// Monitored object identifier.
@@ -67,8 +76,8 @@ pub enum CovSubscriptionKey {
     },
     /// Single-property subscription. Absent, zero and element indexes are distinct.
     Property {
-        /// Exact transport and routed endpoint.
-        endpoint: SubscriberEndpoint,
+        /// Original client address, without the immediate router.
+        recipient: CovRecipient,
         /// Subscriber's process identifier.
         process_id: u32,
         /// Monitored object identifier.
@@ -118,16 +127,16 @@ impl CovSubscription {
 
     /// Validate and derive the sole table identity from this proposed subscription.
     pub fn key(&self) -> Result<CovSubscriptionKey, Error> {
-        let endpoint =
-            SubscriberEndpoint::new(&self.subscriber_mac, self.subscriber_network.as_ref());
+        let recipient = self.recipient();
+        recipient.validate()?;
         let process_id = self.subscriber_process_identifier;
         let object = self.monitored_object_identifier;
         let index = self.monitored_property_array_index;
         match (self.notification_kind, self.monitored_property, index) {
-            (CovNotificationKind::Single, None, None) => Ok(CovSubscriptionKey::Object { endpoint, process_id, object }),
-            (CovNotificationKind::Single, Some(property), _) => Ok(CovSubscriptionKey::Property { endpoint, process_id, object, property, index }),
+            (CovNotificationKind::Single, None, None) => Ok(CovSubscriptionKey::Object { recipient, process_id, object }),
+            (CovNotificationKind::Single, Some(property), _) => Ok(CovSubscriptionKey::Property { recipient, process_id, object, property, index }),
             (CovNotificationKind::Multiple, Some(property), _) => Ok(CovSubscriptionKey::Multiple {
-                context: MultipleContextKey { recipient: MultipleRecipient::from_endpoint(&endpoint.mac, endpoint.network.as_ref()), process_id, confirmed: self.issue_confirmed_notifications }, object, property, index,
+                context: MultipleContextKey { recipient, process_id, confirmed: self.issue_confirmed_notifications }, object, property, index,
             }),
             _ => Err(Error::Encoding("COV reference requires a property; whole-object subscriptions cannot carry an index".into())),
         }

@@ -64,9 +64,10 @@ pub struct CovSubscription {
 }
 
 impl CovSubscription {
-    /// Derive the quota/rate group, not cancellation or replacement identity.
-    pub fn peer_key(&self) -> CovPeerKey {
-        CovPeerKey::from_endpoint(&self.subscriber_mac, self.subscriber_network.as_ref())
+    /// Original client address shared by subscription identity and accounting.
+    /// Process, family and monitored coordinates additionally distinguish subscriptions.
+    pub fn recipient(&self) -> CovRecipient {
+        CovRecipient::from_endpoint(&self.subscriber_mac, self.subscriber_network.as_ref())
     }
 }
 
@@ -85,8 +86,8 @@ pub struct CovSubscriptionTable {
     subs: HashMap<CovSubscriptionKey, CovSubscriptionSnapshot>,
     generation: u64,
     owner: Arc<()>,
-    peer_counts: HashMap<CovPeerKey, usize>,
-    peer_indefinite_counts: HashMap<CovPeerKey, usize>,
+    peer_counts: HashMap<CovRecipient, usize>,
+    peer_indefinite_counts: HashMap<CovRecipient, usize>,
     policy: CovPolicy,
     counters: Arc<AtomicCovCounters>,
     in_flight: Arc<CovInFlightTracker>,
@@ -143,12 +144,12 @@ impl CovSubscriptionTable {
     }
 
     /// Get the number of active subscriptions for a peer.
-    pub fn peer_subscription_count(&self, peer: &CovPeerKey) -> usize {
+    pub fn peer_subscription_count(&self, peer: &CovRecipient) -> usize {
         self.peer_counts.get(peer).copied().unwrap_or(0)
     }
 
     /// Get the number of active indefinite subscriptions for a peer.
-    pub fn peer_indefinite_count(&self, peer: &CovPeerKey) -> usize {
+    pub fn peer_indefinite_count(&self, peer: &CovRecipient) -> usize {
         self.peer_indefinite_counts.get(peer).copied().unwrap_or(0)
     }
 
@@ -164,7 +165,7 @@ impl CovSubscriptionTable {
 
     fn remove_internal(&mut self, key: &CovSubscriptionKey, was_cancelled: bool) -> bool {
         if let Some(sub) = self.subs.remove(key) {
-            let peer = sub.peer_key();
+            let peer = sub.recipient();
             if let Some(count) = self.peer_counts.get_mut(&peer) {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
@@ -225,7 +226,7 @@ impl CovSubscriptionTable {
     }
 
     /// Remove subscriptions using this current route and release shared peer quotas.
-    /// An obsolete router cannot remove a Multiple context migrated elsewhere.
+    /// An obsolete router cannot remove a subscription migrated elsewhere.
     pub fn remove_peer_subscriptions(
         &mut self,
         mac: &[u8],
