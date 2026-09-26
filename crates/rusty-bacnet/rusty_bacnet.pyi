@@ -971,7 +971,12 @@ class LifeSafetyOperation:
 # ---------------------------------------------------------------------------
 
 class ObjectIdentifier:
-    """BACnet Object Identifier (type + instance number)."""
+    """BACnet Object Identifier (10-bit type + 22-bit instance number).
+
+    For u32-representable values, types above 1023 or instances above 4,194,303
+    raise ValueError. Integers outside u32 retain their argument-conversion errors.
+    Valid proprietary types and the wire wildcard instance are accepted.
+    """
 
     def __init__(self, object_type: ObjectType, instance: int) -> None: ...
 

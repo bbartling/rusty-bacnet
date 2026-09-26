@@ -1,7 +1,6 @@
 //! BACnetValueSource CHOICE framing (ASHRAE 135-2020 Clause 21).
 use bacnet_types::constructed::{BACnetAddress, BACnetValueSource};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::{
@@ -18,34 +17,12 @@ const WHAT: &str = "BACnetValueSource";
 /// local network zero and empty (broadcast) MAC addresses. Source identity and
 /// authorization are mechanism-level concerns, not datatype restrictions.
 ///
-/// Invalid object-type or instance widths, or an unencodable MAC length, return an error
+/// An unencodable MAC length returns an error
 /// before modifying the output buffer.
 pub fn encode_value_source(buf: &mut BytesMut, source: &BACnetValueSource) -> Result<(), Error> {
-    match source {
-        BACnetValueSource::Object(reference) => {
-            for oid in reference
-                .device_identifier
-                .iter()
-                .chain(std::iter::once(&reference.object_identifier))
-            {
-                if oid.object_type().to_raw() > 0x3ff {
-                    return Err(Error::OutOfRange(format!(
-                        "{WHAT}: object type exceeds 10-bit field"
-                    )));
-                }
-                if oid.instance_number() > ObjectIdentifier::MAX_INSTANCE {
-                    return Err(Error::OutOfRange(format!(
-                        "{WHAT}: object instance exceeds 22-bit field"
-                    )));
-                }
-            }
-        }
-        BACnetValueSource::Address(address) => {
-            u32::try_from(address.mac_address.len()).map_err(|_| {
-                Error::OutOfRange(format!("{WHAT}: MAC length exceeds wire length"))
-            })?;
-        }
-        BACnetValueSource::None => {}
+    if let BACnetValueSource::Address(address) = source {
+        u32::try_from(address.mac_address.len())
+            .map_err(|_| Error::OutOfRange(format!("{WHAT}: MAC length exceeds wire length")))?;
     }
     match source {
         BACnetValueSource::None => tags::encode_tag(buf, 0, tags::TagClass::Context, 0),

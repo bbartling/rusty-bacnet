@@ -2182,13 +2182,21 @@
    "status": "implementation-present-needs-negative-tests",
    "code_anchors": [
     "crates/bacnet-encoding/src/primitives",
-    "crates/bacnet-encoding/src/tags.rs"
+    "crates/bacnet-encoding/src/tags.rs",
+    "crates/bacnet-types/src/primitives.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-encoding/src/primitives/tests.rs"
+    "crates/bacnet-encoding/src/primitives/tests.rs",
+    "crates/bacnet-types/src/primitives.rs::object_identifier_wire_boundaries_preserve_identity",
+    "crates/bacnet-encoding/src/constructed/tests/object_identifier_invariant.rs",
+    "crates/rusty-bacnet/tests/test_object_identifier_invariant.py"
    ],
    "negative_tests": [
-    "crates/bacnet-encoding/src/primitives/tests.rs"
+    "crates/bacnet-encoding/src/primitives/tests.rs",
+    "crates/bacnet-types/src/primitives.rs::object_identifier_new_rejects_type_overflow",
+    "crates/bacnet-types/src/primitives.rs::object_identifier_addressable_rejects_type_overflow",
+    "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries",
+    "crates/rusty-bacnet/tests/test_object_identifier_invariant.py"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -2197,7 +2205,7 @@
     "README services",
     "docs/python-api.md property value APIs"
    ],
-   "notes": "Needs a complete malformed fixture catalog and byte-equivalence guard for optimizations."
+   "notes": "Refs #847: Clause 20.2.14 ObjectIdentifier constructors and bounded wire decode establish 10-bit type and 22-bit instance widths. Safe unchecked construction and release masking are removed; infallible encoding preserves identity, including proprietary type1023 and wildcard instance. Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations."
   },
   {
    "id": "BACNET-21-FORMAL-APDUS",
@@ -2238,16 +2246,16 @@
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_every_truncated_vector_and_invalid_start_without_panic",
     "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_malformed_choices_members_and_framing",
-    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_oid_width_is_atomic_for_both_reference_fields",
-    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_device_instance_is_atomic",
-    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_object_instance_is_atomic"
+    "crates/bacnet-types/src/primitives.rs::object_identifier_new_rejects_type_overflow",
+    "crates/bacnet-types/src/primitives.rs::object_identifier_addressable_rejects_type_overflow",
+    "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md ValueSource CHOICE",
     "CHANGELOG.md typed ValueSource codec prerequisite"
    ],
-   "notes": "Bounded typed-codec prerequisite for #824; neither #824 nor #823 is closed. Golden bytes are independently derived from Clause21 productions and Clause20.2 OID fields, not round-trip-only evidence. Generic decoding preserves any legal 10-bit OID type/22-bit instance including wildcard and non-Device optional identifiers, network0 and empty MAC. Those forms are datatype acceptance, not trusted source provenance. Encoding validates fallible ranges before output mutation. No source producer, object property-array behavior, correction authorization, specialized COV, new PropertyValue variant or exact-whole-value wrapper is added. A later complete-property writer must require end == payload.len(); concatenated consumers retain suffixes. Existing timestamp codecs are reused unchanged. Broader object/service support statuses are not promoted."
+   "notes": "Bounded typed-codec prerequisite for #824; neither #824 nor #823 is closed. Golden bytes are independently derived from Clause21 productions and Clause20.2 OID fields, not round-trip-only evidence. Generic decoding preserves any legal 10-bit OID type/22-bit instance including wildcard and non-Device optional identifiers, network0 and empty MAC. Those forms are datatype acceptance, not trusted source provenance. ObjectIdentifier construction enforces wire widths; ValueSource encoding retains fallible MAC-length validation before output mutation. No source producer, object property-array behavior, correction authorization, specialized COV, new PropertyValue variant or exact-whole-value wrapper is added. A later complete-property writer must require end == payload.len(); concatenated consumers retain suffixes. Existing timestamp codecs are reused unchanged. Broader object/service support statuses are not promoted."
   },
   {
    "id": "BACNET-21-TIMESTAMP-CHOICE",

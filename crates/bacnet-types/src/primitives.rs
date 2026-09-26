@@ -17,6 +17,8 @@ use crate::error::Error;
 ///
 /// Uniquely identifies a BACnet object within a device. Encoded as a
 /// 4-byte big-endian value: `(object_type << 22) | instance_number`.
+/// Checked construction and wire decoding preserve both field widths, so
+/// encoding cannot silently truncate an identifier.
 ///
 /// The all-ones instance value [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE)
 /// is still a valid 22-bit wire value, and some service contexts give it
@@ -53,7 +55,7 @@ impl ObjectIdentifier {
     /// This excludes [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE).
     pub const MAX_ADDRESSABLE_INSTANCE: u32 = Self::WILDCARD_INSTANCE - 1;
 
-    /// Create a new ObjectIdentifier from any valid 22-bit wire instance.
+    /// Create an ObjectIdentifier from a 10-bit type and 22-bit wire instance.
     ///
     /// This constructor preserves [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE)
     /// because it is a valid encoded value in BACnet service payloads. Use
@@ -61,13 +63,20 @@ impl ObjectIdentifier {
     /// concrete object instance.
     ///
     /// # Errors
-    /// Returns `Err` if `instance_number` exceeds [`MAX_INSTANCE`](Self::MAX_INSTANCE).
+    /// Returns `Err` if the object type exceeds 1023 or `instance_number` exceeds
+    /// [`MAX_INSTANCE`](Self::MAX_INSTANCE).
     pub fn new(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
         if instance_number > Self::MAX_INSTANCE {
             return Err(Error::OutOfRange(alloc_or_std_format!(
                 "instance number {} exceeds max {}",
                 instance_number,
                 Self::MAX_INSTANCE
+            )));
+        }
+        if object_type.to_raw() > 0x3FF {
+            return Err(Error::OutOfRange(alloc_or_std_format!(
+                "object type {} exceeds max 1023",
+                object_type.to_raw()
             )));
         }
         Ok(Self {
@@ -83,17 +92,11 @@ impl ObjectIdentifier {
     /// round trips and BACnet service contexts where it is meaningful.
     ///
     /// # Errors
-    /// Returns `Err` if `instance_number` exceeds
+    /// Returns `Err` if the object type exceeds 1023, or `instance_number` exceeds
     /// [`MAX_INSTANCE`](Self::MAX_INSTANCE) or equals
     /// [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE).
     pub fn new_addressable(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
-        if instance_number > Self::MAX_INSTANCE {
-            return Err(Error::OutOfRange(alloc_or_std_format!(
-                "instance number {} exceeds max {}",
-                instance_number,
-                Self::MAX_INSTANCE
-            )));
-        }
+        let identifier = Self::new(object_type, instance_number)?;
         if instance_number == Self::WILDCARD_INSTANCE {
             return Err(Error::OutOfRange(alloc_or_std_format!(
                 "instance number {} is reserved as the wildcard value; maximum addressable instance is {}",
@@ -101,18 +104,7 @@ impl ObjectIdentifier {
                 Self::MAX_ADDRESSABLE_INSTANCE
             )));
         }
-        Ok(Self {
-            object_type,
-            instance_number,
-        })
-    }
-
-    /// Create without validation. Caller must ensure instance <= MAX_INSTANCE.
-    pub const fn new_unchecked(object_type: ObjectType, instance_number: u32) -> Self {
-        Self {
-            object_type,
-            instance_number,
-        }
+        Ok(identifier)
     }
 
     /// The object type.
@@ -132,18 +124,17 @@ impl ObjectIdentifier {
 
     /// Encode to the 4-byte BACnet wire format (big-endian).
     pub fn encode(&self) -> [u8; 4] {
-        debug_assert!(
+        assert!(
             self.object_type.to_raw() <= 0x3FF,
             "ObjectType {} exceeds 10-bit field",
             self.object_type.to_raw()
         );
-        debug_assert!(
+        assert!(
             self.instance_number <= Self::MAX_INSTANCE,
             "Instance {} exceeds MAX_INSTANCE",
             self.instance_number
         );
-        let value = ((self.object_type.to_raw() & 0x3FF) << 22)
-            | (self.instance_number & Self::MAX_INSTANCE);
+        let value = (self.object_type.to_raw() << 22) | self.instance_number;
         value.to_be_bytes()
     }
 
@@ -650,14 +641,68 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, should_panic(expected = "exceeds 10-bit field"))]
-    fn object_identifier_type_overflow_round_trip() {
-        // In debug builds, encode() asserts type <= 1023.
-        // In release builds, types > 1023 are silently masked to 10 bits.
-        let oid = ObjectIdentifier::new_unchecked(ObjectType::from_raw(1024), 0);
-        let bytes = oid.encode();
-        let decoded = ObjectIdentifier::decode(&bytes).unwrap();
-        assert_eq!(decoded.object_type(), ObjectType::from_raw(0));
+    fn object_identifier_new_rejects_type_overflow() {
+        for raw in [1024, u32::MAX] {
+            assert!(matches!(
+                ObjectIdentifier::new(ObjectType::from_raw(raw), 0),
+                Err(Error::OutOfRange(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn object_identifier_addressable_rejects_type_overflow() {
+        for raw in [1024, u32::MAX] {
+            assert!(matches!(
+                ObjectIdentifier::new_addressable(ObjectType::from_raw(raw), 0),
+                Err(Error::OutOfRange(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn object_identifier_checked_instance_boundaries() {
+        for instance in [ObjectIdentifier::MAX_INSTANCE + 1, u32::MAX] {
+            for constructor in [ObjectIdentifier::new, ObjectIdentifier::new_addressable] {
+                assert!(matches!(
+                    constructor(ObjectType::from_raw(1023), instance),
+                    Err(Error::OutOfRange(_))
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn object_identifier_wire_boundaries_preserve_identity() {
+        for (raw_type, instance, wire) in [
+            (0, 0, [0, 0, 0, 0]),
+            (1023, 0, [0xff, 0xc0, 0, 0]),
+            (
+                1023,
+                ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE,
+                [0xff, 0xff, 0xff, 0xfe],
+            ),
+            (
+                1023,
+                ObjectIdentifier::MAX_INSTANCE,
+                [0xff, 0xff, 0xff, 0xff],
+            ),
+        ] {
+            let object_type = ObjectType::from_raw(raw_type);
+            let oid = ObjectIdentifier::new(object_type, instance).unwrap();
+            assert_eq!(oid.encode(), wire);
+            assert_eq!(ObjectIdentifier::decode(&wire).unwrap(), oid);
+            if instance == ObjectIdentifier::WILDCARD_INSTANCE {
+                assert!(ObjectIdentifier::new_addressable(object_type, instance).is_err());
+            } else {
+                assert_eq!(
+                    ObjectIdentifier::new_addressable(object_type, instance).unwrap(),
+                    oid
+                );
+            }
+        }
+        // Raw ObjectType remains a generic selector outside ObjectIdentifier.
+        assert_eq!(ObjectType::from_raw(u32::MAX).to_raw(), u32::MAX);
     }
 
     #[test]

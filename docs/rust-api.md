@@ -95,6 +95,19 @@ let (value, bytes_consumed) = decode_application_value(&bytes, 0)?;
 assert_eq!(value, PropertyValue::Real(72.5));
 ```
 
+### Object identifiers
+
+`ObjectIdentifier::new` validates the 10-bit object type (0..=1023) and 22-bit
+instance (0..=4,194,303). `new_addressable` shares those checks and additionally
+rejects the reserved wildcard instance 4,194,303. `ObjectType::from_raw` remains
+an unrestricted selector; values above 1023 cannot form an object identifier.
+Valid proprietary types and wire wildcard identifiers remain supported.
+
+The safe `ObjectIdentifier::new_unchecked` constructor has been removed. Use
+`new` or `new_addressable` and handle the error. The private fields and checked
+construction keep encoding infallible without release-mode truncation; wire
+decoding also establishes the field-width invariant.
+
 ### ValueSource CHOICE
 
 `bacnet_types::constructed::BACnetValueSource` represents `None`,
@@ -103,8 +116,8 @@ The Object payload contains a required object identifier and an optional device
 identifier; it replaces the earlier bare ObjectIdentifier payload.
 
 `bacnet_encoding::constructed::encode_value_source(&mut BytesMut, &BACnetValueSource)`
-returns `Result<(), Error>` and appends one framed CHOICE. Invalid object-type or
-instance widths in either reference field, and unencodable MAC lengths, are rejected
+returns `Result<(), Error>` and appends one framed CHOICE. Object-identifier widths
+are validated at construction. Unencodable MAC lengths are rejected by this codec
 before changing the buffer.
 `decode_value_source(&[u8], offset)` returns `Result<(BACnetValueSource, usize), Error>`;
 the second value is the next absolute offset, and suffix bytes remain available.
