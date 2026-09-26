@@ -196,7 +196,7 @@ class InputPresentValueArtifactTests(unittest.TestCase):
                 await server.write_property_local(
                     ai,
                     PropertyIdentifier.OUT_OF_SERVICE,
-                    PropertyValue.boolean(True),
+                    PropertyValue.boolean(True), source_object=None,
                 )
                 oos_notification = await asyncio.wait_for(
                     notifications.get(), timeout=NOTIFICATION_TIMEOUT

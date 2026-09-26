@@ -3,7 +3,13 @@ use bacnet_types::enums::{EventState, EventType};
 
 fn write_enumerated(object: &mut BinaryOutputObject, property: PropertyIdentifier, value: u32) {
     object
-        .write_property(property, None, PropertyValue::Enumerated(value), None)
+        .write_property_from(
+            property,
+            None,
+            PropertyValue::Enumerated(value),
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
@@ -348,8 +354,14 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
         ),
     ];
     for (property, value) in writes {
-        bo.write_property(property, None, value.clone(), None)
-            .unwrap();
+        bo.write_property_from(
+            property,
+            None,
+            value.clone(),
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
         assert_eq!(bo.read_property(property, None).unwrap(), value);
     }
 

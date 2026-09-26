@@ -39,60 +39,6 @@ mod unconfirmed_tests;
 pub(crate) use self::{executed::EXECUTED_CONFIRMED, unconfirmed::EXECUTED_UNCONFIRMED};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Handle one admitted confirmed request.
-    ///
-    /// Backward-compatible entry for callers without LSO replay state
-    /// (e.g. DCC-focused tests): LSO requests execute without storing a
-    /// replay, which is always safe (never suppresses first execution).
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::server) async fn handle_admitted_confirmed_request(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
-        seg_send_permits: &Arc<Semaphore>,
-        cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
-        dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-        dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
-        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
-        config: &ServerConfig,
-        request_tasks: &super::request_tasks::RequestTaskSpawner,
-        source_mac: &[u8],
-        source_network: Option<NpduAddress>,
-        provenance: bacnet_transport::port::TransportProvenance,
-        req: bacnet_encoding::apdu::ConfirmedRequest,
-        reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
-    ) {
-        Self::handle_admitted_confirmed_request_with_lso(
-            db,
-            network,
-            cov_table,
-            seg_ack_senders,
-            seg_send_permits,
-            cov_in_flight,
-            server_tsm,
-            notification_transactions,
-            device_bindings,
-            comm_state,
-            dcc_timer,
-            dcc_outcomes,
-            mutation_decisions,
-            config,
-            request_tasks,
-            source_mac,
-            source_network,
-            provenance,
-            req,
-            reply_tx,
-            None,
-        )
-        .await;
-    }
-
     /// Handle one admitted confirmed request with LSO replay ownership.
     ///
     /// `lso_pending` is `Some` for LSO requests admitted through the LSO
@@ -170,6 +116,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let mut ack_buf = BytesMut::with_capacity(512);
+        // Snapshot actual original sender and correlation independently of Audit;
+        // the binding guard is gone before any object mutation takes place.
+        let command_origin = device_bindings::snapshot_command_origin(
+            service_choice,
+            source_mac,
+            source_network.as_ref(),
+            device_bindings,
+            notification_transactions,
+        )
+        .await;
         let mutation = mutations::Request {
             config,
             decisions: mutation_decisions,
@@ -177,6 +133,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             source_network: source_network.as_ref(),
             provenance,
             req: &req,
+            command_origin: command_origin.as_ref(),
         };
         let mut audit = super::audit_reporter::WriteAudit::new(
             config,

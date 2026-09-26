@@ -162,6 +162,22 @@ pub trait BACnetObject: Send + Sync {
         priority: Option<u8>,
     ) -> Result<(), Error>;
 
+    /// Write with explicit actual command provenance. Standalone callers assert
+    /// the origin; server boundaries additionally validate ingress or membership.
+    /// Decorators must forward this hook without discarding the origin.
+    /// The default preserves custom/unaffected object behavior. First-party
+    /// source-tracked commands require this hook and deny context-free writing.
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        _origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.write_property(property, array_index, value, priority)
+    }
+
     /// Return canonical metadata for this object's effective property rows.
     ///
     /// Migrated implementations return every supported standard row for the
@@ -228,15 +244,16 @@ pub trait BACnetObject: Send + Sync {
         0
     }
 
-    /// Whether `write_property` accepts `property` for this object.
+    /// Whether a property write route can accept `property` for this object.
     ///
     /// PICS generation and runtime dispatch MUST consult this (or
-    /// `write_property` itself) rather than a separate heuristic, so the PICS
+    /// `write_property_from` where source authority is required) rather than a
+    /// separate heuristic, so the PICS
     /// writable flags cannot drift from the actual write routes. The default
     /// reproduces the historical PICS heuristic (see
     /// [`historical_writable_default`]) so unmigrated object types keep their
     /// current PICS output. Object implementations override to mirror their
-    /// real `write_property` arms exactly.
+    /// real write capabilities, including required command origin and ownership.
     ///
     /// Universal read-only properties (`OBJECT_IDENTIFIER`, `OBJECT_TYPE`,
     /// `PROPERTY_LIST`, `STATUS_FLAGS`) are always non-writable and are

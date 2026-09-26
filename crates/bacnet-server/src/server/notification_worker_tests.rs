@@ -29,6 +29,7 @@ async fn reap_after_ingress_closure(hold_request: bool) {
                     None,
                     PropertyValue::Real(42.0),
                     Some(16),
+                    crate::LocalCommandSource::ServerDevice,
                 )
                 .await
                 .unwrap();

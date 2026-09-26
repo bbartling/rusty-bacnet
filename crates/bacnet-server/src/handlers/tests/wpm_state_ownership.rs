@@ -212,11 +212,12 @@ fn wpm_command_priority_and_fallback_remain_owned_by_committed_prefix() {
         );
         db.get_mut(&oid)
             .unwrap()
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Null,
                 Some(8),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
         assert_eq!(

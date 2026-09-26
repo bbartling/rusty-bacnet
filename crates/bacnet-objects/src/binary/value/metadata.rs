@@ -7,6 +7,8 @@ use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
     PropertyPresenceCondition::{Commandable, IntrinsicReporting, PairedText},
+    PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
+    PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -73,6 +75,24 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::ACTIVE_TEXT, Optional, Some(PairedText), Always),
     PropertyMetadata::new(P::INACTIVE_TEXT, Optional, Some(PairedText), Always),
     PropertyMetadata::new(P::ALARM_VALUE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE,
+        Optional,
+        Some(ValueSourceTracking),
+        WhenCommandOwner,
+    ),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE_ARRAY,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::LAST_COMMAND_TIME,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -148,6 +168,7 @@ mod tests {
             } else {
                 expected.push(P::ALARM_VALUE);
             }
+            expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             let original = object.property_metadata().into_owned();
             for enabled in [false, true] {
                 object
@@ -166,13 +187,20 @@ mod tests {
                     let p = row.property_identifier;
                     let conformance = if output && p == P::PRESENT_VALUE {
                         RequiredWrite
-                    } else if required.contains(&p) {
+                    } else if required.contains(&p)
+                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
+                            .contains(&p)
+                    {
                         RequiredRead
                     } else {
                         Optional
                     };
                     assert_eq!(row.conformance, conformance, "{p:?}");
                     let condition = match p {
+                        P::VALUE_SOURCE => Some(ValueSourceTracking),
+                        P::VALUE_SOURCE_ARRAY | P::LAST_COMMAND_TIME => {
+                            Some(CommandableValueSourceTracking)
+                        }
                         P::PRIORITY_ARRAY | P::RELINQUISH_DEFAULT | P::CURRENT_COMMAND_PRIORITY => {
                             (!output).then_some(Commandable)
                         }
@@ -254,6 +282,7 @@ mod tests {
                 for row in metadata {
                     let p = row.property_identifier;
                     let capability = match p {
+                        P::VALUE_SOURCE => WhenCommandOwner,
                         P::OBJECT_NAME
                         | P::DESCRIPTION
                         | P::PRESENT_VALUE
@@ -281,8 +310,18 @@ mod tests {
                     );
                     let index = (p == P::PRIORITY_ARRAY).then_some(8);
                     let value = object.read_property(p, index).unwrap();
-                    let result = object.write_property(p, index, value, None);
-                    if capability == Always || (capability == WhenOutOfService && out_of_service) {
+                    let result = object.write_property_from(
+                        p,
+                        index,
+                        value,
+                        None,
+                        &crate::command_source::test_origin(),
+                    );
+                    if capability
+                        == crate::property_metadata::PropertyWriteCapability::WhenCommandOwner
+                        || capability == Always
+                        || (capability == WhenOutOfService && out_of_service)
+                    {
                         result.unwrap();
                     } else {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
@@ -293,13 +332,25 @@ mod tests {
                     let before = object.read_property(p, index).unwrap();
                     assert_error(
                         object
-                            .write_property(p, index, PropertyValue::Enumerated(2), Some(8))
+                            .write_property_from(
+                                p,
+                                index,
+                                PropertyValue::Enumerated(2),
+                                Some(8),
+                                &crate::command_source::test_origin(),
+                            )
                             .unwrap_err(),
                         ErrorCode::VALUE_OUT_OF_RANGE,
                     );
                     assert_eq!(object.read_property(p, index).unwrap(), before);
                     object
-                        .write_property(p, index, PropertyValue::Enumerated(1), Some(8))
+                        .write_property_from(
+                            p,
+                            index,
+                            PropertyValue::Enumerated(1),
+                            Some(8),
+                            &crate::command_source::test_origin(),
+                        )
                         .unwrap();
                     assert_eq!(
                         object.read_property(P::PRESENT_VALUE, None).unwrap(),
@@ -314,10 +365,22 @@ mod tests {
                 );
                 // Relinquish both written slots: the configured default takes over.
                 object
-                    .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(8))
+                    .write_property_from(
+                        P::PRESENT_VALUE,
+                        None,
+                        PropertyValue::Null,
+                        Some(8),
+                        &crate::command_source::test_origin(),
+                    )
                     .unwrap();
                 object
-                    .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(16))
+                    .write_property_from(
+                        P::PRESENT_VALUE,
+                        None,
+                        PropertyValue::Null,
+                        Some(16),
+                        &crate::command_source::test_origin(),
+                    )
                     .unwrap();
                 object
                     .write_property(

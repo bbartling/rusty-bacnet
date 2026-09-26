@@ -158,7 +158,8 @@ mod tests {
                 expected.push(P::ALARM_VALUES);
             }
             if commandable {
-                expected.extend([P::VALUE_SOURCE, P::LAST_COMMAND_TIME]);
+                expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
             required.push(P::PROPERTY_LIST);
             assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
@@ -181,13 +182,18 @@ mod tests {
                     let p = row.property_identifier;
                     let conformance = if output && p == P::PRESENT_VALUE {
                         RequiredWrite
-                    } else if required.contains(&p) {
+                    } else if required.contains(&p)
+                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
+                            .contains(&p)
+                    {
                         RequiredRead
                     } else {
                         Optional
                     };
                     assert_eq!(row.conformance, conformance, "{kind:?} {p:?}");
                     let condition = match p {
+                        P::VALUE_SOURCE => Some(crate::property_metadata::PropertyPresenceCondition::ValueSourceTracking),
+                        P::VALUE_SOURCE_ARRAY | P::LAST_COMMAND_TIME => Some(crate::property_metadata::PropertyPresenceCondition::CommandableValueSourceTracking),
                         P::PRIORITY_ARRAY | P::RELINQUISH_DEFAULT | P::CURRENT_COMMAND_PRIORITY => {
                             (!output).then_some(Commandable)
                         }
@@ -274,6 +280,9 @@ mod tests {
                 for row in object.property_metadata().into_owned() {
                     let p = row.property_identifier;
                     let capability = match p {
+                        P::VALUE_SOURCE => {
+                            crate::property_metadata::PropertyWriteCapability::WhenCommandOwner
+                        }
                         P::PRESENT_VALUE if input => WhenOutOfService,
                         P::RELIABILITY => WhenOutOfService,
                         P::OBJECT_NAME
@@ -305,8 +314,18 @@ mod tests {
                         _ => None,
                     };
                     let value = object.read_property(p, index).unwrap();
-                    let result = object.write_property(p, index, value, None);
-                    if capability == Always || (capability == WhenOutOfService && out_of_service) {
+                    let result = object.write_property_from(
+                        p,
+                        index,
+                        value,
+                        None,
+                        &crate::command_source::test_origin(),
+                    );
+                    if capability
+                        == crate::property_metadata::PropertyWriteCapability::WhenCommandOwner
+                        || capability == Always
+                        || (capability == WhenOutOfService && out_of_service)
+                    {
                         result.unwrap();
                     } else {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);

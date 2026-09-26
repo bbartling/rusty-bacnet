@@ -51,6 +51,7 @@ async fn mandatory_policy_datetime_local_identity_and_capacity_rollback() {
                 None,
                 change_value(PropertyIdentifier::AUDITABLE_OPERATIONS),
                 None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await,
     );
@@ -63,6 +64,7 @@ async fn mandatory_policy_datetime_local_identity_and_capacity_rollback() {
             None,
             change_value(PropertyIdentifier::AUDITABLE_OPERATIONS),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

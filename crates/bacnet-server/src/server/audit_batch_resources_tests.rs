@@ -375,6 +375,7 @@ async fn delayed_target_audit_full_ordinary_queue_keeps_mandatory_changes_immedi
             None,
             PropertyValue::Unsigned(3599),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

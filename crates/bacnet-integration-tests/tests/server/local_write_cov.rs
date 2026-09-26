@@ -64,6 +64,7 @@ async fn local_write_fires_cov_notification() {
             None,
             PropertyValue::Real(50.0),
             Some(16),
+            bacnet_server::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -87,6 +88,7 @@ async fn local_write_fires_cov_notification() {
             None,
             PropertyValue::Real(99.0),
             Some(16),
+            bacnet_server::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -139,6 +141,7 @@ async fn local_object_name_write_refreshes_name_index() {
             None,
             PropertyValue::CharacterString("AO-Renamed".into()),
             None,
+            bacnet_server::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -163,6 +166,7 @@ async fn local_object_name_write_refreshes_name_index() {
             None,
             PropertyValue::CharacterString("Local-Name-Dev".into()),
             None,
+            bacnet_server::LocalCommandSource::ServerDevice,
         )
         .await;
     assert!(dup.is_err(), "duplicate object name must be rejected");

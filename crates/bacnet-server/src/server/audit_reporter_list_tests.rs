@@ -187,7 +187,8 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 vec![0x21, 2],
-                (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE),
+                // List services are not command producers; tracked PV fails closed.
+                (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED),
                 Some(vec![0x91, 0]),
             ),
         ] {

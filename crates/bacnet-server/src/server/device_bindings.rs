@@ -156,6 +156,25 @@ pub(super) struct DeviceBindingTable {
 }
 
 impl DeviceBindingTable {
+    /// Snapshot original sender and correlation while holding only the binding guard.
+    pub(super) fn command_origin(
+        &self,
+        immediate: &[u8],
+        routed: Option<&NpduAddress>,
+        is_broadcast: impl Fn(&[u8]) -> bool,
+    ) -> bacnet_objects::command_source::CommandOrigin {
+        bacnet_objects::command_source::CommandOrigin::Remote {
+            actual_address: bacnet_types::constructed::BACnetAddress {
+                network_number: routed.map_or(0, |source| source.network),
+                mac_address: routed.map_or_else(
+                    || MacAddr::from_slice(immediate),
+                    |source| source.mac_address.clone(),
+                ),
+            },
+            binding: self.source_binding(immediate, routed, is_broadcast),
+        }
+    }
+
     /// Prefer a known, unambiguous Device identity in target Audit records.
     /// This is address correlation, never authentication of a principal.
     pub(super) fn source_device(
@@ -164,6 +183,19 @@ impl DeviceBindingTable {
         routed: Option<&NpduAddress>,
         is_broadcast: impl Fn(&[u8]) -> bool,
     ) -> Option<ObjectIdentifier> {
+        match self.source_binding(immediate, routed, is_broadcast) {
+            bacnet_objects::command_source::CommandDeviceBinding::Unique(device) => Some(device),
+            _ => None,
+        }
+    }
+
+    pub(super) fn source_binding(
+        &self,
+        immediate: &[u8],
+        routed: Option<&NpduAddress>,
+        is_broadcast: impl Fn(&[u8]) -> bool,
+    ) -> bacnet_objects::command_source::CommandDeviceBinding {
+        use bacnet_objects::command_source::CommandDeviceBinding;
         let now = Instant::now();
         let mut matched = None;
         for device in self.entries.keys() {
@@ -181,12 +213,12 @@ impl DeviceBindingTable {
             };
             if matches {
                 if matched.is_some() {
-                    return None;
+                    return CommandDeviceBinding::Ambiguous;
                 }
                 matched = Some(*device);
             }
         }
-        matched
+        matched.map_or(CommandDeviceBinding::Unknown, CommandDeviceBinding::Unique)
     }
 
     pub(super) fn new() -> Self {
@@ -368,4 +400,33 @@ fn target_is_usable(target: &DeviceBindingTarget, is_broadcast: impl Fn(&[u8]) -
                 && !is_broadcast(router_mac)
         }
     }
+}
+
+/// Snapshot only services that can submit a tracked command, before the database lock.
+pub(super) async fn snapshot_command_origin(
+    service: ConfirmedServiceChoice,
+    immediate: &[u8],
+    routed: Option<&NpduAddress>,
+    bindings: &Arc<RwLock<DeviceBindingTable>>,
+    transactions: &Arc<NotificationTransactions>,
+) -> Option<bacnet_objects::command_source::CommandOrigin> {
+    if !matches!(
+        service,
+        ConfirmedServiceChoice::WRITE_PROPERTY
+            | ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE
+            | ConfirmedServiceChoice::CREATE_OBJECT
+    ) {
+        return None;
+    }
+    Some(
+        bindings
+            .read()
+            .await
+            .command_origin(immediate, routed, |mac| {
+                transactions
+                    .audit_routes
+                    .get()
+                    .is_some_and(|routes| routes.is_broadcast(mac))
+            }),
+    )
 }

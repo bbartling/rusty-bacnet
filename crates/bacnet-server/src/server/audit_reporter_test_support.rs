@@ -166,6 +166,23 @@ impl BACnetObject for CountingValue {
         self.writes.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        origin: &bacnet_objects::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.attempts.fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = self.execution_error.lock().unwrap().take() {
+            return Err(error);
+        }
+        self.value
+            .write_property_from(property, index, value, priority, origin)?;
+        self.writes.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.value.property_list()
     }

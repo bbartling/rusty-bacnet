@@ -9,6 +9,7 @@ pub mod binary;
 pub mod clock;
 pub mod color;
 pub mod command;
+pub mod command_source;
 pub(crate) mod common;
 pub mod database;
 pub mod device;

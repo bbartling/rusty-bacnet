@@ -93,7 +93,7 @@ impl Fixture {
     fn new(hold: bool) -> Self {
         let mut db = clocked_test_database();
         let mut av = AnalogValueObject::new(3, "value", 95).unwrap();
-        av.set_present_value(10.0);
+        av.set_relinquish_default(10.0).unwrap();
         db.add(Box::new(av)).unwrap();
         let sent = Arc::new(StdMutex::new(Vec::new()));
         let routes = Arc::new(StdMutex::new(Vec::new()));

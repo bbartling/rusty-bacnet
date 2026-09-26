@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::property_metadata::PropertyConformance;
 use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
 use bacnet_types::primitives::PropertyValue;
@@ -349,7 +348,7 @@ impl<'a> PicsGenerator<'a> {
                     access: PropertyAccess {
                         readable: true,
                         writable: row.write_capability.is_writable(),
-                        optional: row.conformance == PropertyConformance::Optional,
+                        optional: !row.is_required(),
                     },
                 })
                 .collect()

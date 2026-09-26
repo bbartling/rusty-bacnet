@@ -66,7 +66,14 @@ async fn renewal_wire(single: bool) {
     let entries = wire.server.cov_table.read().await.len();
     wire.sent.lock().unwrap().clear();
     wire.server
-        .write_local(&av(1), PV, None, PropertyValue::Real(21.0), None)
+        .write_local(
+            &av(1),
+            PV,
+            None,
+            PropertyValue::Real(21.0),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
         .await
         .unwrap();
     let frames = wire.sent.lock().unwrap().clone();

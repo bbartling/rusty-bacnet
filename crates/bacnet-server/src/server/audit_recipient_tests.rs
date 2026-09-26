@@ -162,6 +162,7 @@ async fn recipient_direct_and_server_local_writes_use_the_same_owner() {
                     None,
                     new,
                     None,
+                    crate::LocalCommandSource::ServerDevice,
                 )
                 .await
                 .unwrap();

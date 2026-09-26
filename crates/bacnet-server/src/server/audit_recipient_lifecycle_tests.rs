@@ -241,7 +241,8 @@ async fn recipient_no_runtime_and_closed_admission_fail_before_commit() {
             PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
             None,
             PropertyValue::ApplicationData(value(&device(21))),
-            None
+            None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .is_err());

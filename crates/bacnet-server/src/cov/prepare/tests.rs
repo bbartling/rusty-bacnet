@@ -38,7 +38,7 @@ fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
     )
     .unwrap();
     let initial = prepared(&av, PropertyIdentifier::PRESENT_VALUE, None, None);
-    av.set_present_value(1.0);
+    av.set_relinquish_default(1.0).unwrap();
     assert!(
         !prepared(&av, PropertyIdentifier::PRESENT_VALUE, None, None)
             .reports(Some(&initial.sample))
@@ -80,11 +80,12 @@ fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
         Some(8),
         Some(f32::INFINITY),
     );
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(10.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let value = prepared(
@@ -94,11 +95,12 @@ fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
         Some(f32::INFINITY),
     );
     assert!(value.reports(Some(&empty.sample)));
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(11.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert!(
@@ -110,11 +112,12 @@ fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
             .reports(Some(&value.sample))
     );
     for priority in 1..=16 {
-        av.write_property(
+        av.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(10.0),
             Some(priority),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     }
@@ -128,11 +131,12 @@ fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
         matches!(full.sample.value(),PropertyValue::List(v) if v.iter().all(|v|matches!(v,PropertyValue::Real(10.0))))
     );
     assert!(!full.reports(Some(&full.sample)));
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(10.1),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert!(prepared(

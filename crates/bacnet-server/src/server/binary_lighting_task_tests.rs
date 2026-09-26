@@ -74,6 +74,7 @@ async fn write_command(
             None,
             PropertyValue::Enumerated(value),
             Some(priority),
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

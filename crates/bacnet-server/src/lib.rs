@@ -14,3 +14,7 @@ pub mod pics;
 pub mod schedule;
 pub mod server;
 pub mod trend_log;
+
+/// Explicit initiators for local command-source tracking.
+pub mod command_source;
+pub use command_source::LocalCommandSource;

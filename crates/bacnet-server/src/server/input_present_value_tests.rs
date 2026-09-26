@@ -210,6 +210,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
             None,
             PropertyValue::Real(40.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect_err("network-equivalent in-service write must be denied");
@@ -233,6 +234,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -244,6 +246,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
             None,
             PropertyValue::Real(72.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -399,6 +402,7 @@ async fn unknown_and_unsupported_objects_fail_before_side_effects() {
             None,
             PropertyValue::Real(42.0),
             Some(8),
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect("generic local route must retain commandable-object behavior");

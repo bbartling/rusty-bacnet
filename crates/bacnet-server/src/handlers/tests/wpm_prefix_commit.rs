@@ -34,7 +34,15 @@ fn encode_request(oid: ObjectIdentifier, properties: Vec<BACnetPropertyValue>) -
 
 fn detailed(db: &mut ObjectDatabase, request: &[u8]) -> WritePropertyMultipleOutcome {
     let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
-    handle_write_property_multiple_detailed(db, request, &mut snapshots)
+    handle_write_property_multiple_observed(
+        db,
+        request,
+        &mut snapshots,
+        None,
+        None,
+        None,
+        Some(&crate::command_source::test_origin()),
+    )
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {

@@ -150,6 +150,11 @@ async fn schedule_unindexed_command_retains_fixed_priority_sixteen() {
     );
     let mut db = ObjectDatabase::new();
     db.set_clock_reader(Some(Arc::new(FixedScheduleClock)));
+    db.add(Box::new(
+        bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig::default())
+            .unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(target)).unwrap();
     db.add(Box::new(schedule)).unwrap();
     let db = Arc::new(RwLock::new(db));
@@ -161,6 +166,23 @@ async fn schedule_unindexed_command_retains_fixed_priority_sixteen() {
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
         PropertyValue::Unsigned(2)
+    );
+    let PropertyValue::ApplicationData(bytes) = target
+        .read_property(PropertyIdentifier::VALUE_SOURCE, None)
+        .unwrap()
+    else {
+        panic!("typed source")
+    };
+    let (source, consumed) = bacnet_encoding::constructed::decode_value_source(&bytes, 0).unwrap();
+    assert_eq!(consumed, bytes.len());
+    assert_eq!(
+        source,
+        bacnet_types::constructed::BACnetValueSource::Object(
+            bacnet_types::constructed::BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: ObjectIdentifier::new(ObjectType::SCHEDULE, 3).unwrap(),
+            }
+        )
     );
     for index in 1..=16 {
         assert_eq!(

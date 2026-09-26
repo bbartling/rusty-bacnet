@@ -6,7 +6,9 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
+    PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
     PropertyPresenceCondition::{IntrinsicReporting, PairedText},
+    PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -74,6 +76,24 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
     PropertyMetadata::new(P::ACTIVE_TEXT, Optional, Some(PairedText), Always),
     PropertyMetadata::new(P::INACTIVE_TEXT, Optional, Some(PairedText), Always),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE,
+        Optional,
+        Some(ValueSourceTracking),
+        WhenCommandOwner,
+    ),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE_ARRAY,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::LAST_COMMAND_TIME,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -103,11 +123,12 @@ mod tests {
                 )
                 .unwrap();
             object
-                .write_property(
+                .write_property_from(
                     P::PRESENT_VALUE,
                     None,
                     PropertyValue::Enumerated(1),
                     Some(8),
+                    &crate::command_source::test_origin(),
                 )
                 .unwrap();
             assert_eq!(
@@ -118,7 +139,13 @@ mod tests {
                 .write_property(P::FEEDBACK_VALUE, None, PropertyValue::Enumerated(1), None)
                 .unwrap();
             object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(8))
+                .write_property_from(
+                    P::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Null,
+                    Some(8),
+                    &crate::command_source::test_origin(),
+                )
                 .unwrap();
             assert_eq!(
                 object.read_property(P::PRESENT_VALUE, None).unwrap(),

@@ -11,6 +11,7 @@ async fn supported_local_write_has_local_device_provenance_and_preimage() {
             None,
             PropertyValue::Enumerated(1),
             Some(8),
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -97,6 +98,7 @@ async fn object_audit_policy_actual_changes_noops_failures_and_local_paths() {
                 None,
                 PropertyValue::Enumerated(AuditLevel::NONE.to_raw()),
                 None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .unwrap();
@@ -107,7 +109,8 @@ async fn object_audit_policy_actual_changes_noops_failures_and_local_paths() {
                 PropertyIdentifier::AUDIT_LEVEL,
                 None,
                 PropertyValue::Boolean(true),
-                None
+                None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .is_err());
@@ -143,6 +146,7 @@ async fn object_audit_policy_actual_changes_noops_failures_and_local_paths() {
                 None,
                 PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw()),
                 None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .unwrap();
@@ -225,6 +229,7 @@ async fn object_audit_policy_reporter_none_unselected_and_input_sampling_silent(
                 None,
                 PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw()),
                 None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .unwrap();

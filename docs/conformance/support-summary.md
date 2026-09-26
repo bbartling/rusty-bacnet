@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 55 |
+| Priority | P1 | 56 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 23 |
+| Status | supported-with-clause-evidence | 24 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -85,6 +85,7 @@
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-21-VALUE-SOURCE-CHOICE` | Clause 21 BACnetValueSource, BACnetDeviceObjectReference and BACnetAddress; Clause 20.2.1 tag framing | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-19-COMMAND-SOURCE-TRACKING` | Clause 19.5.1 command source tracking and 19.5.1.3 source correction; Tables 12-3, 12-4, 12-8, 12-10, 12-22, 12-23; Clause 21 BACnetValueSource and BACnetTimeStamp | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-A-PICS` | Annex A | P1 | in-progress | 2 |
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | implementation-present-needs-conformance-tests | 2 |

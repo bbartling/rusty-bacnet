@@ -59,7 +59,7 @@ async def main():
             await server.write_property_local(
                 ai1,
                 PropertyIdentifier.PRESENT_VALUE,
-                PropertyValue.real(temp),
+                PropertyValue.real(temp), source_object=None,
             )
             print(f"Server wrote: {temp}")
 

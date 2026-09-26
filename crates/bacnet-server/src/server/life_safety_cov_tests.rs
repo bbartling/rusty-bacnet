@@ -326,6 +326,7 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -337,6 +338,7 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

@@ -1866,15 +1866,20 @@ value = await server.read_property(
 print(value.value)  # 72.5
 ```
 
-#### `write_property_local(object_id, property_id, value, priority=None, array_index=None)`
+#### `write_property_local(object_id, property_id, value, priority=None, array_index=None, *, source_object)`
 
-Write a property on a local object.
+Write a property on a local object with a required keyword source. Explicit
+`source_object=None` selects the server Device; an ObjectIdentifier names an
+existing local initiating object. Six-family command-source writes require a
+concrete server Device, and source corrections retain that Device as owner.
+Unrelated local properties retain their no-Device behavior.
 
 ```python
 await server.write_property_local(
-    ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+    ObjectIdentifier(ObjectType.ANALOG_VALUE, 1),
     PropertyIdentifier.PRESENT_VALUE,
     PropertyValue.real(73.0),
+    source_object=None,
 )
 ```
 
@@ -1967,10 +1972,9 @@ async def server_example():
     await server.start()
     print(f"Server running at {await server.local_address()}")
 
-    # Update a value at runtime
-    await server.write_property_local(
+    # Publish an application-owned Input sample at runtime
+    await server.set_present_value_local(
         ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-        PropertyIdentifier.PRESENT_VALUE,
         PropertyValue.real(73.0),
     )
 

@@ -32,7 +32,7 @@ fn wp(
     }
     .encode(&mut bytes)
     .unwrap();
-    handle_write_property(db, &bytes)
+    sourced_wp(db, &bytes)
 }
 fn wpm(
     db: &mut ObjectDatabase,
@@ -56,7 +56,7 @@ fn wpm(
     }
     .encode(&mut bytes)
     .unwrap();
-    handle_write_property_multiple(db, &bytes)
+    sourced_wpm(db, &bytes)
 }
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     vec![

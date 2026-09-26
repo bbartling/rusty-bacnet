@@ -349,6 +349,10 @@ impl BACnetServer {
 
     /// Write a property on a local object in the server's database.
     ///
+    /// Required `source_object=None` selects the server Device; an identifier
+    /// selects an existing local initiator. Tracked writes require a concrete
+    /// local Device, which retains correction ownership.
+    ///
     /// Delegates to the server-owned [`write_local`](server::BACnetServer::write_local)
     /// entry point so a local write fires the same post-write COV and event
     /// notifications as a network `WriteProperty`. `OBJECT_NAME` writes are
@@ -366,7 +370,7 @@ impl BACnetServer {
     /// `stop()` racing the notification sends mid-flight. A confirmed-COV send
     /// to an unresponsive subscriber can therefore stall other Python calls
     /// for up to the COV retry timeout.
-    #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None))]
+    #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None, *, source_object))]
     #[allow(clippy::too_many_arguments)]
     fn write_property_local<'py>(
         &self,
@@ -376,11 +380,16 @@ impl BACnetServer {
         value: PyPropertyValue,
         priority: Option<u8>,
         array_index: Option<u32>,
+        source_object: Option<PyObjectIdentifier>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
         let prop_value = value.inner;
+        let source = source_object
+            .map_or(bacnet_server::LocalCommandSource::ServerDevice, |object| {
+                bacnet_server::LocalCommandSource::Object(object.to_rust())
+            });
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             // Hold the server guard for the duration of the call: `write_local`
@@ -390,7 +399,7 @@ impl BACnetServer {
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-            srv.write_local(&oid, pid, array_index, prop_value, priority)
+            srv.write_local(&oid, pid, array_index, prop_value, priority, source)
                 .await
                 .map_err(to_py_err)
         })

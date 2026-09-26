@@ -140,7 +140,14 @@ async fn device_execution_owned_wp_rejects_custom_writer() {
     }
     let local = wire
         .server
-        .write_local(&device(), SERVICES, None, PropertyValue::Null, None)
+        .write_local(
+            &device(),
+            SERVICES,
+            None,
+            PropertyValue::Null,
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
         .await;
     assert!(
         matches!(local, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
@@ -172,6 +179,7 @@ async fn device_execution_owned_wp_rejects_custom_writer() {
             None,
             PropertyValue::CharacterString("local".into()),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

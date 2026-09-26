@@ -43,11 +43,15 @@ pub enum PropertyPresenceCondition {
     ObjectAuditReporting,
     /// An optional Audit priority filter on a commandable reporting object.
     CommandableAuditReporting,
+    /// The Value_Source mechanism is implemented, making its source required.
+    ValueSourceTracking,
+    /// Source tracking on a commandable object requires its source array and time.
+    CommandableValueSourceTracking,
     /// The paired Active_Text and Inactive_Text option is implemented.
     PairedText,
 }
 
-/// The write capability implemented by an object's `write_property` route.
+/// The write capability implemented by an object's property-write routes.
 ///
 /// A conditional capability remains writable for PICS purposes even when the
 /// current object state causes a particular request to be denied.
@@ -60,6 +64,8 @@ pub enum PropertyWriteCapability {
     Always,
     /// The property-write route is available only while Out_Of_Service is true.
     WhenOutOfService,
+    /// Correction is restricted to the original command owner at that priority.
+    WhenCommandOwner,
 }
 
 impl PropertyWriteCapability {
@@ -89,13 +95,17 @@ pub struct PropertyMetadata {
 }
 
 impl PropertyMetadata {
-    /// Whether this effective row is required, including the active Device
-    /// Audit Reporting requirement while retaining its optional base table code.
+    /// Whether this effective row is required, including enabled Audit Reporting
+    /// and command-source mechanisms while retaining optional base table codes.
     pub const fn is_required(self) -> bool {
         self.conformance.is_required()
             || matches!(
                 self.presence_condition,
-                Some(PropertyPresenceCondition::AuditReporting)
+                Some(
+                    PropertyPresenceCondition::AuditReporting
+                        | PropertyPresenceCondition::ValueSourceTracking
+                        | PropertyPresenceCondition::CommandableValueSourceTracking
+                )
             )
     }
 

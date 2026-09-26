@@ -79,6 +79,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// uniqueness check and index refresh, exactly like the network handler —
     /// then releases the lock and runs the COV/event trigger path so a
     /// subscription observes a local mutation just as it would a network one.
+    /// `source` explicitly selects the Device or an existing initiating object.
+    /// Tracked commands require a concrete selected Device; the selected Device
+    /// retains correction ownership regardless of the local initiator. Unrelated
+    /// properties preserve their behavior without a usable command origin.
     /// Low-level object setters deliberately bypass this notification owner.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
@@ -89,6 +93,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
+        source: crate::LocalCommandSource,
     ) -> Result<(), Error> {
         self.write_local_as(
             oid,
@@ -98,6 +103,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 priority,
             },
             value,
+            Some(source),
         )
         .await
     }
@@ -122,7 +128,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        self.write_local_as(oid, LocalWrite::ApplicationInputPresentValue, value)
+        self.write_local_as(oid, LocalWrite::ApplicationInputPresentValue, value, None)
             .await
     }
 
@@ -131,6 +137,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         write: LocalWrite,
         value: PropertyValue,
+        source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
         // Only a property write can carry OBJECT_NAME, so only it needs the name
         // index kept in step.
@@ -217,6 +224,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 LocalWrite::ApplicationInputPresentValue => None,
             };
+            let command_origin =
+                source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
             let result = prepared.unwrap_or_else(|| {
                 let object = db.get_mut(oid).expect("existence checked above");
                 match write {
@@ -226,7 +235,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         priority,
                     } => {
                         crate::device_view::check_executor_owned_write(*oid, property)?;
-                        object.write_property(property, array_index, value, priority)
+                        crate::command_source::write_target(
+                            object,
+                            property,
+                            array_index,
+                            value,
+                            priority,
+                            command_origin.as_ref(),
+                        )
                     }
                     LocalWrite::ApplicationInputPresentValue => {
                         object.set_present_value_internal(value)
@@ -378,12 +394,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     if !current {
                         TargetResult::Stale
                     } else {
+                        let origin = crate::command_source::resolve_local(
+                            &database,
+                            crate::LocalCommandSource::Object(plan.source),
+                        )
+                        .ok();
                         match database.get_mut(&target.object_identifier) {
-                            Some(object) => match object.write_property(
+                            Some(object) => match crate::command_source::write_target(
+                                object,
                                 PropertyIdentifier::PRESENT_VALUE,
                                 None,
                                 PropertyValue::Enumerated(u32::from(target.active)),
                                 Some(plan.priority),
+                                origin.as_ref(),
                             ) {
                                 Ok(()) => TargetResult::Applied,
                                 Err(_) => TargetResult::Failed,

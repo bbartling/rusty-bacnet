@@ -7,6 +7,8 @@ use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
     PropertyPresenceCondition::{Commandable, IntrinsicReporting},
+    PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
+    PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -73,10 +75,25 @@ const BASE: &[PropertyMetadata] = &[
     // Always denotes the element-write route, not whole-array replacement.
     PropertyMetadata::new(P::STATE_TEXT, Optional, None, Always),
     PropertyMetadata::new(P::ALARM_VALUES, Optional, Some(IntrinsicReporting), Always),
-    // Both reads are unconditional today. Append optional, read-only projections
-    // without changing their existing values, encoding, or tracking lifecycle.
-    PropertyMetadata::new(P::VALUE_SOURCE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::LAST_COMMAND_TIME, Optional, None, ReadOnly),
+    // The enabled command-source mechanism makes these paired properties required.
+    PropertyMetadata::new(
+        P::VALUE_SOURCE,
+        Optional,
+        Some(ValueSourceTracking),
+        WhenCommandOwner,
+    ),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE_ARRAY,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::LAST_COMMAND_TIME,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -107,14 +124,20 @@ mod tests {
                 for invalid in [0, 4, u64::from(u32::MAX) + 1] {
                     let before = object.read_property(p, index).unwrap();
                     assert!(
-                        matches!(object.write_property(p, index, PropertyValue::Unsigned(invalid), Some(8)),
+                        matches!(object.write_property_from(p, index, PropertyValue::Unsigned(invalid), Some(8), &crate::command_source::test_origin()),
                         Err(Error::Protocol { class, code }) if class == u32::from(ErrorClass::PROPERTY.to_raw())
                             && code == u32::from(ErrorCode::VALUE_OUT_OF_RANGE.to_raw()))
                     );
                     assert_eq!(object.read_property(p, index).unwrap(), before);
                 }
                 object
-                    .write_property(p, index, PropertyValue::Unsigned(3), Some(8))
+                    .write_property_from(
+                        p,
+                        index,
+                        PropertyValue::Unsigned(3),
+                        Some(8),
+                        &crate::command_source::test_origin(),
+                    )
                     .unwrap();
             }
             assert!(
@@ -123,7 +146,13 @@ mod tests {
                     && code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
             );
             object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(8))
+                .write_property_from(
+                    P::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Null,
+                    Some(8),
+                    &crate::command_source::test_origin(),
+                )
                 .unwrap();
             assert_eq!(
                 object.read_property(P::PRESENT_VALUE, None).unwrap(),
@@ -135,15 +164,17 @@ mod tests {
                     .unwrap(),
                 PropertyValue::Null
             );
-            // Discovery changes only: command writes retain the existing readback lifecycle.
-            for (p, before) in [P::VALUE_SOURCE, P::LAST_COMMAND_TIME]
-                .into_iter()
-                .zip(readbacks)
-            {
-                assert_eq!(object.read_property(p, None).unwrap(), before);
-                assert!(!object.is_array_property(p));
-                assert!(!object.is_writable_property(p));
-            }
+            assert_eq!(
+                object.read_property(P::VALUE_SOURCE, None).unwrap(),
+                readbacks[0]
+            );
+            assert_ne!(
+                object.read_property(P::LAST_COMMAND_TIME, None).unwrap(),
+                readbacks[1]
+            );
+            assert!(object.is_writable_property(P::VALUE_SOURCE));
+            assert!(!object.is_writable_property(P::LAST_COMMAND_TIME));
+            assert!(!object.is_array_property(P::VALUE_SOURCE));
         }
     }
 
@@ -152,7 +183,13 @@ mod tests {
         let mut object = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
         let metadata = object.property_metadata().into_owned();
         object
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3), Some(8))
+            .write_property_from(
+                P::PRESENT_VALUE,
+                None,
+                PropertyValue::Unsigned(3),
+                Some(8),
+                &crate::command_source::test_origin(),
+            )
             .unwrap();
         object.set_relinquish_default(3).unwrap();
         object.set_alarm_values(vec![3]);

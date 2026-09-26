@@ -30,7 +30,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 ///   ACTIVE_COV_SUBSCRIPTIONS (Table 12-13) — takes no index: Clause 12.1.5.2
 ///   makes ReadRange the only positional access to a BACnetLIST. Array-typed
 ///   identifiers whose object types are not modeled in-tree (e.g.
-///   ACTION_TEXT, EVENT_MESSAGE_TEXTS_CONFIG, VALUE_SOURCE_ARRAY) stay
+///   ACTION_TEXT, EVENT_MESSAGE_TEXTS_CONFIG) stay
 ///   rejected until their object-side modeling lands.
 ///
 /// Like [`historical_writable_default`] this is a free function (not a
@@ -69,6 +69,15 @@ pub(super) fn array_property_default(
         PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
             object_type == ObjectType::CHANNEL
         }
+        PropertyIdentifier::VALUE_SOURCE_ARRAY => matches!(
+            object_type,
+            ObjectType::ANALOG_OUTPUT
+                | ObjectType::ANALOG_VALUE
+                | ObjectType::BINARY_OUTPUT
+                | ObjectType::BINARY_VALUE
+                | ObjectType::MULTI_STATE_OUTPUT
+                | ObjectType::MULTI_STATE_VALUE
+        ),
         PropertyIdentifier::PRESENT_VALUE => object_type == ObjectType::GLOBAL_GROUP,
         _ => false,
     }

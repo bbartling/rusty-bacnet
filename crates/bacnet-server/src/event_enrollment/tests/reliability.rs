@@ -114,7 +114,13 @@ fn write_target(
 ) {
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(property, None, value, None)
+        .write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
@@ -325,11 +331,12 @@ fn absent_optional_fault_parameters_preserves_custom_normal_event_evaluation() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(321, "AV-no-fault-parameters", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -565,11 +572,12 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(304, "AV-recovery", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -639,11 +647,12 @@ fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences(
         let mut db = ObjectDatabase::new();
         let mut target = AnalogValueObject::new(305, "AV-hook", 62).unwrap();
         target
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(90.0),
                 Some(1),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
         target
@@ -696,11 +705,12 @@ fn held_configuration_error_clears_landed_after_error_invalidation_once() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(306, "AV-held-config", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(50.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();

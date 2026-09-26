@@ -12,11 +12,12 @@ fn bv_read_present_value_default() {
 #[test]
 fn bv_write_present_value() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1), // active
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = bv
@@ -28,11 +29,12 @@ fn bv_write_present_value() {
 #[test]
 fn bv_write_invalid_value_rejected() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    let result = bv.write_property(
+    let result = bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(2), // invalid -- only 0 or 1
         Some(8),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -40,11 +42,12 @@ fn bv_write_invalid_value_rejected() {
 #[test]
 fn bv_write_wrong_type_rejected() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    let result = bv.write_property(
+    let result = bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(1.0), // wrong type
         Some(8),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -84,11 +87,12 @@ fn bi_read_present_value_default() {
 #[test]
 fn bi_write_denied_when_in_service() {
     let mut bi = BinaryInputObject::new(1, "BI-1").unwrap();
-    let result = bi.write_property(
+    let result = bi.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         None,
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -103,11 +107,12 @@ fn bi_write_allowed_when_out_of_service() {
         None,
     )
     .unwrap();
-    bi.write_property(
+    bi.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         None,
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = bi
@@ -149,11 +154,12 @@ fn bi_read_reliability_default() {
 #[test]
 fn bo_write_with_priority() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = bo
@@ -169,11 +175,12 @@ fn bo_write_with_priority() {
 #[test]
 fn bo_relinquish_falls_to_default() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -181,11 +188,12 @@ fn bo_relinquish_falls_to_default() {
             .unwrap(),
         PropertyValue::Enumerated(1)
     );
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -198,11 +206,12 @@ fn bo_relinquish_falls_to_default() {
 #[test]
 fn bo_invalid_value_rejected() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
-    let result = bo.write_property(
+    let result = bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(2),
         None,
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -314,11 +323,12 @@ fn bo_priority_array_index_far_out_of_bounds() {
 fn bo_write_with_priority_zero_rejected() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     // Priority 0 is invalid (valid range is 1-16)
-    let result = bo.write_property(
+    let result = bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(0),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -327,11 +337,12 @@ fn bo_write_with_priority_zero_rejected() {
 fn bo_write_with_priority_17_rejected() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     // Priority 17 is invalid (valid range is 1-16)
-    let result = bo.write_property(
+    let result = bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(17),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -340,11 +351,12 @@ fn bo_write_with_priority_17_rejected() {
 fn bo_write_with_priority_255_rejected() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     // Priority 255 is invalid
-    let result = bo.write_property(
+    let result = bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(255),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -430,11 +442,12 @@ fn bo_priority_array_read_all_slots_none_by_default() {
 #[test]
 fn bo_present_value_priority_write_value() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1), // active
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -452,18 +465,20 @@ fn bo_present_value_priority_write_value() {
 #[test]
 fn bo_present_value_priority_relinquish() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     // Fall back to relinquish default (0 = inactive)
@@ -601,11 +616,12 @@ fn bo_relinquish_default_write_recaptures_present_value() {
 
     // A live command still outranks the default; relinquishing falls back to
     // the written default.
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -613,11 +629,12 @@ fn bo_relinquish_default_write_recaptures_present_value() {
             .unwrap(),
         PropertyValue::Enumerated(0)
     );
-    bo.write_property(
+    bo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(

@@ -486,6 +486,7 @@ async fn target_reporter_recipient_pair_has_one_elected_owner_and_fences_every_c
                 None,
                 PropertyValue::ApplicationData(value.to_vec()),
                 None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .unwrap();
@@ -554,6 +555,7 @@ async fn target_reporter_plural_cancelled_stop_rejects_changes_until_joined_unin
             None,
             PropertyValue::CharacterString("pending".into()),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

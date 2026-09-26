@@ -34,8 +34,8 @@ pub struct BinaryValueObject {
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
-    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
-    value_source: common::ValueSourceTracking,
+    /// Implemented paired command-source tracking (Clause 19.5).
+    value_source: crate::command_source::ValueSourceTracking,
 }
 
 impl BinaryValueObject {
@@ -70,7 +70,7 @@ impl BinaryValueObject {
             },
             event_detection_enable: true,
             event_history: EventHistory::default(),
-            value_source: common::ValueSourceTracking::default(),
+            value_source: crate::command_source::ValueSourceTracking::default(),
         })
     }
 
@@ -156,6 +156,13 @@ impl BACnetObject for BinaryValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if let Some(result) = self
+            .value_source
+            .read(property, array_index, &self.priority_array)
+        {
+            return result;
+        }
+
         if let Some(result) = self.audit_policy.read(property, array_index) {
             return result;
         }
@@ -198,15 +205,6 @@ impl BACnetObject for BinaryValueObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            p if p == PropertyIdentifier::VALUE_SOURCE => {
-                Ok(self.value_source.value_source.clone())
-            }
-            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
-                match self.value_source.last_command_time {
-                    BACnetTimeStamp::SequenceNumber(n) => u64::from(n),
-                    _ => 0,
-                },
-            )),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
             }
@@ -228,6 +226,46 @@ impl BACnetObject for BinaryValueObject {
         }
     }
 
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) && array_index.is_some()
+        {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return self.value_source.correct(value, priority, origin);
+        }
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            return crate::command_source::write_sourced_priority!(
+                self,
+                value,
+                priority,
+                origin,
+                |v| {
+                    if let PropertyValue::Enumerated(e) = v {
+                        if e > 1 {
+                            Err(common::value_out_of_range_error())
+                        } else {
+                            Ok(e)
+                        }
+                    } else {
+                        Err(common::invalid_data_type_error())
+                    }
+                }
+            );
+        }
+        self.write_property(property, array_index, value, priority)
+    }
+
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
@@ -242,18 +280,11 @@ impl BACnetObject for BinaryValueObject {
             return result;
         }
 
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            return common::write_priority_array!(self, value, priority, |v| {
-                if let PropertyValue::Enumerated(e) = v {
-                    if e > 1 {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(e)
-                    }
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            });
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) {
+            return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::ACTIVE_TEXT {
             if let PropertyValue::CharacterString(s) = value {

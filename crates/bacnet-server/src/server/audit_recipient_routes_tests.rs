@@ -80,6 +80,7 @@ async fn audit_target_routes_are_callback_free_after_startup() {
                             None,
                             value,
                             None,
+                            crate::LocalCommandSource::ServerDevice,
                         )
                         .await
                         .unwrap();
@@ -159,7 +160,8 @@ async fn audit_target_routes_use_actual_bound_bip_broadcast_port() {
             PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
             None,
             PropertyValue::ApplicationData(bytes.to_vec()),
-            None
+            None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .is_err());
@@ -269,7 +271,8 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
                         PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
                         None,
                         PropertyValue::ApplicationData(bytes.to_vec()),
-                        None
+                        None,
+                        crate::LocalCommandSource::ServerDevice,
                     )
                     .await
                     .is_err());
