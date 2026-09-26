@@ -42,7 +42,7 @@ impl CovTimeRemaining {
 }
 
 impl CovSubscriptionTable {
-    /// Resolve a captured owner/key/generation against the live table expiry.
+    /// Resolve captured owner/key/generation/route authority against live expiry.
     /// An expiry-only Multiple context refresh does not replace the generation.
     pub fn remaining_lifetime(
         &self,
@@ -53,7 +53,12 @@ impl CovSubscriptionTable {
             return None;
         }
         self.subs.get(snapshot.key()).and_then(|entry| {
-            (entry.generation == snapshot.generation)
+            let same_route = match (&entry.route_owner, &snapshot.route_owner) {
+                (Some(current), Some(captured)) => Arc::ptr_eq(current, captured),
+                (None, None) => true,
+                _ => false,
+            };
+            (entry.generation == snapshot.generation && same_route)
                 .then(|| CovTimeRemaining::at(entry.expires_at, now))
         })
     }
@@ -122,7 +127,13 @@ mod tests {
         let snapshot = table.admit_for_test(proposal.clone(), 0).unwrap();
         let context = snapshot.key().multiple_context().unwrap().clone();
         table
-            .subscribe_multiple(&context, now + Duration::from_secs(10), 0, vec![])
+            .subscribe_multiple(
+                &context,
+                &snapshot.endpoint(),
+                now + Duration::from_secs(10),
+                0,
+                vec![],
+            )
             .unwrap();
         assert_eq!(
             table

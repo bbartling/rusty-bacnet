@@ -153,7 +153,7 @@ async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_order
         let mut processes = Vec::new();
         let mut i_am = 0;
         let mut i_have = 0;
-        for packet in packets {
+        for (_, packet) in packets {
             let npdu = decode_npdu(packet).unwrap();
             let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected unconfirmed discovery or COV");

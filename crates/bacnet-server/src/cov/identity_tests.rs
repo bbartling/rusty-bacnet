@@ -124,7 +124,13 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     let counters = table.counters.snapshot();
     resource_error(
         table
-            .subscribe_multiple(&context, expiry, 4, vec![replacement.clone(), added])
+            .subscribe_multiple(
+                &context,
+                &existing.endpoint(),
+                expiry,
+                4,
+                vec![replacement.clone(), added],
+            )
             .unwrap_err(),
     );
     assert_eq!(table.generation, u64::MAX - 1);
@@ -160,6 +166,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     let accepted = table
         .subscribe_multiple(
             &context,
+            &existing.endpoint(),
             expiry,
             4,
             vec![replacement; 64]
@@ -197,7 +204,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
 fn cov_identity_indexes_forms_quota_and_exact_router_cleanup() {
     let mut table = CovSubscriptionTable::with_policy(
         CovPolicy {
-            max_subscriptions_per_peer: 8,
+            max_subscriptions_per_peer: 4,
             reserved_capacity: 0,
             ..Default::default()
         },
@@ -216,14 +223,15 @@ fn cov_identity_indexes_forms_quota_and_exact_router_cleanup() {
         }
     }
     let quota = CovPeerKey::from_endpoint(&MacAddr::from_slice(&[1]), Some(&remote));
-    assert_eq!(table.peer_subscription_count(&quota), 8);
+    assert_eq!(table.peer_subscription_count(&quota), 4);
     let mut opposite = proposal(None, true);
     opposite.subscriber_network = Some(remote.clone());
     resource_error(table.admit_for_test(opposite.clone(), 0).unwrap_err());
-    assert_eq!(table.remove_peer_subscriptions(&[1], Some(&remote)), 4);
-    assert_eq!(table.peer_subscription_count(&quota), 4);
+    assert_eq!(table.remove_peer_subscriptions(&[1], Some(&remote)), 0);
+    assert_eq!(table.remove_peer_subscriptions(&[2], Some(&remote)), 4);
+    assert_eq!(table.peer_subscription_count(&quota), 0);
     table.admit_for_test(opposite, 0).unwrap();
-    assert_eq!(table.peer_subscription_count(&quota), 5);
+    assert_eq!(table.peer_subscription_count(&quota), 1);
     assert_eq!(table.remove_peer_subscriptions(&[9], Some(&remote)), 0);
 }
 
@@ -244,3 +252,6 @@ fn cov_identity_ordinary_and_single_mode_renew_in_place() {
     assert_eq!(table.len(), 2);
     assert_eq!(table.counters.snapshot().subscriptions_created, 2);
 }
+
+#[path = "multiple_route_tests.rs"]
+mod multiple_route;

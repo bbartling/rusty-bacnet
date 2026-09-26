@@ -36,7 +36,7 @@ mod tests;
 /// identity and returns an immutable [`CovSubscriptionSnapshot`] for delivery.
 #[derive(Debug, Clone)]
 pub struct CovSubscription {
-    /// MAC address of the subscriber.
+    /// Immediate delivery MAC: the local subscriber or its current router.
     pub subscriber_mac: MacAddr,
     /// Routed source address when the subscriber is behind a BACnet router.
     pub subscriber_network: Option<NpduAddress>,
@@ -224,7 +224,8 @@ impl CovSubscriptionTable {
         }
     }
 
-    /// Remove one exact endpoint and release its contribution to shared peer quotas.
+    /// Remove subscriptions using this current route and release shared peer quotas.
+    /// An obsolete router cannot remove a Multiple context migrated elsewhere.
     pub fn remove_peer_subscriptions(
         &mut self,
         mac: &[u8],
@@ -234,7 +235,7 @@ impl CovSubscriptionTable {
         let to_remove: Vec<_> = self
             .subs
             .iter()
-            .filter(|(key, _)| key.endpoint() == &target)
+            .filter(|(_, entry)| entry.endpoint() == target)
             .map(|(k, _)| k.clone())
             .collect();
         let count = to_remove.len();

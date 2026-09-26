@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 
 struct HeldTransport {
     sent: Arc<StdMutex<Vec<Bytes>>>,
+    routes: Arc<StdMutex<Vec<MacAddr>>>,
     entered: Arc<Notify>,
     release: Arc<Semaphore>,
     hold: bool,
@@ -21,8 +22,9 @@ impl TransportPort for HeldTransport {
     async fn stop(&mut self) -> Result<(), Error> {
         Ok(())
     }
-    async fn send_unicast(&self, npdu: &[u8], _: &[u8]) -> Result<(), Error> {
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
+        self.routes.lock().unwrap().push(MacAddr::from_slice(mac));
         self.entered.notify_one();
         if self.hold {
             self.release.acquire().await.unwrap().forget();
@@ -83,6 +85,7 @@ struct Fixture {
     config: ServerConfig,
     fail: Arc<std::sync::atomic::AtomicBool>,
     sent: Arc<StdMutex<Vec<Bytes>>>,
+    routes: Arc<StdMutex<Vec<MacAddr>>>,
     entered: Arc<Notify>,
     release: Arc<Semaphore>,
 }
@@ -93,6 +96,7 @@ impl Fixture {
         av.set_present_value(10.0);
         db.add(Box::new(av)).unwrap();
         let sent = Arc::new(StdMutex::new(Vec::new()));
+        let routes = Arc::new(StdMutex::new(Vec::new()));
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -100,6 +104,7 @@ impl Fixture {
             db: Arc::new(RwLock::new(db)),
             network: Arc::new(NetworkLayer::new(HeldTransport {
                 sent: sent.clone(),
+                routes: routes.clone(),
                 entered: entered.clone(),
                 release: release.clone(),
                 hold,
@@ -112,6 +117,7 @@ impl Fixture {
             config: ServerConfig::default(),
             fail,
             sent,
+            routes,
             entered,
             release,
         }
@@ -325,3 +331,5 @@ mod sample_contract;
 mod status_flags;
 
 mod status_contract;
+
+mod route_migration;

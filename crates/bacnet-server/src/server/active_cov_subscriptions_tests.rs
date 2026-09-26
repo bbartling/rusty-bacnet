@@ -7,6 +7,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 use support::*;
 
 mod device_selection;
+mod multiple_route;
 mod support;
 
 // Shares this suite's wire harness; Multiple contexts are a separate property.
