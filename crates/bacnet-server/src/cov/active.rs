@@ -46,24 +46,22 @@ impl CovSubscriptionTable {
         self.subs
             .values()
             .filter_map(|entry| {
-                let (endpoint, process_id, object, property) = match &entry.key {
+                let (process_id, object, property) = match &entry.key {
                     CovSubscriptionKey::Object {
-                        endpoint,
-                        process_id,
-                        object,
-                    } => (endpoint, *process_id, *object, None),
+                        process_id, object, ..
+                    } => (*process_id, *object, None),
                     CovSubscriptionKey::Property {
-                        endpoint,
                         process_id,
                         object,
                         property,
                         index,
-                    } => (endpoint, *process_id, *object, Some((*property, *index))),
+                        ..
+                    } => (*process_id, *object, Some((*property, *index))),
                     CovSubscriptionKey::Multiple { .. } => return None,
                 };
                 let time_remaining = CovTimeRemaining::at(entry.expires_at, now).wire_seconds()?;
                 Some(ActiveCovEntry {
-                    endpoint: endpoint.clone(),
+                    endpoint: entry.endpoint(),
                     process_id,
                     object,
                     property,

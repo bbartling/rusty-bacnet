@@ -249,7 +249,7 @@ async fn cov_identity_multiple_forms_coexist_refresh_and_cancel_exact_context() 
 }
 
 #[tokio::test]
-async fn cov_identity_two_router_paths_share_quota_but_not_cleanup_authority() {
+async fn cov_identity_two_router_paths_renew_one_context_and_cleanup_current_route() {
     let fixture = DispatchFixture::new(life_safety_db(), []).await;
     let remote = NpduAddress {
         network: 23,
@@ -276,11 +276,11 @@ async fn cov_identity_two_router_paths_share_quota_but_not_cleanup_authority() {
         }
         assert!(matches!(fixture.take_apdus()[0], Apdu::SimpleAck(_)));
     }
-    let peer = crate::cov::CovPeerKey::from_endpoint(&MacAddr::from_slice(&[1]), Some(&remote));
+    let peer = crate::cov::CovRecipient::from_endpoint(&MacAddr::from_slice(&[1]), Some(&remote));
     {
         let mut table = fixture.cov_table.write().await;
-        assert_eq!(table.peer_subscription_count(&peer), 2);
-        assert_eq!(table.remove_peer_subscriptions(&[1], Some(&remote)), 1);
+        assert_eq!(table.peer_subscription_count(&peer), 1);
+        assert_eq!(table.remove_peer_subscriptions(&[1], Some(&remote)), 0);
         assert_eq!(table.peer_subscription_count(&peer), 1);
     }
     assert_eq!(fire(&fixture).await, vec![2]);
@@ -300,5 +300,5 @@ async fn cov_identity_two_router_paths_share_quota_but_not_cleanup_authority() {
             single(true),
         )
         .await;
-    assert_eq!(fixture.cov_table.read().await.len(), 1);
+    assert!(fixture.cov_table.read().await.is_empty());
 }

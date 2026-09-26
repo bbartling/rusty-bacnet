@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Ordinary and Single COV subscriptions now match the original BACnet recipient
+  across routers (#840). Accepted renewals select the current delivery route;
+  cancellation matches either router, obsolete-route cleanup preserves migrated
+  entries, and existing renewal generations fence stale notification work.
+  `CovRecipient` replaces `MultipleRecipient` and `CovPeerKey` without aliases,
+  unifying subscription and quota/notification identity. Object/Property keys use
+  `recipient`; `CovSubscription::recipient()` and `CovPolicy::reserved_recipients`
+  replace `peer_key()` and `reserved_peer_keys`. Table admission rejects an empty
+  routed source MAC before mutation. Valid quota and lifetime policies are unchanged.
+
 - PICS property rows now aggregate every configured instance of each object type
   (#838), including mixed stream/record and read-only File objects. Presence and
   read/write capabilities are unions; required declarations win over optional
@@ -29,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renewals retarget all retained references; cross-router cancellation preserves
   surviving routes and stale completions cannot advance migrated observations.
   This pre-1.0 Rust API change replaces `MultipleContextKey::endpoint` with
-  `recipient: MultipleRecipient`, adds the explicit route to `subscribe_multiple`,
+  `recipient: CovRecipient`, adds the explicit route to `subscribe_multiple`,
   and moves the endpoint accessor from the key to subscription data.
 
 - ReadPropertyMultiple responses to a resolved wildcard Device request now

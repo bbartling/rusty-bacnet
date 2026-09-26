@@ -1296,12 +1296,21 @@ view before this union. Type-level createable/deleteable flags and runtime File
 behavior are unchanged. Generated PICS remains draft internal support evidence.
 
 The bundled server keeps ordinary object, Single-property and Multiple-reference
-subscriptions independent. Ordinary and Single identities include the exact immediate
-transport endpoint and optional routed NPDU source. Multiple contexts instead match
-the original BACnet client address (local MAC or remote SNET/SADR), process identifier
-and confirmed form, independently of the immediate router. Object, property and
-optional array index identify each reference; absent, zero and element indexes differ.
-Confirmed mode is mutable for ordinary/Single renewal; Multiple forms coexist.
+subscriptions independent. All families identify the original BACnet client address
+(local MAC or routed SNET/SADR), independently of the immediate router. Ordinary
+and Single keys additionally identify process and monitored object; Single also
+includes property and array index. Absent, zero and element indexes differ.
+Confirmed mode is mutable for ordinary/Single renewal; Multiple includes form in
+its context identity, so its two forms coexist.
+
+Each successfully admitted ordinary/Single renewal selects its proposed delivery
+route and terms. This includes already-permitted ordinary indefinite renewals;
+Single still requires a positive finite lifetime on the wire. Cancellation through
+either router removes the canonical context. Refused renewal preserves the live
+target's route, terms and paired observation. Each accepted renewal replaces its
+generation and resets its observation through the normal initial-notification path;
+stale work cannot complete into the replacement. Already admitted old-route work
+may finish, and confirmed observations still commit at admission rather than ACK.
 Exact duplicates in a Multiple request use the last options once, with quota and
 generation capacity reserved before any accepted context refresh.
 
@@ -1315,12 +1324,20 @@ generations, while a private route ownership token fences every old-route snapsh
 The routed address is a claimed protocol identity, not authentication; existing
 mutation authorization still precedes subscription handling.
 
-The pre-1.0 Rust API uses `MultipleContextKey::recipient: MultipleRecipient` in
-place of its former `endpoint` field. `subscribe_multiple` takes an explicit
-`&SubscriberEndpoint` route after the context argument and validates it against
-the recipient and proposals. The removed `CovSubscriptionKey::endpoint()` accessor
-is replaced by `CovSubscription::endpoint()` on subscription data (also available
-through accepted snapshots), which reports the current captured delivery route.
+The pre-1.0 Rust API shares `CovRecipient` between subscription identity and
+quota/notification accounting. It replaces the former `MultipleRecipient` and
+`CovPeerKey` types without aliases. `CovSubscriptionKey::{Object, Property}` and
+`MultipleContextKey` use a `recipient` field; `CovSubscription::recipient()` returns
+the canonical address. `CovPolicy::reserved_recipients` holds explicitly reserved
+canonical recipients (the existing `reserved_peers` remains a direct-MAC policy).
+Table admission rejects routed recipients with an empty source MAC, just as NPDU
+source decoding does, before purging or modifying subscriptions. Invalid routed
+input is never reinterpreted as a direct peer.
+
+`subscribe_multiple` takes an explicit `&SubscriberEndpoint` route after the context
+argument and validates it against the recipient and proposals.
+`CovSubscription::endpoint()` on subscription data (also available through accepted
+snapshots) reports its captured delivery route.
 
 The public `CovSubscriptionTable` accepts proposed `CovSubscription` values through
 fallible `subscribe`/`subscribe_multiple` methods and returns immutable
@@ -1341,8 +1358,8 @@ a failed live read cannot authorize a stale sibling's payload or companion.
 Already admitted confirmed notifications retain their APDU and retry/ACK lifecycle.
 `BACnetServer::remove_peer_subscriptions` removes
 only entries using the exact current immediate endpoint plus routed source; cleanup
-of an obsolete router does not remove migrated Multiple references. `CovPeerKey` continues to
-group quota/rate accounting and does not authorize cross-router cleanup.
+of an obsolete router does not remove migrated subscriptions. Canonical recipient
+accounting does not grant cleanup authority to an obsolete route.
 
 Property subscriptions now prepare one selected-coordinate `CovSample` for comparison,
 wire payload and fenced baseline completion; a failed selected read or encoding

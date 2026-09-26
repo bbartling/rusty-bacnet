@@ -846,9 +846,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.mutation_decisions.snapshot()
     }
 
-    /// Remove COV subscriptions for the exact immediate MAC and optional routed source.
-    /// Two routers carrying the same remote source remain distinct endpoints. This
-    /// releases only the removed endpoint's contribution to the shared quota group.
+    /// Remove COV subscriptions using this current immediate MAC and routed source.
+    /// Cleanup of an obsolete router leaves subscriptions renewed onto another route.
+    /// Only removed entries release their contribution to the shared quota group.
     pub async fn remove_peer_subscriptions(
         &self,
         mac: &[u8],

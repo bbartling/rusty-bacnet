@@ -53,7 +53,10 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
             for before in [&finite, &expired] {
                 let after = table
                     .get_subscription(&crate::cov::CovSubscriptionKey::Object {
-                        endpoint: crate::cov::SubscriberEndpoint::new(&before.subscriber_mac, None),
+                        recipient: crate::cov::CovRecipient::from_endpoint(
+                            &before.subscriber_mac,
+                            None,
+                        ),
                         process_id: before.subscriber_process_identifier,
                         object: before.monitored_object_identifier,
                     })
@@ -68,8 +71,8 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
                     before.last_notified_observation
                 );
                 assert_eq!(after.cov_increment, before.cov_increment);
-                assert_eq!(table.peer_subscription_count(&before.peer_key()), 1);
-                assert_eq!(table.peer_indefinite_count(&before.peer_key()), 0);
+                assert_eq!(table.peer_subscription_count(&before.recipient()), 1);
+                assert_eq!(table.peer_indefinite_count(&before.recipient()), 0);
             }
         }
     }

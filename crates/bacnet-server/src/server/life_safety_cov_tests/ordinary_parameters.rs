@@ -32,7 +32,7 @@ async fn invalid_renewal(lifetime: u32) {
         .read()
         .await
         .get_subscription(&crate::cov::CovSubscriptionKey::Object {
-            endpoint: crate::cov::SubscriberEndpoint::new(&fixture.source_mac, None),
+            recipient: crate::cov::CovRecipient::from_endpoint(&fixture.source_mac, None),
             process_id: 14,
             object: point_oid(),
         })
@@ -57,7 +57,7 @@ async fn invalid_renewal(lifetime: u32) {
     assert_eq!(table.len(), 1);
     let after = table
         .get_subscription(&crate::cov::CovSubscriptionKey::Object {
-            endpoint: crate::cov::SubscriberEndpoint::new(&fixture.source_mac, None),
+            recipient: crate::cov::CovRecipient::from_endpoint(&fixture.source_mac, None),
             process_id: 14,
             object: point_oid(),
         })
@@ -72,8 +72,8 @@ async fn invalid_renewal(lifetime: u32) {
         before.last_notified_observation
     );
     assert_eq!(after.cov_increment, before.cov_increment);
-    assert_eq!(table.peer_subscription_count(&before.peer_key()), 1);
-    assert_eq!(table.peer_indefinite_count(&before.peer_key()), 0);
+    assert_eq!(table.peer_subscription_count(&before.recipient()), 1);
+    assert_eq!(table.peer_indefinite_count(&before.recipient()), 0);
 }
 
 #[tokio::test]

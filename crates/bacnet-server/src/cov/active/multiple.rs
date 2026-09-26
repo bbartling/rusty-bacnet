@@ -180,23 +180,23 @@ fn order(a: &ActiveCovMultipleEntry, b: &ActiveCovMultipleEntry) -> CmpOrdering 
         .then_with(|| coordinates(a).cmp(&coordinates(b)))
 }
 
-fn multiple_recipient(recipient: &MultipleRecipient) -> BACnetRecipient {
+fn multiple_recipient(recipient: &CovRecipient) -> BACnetRecipient {
     BACnetRecipient::Address(match recipient {
-        MultipleRecipient::Direct(mac) => BACnetAddress {
+        CovRecipient::Direct(mac) => BACnetAddress {
             network_number: 0,
             mac_address: mac.clone(),
         },
-        MultipleRecipient::Routed(source) => BACnetAddress {
+        CovRecipient::Routed(source) => BACnetAddress {
             network_number: source.network,
             mac_address: source.mac_address.clone(),
         },
     })
 }
 
-fn recipient_order(a: &MultipleRecipient, b: &MultipleRecipient) -> CmpOrdering {
-    let coordinates = |recipient: &MultipleRecipient| match recipient {
-        MultipleRecipient::Direct(mac) => (None, mac.clone()),
-        MultipleRecipient::Routed(source) => (Some(source.network), source.mac_address.clone()),
+fn recipient_order(a: &CovRecipient, b: &CovRecipient) -> CmpOrdering {
+    let coordinates = |recipient: &CovRecipient| match recipient {
+        CovRecipient::Direct(mac) => (None, mac.clone()),
+        CovRecipient::Routed(source) => (Some(source.network), source.mac_address.clone()),
     };
     coordinates(a).cmp(&coordinates(b))
 }

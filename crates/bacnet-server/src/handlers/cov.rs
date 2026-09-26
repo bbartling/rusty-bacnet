@@ -70,7 +70,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
 
     if request.is_cancellation() {
         table.unsubscribe(&CovSubscriptionKey::Object {
-            endpoint: SubscriberEndpoint::new(source_mac, source_network),
+            recipient: crate::cov::CovRecipient::from_endpoint(source_mac, source_network),
             process_id: request.subscriber_process_identifier,
             object: request.monitored_object_identifier,
         });
@@ -170,7 +170,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 
     if request.is_cancellation() {
         table.unsubscribe(&CovSubscriptionKey::Property {
-            endpoint: SubscriberEndpoint::new(source_mac, source_network),
+            recipient: crate::cov::CovRecipient::from_endpoint(source_mac, source_network),
             process_id: request.subscriber_process_identifier,
             object: request.monitored_object_identifier,
             property: request.monitored_property_identifier,
@@ -275,7 +275,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     let confirmed = request.issue_confirmed_notifications;
     let route = SubscriberEndpoint::new(source_mac, source_network);
     let context = MultipleContextKey {
-        recipient: crate::cov::MultipleRecipient::from_endpoint(source_mac, source_network),
+        recipient: crate::cov::CovRecipient::from_endpoint(source_mac, source_network),
         process_id: request.subscriber_process_identifier,
         confirmed,
     };

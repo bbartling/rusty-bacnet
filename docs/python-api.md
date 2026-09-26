@@ -397,19 +397,22 @@ their existing write behavior. Changing a Device's declaration is not a runtime
 service-disable switch.
 
 The bundled server distinguishes ordinary, Single-property and Multiple-reference
-subscriptions by their requested coordinates. Ordinary and Single identities include
-the exact transport/routed endpoint. Multiple contexts match the original client
-BACnet address, process and confirmed form independently of the immediate router.
-The latest accepted finite request, including an empty renewal of an existing
-context, retargets every retained reference. Cancellation from another router
-removes matching targets without retargeting survivors; rejected requests preserve
-the live target context. Route changes fence old snapshots while preserving
-unreplaced selected-value/flags observations. Peer cleanup uses the current route.
-Claimed BACnet addresses do not establish authentication.
-Ordinary renewal may change confirmed mode; confirmed and unconfirmed Multiple
-contexts coexist independently. Different accepted array indexes stay distinct,
-and exact duplicate Multiple references use the final options once. Stale initial
-or change-notification completion cannot overwrite renewed/recreated entries.
+subscriptions by their requested coordinates. All families match the original
+client BACnet address independently of the immediate router. Ordinary and Single
+use process/object coordinates, plus property/index for Single; their confirmed
+mode remains mutable. Successfully admitted renewals select the current route,
+including permitted ordinary indefinite renewals. Cancellation through either
+router removes the same context; refused renewal preserves its route and terms.
+Every ordinary/Single renewal advances its generation and follows the normal
+observation reset/initial-notification path, fencing stale completion.
+
+Multiple additionally keys on confirmed form. Its latest accepted finite request,
+including an empty renewal of an existing context, retargets every retained
+reference. Cancellation removes matching targets without retargeting survivors;
+route changes fence old snapshots while preserving unreplaced observations.
+Different accepted array indexes stay distinct, and exact duplicate Multiple
+references use final options once. Peer cleanup follows the current route for
+all families. Claimed BACnet addresses do not establish authentication.
 Live finite subscription notifications use positive ceiling seconds (bounded to
 `u32::MAX`); ordinary indefinite subscriptions continue to report zero. Expired or
 stale ownership at the final eligibility check cannot admit a new notification.

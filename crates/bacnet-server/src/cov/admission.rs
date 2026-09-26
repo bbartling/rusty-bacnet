@@ -15,7 +15,7 @@ impl CovSubscriptionTable {
         self.purge_expired();
         let existing = self.subs.get(&key).cloned();
         self.check_admission(
-            &sub.peer_key(),
+            &sub.recipient(),
             sub.expires_at.is_none(),
             existing.as_deref(),
         )?;
@@ -38,8 +38,10 @@ impl CovSubscriptionTable {
         max_notification_delay: u32,
         mut subscriptions: Vec<CovSubscription>,
     ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
-        if MultipleRecipient::from_endpoint(&route.mac, route.network.as_ref()) != context.recipient
-        {
+        context.recipient.validate()?;
+        let recipient = CovRecipient::from_endpoint(&route.mac, route.network.as_ref());
+        recipient.validate()?;
+        if recipient != context.recipient {
             return Err(Error::Encoding(
                 "Multiple route does not match its recipient".into(),
             ));
@@ -64,7 +66,7 @@ impl CovSubscriptionTable {
             .iter()
             .filter(|key| !self.subs.contains_key(key))
             .count();
-        let peer = CovPeerKey::from_endpoint(&route.mac, route.network.as_ref());
+        let peer = CovRecipient::from_endpoint(&route.mac, route.network.as_ref());
         self.check_admission_multiple(&peer, new_count, 0)?;
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
@@ -170,7 +172,7 @@ impl CovSubscriptionTable {
             subscription: sub.clone(),
             max_notification_delay,
         };
-        let peer = sub.peer_key();
+        let peer = sub.recipient();
         let new_indefinite = sub.expires_at.is_none();
         if let Some(old) = self.subs.insert(snapshot.key.clone(), snapshot.clone()) {
             let old_indefinite = old.expires_at.is_none();
@@ -202,7 +204,7 @@ impl CovSubscriptionTable {
     /// Check admission for a single subscription request against policy quotas.
     pub(super) fn check_admission(
         &mut self,
-        peer: &CovPeerKey,
+        peer: &CovRecipient,
         is_indefinite: bool,
         existing: Option<&CovSubscription>,
     ) -> Result<(), Error> {
@@ -240,7 +242,7 @@ impl CovSubscriptionTable {
     /// Check admission for a batch of subscriptions against policy quotas.
     fn check_admission_multiple(
         &mut self,
-        peer: &CovPeerKey,
+        peer: &CovRecipient,
         new_count: usize,
         new_indefinite: usize,
     ) -> Result<(), Error> {

@@ -30,7 +30,7 @@ fn routed() -> SubscriberEndpoint {
 
 fn context(endpoint: SubscriberEndpoint, process_id: u32, confirmed: bool) -> MultipleContextKey {
     MultipleContextKey {
-        recipient: MultipleRecipient::from_endpoint(&endpoint.mac, endpoint.network.as_ref()),
+        recipient: CovRecipient::from_endpoint(&endpoint.mac, endpoint.network.as_ref()),
         process_id,
         confirmed,
     }

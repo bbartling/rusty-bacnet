@@ -497,7 +497,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
     {
         let table = server.cov_table.read().await;
         assert!(table.contains(&crate::cov::CovSubscriptionKey::Object {
-            endpoint: crate::cov::SubscriberEndpoint::new(
+            recipient: crate::cov::CovRecipient::from_endpoint(
                 &MacAddr::from_slice(&router_mac),
                 Some(&routed_b)
             ),
