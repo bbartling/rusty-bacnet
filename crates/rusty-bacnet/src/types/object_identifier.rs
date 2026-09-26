@@ -6,6 +6,9 @@ use super::*;
 
 /// BACnet Object Identifier (type + instance).
 ///
+/// Raises ValueError for types above 1023 or instances above 4,194,303.
+/// Valid proprietary types and the wire wildcard instance are accepted.
+///
 /// Usage: `ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)`
 #[pyclass(name = "ObjectIdentifier", frozen, from_py_object)]
 #[derive(Clone)]
