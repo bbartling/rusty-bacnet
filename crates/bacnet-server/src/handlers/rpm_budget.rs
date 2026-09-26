@@ -12,7 +12,6 @@ pub(crate) enum RpmFailure {
 }
 
 struct PlannedObject {
-    response_oid: ObjectIdentifier,
     lookup_oid: ObjectIdentifier,
     properties: Vec<PropertyReference>,
 }
@@ -110,7 +109,6 @@ fn plan(
         // Empty object wrappers are retained; their count is bounded by the
         // existing decoded request, not by the expanded-result policy.
         plan.push(PlannedObject {
-            response_oid: spec.object_identifier,
             lookup_oid,
             properties,
         });
@@ -235,7 +233,7 @@ pub(crate) fn rpm_budgeted_request_observed(
     ReadAccessResult::encode_footer(&mut footer);
     for spec in plan {
         let mut header = BytesMut::new();
-        ReadAccessResult::encode_header(&mut header, &spec.response_oid);
+        ReadAccessResult::encode_header(&mut header, &spec.lookup_oid);
         scratch.append(&header, footer.len())?;
         for reference in spec.properties {
             let row_live =

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- ReadPropertyMultiple responses to a resolved wildcard Device request now
+  identify the selected concrete Device in each result wrapper, matching the
+  returned Object_Identifier value (#835). Legacy and budgeted server handlers
+  agree, including property-error rows; unresolved Device requests retain their
+  wildcard identity and UNKNOWN_OBJECT errors.
+
 - Server wildcard Device reads, live COV lists, discovery and notification
   identity now consistently select the lowest Device instance when the database
   contains multiple Devices (#832). Selection is independent of insertion and

@@ -144,6 +144,12 @@ index zero, proprietary properties, NULL and empty list values remain legal.
 Direct and device-directed clients reject invalid requests before admission or
 discovery. Inbound cursor/no-op and ordered-prefix error semantics are separate.
 
+For a Device wildcard request `(Device,4194303)`, the bundled server's
+ReadPropertyMultiple result wrapper names the resolved local Device, including
+wrappers containing per-property errors. Its Object_Identifier value names the
+same Device. Without a matching Device, the wrapper retains the wildcard and
+its references return UNKNOWN_OBJECT. Concrete requests remain unchanged.
+
 ReadPropertyMultiple response indexes follow the effective object declaration:
 requested indexes remain on known arrays, including index zero and inline array
 errors; scalar results omit them. Unknown objects/properties or unavailable

@@ -400,7 +400,7 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
             Some((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
         ),
         (
-            oid(ObjectType::DEVICE, 4194303),
+            oid(ObjectType::DEVICE, 10),
             PropertyIdentifier::OBJECT_LIST,
             Some(0),
             None,
@@ -422,7 +422,6 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
         .as_mut()
         .unwrap()
         .property_array_index = requested_scalar_index.map(u64::from);
-    expected_records[5].target_object = Some(oid(ObjectType::DEVICE, 10));
     assert_eq!(records(&fixture), expected_records);
     assert!(records(&plain).is_empty());
     fixture.server.stop().await.unwrap();

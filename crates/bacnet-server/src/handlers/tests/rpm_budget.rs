@@ -345,7 +345,7 @@ fn rpm_migrated_metadata_device_wildcard_and_index_legacy_parity() {
         let count = ack.list_of_read_access_results[0].list_of_results.len();
         assert_eq!(
             ack.list_of_read_access_results[0].object_identifier,
-            wildcard
+            ObjectIdentifier::new(ObjectType::DEVICE, 123).unwrap()
         );
         for work in [count - 1, count, count + 1] {
             let mut out = BytesMut::new();
@@ -356,6 +356,131 @@ fn rpm_migrated_metadata_device_wildcard_and_index_legacy_parity() {
                 result.unwrap();
                 assert_eq!(out, legacy);
             }
+        }
+    }
+}
+
+#[test]
+fn rpm_device_result_identity_errors_and_exact_byte_budget() {
+    use bacnet_encoding::primitives::decode_application_value;
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    for instance in [123, ObjectIdentifier::MAX_INSTANCE] {
+        let selected = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+        let wildcard =
+            ObjectIdentifier::new(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE).unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(
+            DeviceObject::new(DeviceConfig {
+                instance,
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+        let data = request(
+            [wildcard, selected]
+                .into_iter()
+                .map(|object_identifier| ReadAccessSpecification {
+                    object_identifier,
+                    list_of_property_references: vec![
+                        reference(PropertyIdentifier::OBJECT_IDENTIFIER),
+                        reference(PropertyIdentifier::PRESENT_VALUE),
+                        PropertyReference {
+                            property_identifier: PropertyIdentifier::OBJECT_NAME,
+                            property_array_index: Some(7),
+                        },
+                        reference(PropertyIdentifier::OBJECT_IDENTIFIER),
+                    ],
+                })
+                .collect(),
+        );
+        let mut legacy = BytesMut::new();
+        handle_read_property_multiple(&db, &data, &mut legacy).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();
+        assert_eq!(ack.list_of_read_access_results.len(), 2);
+        for result in ack.list_of_read_access_results {
+            assert_eq!(result.object_identifier, selected);
+            let rows = result.list_of_results;
+            assert_eq!(rows.len(), 4);
+            assert_eq!(rows[0], rows[3], "duplicate order is retained");
+            let bytes = rows[0].property_value.as_ref().unwrap();
+            assert_eq!(
+                decode_application_value(bytes, 0).unwrap(),
+                (PropertyValue::ObjectIdentifier(selected), bytes.len())
+            );
+            assert_eq!(
+                rows[1].property_identifier,
+                PropertyIdentifier::PRESENT_VALUE
+            );
+            assert_eq!(
+                rows[1].error,
+                Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY))
+            );
+            assert_eq!(rows[2].property_identifier, PropertyIdentifier::OBJECT_NAME);
+            assert_eq!(rows[2].property_array_index, None);
+            assert_eq!(
+                rows[2].error,
+                Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
+            );
+        }
+        for cap in [legacy.len() - 1, legacy.len(), legacy.len() + 1] {
+            let mut bounded = BytesMut::from(&b"prefix"[..]);
+            let result = handle_rpm_budgeted(&db, &data, &mut bounded, budget(8, cap));
+            if cap < legacy.len() {
+                assert!(matches!(result, Err(RpmFailure::Bytes)));
+                assert_eq!(
+                    &bounded[..],
+                    b"prefix",
+                    "failure appends no partial wrapper"
+                );
+            } else {
+                result.unwrap();
+                assert_eq!(&bounded[6..], &legacy[..]);
+            }
+        }
+    }
+}
+
+#[test]
+fn rpm_unresolved_device_and_network_port_wildcards_keep_requested_identity() {
+    let db = ObjectDatabase::new();
+    let requested = [
+        ObjectIdentifier::new(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE).unwrap(),
+        ObjectIdentifier::new(ObjectType::NETWORK_PORT, ObjectIdentifier::MAX_INSTANCE).unwrap(),
+        ObjectIdentifier::new(ObjectType::DEVICE, 123).unwrap(),
+    ];
+    let data = request(
+        requested
+            .into_iter()
+            .map(|object_identifier| ReadAccessSpecification {
+                object_identifier,
+                list_of_property_references: vec![
+                    reference(PropertyIdentifier::OBJECT_IDENTIFIER),
+                    PropertyReference {
+                        property_identifier: PropertyIdentifier::OBJECT_NAME,
+                        property_array_index: Some(7),
+                    },
+                ],
+            })
+            .collect(),
+    );
+    let mut legacy = BytesMut::new();
+    handle_read_property_multiple(&db, &data, &mut legacy).unwrap();
+    let mut bounded = BytesMut::new();
+    handle_rpm_budgeted(&db, &data, &mut bounded, budget(6, legacy.len())).unwrap();
+    assert_eq!(bounded, legacy);
+    let ack = ReadPropertyMultipleACK::decode(&bounded).unwrap();
+    assert_eq!(ack.list_of_read_access_results.len(), requested.len());
+    for (result, expected) in ack.list_of_read_access_results.iter().zip(requested) {
+        assert_eq!(result.object_identifier, expected);
+        assert_eq!(result.list_of_results.len(), 2);
+        for row in &result.list_of_results {
+            assert_eq!(row.property_array_index, None);
+            assert_eq!(row.property_value, None);
+            assert_eq!(
+                row.error,
+                Some((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))
+            );
         }
     }
 }

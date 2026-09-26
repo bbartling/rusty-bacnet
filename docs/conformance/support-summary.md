@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 52 |
+| Priority | P1 | 53 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -25,7 +25,7 @@
 | Status | implementation-present-needs-state-machine-audit | 4 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
-| Status | in-progress | 16 |
+| Status | in-progress | 17 |
 | Status | supported-with-clause-evidence | 21 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
@@ -74,6 +74,7 @@
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18; §13.14.1.1–13.14.2 (printed703–704/PDF705–706); §13.15.1.1 (printed707/PDF709); §13.15.1.3 Table13-20; §§13.6/13.7 (printed685/687, PDF687/689); §§13.17/13.18 (printed714/717, PDF716/719); §13.1 Tables13-1/13-1a (printed633–634/PDF635–636) | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-19-SOURCE-READ-PROPERTY` | Clause 19.6 / Tables 19-3, 19-4, 19-5; Clause 18.7; Clause 12.63; Clause 15.8 (printed745-748/PDF747-750); Clause19.6.5/Table19-5 (printed823/PDF825); Clauses20.2.12-13 (printed846-847/PDF848-849); Clause 15.5.1.2 (printed739/PDF741), 15.5.2 (printed740/PDF742); Table19-4 (printed822/PDF824); Clause15.7 (printed742–744/PDF744–746); Clause19.6 High Volume (printed825/PDF827) | P1 | in-progress | 10 |
 | `BACNET-13-AUDIT-WIRE-MODELS` | Clauses 13.19-13.21; Clause 21.2.1, Clause 21.2.3, Clause 21.3.1, BACnetAuditNotification, BACnetAuditLogQueryParameters, and BACnetAuditOperationFlags productions | P1 | implementation-present-needs-source-review | 6 |
+| `BACNET-15-RPM-DEVICE-WILDCARD-RESULT` | Clauses 15.7.2 and 15.7.3.2 (printed743-744/PDF745-746); ASHRAE 135.1-2003 Addendum a test 9.20.1.11 (PDF11-12) | P1 | in-progress | 0 |
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5); Clause 15.7.3.2.2.2 (printed744/PDF746) | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | supported-with-clause-evidence | 0 |
