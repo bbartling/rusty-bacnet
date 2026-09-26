@@ -358,7 +358,7 @@ pub fn handle_read_property_multiple(
         }
 
         results.push(ReadAccessResult {
-            object_identifier: spec.object_identifier,
+            object_identifier: lookup_oid,
             list_of_results: elements,
         });
     }

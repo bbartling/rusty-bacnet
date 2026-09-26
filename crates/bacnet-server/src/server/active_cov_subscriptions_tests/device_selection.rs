@@ -88,7 +88,7 @@ async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_order
                     .await;
                 assert_eq!(
                     ack.list_of_read_access_results[1].object_identifier,
-                    wildcard()
+                    device()
                 );
                 let lists = rows(&ack, property);
                 assert_eq!(lists.len(), 7);
@@ -108,7 +108,7 @@ async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_order
             let ack = wire.rpm(vec![(wildcard(), vec![(property, None)])]).await;
             assert_eq!(
                 ack.list_of_read_access_results[0].object_identifier,
-                wildcard()
+                device()
             );
             assert_eq!(rows(&ack, property), vec![expected.to_vec()]);
             assert_eq!(

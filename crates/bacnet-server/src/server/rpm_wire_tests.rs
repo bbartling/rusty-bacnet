@@ -6,6 +6,90 @@ use bacnet_services::{
 use bacnet_transport::port::TransportProvenance;
 
 #[tokio::test]
+async fn rpm_device_wildcard_bip_wire_returns_concrete_wrapper_and_value() {
+    use bacnet_client::client::BACnetClient;
+    use bacnet_encoding::primitives::decode_application_value;
+    use bacnet_services::rpm::ReadPropertyMultipleACK;
+    use std::net::Ipv4Addr;
+
+    let concrete = ObjectIdentifier::new(ObjectType::DEVICE, 321).unwrap();
+    let wildcard = ObjectIdentifier::new(ObjectType::DEVICE, 4194303).unwrap();
+    let mut database = ObjectDatabase::new();
+    database
+        .add(Box::new(
+            DeviceObject::new(bacnet_objects::device::DeviceConfig {
+                instance: 321,
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: [wildcard, concrete]
+            .into_iter()
+            .map(|object_identifier| ReadAccessSpecification {
+                object_identifier,
+                list_of_property_references: vec![
+                    PropertyReference {
+                        property_identifier: PropertyIdentifier::OBJECT_IDENTIFIER,
+                        property_array_index: None,
+                    },
+                    PropertyReference {
+                        property_identifier: PropertyIdentifier::OBJECT_NAME,
+                        property_array_index: Some(7),
+                    },
+                ],
+            })
+            .collect(),
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut server = BACnetServer::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .database(database)
+        .build()
+        .await
+        .unwrap();
+    let mut client = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .build()
+        .await
+        .unwrap();
+    let response = client
+        .confirmed_request(
+            server.local_mac(),
+            ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            &request,
+        )
+        .await;
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+    let ack = ReadPropertyMultipleACK::decode(&response.unwrap()).unwrap();
+    assert_eq!(ack.list_of_read_access_results.len(), 2);
+    for result in ack.list_of_read_access_results {
+        let rows = result.list_of_results;
+        assert_eq!(rows.len(), 2);
+        let value = rows[0].property_value.as_ref().unwrap();
+        assert_eq!(
+            decode_application_value(value, 0).unwrap(),
+            (PropertyValue::ObjectIdentifier(concrete), value.len())
+        );
+        // ASHRAE 135.1-2003 Addendum a test 9.20.1.11 requires the
+        // selected Device in both the result wrapper and property value.
+        assert_eq!(result.object_identifier, concrete);
+        assert_eq!(rows[1].property_identifier, PropertyIdentifier::OBJECT_NAME);
+        assert_eq!(rows[1].property_array_index, None);
+        assert_eq!(
+            rows[1].error,
+            Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
+        );
+    }
+}
+
+#[tokio::test]
 async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
     for work in [false, true] {
         for segmented_response_accepted in [false, true] {
