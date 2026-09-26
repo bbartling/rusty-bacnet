@@ -9,7 +9,7 @@ use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
 fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
-    // Independent (identifier, optional, writable) rows in projection order.
+    // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     // PICS corrections vs the historical heuristic: Object_Name is required
     // and read-only; CDI Present_Value is required and read-only;
     // Credential_Status, User_Type, and the rights Global_Identifier are
@@ -142,14 +142,15 @@ fn pics_access_identity_property_metadata_is_exact() {
                     })
                     .collect();
                 assert_eq!(
-                    rows, expected,
+                    rows,
+                    sorted_rows(&expected),
                     "{kind:?}, configured={configured}, OOS={out_of_service}"
                 );
                 assert_eq!(
                     rows.iter()
                         .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                         .collect::<Vec<_>>(),
-                    required.as_ref()
+                    sorted_required(required.as_ref())
                 );
             }
         }

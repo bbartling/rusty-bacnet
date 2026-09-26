@@ -158,7 +158,9 @@ fn rpm_metadata_log_selectors_pics_rows_and_budgets_are_exact() {
                         (row.property_id, row.access.optional, row.access.writable)
                     })
                     .collect();
-                assert_eq!(rows, expected);
+                let mut pics_expected = expected.clone();
+                pics_expected.sort_by_key(|row| row.0.to_raw());
+                assert_eq!(rows, pics_expected);
                 for (selector, expected) in [
                     (P::ALL, all.as_slice()),
                     (P::REQUIRED, required.as_slice()),

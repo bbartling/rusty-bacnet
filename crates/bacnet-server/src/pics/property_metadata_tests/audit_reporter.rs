@@ -119,17 +119,21 @@ fn pics_audit_reporter_union_is_independent_of_instance_traversal() {
             [&first as &dyn BACnetObject, &second as &dyn BACnetObject],
             [&second as &dyn BACnetObject, &first as &dyn BACnetObject],
         ] {
-            let rows = PicsGenerator::audit_reporter_property_support(&objects)
-                .iter()
-                .map(|row| {
-                    (
-                        row.property_id,
-                        row.access.readable,
-                        row.access.optional,
-                        row.access.writable,
-                    )
-                })
-                .collect::<Vec<_>>();
+            let rows = PicsGenerator::union_property_support(
+                objects
+                    .iter()
+                    .flat_map(|object| PicsGenerator::object_property_support(*object)),
+            )
+            .iter()
+            .map(|row| {
+                (
+                    row.property_id,
+                    row.access.readable,
+                    row.access.optional,
+                    row.access.writable,
+                )
+            })
+            .collect::<Vec<_>>();
             assert_eq!(rows, expected_rows(configured));
         }
     }

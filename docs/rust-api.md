@@ -1283,8 +1283,17 @@ runtime service toggle. Raw built-in Device metadata and reads include property
 only for declared SubscribeCOVPropertyMultiple; present standalone lists are empty.
 Direct database reads, context-free `handle_read_property`/`handle_read_property_multiple`
 and standalone `PicsGenerator` use raw object declarations. Use the full server's
-read and PICS methods for its execution view. This Device correction does not
-change mixed-File property aggregation in PICS (#838).
+read and PICS methods for its execution view.
+
+PICS property rows aggregate all configured instances of each object type in
+ascending property-ID order, including single-instance output. A row or read/write
+flag means at least one instance supports it; actual access still depends on the
+concrete object. A property is optional only when all of its present metadata rows
+are optional; a required declaration wins, and absent rows do not vote. For example,
+a writable stream File contributes writable File_Size while a writable record File
+contributes writable Record_Count. Each served Device passes through the execution
+view before this union. Type-level createable/deleteable flags and runtime File
+behavior are unchanged. Generated PICS remains draft internal support evidence.
 
 The bundled server keeps ordinary object, Single-property and Multiple-reference
 subscriptions independent. Ordinary and Single identities include the exact immediate

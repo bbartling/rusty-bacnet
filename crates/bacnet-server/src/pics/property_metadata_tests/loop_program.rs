@@ -96,12 +96,16 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
             } else {
                 notification_class_rows.as_slice()
             };
-            assert_eq!(rows, expected, "{kind:?}, OOS={out_of_service}");
+            assert_eq!(
+                rows,
+                sorted_rows(expected),
+                "{kind:?}, OOS={out_of_service}"
+            );
             assert_eq!(
                 rows.iter()
                     .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                     .collect::<Vec<_>>(),
-                required.as_ref()
+                sorted_required(required.as_ref())
             );
         }
     }

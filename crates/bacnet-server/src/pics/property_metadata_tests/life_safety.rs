@@ -7,7 +7,7 @@ use PropertyIdentifier as P;
 
 #[test]
 fn pics_life_safety_point_property_metadata_is_exact() {
-    // Independent (identifier, optional, writable) rows in projection order.
+    // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     let expected = [
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, false),
@@ -61,14 +61,15 @@ fn pics_life_safety_point_property_metadata_is_exact() {
                 })
                 .collect();
             assert_eq!(
-                rows, expected,
+                rows,
+                sorted_rows(&expected),
                 "configured={configured}, OOS={out_of_service}"
             );
             assert_eq!(
                 rows.iter()
                     .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                     .collect::<Vec<_>>(),
-                required.as_ref()
+                sorted_required(required.as_ref())
             );
         }
     }
@@ -127,14 +128,15 @@ fn pics_life_safety_zone_property_metadata_is_exact() {
                 })
                 .collect();
             assert_eq!(
-                rows, expected,
+                rows,
+                sorted_rows(&expected),
                 "configured={configured}, OOS={out_of_service}"
             );
             assert_eq!(
                 rows.iter()
                     .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                     .collect::<Vec<_>>(),
-                required.as_ref()
+                sorted_required(required.as_ref())
             );
         }
     }

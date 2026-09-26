@@ -32,6 +32,19 @@ mod network_port;
 mod schedule;
 mod timer;
 
+// Expected fixtures retain readable declaration order while the PICS contract
+// orders every type's output by raw property ID, including single instances.
+fn sorted_rows(rows: &[(PropertyIdentifier, bool, bool)]) -> Vec<(PropertyIdentifier, bool, bool)> {
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|row| row.0.to_raw());
+    rows
+}
+fn sorted_required(properties: &[PropertyIdentifier]) -> Vec<PropertyIdentifier> {
+    let mut properties = properties.to_vec();
+    properties.sort_by_key(|property| property.to_raw());
+    properties
+}
+
 fn property_support(
     pics: &Pics,
     object_type: ObjectType,
@@ -242,7 +255,7 @@ fn pics_projects_migrated_property_metadata() {
         .collect();
     assert_eq!(
         alert_rows,
-        vec![
+        sorted_rows(&[
             (PropertyIdentifier::OBJECT_IDENTIFIER, false, false),
             (PropertyIdentifier::OBJECT_NAME, false, false),
             (PropertyIdentifier::DESCRIPTION, true, true),
@@ -256,7 +269,7 @@ fn pics_projects_migrated_property_metadata() {
             (PropertyIdentifier::NOTIFY_TYPE, false, true),
             (PropertyIdentifier::EVENT_TIME_STAMPS, false, false),
             (PropertyIdentifier::PROPERTY_LIST, false, false),
-        ]
+        ])
     );
 }
 
@@ -284,39 +297,38 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        rows,
-        vec![
-            (PropertyIdentifier::OBJECT_IDENTIFIER, true, false, false),
-            (PropertyIdentifier::OBJECT_NAME, true, false, false),
-            (PropertyIdentifier::OBJECT_TYPE, true, false, false),
-            (PropertyIdentifier::DESCRIPTION, true, true, true),
-            (PropertyIdentifier::STATUS_FLAGS, true, false, false),
-            (PropertyIdentifier::RELIABILITY, true, false, false),
-            (PropertyIdentifier::EVENT_STATE, true, false, false),
-            (PropertyIdentifier::AUDIT_LEVEL, true, false, false),
-            (
-                PropertyIdentifier::AUDIT_SOURCE_REPORTER,
-                true,
-                false,
-                false,
-            ),
-            (PropertyIdentifier::AUDITABLE_OPERATIONS, true, false, false,),
-            (
-                PropertyIdentifier::AUDIT_PRIORITY_FILTER,
-                true,
-                false,
-                false,
-            ),
-            (
-                PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
-                true,
-                false,
-                false,
-            ),
-            (PropertyIdentifier::PROPERTY_LIST, true, false, false),
-        ]
-    );
+    let mut expected = vec![
+        (PropertyIdentifier::OBJECT_IDENTIFIER, true, false, false),
+        (PropertyIdentifier::OBJECT_NAME, true, false, false),
+        (PropertyIdentifier::OBJECT_TYPE, true, false, false),
+        (PropertyIdentifier::DESCRIPTION, true, true, true),
+        (PropertyIdentifier::STATUS_FLAGS, true, false, false),
+        (PropertyIdentifier::RELIABILITY, true, false, false),
+        (PropertyIdentifier::EVENT_STATE, true, false, false),
+        (PropertyIdentifier::AUDIT_LEVEL, true, false, false),
+        (
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+            true,
+            false,
+            false,
+        ),
+        (PropertyIdentifier::AUDITABLE_OPERATIONS, true, false, false),
+        (
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            true,
+            false,
+            false,
+        ),
+        (
+            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+            true,
+            false,
+            false,
+        ),
+        (PropertyIdentifier::PROPERTY_LIST, true, false, false),
+    ];
+    expected.sort_by_key(|row| row.0.to_raw());
+    assert_eq!(rows, expected);
 }
 
 #[test]
@@ -418,12 +430,16 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
                     (row.property_id, row.access.optional, row.access.writable)
                 })
                 .collect();
-            assert_eq!(rows, expected, "configuration {configuration}");
+            assert_eq!(
+                rows,
+                sorted_rows(&expected),
+                "configuration {configuration}"
+            );
             assert_eq!(
                 rows.iter()
                     .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                     .collect::<Vec<_>>(),
-                required.as_ref()
+                sorted_required(required.as_ref())
             );
         }
     }
@@ -509,14 +525,15 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                     })
                     .collect();
                 assert_eq!(
-                    rows, expected,
+                    rows,
+                    sorted_rows(&expected),
                     "{kind:?}, OOS={out_of_service}, detection={detection_enabled}"
                 );
                 assert_eq!(
                     rows.iter()
                         .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                         .collect::<Vec<_>>(),
-                    required.as_ref()
+                    sorted_required(required.as_ref())
                 );
             }
         }
@@ -610,14 +627,15 @@ fn pics_multistate_property_metadata_is_exact() {
                     })
                     .collect();
                 assert_eq!(
-                    rows, expected,
+                    rows,
+                    sorted_rows(&expected),
                     "{kind:?}, OOS={out_of_service}, detection={detection_enabled}"
                 );
                 assert_eq!(
                     rows.iter()
                         .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                         .collect::<Vec<_>>(),
-                    required.as_ref()
+                    sorted_required(required.as_ref())
                 );
             }
         }

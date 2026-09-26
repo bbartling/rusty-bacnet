@@ -72,14 +72,14 @@ mod pics {
     use crate::server::ServerConfig;
 
     #[test]
-    fn file_property_metadata_is_exact_for_each_representative() {
+    fn file_property_metadata_is_exact_for_each_single_instance() {
         for method in [1, 0, u32::MAX] {
             for read_only in [false, true] {
                 let mut object = FileObject::new(1, "FILE-1", "raw").unwrap();
                 object.set_file_access_method(method);
                 object.set_read_only(read_only);
-                // Independent (identifier, optional, writable) fixture. Never
-                // combine representatives: PICS intentionally selects one.
+                // Independent (identifier, optional, writable) single-instance fixture.
+                // The generated type row sorts these declarations by property ID.
                 let mut expected = vec![
                     (P::OBJECT_IDENTIFIER, false, false),
                     (P::OBJECT_NAME, false, false),
@@ -99,7 +99,8 @@ mod pics {
                 if method == 0 {
                     expected.push((P::RECORD_COUNT, true, !read_only));
                 }
-                let required = object.required_properties();
+                let mut required = object.required_properties().into_owned();
+                required.sort_by_key(|property| property.to_raw());
                 let mut db = ObjectDatabase::new();
                 db.add(Box::new(object)).unwrap();
                 let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
@@ -116,12 +117,13 @@ mod pics {
                         (row.property_id, row.access.optional, row.access.writable)
                     })
                     .collect();
+                expected.sort_by_key(|row| row.0.to_raw());
                 assert_eq!(rows, expected, "method={method}, read_only={read_only}");
                 assert_eq!(
                     rows.iter()
                         .filter_map(|&(p, optional, _)| (!optional).then_some(p))
                         .collect::<Vec<_>>(),
-                    required.as_ref()
+                    required
                 );
             }
         }
