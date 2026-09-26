@@ -7,6 +7,8 @@ use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
     PropertyPresenceCondition::IntrinsicReporting,
+    PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
+    PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -69,6 +71,24 @@ const BASE: &[PropertyMetadata] = &[
         P::EVENT_MESSAGE_TEXTS,
         Optional,
         Some(IntrinsicReporting),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE,
+        Optional,
+        Some(ValueSourceTracking),
+        WhenCommandOwner,
+    ),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE_ARRAY,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::LAST_COMMAND_TIME,
+        Optional,
+        Some(CommandableValueSourceTracking),
         ReadOnly,
     ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),

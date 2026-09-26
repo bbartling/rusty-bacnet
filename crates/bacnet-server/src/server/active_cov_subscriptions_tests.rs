@@ -6,6 +6,7 @@ use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use support::*;
 
+mod command_source;
 mod device_execution;
 mod device_selection;
 mod multiple_route;
@@ -90,6 +91,7 @@ async fn active_cov_wire_lists_accepted_ordinary_and_single_subscriptions() {
             None,
             PropertyValue::Real(2.5),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

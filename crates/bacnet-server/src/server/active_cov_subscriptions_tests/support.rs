@@ -302,7 +302,7 @@ impl Wire {
             .unwrap();
         }
         let mut first = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-        first.set_present_value(20.0);
+        first.set_relinquish_default(20.0).unwrap();
         db.add(Box::new(first)).unwrap();
         db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
             .unwrap();

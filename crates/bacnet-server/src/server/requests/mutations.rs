@@ -28,6 +28,7 @@ pub(super) struct Request<'a> {
     pub source_network: Option<&'a NpduAddress>,
     pub provenance: bacnet_transport::port::TransportProvenance,
     pub req: &'a ConfirmedRequestPdu,
+    pub command_origin: Option<&'a bacnet_objects::command_source::CommandOrigin>,
 }
 
 impl Request<'_> {
@@ -121,6 +122,7 @@ impl Request<'_> {
                 &self.req.service_request,
                 Some(audit),
                 Some(&source),
+                self.command_origin,
             );
             let changes = result
                 .as_ref()
@@ -170,6 +172,7 @@ impl Request<'_> {
                 Some(&authorize),
                 Some(audit),
                 Some(&source),
+                self.command_origin,
             );
             let committed_oids = match &outcome {
                 handlers::WritePropertyMultipleOutcome::Success { committed_oids }
@@ -305,6 +308,7 @@ impl Request<'_> {
                 &self.req.service_request,
                 &mut ack_buf,
                 &mut target,
+                self.command_origin,
             );
             // Initial application values are decoded inside the handler, possibly
             // after earlier values were applied. Rollback is already complete;

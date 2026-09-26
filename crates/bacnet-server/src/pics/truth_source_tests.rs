@@ -4,10 +4,10 @@
 //! the workspace's 700-LOC file cap. They verify the central invariant of the
 //! shared-truth-source design: for every core I/O/V object type, the
 //! `BACnetObject::is_writable_property` override and the runtime
-//! `write_property` match arms must agree — if the override reports a property
-//! writable, `write_property` must accept it, and if it reports it read-only,
-//! `write_property` must reject it. This is the regression guard that prevents
-//! an override and its `write_property` arms from drifting apart (the exact
+//! `write_property_from` match arms must agree — if the override reports a property
+//! writable, `write_property_from` must accept it, and if it reports it read-only,
+//! `write_property_from` must reject it. This is the regression guard that prevents
+//! an override and its `write_property_from` arms from drifting apart (the exact
 //! false-negative class issue #115 eliminates).
 
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
@@ -23,13 +23,13 @@ use super::{PicsConfig, PicsGenerator};
 use crate::server::ServerConfig;
 
 /// Cross-check the central truth-source invariant: for every core I/O/V type,
-/// `is_writable_property` and `write_property` must agree. If the override
-/// reports a property writable, `write_property` must accept it; if it reports
-/// it read-only, `write_property` must reject it. This guards against the
-/// override and the `write_property` match arms drifting apart — the exact
+/// `is_writable_property` and `write_property_from` must agree. If the override
+/// reports a property writable, `write_property_from` must accept it; if it reports
+/// it read-only, `write_property_from` must reject it. This guards against the
+/// override and the `write_property_from` match arms drifting apart — the exact
 /// false-negative class issue #115 is meant to eliminate.
 ///
-/// Sample values are chosen to satisfy `write_property`'s validation so a true
+/// Sample values are chosen to satisfy `write_property_from`'s validation so a true
 /// agreement is tested (not a rejection on bad input). Input types (AI, BI,
 /// MSI) require `out_of_service` before PRESENT_VALUE is accepted, so those
 /// objects are pre-flipped where needed.
@@ -51,10 +51,16 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
             obj.is_writable_property(pid),
             "{label}: is_writable_property must report {pid:?} writable"
         );
-        let result = obj.write_property(pid, None, value, None);
+        let result = obj.write_property_from(
+            pid,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        );
         assert!(
             result.is_ok(),
-            "{label}: write_property must accept {pid:?}, got: {result:?}"
+            "{label}: source-aware write must accept {pid:?}, got: {result:?}"
         );
     }
 
@@ -64,10 +70,16 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
             !obj.is_writable_property(pid),
             "{label}: is_writable_property must report {pid:?} NOT writable"
         );
-        let result = obj.write_property(pid, None, PropertyValue::Null, None);
+        let result = obj.write_property_from(
+            pid,
+            None,
+            PropertyValue::Null,
+            None,
+            &crate::command_source::test_origin(),
+        );
         assert!(
             result.is_err(),
-            "{label}: write_property must reject {pid:?}, got: {result:?}"
+            "{label}: source-aware write must reject {pid:?}, got: {result:?}"
         );
     }
 
@@ -83,10 +95,16 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
             obj.is_writable_property(pid),
             "{label}: is_writable_property must report {pid:?} writable"
         );
-        let result = obj.write_property(pid, Some(index), value, None);
+        let result = obj.write_property_from(
+            pid,
+            Some(index),
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        );
         assert!(
             result.is_ok(),
-            "{label}: write_property must accept {pid:?}[{index}], got: {result:?}"
+            "{label}: source-aware write must accept {pid:?}[{index}], got: {result:?}"
         );
     }
 
@@ -367,7 +385,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     assert_rejects(&mut msv, READ_ONLY, "MSV");
 }
 
-/// The per-object `write_property` arms and the `is_writable_property`
+/// The per-object `write_property_from` arms and the `is_writable_property`
 /// override must agree on the two objects hardened in the #182 review round:
 /// Pulse Converter (whose historical default advertised INPUT_REFERENCE
 /// read-only while the arm accepted it — and OBJECT_NAME writable while no
@@ -395,7 +413,14 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 "{label}: {pid:?} must be advertised writable"
             );
             assert!(
-                obj.write_property(pid, None, value, None).is_ok(),
+                obj.write_property_from(
+                    pid,
+                    None,
+                    value,
+                    None,
+                    &crate::command_source::test_origin()
+                )
+                .is_ok(),
                 "{label}: {pid:?} advertised writable but the arm rejected a good value"
             );
         }
@@ -405,7 +430,14 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 "{label}: {pid:?} must NOT be advertised writable"
             );
             assert!(
-                obj.write_property(pid, None, value, None).is_err(),
+                obj.write_property_from(
+                    pid,
+                    None,
+                    value,
+                    None,
+                    &crate::command_source::test_origin()
+                )
+                .is_err(),
                 "{label}: {pid:?} not advertised but the arm accepted a write"
             );
         }

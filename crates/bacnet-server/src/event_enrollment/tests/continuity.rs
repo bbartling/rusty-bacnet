@@ -66,7 +66,13 @@ fn set_input_value(object: &mut dyn BACnetObject, value: PropertyValue) {
         )
         .unwrap();
     object
-        .write_property(PropertyIdentifier::PRESENT_VALUE, None, value, None)
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
@@ -378,11 +384,12 @@ impl ObservationTarget {
     fn new(instance: u32, fail_reliability: bool, fail_indexed_value: bool) -> Self {
         let mut inner = AnalogValueObject::new(instance, format!("AV-gap-{instance}"), 62).unwrap();
         inner
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(90.0),
                 Some(1),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
         Self {
@@ -426,8 +433,13 @@ impl BACnetObject for ObservationTarget {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        self.inner
-            .write_property(property, array_index, value, priority)
+        self.inner.write_property_from(
+            property,
+            array_index,
+            value,
+            priority,
+            &crate::command_source::test_origin(),
+        )
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {

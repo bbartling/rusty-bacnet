@@ -125,11 +125,70 @@ A consumer decoding a complete property payload must check that this offset equa
 the payload length. Array or stream consumers can decode subsequent choices.
 
 This generic datatype preserves wire-valid object types and wildcard instances,
-network zero and empty broadcast MAC addresses. Decoding does not establish that a
-source is an actual or authorized command origin. This codec foundation adds no
-object Value_Source producer, source-array property, or source-correction policy;
-those remain separate work under #824. The existing BACnetTimeStamp type and codec
-continue to serve timestamp encoding.
+network zero and empty broadcast MAC addresses. A source claim does not establish
+an actual or authorized command origin. Existing BACnetTimeStamp codecs remain
+the timestamp encoding authority.
+
+### Command-source tracking
+
+Analog Output/Value, Binary Output/Value and Multi-state Output/Value implement
+`Value_Source`, the 16-element `Value_Source_Array`, and `Last_Command_Time`.
+These paired properties are required while this mechanism is enabled, including
+in Property_List, REQUIRED RPM selection and PICS. Sources and the timestamp are
+returned as `PropertyValue::ApplicationData` containing their BACnet CHOICE bytes;
+source-array index 0 returns Unsigned 16. `Command_Time_Array` is not implemented.
+
+A standalone command uses `BACnetObject::write_property_from` with an explicit
+`bacnet_objects::command_source::CommandOrigin`. Remote origins contain the actual
+BACnet address and an Unknown, Unique(Device), or Ambiguous correlation snapshot.
+Local origins contain a concrete owning Device and an optional concrete initiating
+object. Standalone calls validate syntax and trust the caller's declaration;
+they do not authenticate it or check database membership. Context-free
+`write_property` denies Present_Value commands and Value_Source corrections on
+these six families. `AnalogValueObject::set_present_value` was removed: configure
+`set_relinquish_default` for a fallback or submit a sourced priority command.
+Input measurement setters keep their separate contract. Priority_Array stays
+read-only; a sourced Present_Value NULL relinquishes the specified priority.
+
+The full server derives remote origins from direct network 0/source MAC or routed
+SNET/SADR, independently of Audit reporting. Address-to-Device correlation is a
+snapshot, not authentication. WP, WPM and CreateObject initial commands use that
+origin. Schedule commands name the initiating Schedule and preserve complete
+target references; Staging commands name the actual plan source after its existing
+generation check. Failed CreateObject initialization rolls back the new object;
+WPM retains its successful prefix and failed coordinate.
+
+`BACnetServer::write_local` requires a final `LocalCommandSource` argument:
+`ServerDevice` or `Object(oid)`. Both require a selected concrete local Device for
+tracked commands; the object form also requires an existing concrete local
+initiator under the database guard. Missing or wildcard-only Device identity and
+missing initiators fail closed. Unrelated local writes retain their behavior
+without a Device. The selected Device owns correction rights; changing the local
+initiator changes the published source but not that owner. Custom objects retain
+the default generic writer unless they implement the new hook. Writable
+decorators must forward it, as the endpoint source-reporting decorator does.
+The endpoint inbound write allowlist is unchanged.
+
+Each priority retains its original command owner separately from its correctable
+source claim. Remote correction requires the same uniquely known Device at both
+operations, or the same actual address without conflicting known identities or
+ambiguity. An originally unknown command cannot gain cross-address rights through
+a later binding. Expiry permits retained-address fallback; ambiguity denies
+correction. Router hop changes alone do not change the original routed address.
+Local correction requires the same owning Device, independently of initiator;
+remote and local owners cannot correct one another. An authorized owner may
+assert any complete, valid ValueSource CHOICE, including none or a forwarded
+object/address. Payload claims do not prove ownership. Correction preserves the
+original token; a new command replaces it.
+
+Last_Command_Time is an object-owned u16 SequenceNumber, initially 0, incremented
+with wraparound only when a successful Present_Value command or relinquishment
+changes the effective `(value, active priority, source)` tuple. Noncurrent-only
+writes, source corrections and fallback configuration do not increment it.
+A NULL command retains the relinquishing writer in that slot's source (the
+selected interpretation of the last command), while the visible source moves to
+the next active slot or none. Source tracking does not add specialized COV support
+for these properties; that remains separate work under #823.
 
 ### APDU Types
 

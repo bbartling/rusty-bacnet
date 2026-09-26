@@ -153,6 +153,24 @@ impl BACnetObject for SourceReporter {
             .write_property(property, array_index, value, priority)
     }
 
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        origin: &bacnet_objects::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        if self.active() && property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
+            return Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            });
+        }
+        self.wrapped
+            .write_property_from(property, array_index, value, priority, origin)
+    }
+
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.wrapped.property_metadata()
     }
@@ -408,3 +426,7 @@ impl BACnetObject for SourceReporter {
         self.wrapped.add_trend_record(record)
     }
 }
+
+#[cfg(test)]
+#[path = "source_reporter_command_tests.rs"]
+mod command_tests;

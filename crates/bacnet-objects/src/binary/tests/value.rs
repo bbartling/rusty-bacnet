@@ -12,11 +12,12 @@ fn bv_read_present_value_default() {
 #[test]
 fn bv_write_present_value() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1), // active
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = bv
@@ -28,11 +29,12 @@ fn bv_write_present_value() {
 #[test]
 fn bv_write_invalid_value_rejected() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    let result = bv.write_property(
+    let result = bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(2), // invalid -- only 0 or 1
         Some(8),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -40,11 +42,12 @@ fn bv_write_invalid_value_rejected() {
 #[test]
 fn bv_write_wrong_type_rejected() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    let result = bv.write_property(
+    let result = bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(1.0), // wrong type
         Some(8),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -80,11 +83,12 @@ fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
     );
     bv.event_detector.alarm_values = vec![1];
     bv.event_detector.time_delay = 2;
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(bv.evaluate_intrinsic_reporting(), None);
@@ -138,11 +142,12 @@ fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
 #[test]
 fn bv_write_with_priority() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = bv
@@ -158,11 +163,12 @@ fn bv_write_with_priority() {
 #[test]
 fn bv_relinquish_falls_to_default() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -170,11 +176,12 @@ fn bv_relinquish_falls_to_default() {
             .unwrap(),
         PropertyValue::Enumerated(1)
     );
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -220,11 +227,12 @@ fn bv_priority_array_in_property_list() {
 #[test]
 fn bv_present_value_priority_write() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -242,18 +250,20 @@ fn bv_present_value_priority_write() {
 #[test]
 fn bv_present_value_priority_relinquish() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -334,19 +344,21 @@ fn bo_description_read_write() {
 fn bv_higher_priority_wins() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
     // Write inactive at priority 10
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(0),
         Some(10),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     // Write active at priority 5 (higher)
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -355,11 +367,12 @@ fn bv_higher_priority_wins() {
         PropertyValue::Enumerated(1) // priority 5 wins
     );
     // Relinquish priority 5, falls to priority 10
-    bv.write_property(
+    bv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(

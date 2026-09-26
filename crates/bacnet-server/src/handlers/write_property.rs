@@ -90,7 +90,15 @@ pub(crate) fn handle_write_property_multiple_authorized(
     snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
     authorize: Option<WritePropertyMultipleGate<'_>>,
 ) -> WritePropertyMultipleOutcome {
-    handle_write_property_multiple_observed(db, service_data, snapshots, authorize, None, None)
+    handle_write_property_multiple_observed(
+        db,
+        service_data,
+        snapshots,
+        authorize,
+        None,
+        None,
+        None,
+    )
 }
 
 pub(crate) fn handle_write_property_multiple_observed(
@@ -100,6 +108,7 @@ pub(crate) fn handle_write_property_multiple_observed(
     authorize: Option<WritePropertyMultipleGate<'_>>,
     mut observer: Option<&mut dyn WriteCommitObserver>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
+    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> WritePropertyMultipleOutcome {
     let mut cursor = WritePropertyMultipleCursor::new(service_data);
     let mut committed_oids = Vec::new();
@@ -215,6 +224,7 @@ pub(crate) fn handle_write_property_multiple_observed(
                 value,
                 attempt.priority,
                 source,
+                command_origin,
             )
         });
         if let Err(error) = write {
@@ -291,7 +301,10 @@ pub(crate) fn decode_write_property_value(
             _ => Err(invalid_data_encoding_error()),
         };
     }
-    if property == PropertyIdentifier::RECIPIENT_LIST {
+    if matches!(
+        property,
+        PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::VALUE_SOURCE
+    ) {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
     if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
@@ -389,7 +402,7 @@ pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<ObjectIdentifier, Error> {
-    handle_write_property_observed(db, service_data, None, None)
+    handle_write_property_observed(db, service_data, None, None, None)
 }
 
 pub(crate) fn handle_write_property_observed(
@@ -397,6 +410,7 @@ pub(crate) fn handle_write_property_observed(
     service_data: &[u8],
     mut observer: Option<&mut dyn WriteCommitObserver>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
+    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<ObjectIdentifier, Error> {
     let request = WritePropertyRequest::decode(service_data)?;
     let oid = request.object_identifier;
@@ -463,6 +477,7 @@ pub(crate) fn handle_write_property_observed(
             value,
             request.priority,
             source,
+            command_origin,
         )
     });
     if let Err(error) = result {
@@ -489,6 +504,7 @@ fn write_with_source(
     value: PropertyValue,
     priority: Option<u8>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
+    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), Error> {
     crate::device_view::check_executor_owned_write(object.object_identifier(), property)?;
     if matches!(
@@ -501,5 +517,8 @@ fn write_with_source(
             return reporter.write_property(property, value, index, source);
         }
     }
-    object.write_property(property, index, value, priority)
+    match command_origin {
+        Some(origin) => object.write_property_from(property, index, value, priority, origin),
+        None => object.write_property(property, index, value, priority),
+    }
 }

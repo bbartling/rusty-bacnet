@@ -37,6 +37,7 @@ async fn mandatory_policy_send_capacity_denial_is_atomic() {
             None,
             PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw()),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await;
     assert!(
@@ -222,6 +223,7 @@ async fn mandatory_policy_confirmed_lease_route_and_closed_owner_denials() {
                     None,
                     change_value(PropertyIdentifier::AUDIT_LEVEL),
                     None,
+                    crate::LocalCommandSource::ServerDevice,
                 )
                 .await,
         );
@@ -258,6 +260,7 @@ async fn mandatory_policy_no_runtime_refuses_without_consuming_sequence() {
                         None,
                     ),
                     Some(&mut audit),
+                    None,
                     None,
                 )
                 .map(|_| ())
@@ -298,7 +301,14 @@ async fn mandatory_policy_invalid_noop_null_and_ordinary_writes_keep_their_contr
         PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw()),
     ] {
         f.server
-            .write_local(&target, PropertyIdentifier::AUDIT_LEVEL, None, value, None)
+            .write_local(
+                &target,
+                PropertyIdentifier::AUDIT_LEVEL,
+                None,
+                value,
+                None,
+                crate::LocalCommandSource::ServerDevice,
+            )
             .await
             .unwrap();
     }
@@ -333,6 +343,7 @@ async fn mandatory_policy_invalid_noop_null_and_ordinary_writes_keep_their_contr
                 index,
                 value,
                 priority,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .unwrap_err();
@@ -348,6 +359,7 @@ async fn mandatory_policy_invalid_noop_null_and_ordinary_writes_keep_their_contr
             None,
             PropertyValue::CharacterString("ordinary".into()),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -553,6 +565,7 @@ async fn mandatory_policy_admitted_worker_is_joined_after_cancelled_stop() {
             None,
             change_value(PropertyIdentifier::AUDIT_LEVEL),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

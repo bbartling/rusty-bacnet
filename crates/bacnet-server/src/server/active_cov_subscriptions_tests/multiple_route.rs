@@ -144,7 +144,14 @@ async fn changed_value_uses(wire: &Wire, route: &Peer, object: ObjectIdentifier,
     use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
     wire.sent.lock().unwrap().clear();
     wire.server
-        .write_local(&object, PV, None, PropertyValue::Real(value), None)
+        .write_local(
+            &object,
+            PV,
+            None,
+            PropertyValue::Real(value),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
         .await
         .unwrap();
     let frames = wire.sent.lock().unwrap().clone();

@@ -105,7 +105,13 @@ async fn delayed_target_audit_local_send_clears_command_before_ack_then_stop_kee
             PropertyIdentifier::MAXIMUM_SEND_DELAY,
         ] {
             assert!(reporter
-                .write_property(property, None, PropertyValue::Null, None)
+                .write_property_from(
+                    property,
+                    None,
+                    PropertyValue::Null,
+                    None,
+                    &crate::command_source::test_origin()
+                )
                 .is_err());
         }
     }

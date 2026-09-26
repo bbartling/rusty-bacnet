@@ -14,11 +14,12 @@ fn unreadable_parameters_cancel_pending_countdown() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(97, "AV-unreadable-params", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -56,19 +57,21 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(98, "AV-custom-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(10.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(2),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -102,11 +105,12 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
 
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(20.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
@@ -124,11 +128,12 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
 
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(100.0),
             Some(2),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
@@ -139,11 +144,12 @@ fn failed_indexed_reset_cannot_resume_after_restoring_the_reference() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(103, "AV-reset-retry", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -242,11 +248,12 @@ fn source_less_unindexed_cov_does_not_reuse_a_retargeted_baseline() {
         .unwrap();
     db.get_mut(&second_oid)
         .unwrap()
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(100.0),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     db.get_mut(&second_oid)
@@ -266,11 +273,12 @@ fn source_write_failure_allows_one_immediate_change_of_state_transition() {
     let mut db = ObjectDatabase::new();
     let mut target = BinaryValueObject::new(106, "BV-source-failure").unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(1),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -298,11 +306,12 @@ fn invalidation_survives_failed_state_and_source_writes() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(107, "AV-double-failure", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -372,11 +381,12 @@ fn source_less_custom_enrollment_retains_indexed_delay_behavior() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(108, "AV-indexed-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -396,11 +406,12 @@ fn replacing_the_monitored_object_restarts_an_indexed_delay() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(109, "AV-replaced-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -413,11 +424,12 @@ fn replacing_the_monitored_object_restarts_an_indexed_delay() {
 
     let mut replacement = AnalogValueObject::new(109, "AV-replacement", 62).unwrap();
     replacement
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     db.add(Box::new(replacement)).unwrap();
@@ -433,11 +445,12 @@ fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(110, "AV-event-state-order", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -467,11 +480,12 @@ fn same_state_transition_does_not_depend_on_rewriting_event_state() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(111, "AV-same-state-write", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(10.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -493,11 +507,12 @@ fn same_state_transition_does_not_depend_on_rewriting_event_state() {
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(20.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
@@ -508,11 +523,12 @@ fn mutation_then_error_is_visible_but_never_reports_a_transition() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(112, "AV-landed-error", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -556,11 +572,12 @@ fn detached_enrollment_does_not_resume_state_after_target_replacement() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(113, "AV-detached-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -575,11 +592,12 @@ fn detached_enrollment_does_not_resume_state_after_target_replacement() {
     db.remove(&target_oid).unwrap().unwrap();
     let mut replacement = AnalogValueObject::new(113, "AV-detached-replacement", 62).unwrap();
     replacement
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     db.add(Box::new(replacement)).unwrap();

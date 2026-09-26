@@ -381,6 +381,13 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
             } else if kind == ObjectType::ANALOG_VALUE {
                 expected_optional.splice(2..2, commandable);
             }
+            if kind != ObjectType::ANALOG_INPUT {
+                expected_required.extend([
+                    P::VALUE_SOURCE,
+                    P::VALUE_SOURCE_ARRAY,
+                    P::LAST_COMMAND_TIME,
+                ]);
+            }
             if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
                 expected_optional.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
             }
@@ -406,8 +413,8 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
                     .filter_map(|row| {
                         let selected = row.property_identifier != P::PROPERTY_LIST
                             && match selector {
-                                P::REQUIRED => row.conformance.is_required(),
-                                P::OPTIONAL => !row.conformance.is_required(),
+                                P::REQUIRED => row.is_required(),
+                                P::OPTIONAL => !row.is_required(),
                                 _ => true,
                             };
                         selected.then_some(row.property_identifier)
@@ -483,6 +490,8 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
                 } else {
                     all.push(P::ALARM_VALUE);
                 }
+                all.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
                 let optional: Vec<_> = all
                     .iter()
                     .copied()
@@ -493,15 +502,22 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
                     (P::EVENT_DETECTION_ENABLE, detection_enabled),
                 ] {
                     object
-                        .write_property(p, None, PropertyValue::Boolean(enabled), None)
+                        .write_property_from(
+                            p,
+                            None,
+                            PropertyValue::Boolean(enabled),
+                            None,
+                            &crate::command_source::test_origin(),
+                        )
                         .unwrap();
                 }
                 object
-                    .write_property(
+                    .write_property_from(
                         P::PRESENT_VALUE,
                         None,
                         PropertyValue::Enumerated(1),
                         Some(8),
+                        &crate::command_source::test_origin(),
                     )
                     .unwrap();
                 let mut db = ObjectDatabase::new();
@@ -595,7 +611,8 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
                     .unwrap();
             }
             if kind != ObjectType::MULTI_STATE_INPUT {
-                all.extend([P::VALUE_SOURCE, P::LAST_COMMAND_TIME]);
+                all.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
             let optional: Vec<_> = all
                 .iter()

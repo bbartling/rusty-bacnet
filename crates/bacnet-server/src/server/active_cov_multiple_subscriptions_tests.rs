@@ -161,6 +161,7 @@ async fn active_cov_multiple_wire_groups_references_by_recipient_and_form() {
             None,
             PropertyValue::Real(2.5),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

@@ -84,3 +84,33 @@ mod wpm_prefix_commit;
 mod write_cov_who;
 mod write_property_name;
 mod write_validation;
+
+// Isolated handler fixtures explicitly assert a standalone writer. Live ingress
+// derivation is tested separately through the running server's wire dispatcher.
+fn sourced_wp(db: &mut ObjectDatabase, data: &[u8]) -> Result<ObjectIdentifier, Error> {
+    handle_write_property_observed(
+        db,
+        data,
+        None,
+        None,
+        Some(&crate::command_source::test_origin()),
+    )
+}
+fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentifier>, Error> {
+    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
+    match handle_write_property_multiple_observed(
+        db,
+        data,
+        &mut snapshots,
+        None,
+        None,
+        None,
+        Some(&crate::command_source::test_origin()),
+    ) {
+        WritePropertyMultipleOutcome::Success { committed_oids } => Ok(committed_oids),
+        WritePropertyMultipleOutcome::Error { error, .. } => Err(error),
+        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject {
+            reason: reason.to_raw(),
+        }),
+    }
+}

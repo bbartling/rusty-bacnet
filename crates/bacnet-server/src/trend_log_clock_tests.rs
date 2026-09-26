@@ -40,11 +40,12 @@ fn database(clock: Arc<dyn ClockReader>) -> (Arc<RwLock<ObjectDatabase>>, Object
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(1, "AV", 95).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(42.5),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let mut trend = TrendLogObject::new(1, "Trend", 8).unwrap();

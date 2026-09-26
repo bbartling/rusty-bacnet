@@ -115,6 +115,7 @@ async fn dcc_states_preserve_delayed_detection_but_suppress_distribution() {
                 None,
                 PropertyValue::Real(81.0),
                 None,
+                crate::LocalCommandSource::ServerDevice,
             )
             .await
             .expect("local Present_Value write should seed delayed detection");

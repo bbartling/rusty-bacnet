@@ -361,11 +361,12 @@ mod tests {
         let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
         ao.set_min_pres_value(0.0);
         ao.set_max_pres_value(100.0);
-        ao.write_property(
+        ao.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(150.0),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         let ao_oid = ao.object_identifier();
@@ -374,7 +375,7 @@ mod tests {
         let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
         av.set_min_pres_value(0.0);
         av.set_max_pres_value(100.0);
-        av.set_present_value(-10.0);
+        av.set_relinquish_default(-10.0).unwrap();
         let av_oid = av.object_identifier();
         db.add(Box::new(av)).unwrap();
 
@@ -412,11 +413,12 @@ mod tests {
 
         let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
         av.configure_fault_out_of_range(10.0, 20.0).unwrap();
-        av.write_property(
+        av.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(9.0),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         let av_oid = av.object_identifier();
@@ -453,7 +455,7 @@ mod tests {
     // can receive non-finite application data without changing their API.
     #[cfg(not(debug_assertions))]
     #[test]
-    fn non_finite_configured_analogs_create_no_change_and_keep_owned_faults() {
+    fn non_finite_configured_input_create_no_change_and_keep_owned_faults() {
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
         ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
         ai.set_present_value(21.0);
@@ -461,16 +463,8 @@ mod tests {
         ai.set_present_value(f32::NAN);
         let ai_oid = ai.object_identifier();
 
-        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-        av.configure_fault_out_of_range(10.0, 20.0).unwrap();
-        av.set_present_value(9.0);
-        av.evaluate_reliability_internal().unwrap();
-        av.set_present_value(f32::INFINITY);
-        let av_oid = av.object_identifier();
-
         let mut db = ObjectDatabase::new();
         db.add(Box::new(ai)).unwrap();
-        db.add(Box::new(av)).unwrap();
         let detector = FaultDetector::default();
 
         assert!(detector.evaluate(&mut db).is_empty());
@@ -478,10 +472,6 @@ mod tests {
         assert_eq!(
             read_reliability(&db, ai_oid),
             Reliability::OVER_RANGE.to_raw()
-        );
-        assert_eq!(
-            read_reliability(&db, av_oid),
-            Reliability::UNDER_RANGE.to_raw()
         );
 
         let ai = db.get_mut(&ai_oid).unwrap();
@@ -492,11 +482,12 @@ mod tests {
             None,
         )
         .unwrap();
-        ai.write_property(
+        ai.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(9.0),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         ai.write_property(
@@ -506,27 +497,12 @@ mod tests {
             None,
         )
         .unwrap();
-        db.get_mut(&av_oid)
-            .unwrap()
-            .write_property(
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                PropertyValue::Real(21.0),
-                Some(8),
-            )
-            .unwrap();
-
         let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 2);
+        assert_eq!(changes.len(), 1);
         assert!(changes.contains(&ReliabilityChange {
             object_id: ai_oid,
             old_reliability: Reliability::OVER_RANGE.to_raw(),
             new_reliability: Reliability::UNDER_RANGE.to_raw(),
-        }));
-        assert!(changes.contains(&ReliabilityChange {
-            object_id: av_oid,
-            old_reliability: Reliability::UNDER_RANGE.to_raw(),
-            new_reliability: Reliability::OVER_RANGE.to_raw(),
         }));
     }
 

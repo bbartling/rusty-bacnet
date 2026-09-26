@@ -84,6 +84,14 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
             if kind == ObjectType::ANALOG_OUTPUT {
                 required.splice(8..8, commandable);
             }
+            if kind != ObjectType::ANALOG_INPUT {
+                expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                let end = required.len() - 1;
+                required.splice(
+                    end..end,
+                    [P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME],
+                );
+            }
             if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
                 expected.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
             }
@@ -105,7 +113,10 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
                         && row.property_identifier == P::PRESENT_VALUE
                     {
                         PropertyConformance::RequiredWrite
-                    } else if required.contains(&row.property_identifier) {
+                    } else if required.contains(&row.property_identifier)
+                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
+                            .contains(&row.property_identifier)
+                    {
                         PropertyConformance::RequiredRead
                     } else {
                         PropertyConformance::Optional
@@ -172,6 +183,7 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
             for row in metadata {
                 let p = row.property_identifier;
                 let capability = match p {
+                    P::VALUE_SOURCE => PropertyWriteCapability::WhenCommandOwner,
                     p if (commandable && crate::common::is_commandable_property_writable(p))
                         || crate::common::is_common_writable(p) =>
                     {
@@ -196,8 +208,15 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                 assert_eq!(object.is_writable_property(p), capability.is_writable());
                 let index = (p == P::PRIORITY_ARRAY).then_some(8);
                 let value = object.read_property(p, index).unwrap();
-                let result = object.write_property(p, index, value, None);
-                let expected = capability == PropertyWriteCapability::Always
+                let result = object.write_property_from(
+                    p,
+                    index,
+                    value,
+                    None,
+                    &crate::command_source::test_origin(),
+                );
+                let expected = capability == PropertyWriteCapability::WhenCommandOwner
+                    || capability == PropertyWriteCapability::Always
                     || (capability == PropertyWriteCapability::WhenOutOfService && out_of_service);
                 assert_eq!(
                     result.is_ok(),
@@ -214,7 +233,13 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                 for p in [P::PRESENT_VALUE, P::RELINQUISH_DEFAULT] {
                     let index = (p == P::PRIORITY_ARRAY).then_some(8);
                     object
-                        .write_property(p, index, PropertyValue::Real(12.5), Some(8))
+                        .write_property_from(
+                            p,
+                            index,
+                            PropertyValue::Real(12.5),
+                            Some(8),
+                            &crate::command_source::test_origin(),
+                        )
                         .unwrap();
                 }
                 assert!(

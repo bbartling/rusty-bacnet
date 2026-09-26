@@ -22,7 +22,7 @@ fn wpm_handler_unknown_object_fails() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn wpm_handler_commits_successful_prefix() {
     request.encode(&mut buf).unwrap();
 
     // Should fail because OBJECT_TYPE is read-only
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 
     let after_hl = match db
         .get(&oid)
@@ -128,7 +128,7 @@ fn wpm_prefix_commit_keeps_out_of_service_transition() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
     let obj = db.get_mut(&oid).unwrap();
     assert_eq!(
         obj.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
@@ -297,11 +297,12 @@ fn make_db_with_commandable_ao() -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
     // Establish an active command at priority 8.
-    ao.write_property(
+    ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(50.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
@@ -364,7 +365,7 @@ fn wpm_prefix_commit_keeps_commandable_priority_slot() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 
     assert_eq!(priority_slot(&db, &oid, 8), Some(99.0));
     assert_eq!(
@@ -425,7 +426,7 @@ fn wpm_prefix_commit_keeps_relinquished_priority_slot() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 
     assert_eq!(
         priority_slot(&db, &oid, 8),
@@ -453,11 +454,12 @@ fn wpm_prefix_commit_keeps_noncommandable_present_value_analoginput() {
         None,
     )
     .unwrap();
-    ai.write_property(
+    ai.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(10.0),
         None,
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
@@ -500,7 +502,7 @@ fn wpm_prefix_commit_keeps_noncommandable_present_value_analoginput() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 
     let post_pv = db
         .get(&oid)
@@ -516,11 +518,12 @@ fn wpm_prefix_commit_keeps_commandable_priority_slot_multistate_output() {
     let mut db = ObjectDatabase::new();
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
     // Active command at priority 8 = state 2.
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(2),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 1).unwrap();
@@ -557,7 +560,7 @@ fn wpm_prefix_commit_keeps_commandable_priority_slot_multistate_output() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 
     assert_eq!(priority_slot(&db, &oid, 8), Some(3.0));
     assert_eq!(priority_slot(&db, &oid, 16), None);
@@ -601,7 +604,7 @@ fn wpm_prefix_commit_keeps_commandable_priority_16_slot() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    assert!(sourced_wpm(&mut db, &buf).is_err());
 
     assert_eq!(priority_slot(&db, &oid, 16), Some(99.0));
     assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));

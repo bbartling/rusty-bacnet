@@ -123,8 +123,8 @@ class EventInformationNativeTests(unittest.IsolatedAsyncioTestCase):
             await server.start()
             for instance in range(1, 6):
                 oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, instance)
-                await server.write_property_local(oid, PropertyIdentifier.HIGH_LIMIT, PropertyValue.real(1))
-                await server.write_property_local(oid, PropertyIdentifier.LIMIT_ENABLE, PropertyValue.bit_string(6, b"\x40"))
+                await server.write_property_local(oid, PropertyIdentifier.HIGH_LIMIT, PropertyValue.real(1), source_object=None)
+                await server.write_property_local(oid, PropertyIdentifier.LIMIT_ENABLE, PropertyValue.bit_string(6, b"\x40"), source_object=None)
                 await server.set_present_value_local(oid, PropertyValue.real(2))
             for routed in [False, True]:
                 for segmented in [False, True]:

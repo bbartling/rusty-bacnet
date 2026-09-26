@@ -306,7 +306,7 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
     // --- Commandable analogValue:2 ---
     let mut commandable_av = AnalogValueObject::new(2, "commandable-av", UNITS_DEGF)?;
     commandable_av.set_description("Commandable Analog Value (Simulated)");
-    commandable_av.set_present_value(0.0);
+    commandable_av.set_relinquish_default(0.0)?;
     commandable_av.write_property(
         PropertyIdentifier::COV_INCREMENT,
         None,

@@ -142,8 +142,14 @@ impl Fixture {
                 PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
             ),
         ] {
-            msi.write_property(property, None, value, None)
-                .unwrap_or_else(|e| panic!("{property:?} must be writable since #229: {e:?}"));
+            msi.write_property_from(
+                property,
+                None,
+                value,
+                None,
+                &crate::command_source::test_origin(),
+            )
+            .unwrap_or_else(|e| panic!("{property:?} must be writable since #229: {e:?}"));
         }
         let fixture = Self::from_object(Box::new(msi)).await;
         fixture.add_alarm_value(ALARM_STATE as u8).await;
@@ -198,7 +204,13 @@ impl Fixture {
             .await
             .get_mut(&self.oid)
             .expect("the MSI is in the database")
-            .write_property(PropertyIdentifier::PRESENT_VALUE, None, value, None)
+            .write_property_from(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                value,
+                None,
+                &crate::command_source::test_origin(),
+            )
             .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
 
         BACnetServer::<RecordingTransport>::fire_event_notifications(
@@ -420,7 +432,14 @@ async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
             PropertyValue::Enumerated(1),
         ),
     ] {
-        bi.write_property(property, None, value, None).unwrap();
+        bi.write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
     }
     let bi_fixture = Fixture::from_object(Box::new(bi)).await;
     bi_fixture
@@ -456,7 +475,14 @@ async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
             PropertyValue::Enumerated(1),
         ),
     ] {
-        bv.write_property(property, None, value, None).unwrap();
+        bv.write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
     }
     let bv_fixture = Fixture::from_object(Box::new(bv)).await;
     bv_fixture
@@ -484,7 +510,14 @@ async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
             PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
         ),
     ] {
-        msv.write_property(property, None, value, None).unwrap();
+        msv.write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
     }
     let msv_fixture = Fixture::from_object(Box::new(msv)).await;
     msv_fixture.add_alarm_value(2).await;

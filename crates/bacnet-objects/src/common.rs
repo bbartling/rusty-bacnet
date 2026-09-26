@@ -408,39 +408,6 @@ pub(crate) fn recalculate_from_priority_array<T: Copy>(
         .unwrap_or(relinquish_default)
 }
 
-/// Value source tracking for commandable objects.
-///
-/// Stores the source that last wrote to each priority array slot.
-#[derive(Debug, Clone)]
-pub struct ValueSourceTracking {
-    /// Value_Source: the source of the current present_value.
-    /// Null if no command is active (relinquish default).
-    pub value_source: bacnet_types::primitives::PropertyValue,
-    /// Value_Source_Array[16]: source per priority slot.
-    #[allow(dead_code)]
-    pub value_source_array: [bacnet_types::primitives::PropertyValue; 16],
-    /// Last_Command_Time: timestamp of the last write.
-    pub last_command_time: bacnet_types::primitives::BACnetTimeStamp,
-    /// Command_Time_Array[16]: timestamp per priority slot.
-    #[allow(dead_code)]
-    pub command_time_array: [bacnet_types::primitives::BACnetTimeStamp; 16],
-}
-
-impl Default for ValueSourceTracking {
-    fn default() -> Self {
-        Self {
-            value_source: bacnet_types::primitives::PropertyValue::Null,
-            value_source_array: std::array::from_fn(|_| {
-                bacnet_types::primitives::PropertyValue::Null
-            }),
-            last_command_time: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
-            command_time_array: std::array::from_fn(|_| {
-                bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0)
-            }),
-        }
-    }
-}
-
 /// Compute the Current_Command_Priority property value.
 ///
 /// Returns the 1-based index of the active priority array slot, or

@@ -52,7 +52,7 @@ pub fn handle_create_object(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    handle_create_object_observed(db, service_data, buf, &mut None)
+    handle_create_object_observed(db, service_data, buf, &mut None, None)
 }
 
 /// Preserve the public handler's result while exposing only the actual requested,
@@ -62,6 +62,7 @@ pub(crate) fn handle_create_object_observed(
     service_data: &[u8],
     buf: &mut BytesMut,
     target: &mut Option<ObjectIdentifier>,
+    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), Error> {
     *target = None;
     let request = CreateObjectRequest::decode(service_data)?;
@@ -176,7 +177,17 @@ pub(crate) fn handle_create_object_observed(
 
     // Apply initial values; on failure, remove the created object.
     for pv in &request.list_of_initial_values {
-        let (value, _) = match bacnet_encoding::primitives::decode_application_value(&pv.value, 0) {
+        let decoded = if pv.property_identifier == PropertyIdentifier::VALUE_SOURCE {
+            super::write_property::decode_write_property_value(
+                pv.property_identifier,
+                pv.property_array_index,
+                &pv.value,
+            )
+            .map(|value| (value, pv.value.len()))
+        } else {
+            bacnet_encoding::primitives::decode_application_value(&pv.value, 0)
+        };
+        let (value, _) = match decoded {
             Ok(v) => v,
             Err(e) => {
                 let _ = db.remove(&created_oid);
@@ -196,11 +207,13 @@ pub(crate) fn handle_create_object_observed(
             }
         }
         if let Some(obj) = db.get_mut(&created_oid) {
-            if let Err(e) = obj.write_property(
+            if let Err(e) = crate::command_source::write_target(
+                obj,
                 pv.property_identifier,
                 pv.property_array_index,
                 value,
                 pv.priority,
+                command_origin,
             ) {
                 let _ = db.remove(&created_oid);
                 return Err(e);

@@ -190,7 +190,7 @@ fn inhibited_ai_and_av_range_faults_skip_and_reenable_current_evaluation() {
 
     let mut av = AnalogValueObject::new(1, "AV-range", 62).unwrap();
     av.configure_fault_out_of_range(10.0, 20.0).unwrap();
-    av.set_present_value(9.0);
+    av.set_relinquish_default(9.0).unwrap();
     write_bool(&mut av, INHIBIT, true);
     assert_eq!(
         av.evaluate_reliability_internal().unwrap(),

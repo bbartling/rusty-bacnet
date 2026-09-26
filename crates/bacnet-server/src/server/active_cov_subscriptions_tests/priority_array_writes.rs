@@ -100,7 +100,13 @@ fn priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only() {
         );
         let default = object.read_property(PV, None).unwrap();
         object
-            .write_property(PV, None, default.clone(), Some(8))
+            .write_property_from(
+                PV,
+                None,
+                default.clone(),
+                Some(8),
+                &crate::command_source::test_origin(),
+            )
             .unwrap();
         assert_eq!(object.read_property(PA, Some(8)).unwrap(), default);
         assert_eq!(
@@ -116,7 +122,13 @@ fn priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only() {
             }
         }
         object
-            .write_property(PV, None, PropertyValue::Null, Some(8))
+            .write_property_from(
+                PV,
+                None,
+                PropertyValue::Null,
+                Some(8),
+                &crate::command_source::test_origin(),
+            )
             .unwrap();
         assert_eq!(
             object.read_property(PA, Some(8)).unwrap(),
@@ -205,7 +217,14 @@ async fn priority_array_wire_and_local_denial_preserves_all_three_writer_states(
                 );
                 denied(
                     wire.server
-                        .write_local(&oid, PA, index, attempted, None)
+                        .write_local(
+                            &oid,
+                            PA,
+                            index,
+                            attempted,
+                            None,
+                            crate::LocalCommandSource::ServerDevice,
+                        )
                         .await,
                 );
                 assert_eq!(
@@ -310,7 +329,14 @@ async fn priority_array_wpm_denial_keeps_prefix_and_reports_failed_coordinate() 
                     first
                 );
                 wire.server
-                    .write_local(&oid, PV, None, PropertyValue::Null, Some(8))
+                    .write_local(
+                        &oid,
+                        PV,
+                        None,
+                        PropertyValue::Null,
+                        Some(8),
+                        crate::LocalCommandSource::ServerDevice,
+                    )
                     .await
                     .unwrap();
             }

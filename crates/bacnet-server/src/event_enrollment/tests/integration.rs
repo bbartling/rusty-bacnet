@@ -282,8 +282,13 @@ impl BACnetObject for ReferenceValueObject {
             self.reference = Some(value);
             Ok(())
         } else {
-            self.inner
-                .write_property(property, array_index, value, priority)
+            self.inner.write_property_from(
+                property,
+                array_index,
+                value,
+                priority,
+                &crate::command_source::test_origin(),
+            )
         }
     }
 
@@ -402,11 +407,12 @@ fn failed_source_write_does_not_persist_dependent_state() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(99, "AV-failed-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -433,11 +439,12 @@ fn source_write_failure_still_allows_an_immediate_stateless_transition() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(100, "AV-immediate-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -471,19 +478,21 @@ fn failed_state_reset_clears_source_ownership() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(101, "AV-state-reset", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(10.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(2),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();

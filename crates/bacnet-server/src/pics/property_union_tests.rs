@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::file::FileObject;
+use bacnet_objects::property_metadata::PropertyConformance;
 use bacnet_types::enums::FileAccessMethod;
 
 fn file(instance: u32, record: bool, read_only: bool) -> FileObject {

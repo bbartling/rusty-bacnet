@@ -13,7 +13,15 @@ fn read(object: &dyn BACnetObject, property: P) -> V {
     object.read_property(property, None).unwrap()
 }
 fn write(object: &mut dyn BACnetObject, property: P, value: V) {
-    object.write_property(property, None, value, None).unwrap();
+    object
+        .write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
 }
 fn snapshot(object: &dyn BACnetObject) -> Vec<V> {
     [
@@ -73,7 +81,7 @@ fn scalar_null_relinquishment_preserves_common_description_and_oos_state() {
                 (P::OUT_OF_SERVICE, V::CharacterString("invalid".into())),
             ] {
                 assert!(
-                    matches!(object.write_property(property,None,value,None),Err(bacnet_types::error::Error::Protocol{code,..}) if code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32)
+                    matches!(object.write_property_from(property,None,value,None, &crate::command_source::test_origin()),Err(bacnet_types::error::Error::Protocol{code,..}) if code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32)
                 );
                 assert_eq!(snapshot(&*object), before);
             }
@@ -174,13 +182,31 @@ fn scalar_null_relinquishment_skips_multistate_reevaluation_but_boolean_write_ke
 fn scalar_null_does_not_replace_commandable_or_nullable_property_semantics() {
     let mut object = AnalogOutputObject::new(1, "commandable", 62).unwrap();
     object
-        .write_property(P::PRESENT_VALUE, None, V::Real(10.0), Some(8))
+        .write_property_from(
+            P::PRESENT_VALUE,
+            None,
+            V::Real(10.0),
+            Some(8),
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
     object
-        .write_property(P::PRESENT_VALUE, None, V::Real(20.0), Some(4))
+        .write_property_from(
+            P::PRESENT_VALUE,
+            None,
+            V::Real(20.0),
+            Some(4),
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
     object
-        .write_property(P::PRESENT_VALUE, None, V::Null, Some(4))
+        .write_property_from(
+            P::PRESENT_VALUE,
+            None,
+            V::Null,
+            Some(4),
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
     assert_eq!(read(&object, P::PRESENT_VALUE), V::Real(10.0));
     let mut schedule = ScheduleObject::new(1, "nullable", V::Unsigned(2)).unwrap();

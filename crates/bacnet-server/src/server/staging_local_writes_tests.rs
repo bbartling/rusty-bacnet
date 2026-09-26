@@ -157,6 +157,7 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
             None,
             PropertyValue::Real(15.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -168,6 +169,22 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
                 0
             } else {
                 1
+            })
+        );
+    }
+    for target in targets.into_iter().take(2) {
+        let PropertyValue::ApplicationData(bytes) =
+            read(&server, target, PropertyIdentifier::VALUE_SOURCE, None).await
+        else {
+            panic!("typed source")
+        };
+        let (actual, end) = bacnet_encoding::constructed::decode_value_source(&bytes, 0).unwrap();
+        assert_eq!(end, bytes.len());
+        assert_eq!(
+            actual,
+            bacnet_types::constructed::BACnetValueSource::Object(BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: source
             })
         );
     }
@@ -211,6 +228,7 @@ async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stag
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -221,6 +239,7 @@ async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stag
             None,
             PropertyValue::Real(15.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -235,6 +254,7 @@ async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stag
             None,
             PropertyValue::Boolean(false),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -289,6 +309,7 @@ async fn target_failure_faults_source_and_current_success_recovers() {
             None,
             PropertyValue::Real(15.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -408,6 +429,7 @@ async fn retained_stage_does_not_emit_a_duplicate_plan() {
             None,
             PropertyValue::Real(10.5),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -419,6 +441,7 @@ async fn retained_stage_does_not_emit_a_duplicate_plan() {
             None,
             PropertyValue::Real(11.5),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

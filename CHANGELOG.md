@@ -7,14 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Track command sources end to end for Analog Output/Value, Binary Output/Value
+  and Multi-state Output/Value (#824). Object-owned state retains original
+  correction owners, typed current/per-priority sources, and a wrapping sequence
+  timestamp for effective command changes. Network, local, Schedule, Staging and
+  CreateObject commands carry real origins; corrections accept valid claims only
+  from the original owner. Pre-1.0 API changes add `write_property_from`, require
+  `LocalCommandSource` on Rust local writes and keyword `source_object` on Python
+  local writes, and remove the unsourced Analog Value setter. Context-free tracked
+  writes fail closed. Specialized source-property COV remains outside this change.
+
 - Schedule execution retains each local target's array index through the public
   `BACnetObject::tick_schedule` hook, endpoint forwarding and server write queue
   (#845). The hook now returns `Vec<BACnetObjectPropertyReference>` instead of
   object/property pairs. `List_Of_Object_Property_References` reads return
   `ApplicationData` containing concatenated context-tagged local reference bodies,
   including optional indices. Failed targets do not stop later writes; the list
-  remains non-array, and write priority remains fixed at 16. Remote targets,
-  configurable priority and source-origin propagation are not added.
+  remains non-array, and write priority remains fixed at 16. Remote targets
+  and configurable priority are not added. Command-source propagation is described
+  in the #824 entry above.
 
 - `ObjectIdentifier` now validates both its 10-bit object type and 22-bit
   instance at construction (#847). `new_addressable` shares these checks and
@@ -32,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle none, object and address alternatives; decoding consumes one choice
   and returns the next offset. This pre-1.0 type change adds no source producer,
   Value_Source property-array behavior, correction authorization or Python API.
-  Issues #824 and #823 remain open.
+  The end-to-end #824 producer is described above; specialized COV #823 remains separate.
 
 - `Priority_Array` is read-only across all 20 first-party commandable object
   families that previously accepted direct property writes (#842). WP, WPM,

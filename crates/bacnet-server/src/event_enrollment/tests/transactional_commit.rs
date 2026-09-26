@@ -74,11 +74,12 @@ fn stock_transition_commits_timestamp_before_report_token_escapes() {
         )
         .unwrap();
     monitored
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(50.0),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let report = evaluate_event_enrollments_report(&mut db, 1);
@@ -181,11 +182,12 @@ fn same_state_transition_still_commits_ack_and_history() {
         )
         .unwrap();
     monitored
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(20.0),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
 
@@ -217,11 +219,12 @@ fn setup_counted_delayed_enrollment() -> (
     let mut monitored = AnalogValueObject::new(41, "AV-counted", 62).unwrap();
     for index in [1, 2] {
         monitored
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(90.0),
                 Some(index),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
     }
@@ -354,11 +357,12 @@ fn private_state_failure_is_reported_and_suppresses_transition() {
     let mut db = ObjectDatabase::new();
     let mut monitored = AnalogValueObject::new(42, "AV-state-failure", 62).unwrap();
     monitored
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let monitored_oid = monitored.object_identifier();
@@ -385,11 +389,12 @@ fn unsupported_atomic_hook_fails_closed_without_consuming_sequence() {
     let mut db = ObjectDatabase::new();
     let mut monitored = AnalogValueObject::new(43, "AV-unsupported-hook", 62).unwrap();
     monitored
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let monitored_oid = monitored.object_identifier();

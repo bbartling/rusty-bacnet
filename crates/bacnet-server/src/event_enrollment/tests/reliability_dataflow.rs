@@ -55,11 +55,12 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
 
     let mut target = AnalogValueObject::new(307, "AV-reliability-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(-1.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -110,11 +111,12 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
         .unwrap();
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(11.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
 

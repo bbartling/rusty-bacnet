@@ -50,7 +50,7 @@ pub(crate) async fn tick_schedules_with_life_safety_cov(
                         "Schedule value changed, writing to controlled properties"
                     );
                     for reference in refs {
-                        writes.push((reference, value.clone()));
+                        writes.push((oid, reference, value.clone()));
                     }
                 }
             }
@@ -60,17 +60,27 @@ pub(crate) async fn tick_schedules_with_life_safety_cov(
             &db_w,
             writes
                 .iter()
-                .map(|(reference, _)| reference.object_identifier),
+                .map(|(_, reference, _)| reference.object_identifier),
         );
         let mut successful_oids = Vec::new();
-        for (reference, value) in writes {
+        for (initiator, reference, value) in writes {
+            let origin = crate::command_source::resolve_local(
+                &db_w,
+                crate::LocalCommandSource::Object(initiator),
+            )
+            .ok();
             let target_oid = reference.object_identifier;
             let prop_id = reference.property_identifier;
             if let Some(target_obj) = db_w.get_mut(&target_oid) {
                 let prop = PropertyIdentifier::from_raw(prop_id);
-                if let Err(e) =
-                    target_obj.write_property(prop, reference.property_array_index, value, None)
-                {
+                if let Err(e) = crate::command_source::write_target(
+                    target_obj,
+                    prop,
+                    reference.property_array_index,
+                    value,
+                    None,
+                    origin.as_ref(),
+                ) {
                     warn!(
                         target = %target_oid,
                         property = prop_id,

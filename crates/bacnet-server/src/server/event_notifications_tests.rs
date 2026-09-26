@@ -723,6 +723,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
             None,
             PropertyValue::Real(2.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect("local write should succeed");
@@ -822,6 +823,7 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
             None,
             PropertyValue::Real(2.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect("local write should seed delayed transition");

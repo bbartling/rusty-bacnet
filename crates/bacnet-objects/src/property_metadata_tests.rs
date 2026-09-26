@@ -456,11 +456,12 @@ fn property_metadata_contract_write_capabilities_match_dispatch() {
         );
     }
     assert!(binary_input
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(1),
             None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     assert!(binary_input
@@ -480,11 +481,12 @@ fn property_metadata_contract_write_capabilities_match_dispatch() {
         )
         .unwrap();
     binary_input
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(1),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     binary_input
@@ -576,6 +578,7 @@ fn property_metadata_binary_commandable_exact_required_sets() {
                 P::POLARITY,
             ]);
         }
+        required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
         required.push(P::PROPERTY_LIST);
         assert_unique_and_canonical(object.as_ref());
         assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));

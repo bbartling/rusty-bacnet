@@ -33,8 +33,8 @@ pub struct MultiStateValueObject {
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
-    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
-    value_source: common::ValueSourceTracking,
+    /// Implemented paired command-source tracking (Clause 19.5).
+    value_source: crate::command_source::ValueSourceTracking,
 }
 
 impl MultiStateValueObject {
@@ -65,7 +65,7 @@ impl MultiStateValueObject {
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
             event_history: EventHistory::default(),
-            value_source: common::ValueSourceTracking::default(),
+            value_source: crate::command_source::ValueSourceTracking::default(),
         })
     }
 
@@ -198,6 +198,13 @@ impl BACnetObject for MultiStateValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if let Some(result) = self
+            .value_source
+            .read(property, array_index, &self.priority_array)
+        {
+            return result;
+        }
+
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
                 self.status_flags,
@@ -231,15 +238,6 @@ impl BACnetObject for MultiStateValueObject {
             p if p == PropertyIdentifier::NUMBER_OF_STATES => {
                 Ok(PropertyValue::Unsigned(self.number_of_states as u64))
             }
-            p if p == PropertyIdentifier::VALUE_SOURCE => {
-                Ok(self.value_source.value_source.clone())
-            }
-            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
-                match self.value_source.last_command_time {
-                    BACnetTimeStamp::SequenceNumber(n) => u64::from(n),
-                    _ => 0,
-                },
-            )),
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, |v: u32| PropertyValue::Unsigned(
                     v as u64
@@ -275,26 +273,59 @@ impl BACnetObject for MultiStateValueObject {
         }
     }
 
-    fn write_property(
+    fn write_property_from(
         &mut self,
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
+        origin: &crate::command_source::CommandOrigin,
     ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) && array_index.is_some()
+        {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return self.value_source.correct(value, priority, origin);
+        }
         if property == PropertyIdentifier::PRESENT_VALUE {
             let num_states = self.number_of_states;
-            return common::write_priority_array!(self, value, priority, |v| {
-                if let PropertyValue::Unsigned(u) = v {
-                    if u < 1 || u > num_states as u64 {
-                        Err(common::value_out_of_range_error())
+            return crate::command_source::write_sourced_priority!(
+                self,
+                value,
+                priority,
+                origin,
+                |v| {
+                    if let PropertyValue::Unsigned(u) = v {
+                        if u < 1 || u > num_states as u64 {
+                            Err(common::value_out_of_range_error())
+                        } else {
+                            Ok(u as u32)
+                        }
                     } else {
-                        Ok(u as u32)
+                        Err(common::invalid_data_type_error())
                     }
-                } else {
-                    Err(common::invalid_data_type_error())
                 }
-            });
+            );
+        }
+        self.write_property(property, array_index, value, priority)
+    }
+
+    fn write_property(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) {
+            return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::STATE_TEXT {
             match array_index {
@@ -427,11 +458,12 @@ mod detection_enable_tests {
         );
         msv.event_detector.alarm_values = vec![2];
         msv.event_detector.time_delay = 2;
-        msv.write_property(
+        msv.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(2),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         assert_eq!(msv.evaluate_intrinsic_reporting(), None);

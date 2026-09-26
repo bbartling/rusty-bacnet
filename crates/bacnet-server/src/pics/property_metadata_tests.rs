@@ -413,6 +413,13 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
             if configuration & 4 != 0 {
                 expected.push((P::MAX_PRES_VALUE, true, false));
             }
+            if kind != ObjectType::ANALOG_INPUT {
+                expected.extend([
+                    (P::VALUE_SOURCE, false, true),
+                    (P::VALUE_SOURCE_ARRAY, false, false),
+                    (P::LAST_COMMAND_TIME, false, false),
+                ]);
+            }
             let required = object.required_properties();
             let mut db = ObjectDatabase::new();
             db.add(object).unwrap();
@@ -488,7 +495,13 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                     (P::EVENT_DETECTION_ENABLE, detection_enabled),
                 ] {
                     object
-                        .write_property(p, None, PropertyValue::Boolean(enabled), None)
+                        .write_property_from(
+                            p,
+                            None,
+                            PropertyValue::Boolean(enabled),
+                            None,
+                            &crate::command_source::test_origin(),
+                        )
                         .unwrap();
                 }
                 let optional = kind == ObjectType::BINARY_VALUE;
@@ -507,6 +520,11 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                     expected.insert(20, (P::POLARITY, false, false));
                     expected.insert(5, (P::FEEDBACK_VALUE, true, true));
                 }
+                expected.extend([
+                    (P::VALUE_SOURCE, false, true),
+                    (P::VALUE_SOURCE_ARRAY, false, false),
+                    (P::LAST_COMMAND_TIME, false, false),
+                ]);
                 expected.push((P::PROPERTY_LIST, false, false));
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
@@ -583,7 +601,13 @@ fn pics_multistate_property_metadata_is_exact() {
                     (P::EVENT_DETECTION_ENABLE, detection_enabled),
                 ] {
                     object
-                        .write_property(p, None, PropertyValue::Boolean(enabled), None)
+                        .write_property_from(
+                            p,
+                            None,
+                            PropertyValue::Boolean(enabled),
+                            None,
+                            &crate::command_source::test_origin(),
+                        )
                         .unwrap();
                 }
                 let mut expected = base.to_vec();
@@ -605,8 +629,9 @@ fn pics_multistate_property_metadata_is_exact() {
                 }
                 if kind != ObjectType::MULTI_STATE_INPUT {
                     expected.extend([
-                        (P::VALUE_SOURCE, true, false),
-                        (P::LAST_COMMAND_TIME, true, false),
+                        (P::VALUE_SOURCE, false, true),
+                        (P::VALUE_SOURCE_ARRAY, false, false),
+                        (P::LAST_COMMAND_TIME, false, false),
                     ]);
                 }
                 expected.push((P::PROPERTY_LIST, false, false));

@@ -113,7 +113,7 @@ class MutationPolicyWireTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await server.read_property(msi, alarms), before_list)
                     self.assertEqual(await client.atomic_read_file(address, file, "stream", requested_octet_count=64), before_file)
                     local_value = PropertyValue.real(17.0)
-                    await server.write_property_local(av, pv, local_value)
+                    await server.write_property_local(av, pv, local_value, source_object=None)
                     self.assertEqual(await client.read_property(address, av, pv), local_value)
         finally:
             await server.stop()

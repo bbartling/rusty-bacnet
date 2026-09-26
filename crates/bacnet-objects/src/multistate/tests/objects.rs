@@ -23,11 +23,12 @@ fn msi_read_number_of_states() {
 #[test]
 fn msi_write_denied_when_in_service() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 4).unwrap();
-    let result = msi.write_property(
+    let result = msi.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(2),
         None,
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -42,11 +43,12 @@ fn msi_write_allowed_when_out_of_service() {
         None,
     )
     .unwrap();
-    msi.write_property(
+    msi.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         None,
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = msi
@@ -66,19 +68,21 @@ fn msi_write_out_of_range_rejected() {
     )
     .unwrap();
     assert!(msi
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     assert!(msi
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(5),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
 }
@@ -97,11 +101,12 @@ fn msi_read_reliability_default() {
 #[test]
 fn mso_write_with_priority() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = mso
@@ -117,11 +122,12 @@ fn mso_write_with_priority() {
 #[test]
 fn mso_relinquish_falls_to_default() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(4),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -129,11 +135,12 @@ fn mso_relinquish_falls_to_default() {
             .unwrap(),
         PropertyValue::Unsigned(4)
     );
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -147,19 +154,21 @@ fn mso_relinquish_falls_to_default() {
 fn mso_out_of_range_rejected() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
     assert!(mso
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     assert!(mso
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(6),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
 }
@@ -187,11 +196,12 @@ fn msv_read_present_value_default() {
 #[test]
 fn msv_write_with_priority() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(2),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let val = msv
@@ -207,11 +217,12 @@ fn msv_write_with_priority() {
 #[test]
 fn msv_relinquish_falls_to_default() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -219,11 +230,12 @@ fn msv_relinquish_falls_to_default() {
             .unwrap(),
         PropertyValue::Unsigned(3)
     );
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -262,19 +274,21 @@ fn msv_read_relinquish_default() {
 fn msv_write_out_of_range_rejected() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
     assert!(msv
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     assert!(msv
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(4),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
 }
@@ -282,11 +296,12 @@ fn msv_write_out_of_range_rejected() {
 #[test]
 fn msv_write_wrong_type_rejected() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    let result = msv.write_property(
+    let result = msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(1.0),
         None,
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -317,11 +332,12 @@ fn msv_read_reliability_default() {
 #[test]
 fn msv_present_value_priority_write_value() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -339,18 +355,20 @@ fn msv_present_value_priority_write_value() {
 #[test]
 fn msv_present_value_priority_relinquish() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -401,28 +419,31 @@ fn msv_present_value_priority_range_validation() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
     // Value 0 is out of range (valid: 1..=5)
     assert!(msv
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     // Value 6 is out of range
     assert!(msv
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(6),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     // Value 5 is valid
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(5),
         Some(1),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 }
@@ -432,11 +453,12 @@ fn msv_present_value_priority_range_validation() {
 #[test]
 fn mso_present_value_priority_write_value() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -454,18 +476,20 @@ fn mso_present_value_priority_write_value() {
 #[test]
 fn mso_present_value_priority_relinquish() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     // Fall back to relinquish default (1)
@@ -640,11 +664,12 @@ fn mso_one_state_initial_and_relinquish_default_in_range() {
     // Command the only valid state (1) at priority 8, then relinquish slot 8 so
     // the effective value genuinely falls back to the in-range default (not a
     // no-op relinquish of an already-empty slot).
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(1),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -652,11 +677,12 @@ fn mso_one_state_initial_and_relinquish_default_in_range() {
             .unwrap(),
         PropertyValue::Unsigned(1)
     );
-    mso.write_property(
+    mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -681,11 +707,12 @@ fn msv_one_state_initial_and_relinquish_default_in_range() {
     );
     // Command the only valid state (1) at priority 8, then relinquish slot 8 so
     // the effective value genuinely falls back to the in-range default.
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(1),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -693,11 +720,12 @@ fn msv_one_state_initial_and_relinquish_default_in_range() {
             .unwrap(),
         PropertyValue::Unsigned(1)
     );
-    msv.write_property(
+    msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -720,11 +748,12 @@ fn msi_one_state_write_out_of_range_rejected() {
     )
     .unwrap();
     assert!(msi
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(2),
-            None
+            None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
 }

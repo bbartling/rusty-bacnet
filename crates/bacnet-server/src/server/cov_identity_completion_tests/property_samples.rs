@@ -11,11 +11,12 @@ async fn selected_change(kind: CovNotificationKind, property: PropertyIdentifier
             .await
             .get_mut(&object())
             .unwrap()
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(10.0),
                 Some(8),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
         let mut sub = proposal(kind, false, property);

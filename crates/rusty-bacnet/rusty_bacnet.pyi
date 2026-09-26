@@ -2521,8 +2521,14 @@ class BACnetServer:
         value: PropertyValue,
         priority: Optional[int] = None,
         array_index: Optional[int] = None,
+        *,
+        source_object: Optional[ObjectIdentifier],
     ) -> None:
-        """Write a property on a local object."""
+        """Write locally with an explicit source: None selects the server Device.
+
+        A source object must exist in the database. Tracked commands require a
+        concrete server Device; corrections retain the original Device owner.
+        """
         ...
 
     async def set_present_value_local(

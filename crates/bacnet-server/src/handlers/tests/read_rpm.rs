@@ -8,6 +8,7 @@ mod averaging;
 mod calendar;
 mod color;
 mod command;
+mod command_source;
 mod elevator;
 mod file;
 mod group;
@@ -203,7 +204,7 @@ fn write_property_handler_success() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    handle_write_property(&mut db, &buf).unwrap();
+    sourced_wp(&mut db, &buf).unwrap();
 
     // Verify the value was written
     let obj = db.get(&oid).unwrap();

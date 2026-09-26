@@ -606,6 +606,7 @@ async fn audit_reporter_noncommandable_present_value_ignores_priority_filter() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
