@@ -5,10 +5,9 @@ use crate::local_device::selected_device;
 ///
 /// Looks up the object and property in the database, encodes the value,
 /// and returns the ReadPropertyACK service bytes. This low-level helper has
-/// no server context: the Device's `Active_COV_Subscriptions` and
-/// `Active_COV_Multiple_Subscriptions` read as the object's standalone empty
-/// lists. A running `BACnetServer` projects those properties live from its COV
-/// subscription table instead.
+/// no executor context: a built-in Device follows its declared service profile,
+/// including absent or empty COV lists. Running server reads use the executor's
+/// property definitions and live subscription table instead.
 pub fn handle_read_property(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -18,28 +17,28 @@ pub fn handle_read_property(
     read_property_request_observed(db, None, &request, buf, |_, _, _| {})
 }
 
-/// Server ReadProperty evaluator over one decoded request. `live` carries the
-/// request-local Device COV lists; observations carry only execution
+/// ReadProperty evaluator over one decoded request. `view` carries executor-owned
+/// Device definitions and request-local COV lists; observations carry only execution
 /// outcomes, never the read value.
 pub(crate) fn read_property_request_observed(
     db: &ObjectDatabase,
-    live: Option<&LiveDeviceCov>,
+    view: Option<&DeviceReadContext<'_>>,
     request: &ReadPropertyRequest,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
 ) -> Result<(), Error> {
     let lookup_oid = resolve_device_wildcard(db, &request.object_identifier);
-    let result = read_property_decoded(db, live, request, lookup_oid, buf);
+    let result = read_property_decoded(db, view, request, lookup_oid, buf);
     completed(lookup_oid, request, &result);
     result
 }
 
 /// Evaluate one property read with ReadProperty error precedence: unknown
-/// object, then non-array index, then the live Device projection or the
-/// object's own reader.
+/// object, then non-array index using the effective property definition, then
+/// the executor view or raw object's reader.
 pub(crate) fn read_property_value(
     db: &ObjectDatabase,
-    live: Option<&LiveDeviceCov>,
+    view: Option<&DeviceReadContext<'_>>,
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
     array_index: Option<u32>,
@@ -48,6 +47,10 @@ pub(crate) fn read_property_value(
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
+
+    let served = view.map(|view| view.object(object));
+    let object: &dyn bacnet_objects::traits::BACnetObject =
+        served.as_ref().map_or(object, |served| served);
 
     // Clause 15.5.1.3: an array index on a non-array property is rejected
     // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY. The array/list decision
@@ -61,22 +64,19 @@ pub(crate) fn read_property_value(
         });
     }
 
-    match live.and_then(|live| live.resolve(lookup_oid, property)) {
-        Some(value) => Ok(value),
-        None => object.read_property(property, array_index),
-    }
+    object.read_property(property, array_index)
 }
 
 fn read_property_decoded(
     db: &ObjectDatabase,
-    live: Option<&LiveDeviceCov>,
+    view: Option<&DeviceReadContext<'_>>,
     request: &ReadPropertyRequest,
     lookup_oid: ObjectIdentifier,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     let value = read_property_value(
         db,
-        live,
+        view,
         lookup_oid,
         request.property_identifier,
         request.property_array_index,

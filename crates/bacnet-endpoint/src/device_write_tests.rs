@@ -451,3 +451,6 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
     client.stop().await.unwrap();
     session.stop().await.unwrap();
 }
+
+#[path = "device_execution_tests.rs"]
+mod execution;

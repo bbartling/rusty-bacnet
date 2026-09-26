@@ -1,15 +1,22 @@
 use super::*;
 use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
+use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_property::ReadPropertyRequest;
 
-/// ReadProperty for a responder without COV service execution: the Device's
-/// `Active_COV_Subscriptions` and `Active_COV_Multiple_Subscriptions` read as
-/// their standalone empty lists.
+/// ReadProperty under the narrow responder's actual RP[/WP] execution profile.
 pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
+    writes: bool,
 ) -> Apdu {
-    read_property_response_observed(db, None, request, |_, _, _, _| {}).await
+    read_property_response_observed(
+        db,
+        None,
+        DeviceExecution::Endpoint { writes },
+        request,
+        |_, _, _, _| {},
+    )
+    .await
 }
 
 /// Request-local live Device `Active_COV_Subscriptions` and
@@ -53,9 +60,10 @@ pub(super) async fn read_property_multiple_observed(
         Some(selection) => Some(active_cov_snapshot(&db, cov_table, selection).await),
         None => None,
     };
+    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref());
     handlers::rpm_budgeted_request_observed(
         &db,
-        live.as_ref(),
+        Some(&view),
         &request,
         service_ack,
         budget,
@@ -66,6 +74,7 @@ pub(super) async fn read_property_multiple_observed(
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
     cov_table: Option<&RwLock<CovSubscriptionTable>>,
+    execution: DeviceExecution,
     request: &ConfirmedRequestPdu,
     mut completed: impl FnMut(
         &ObjectDatabase,
@@ -88,9 +97,10 @@ pub(super) async fn read_property_response_observed(
                 }
                 _ => None,
             };
+            let view = DeviceReadContext::new(&db, execution, live.as_ref());
             handlers::read_property_request_observed(
                 &db,
-                live.as_ref(),
+                Some(&view),
                 &decoded,
                 &mut service_ack,
                 |oid, request, result| completed(&db, oid, request, result),

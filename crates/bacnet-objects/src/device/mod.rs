@@ -352,7 +352,9 @@ impl DeviceObject {
 
     /// Replace the advertised executed-service set (`Protocol_Services_Supported`,
     /// Clause 12.11). For deployments whose dispatch surface differs from the
-    /// bundled server's [`EXECUTED_SERVICES`].
+    /// bundled server's [`EXECUTED_SERVICES`]. This is a standalone declaration,
+    /// not a runtime dispatch switch. Raw COV presence follows these services;
+    /// a running server overrides served Device data with its own execution view.
     ///
     /// The production is closed at you-Are (bit 48); values past it are not
     /// representable and are dropped.
@@ -389,6 +391,23 @@ impl DeviceObject {
 
     fn clock_frame(&self) -> Option<ClockFrame> {
         self.clock.as_ref()?.read_clock()
+    }
+
+    fn cov_property_present(&self, property: PropertyIdentifier) -> bool {
+        match property {
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => {
+                self.configured_services_supported.iter().any(|service| {
+                    matches!(
+                        *service,
+                        ServiceSupported::SUBSCRIBE_COV | ServiceSupported::SUBSCRIBE_COV_PROPERTY
+                    )
+                })
+            }
+            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => self
+                .configured_services_supported
+                .contains(&ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE),
+            _ => true,
+        }
     }
 
     fn services_supported(&self) -> Vec<u8> {
@@ -525,7 +544,14 @@ impl BACnetObject for DeviceObject {
             // running `BACnetServer` owns both live lists in its COV
             // subscription table and projects them for network reads and
             // `read_local`.
-            return Ok(PropertyValue::ApplicationData(Vec::new()));
+            return if self.cov_property_present(property) {
+                Ok(PropertyValue::ApplicationData(Vec::new()))
+            } else {
+                Err(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            };
         }
 
         self.properties
@@ -604,3 +630,6 @@ impl BACnetObject for DeviceObject {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod service_profile_tests;

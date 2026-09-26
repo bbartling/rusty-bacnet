@@ -8,11 +8,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Get a reference to the shared object database.
     ///
-    /// Objects read through this handle return standalone object data. In
-    /// particular, the Device's `Active_COV_Subscriptions` and
-    /// `Active_COV_Multiple_Subscriptions` are always their empty default
-    /// lists: the live lists are owned by the server's COV subscription table.
-    /// Use [`read_local`](Self::read_local) for the live server view.
+    /// Objects read through this handle return raw standalone data. A built-in
+    /// Device follows its declared service profile, with absent or empty COV lists.
+    /// Served Device definitions and live lists belong to the executor: use
+    /// [`read_local`](Self::read_local) for that view. Normal Device mutation and
+    /// replacement cannot change the served execution profile.
     /// Install Device objects before startup: changing their membership through
     /// this handle does not rebind the discovery limiter's startup identity.
     pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
@@ -23,7 +23,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// With multiple Device objects, the lowest instance is selected for Device
     /// wildcard reads and the live COV lists, independent of insertion order.
-    /// Other Device objects retain their standalone empty COV lists.
+    /// Other Device objects receive empty COV lists. Every served Device uses
+    /// the executor's services, COV presence and property definitions, even after
+    /// public profile mutation, replacement or custom object installation.
     ///
     /// This is the live local read boundary: it applies the same Device
     /// wildcard resolution, `UNKNOWN_OBJECT` and `PROPERTY_IS_NOT_AN_ARRAY`
@@ -57,7 +59,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ),
             None => None,
         };
-        handlers::read_property_value(&db, live.as_ref(), lookup_oid, property, array_index)
+        let view = crate::device_view::DeviceReadContext::new(
+            &db,
+            crate::device_view::DeviceExecution::FullServer,
+            live.as_ref(),
+        );
+        handlers::read_property_value(&db, Some(&view), lookup_oid, property, array_index)
     }
 
     /// Create a cloneable handle for unsolicited I-Am announcements.
@@ -76,12 +83,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.comm_state.load(Ordering::Acquire)
     }
 
-    /// Generate a PICS document from the current object database and server configuration.
+    /// Generate PICS from the database and the server's effective Device execution view.
+    /// Standalone [`PicsGenerator`](crate::pics::PicsGenerator) keeps raw-object semantics.
     ///
     /// The caller must supply a [`PicsConfig`] for fields not available from the server
     /// (vendor name, model, firmware revision, etc.).
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
         let db = self.db.read().await;
-        crate::pics::PicsGenerator::new(&db, &self.config, pics_config).generate()
+        crate::pics::PicsGenerator::new(&db, &self.config, pics_config)
+            .for_server()
+            .generate()
     }
 }

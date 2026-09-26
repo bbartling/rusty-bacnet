@@ -224,7 +224,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         property,
                         array_index,
                         priority,
-                    } => object.write_property(property, array_index, value, priority),
+                    } => {
+                        crate::device_view::check_executor_owned_write(*oid, property)?;
+                        object.write_property(property, array_index, value, priority)
+                    }
                     LocalWrite::ApplicationInputPresentValue => {
                         object.set_present_value_internal(value)
                     }

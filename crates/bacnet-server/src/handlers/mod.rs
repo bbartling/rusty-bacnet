@@ -34,11 +34,12 @@ use bacnet_types::MacAddr;
 
 use bytes::BytesMut;
 
-use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
+use crate::cov::active::LiveCovSelection;
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot,
     CovSubscriptionTable, MultipleContextKey, SubscriberEndpoint,
 };
+use crate::device_view::DeviceReadContext;
 
 mod alarm_event;
 mod audit_log_query;

@@ -445,7 +445,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        let device_write_target = self.validate_device_writes()?;
+        let device_write_target = self.validate_device_execution()?;
         let source_routes = self.prepare_source_audit_reporter()?;
         self.commit_device_write_profile(device_write_target);
         if self.lifecycle.compare_exchange(

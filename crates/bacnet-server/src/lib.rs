@@ -2,6 +2,7 @@
 
 pub mod audit_notification;
 pub mod cov;
+mod device_view;
 pub mod event_enrollment;
 pub mod fault_detection;
 pub mod handlers;
