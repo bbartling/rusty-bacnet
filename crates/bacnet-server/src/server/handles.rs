@@ -13,11 +13,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// `Active_COV_Multiple_Subscriptions` are always their empty default
     /// lists: the live lists are owned by the server's COV subscription table.
     /// Use [`read_local`](Self::read_local) for the live server view.
+    /// Install Device objects before startup: changing their membership through
+    /// this handle does not rebind the discovery limiter's startup identity.
     pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
         &self.db
     }
 
     /// Read one local property through the server's ReadProperty evaluator.
+    ///
+    /// With multiple Device objects, the lowest instance is selected for Device
+    /// wildcard reads and the live COV lists, independent of insertion order.
+    /// Other Device objects retain their standalone empty COV lists.
     ///
     /// This is the live local read boundary: it applies the same Device
     /// wildcard resolution, `UNKNOWN_OBJECT` and `PROPERTY_IS_NOT_AN_ARRAY`

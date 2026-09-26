@@ -81,10 +81,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
 
             let db = db.read().await;
-            let device_oid = db
-                .list_objects()
-                .into_iter()
-                .find(|oid| oid.object_type() == ObjectType::DEVICE);
+            let device_oid = crate::local_device::selected_device(&db);
 
             if let Some(device_oid) = device_oid {
                 let instance = device_oid.instance_number();
@@ -183,10 +180,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
 
             let db = db.read().await;
-            let device_oid = db
-                .list_objects()
-                .into_iter()
-                .find(|oid| oid.object_type() == ObjectType::DEVICE);
+            let device_oid = crate::local_device::selected_device(&db);
 
             if let Some(device_oid) = device_oid {
                 match handlers::handle_who_has(&db, &req.service_request, device_oid) {

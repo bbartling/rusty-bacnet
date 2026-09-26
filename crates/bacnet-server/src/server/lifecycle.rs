@@ -55,11 +55,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
-        let device_instance = db
-            .list_objects()
-            .into_iter()
-            .find(|oid| oid.object_type() == ObjectType::DEVICE)
-            .map(|oid| oid.instance_number());
+        let device_instance =
+            crate::local_device::selected_device(&db).map(|oid| oid.instance_number());
         let (discovery_limiter, time_sync_limiter) = request_limiters(&config, device_instance);
         let db = Arc::new(RwLock::new(db));
         let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());

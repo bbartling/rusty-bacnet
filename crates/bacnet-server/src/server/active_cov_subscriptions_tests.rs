@@ -6,6 +6,7 @@ use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use support::*;
 
+mod device_selection;
 mod support;
 
 // Shares this suite's wire harness; Multiple contexts are a separate property.
@@ -451,11 +452,12 @@ async fn active_cov_read_only_list_scope_local_read_and_stop() {
         .unwrap();
     let selected =
         handlers::resolve_device_wildcard(&*wire.server.database().read().await, &wildcard());
-    let (live_device, standalone) = if selected == device() {
-        (device(), other)
-    } else {
-        (other, device())
-    };
+    assert_eq!(
+        selected,
+        device(),
+        "lowest Device instance owns the live lists"
+    );
+    let (live_device, standalone) = (device(), other);
     assert_eq!(wire.read(live_device, ACTIVE, None).await.unwrap(), live);
     assert_eq!(wire.read(wildcard(), ACTIVE, None).await.unwrap(), live);
     assert_eq!(

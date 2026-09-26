@@ -1,4 +1,5 @@
 use super::*;
+use crate::local_device::selected_device;
 
 /// Handle a ReadProperty request against standalone object data.
 ///
@@ -93,14 +94,6 @@ fn read_property_decoded(
 
     ack.encode(buf);
     Ok(())
-}
-
-/// The local Device that wildcard instance 4194303 names. Ordinary and live
-/// Device reads share this one selection.
-fn selected_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
-    db.list_objects()
-        .into_iter()
-        .find(|candidate| candidate.object_type() == ObjectType::DEVICE)
 }
 
 fn is_device_wildcard(oid: &ObjectIdentifier) -> bool {
