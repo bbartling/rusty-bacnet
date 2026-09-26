@@ -704,3 +704,6 @@ mod life_safety;
 
 #[path = "source_reporter_policy_tests.rs"]
 mod object_policy;
+
+#[path = "source_reporter_schedule_tests.rs"]
+mod schedule;

@@ -22,6 +22,38 @@
  ],
  "rows": [
   {
+   "id": "BACNET-12-SCHEDULE-LOCAL-REFERENCES",
+   "standard_anchor": "Clause 12.24 Table 12-28 (printed308/PDF310), output continuation (printed309/PDF311), reference property (printed311/PDF313); Clause21 BACnetDeviceObjectPropertyReference (printed891/PDF893)",
+   "priority": "P1",
+   "requirement_summary": "Configured local Schedule references retain optional target array indices through tick execution. List_Of_Object_Property_References reads as concatenated context-tagged local DeviceObjectPropertyReference bodies, with the optional Device member absent. Failed targets do not prevent later writes.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/traits.rs",
+    "crates/bacnet-objects/src/schedule/mod.rs",
+    "crates/bacnet-endpoint/src/source_reporter.rs",
+    "crates/bacnet-server/src/schedule.rs",
+    "crates/bacnet-encoding/src/constructed/object_property_reference.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/schedule/tests.rs::tick_schedule_returns_value_and_refs_on_change",
+    "crates/bacnet-endpoint/src/source_reporter_schedule_tests.rs::source_reporter_forwards_complete_schedule_targets",
+    "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_indexed_target_and_later_unindexed_target_survive_failure",
+    "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_unindexed_command_retains_fixed_priority_sixteen",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/schedule.rs::rpm_schedule_indexed_reads_and_reference_wire_bytes"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_indexed_target_and_later_unindexed_target_survive_failure",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/schedule.rs::rpm_schedule_indexed_reads_and_reference_wire_bytes",
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Schedule reference correction",
+    "docs/rust-api.md Schedule & Notification"
+   ],
+   "notes": "Refs #845. Evidence is limited to the existing local-reference profile and fixed read-only priority16. Full typed hook references replace the lossy tuple API; shared public reference encoder produces local DOPR member bodies without a duplicate codec or aliases. Direct fixed-clock ticks prove indexed STATE_TEXT[2] updates only that element, continue after invalid index3, and preserve unindexed writes. Fixed RP/legacy and budgeted RPM bytes cover indexed plus unindexed concatenation, empty list, and list-own nonarray refusal. Existing Schedule evaluation/Out_Of_Service and Life Safety delta controls remain. No remote writes, configurable priority, source-origin propagation or whole-Schedule conformance claim; #824/#823 remain open."
+  },
+  {
    "id": "BACNET-12-AUDIT-REPORTER-DELAY",
    "standard_anchor": "Clause 12.63 / Table 12-82, printed page 619 / PDF page 621; Maximum_Send_Delay and Send_Now printed pages 621-622 / PDF pages 623-624; Clause 19.6.6 and Table 19-5 (partial-profile loss filtering remains unresolved)",
    "priority": "P1",

@@ -960,6 +960,22 @@ the schedule; remote/indexed reference execution is not added.
 | `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
+`ScheduleObject::add_object_property_reference` retains a complete local
+`BACnetObjectPropertyReference`, including its optional target array index.
+The public `BACnetObject::tick_schedule` hook now returns
+`Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)>`; custom overrides
+must return the full references instead of object/property pairs. Endpoint
+forwarding and server execution preserve those coordinates. A failed target
+write does not prevent subsequent target writes. The current profile is
+local-only, with read-only `Priority_For_Writing` fixed at 16.
+
+`List_Of_Object_Property_References` now reads as `PropertyValue::ApplicationData`
+containing concatenated bare context-tagged local DeviceObjectPropertyReference
+bodies: object `[0]`, property `[1]`, optional target index `[2]`, and no Device
+member. RP and RPM emit these bytes unchanged; an empty list has an empty payload.
+The list property itself is not an array, so its own indexed requests still fail
+with `PROPERTY_IS_NOT_AN_ARRAY`. This correction adds no source-origin hooks.
+
 `AlertEnrollmentObject::new` now requires the initial
 `bacnet_types::primitives::ObjectIdentifier` reported by `Present_Value`.
 This is an intentional breaking correction: migrate two-argument callers by

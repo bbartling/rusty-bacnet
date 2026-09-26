@@ -25,7 +25,8 @@ use bacnet_objects::traits::{
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectPropertyReference,
+    BACnetObjectSelector,
 };
 use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
@@ -270,7 +271,7 @@ impl BACnetObject for SourceReporter {
         day_of_week: u8,
         hour: u8,
         minute: u8,
-    ) -> Option<(PropertyValue, Vec<(ObjectIdentifier, u32)>)> {
+    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
         self.wrapped.tick_schedule(day_of_week, hour, minute)
     }
 

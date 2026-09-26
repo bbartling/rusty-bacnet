@@ -49,8 +49,8 @@ pub(crate) async fn tick_schedules_with_life_safety_cov(
                         refs = refs.len(),
                         "Schedule value changed, writing to controlled properties"
                     );
-                    for (target_oid, prop_id) in refs {
-                        writes.push((target_oid, prop_id, value.clone()));
+                    for reference in refs {
+                        writes.push((reference, value.clone()));
                     }
                 }
             }
@@ -58,13 +58,19 @@ pub(crate) async fn tick_schedules_with_life_safety_cov(
 
         let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oids(
             &db_w,
-            writes.iter().map(|(target_oid, _, _)| *target_oid),
+            writes
+                .iter()
+                .map(|(reference, _)| reference.object_identifier),
         );
         let mut successful_oids = Vec::new();
-        for (target_oid, prop_id, value) in writes {
+        for (reference, value) in writes {
+            let target_oid = reference.object_identifier;
+            let prop_id = reference.property_identifier;
             if let Some(target_obj) = db_w.get_mut(&target_oid) {
                 let prop = PropertyIdentifier::from_raw(prop_id);
-                if let Err(e) = target_obj.write_property(prop, None, value, None) {
+                if let Err(e) =
+                    target_obj.write_property(prop, reference.property_array_index, value, None)
+                {
                     warn!(
                         target = %target_oid,
                         property = prop_id,
