@@ -31,6 +31,7 @@ pub(super) const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 
 pub(super) struct WireTransport {
     incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+    sent: Arc<std::sync::Mutex<Vec<Bytes>>>,
 }
 
 impl TransportPort for WireTransport {
@@ -40,10 +41,12 @@ impl TransportPort for WireTransport {
     async fn stop(&mut self) -> Result<(), Error> {
         Ok(())
     }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
+    async fn send_unicast(&self, npdu: &[u8], _: &[u8]) -> Result<(), Error> {
+        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
         Ok(())
     }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
+    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
         Ok(())
     }
     fn local_mac(&self) -> &[u8] {
@@ -266,33 +269,44 @@ pub(super) async fn exchange(
 pub(super) struct Wire {
     pub(super) server: BACnetServer<WireTransport>,
     pub(super) tx: mpsc::Sender<ReceivedNpdu>,
+    pub(super) sent: Arc<std::sync::Mutex<Vec<Bytes>>>,
     invoke_id: u8,
 }
 
 impl Wire {
     pub(super) async fn start(config: ServerConfig) -> Self {
+        Self::start_with_devices(config, &[DEVICE_INSTANCE]).await
+    }
+
+    pub(super) async fn start_with_devices(config: ServerConfig, instances: &[u32]) -> Self {
         let (tx, rx) = mpsc::channel(16);
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut db = ObjectDatabase::new();
-        db.add(Box::new(
-            DeviceObject::new(DeviceConfig {
-                instance: DEVICE_INSTANCE,
-                name: "Active COV Device".into(),
-                ..DeviceConfig::default()
-            })
-            .unwrap(),
-        ))
-        .unwrap();
+        for &instance in instances {
+            db.add(Box::new(
+                DeviceObject::new(DeviceConfig {
+                    instance,
+                    name: format!("Active COV Device {instance}"),
+                    ..DeviceConfig::default()
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        }
         let mut first = AnalogValueObject::new(1, "AV-1", 62).unwrap();
         first.set_present_value(20.0);
         db.add(Box::new(first)).unwrap();
         db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
             .unwrap();
-        let server = BACnetServer::start(config, db, WireTransport { incoming: Some(rx) })
-            .await
-            .unwrap();
+        let transport = WireTransport {
+            incoming: Some(rx),
+            sent: Arc::clone(&sent),
+        };
+        let server = BACnetServer::start(config, db, transport).await.unwrap();
         Self {
             server,
             tx,
+            sent,
             invoke_id: 0,
         }
     }

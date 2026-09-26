@@ -127,10 +127,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let (device_oid, clock_frame) = {
             let db = db.read().await;
-            let device_oid = db
-                .list_objects()
-                .into_iter()
-                .find(|o| o.object_type() == ObjectType::DEVICE)
+            let device_oid = crate::local_device::selected_device(&db)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
             let clock_frame = subscriptions
                 .iter()

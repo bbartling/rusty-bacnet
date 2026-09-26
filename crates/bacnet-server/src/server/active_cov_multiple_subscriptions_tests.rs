@@ -583,11 +583,12 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
         .unwrap();
     let selected =
         handlers::resolve_device_wildcard(&*wire.server.database().read().await, &wildcard());
-    let (live_device, standalone) = if selected == device() {
-        (device(), other)
-    } else {
-        (other, device())
-    };
+    assert_eq!(
+        selected,
+        device(),
+        "lowest Device instance owns the live lists"
+    );
+    let (live_device, standalone) = (device(), other);
     let empty = Vec::<u8>::new();
     assert_eq!(wire.read(live_device, MULTIPLE, None).await.unwrap(), live);
     assert_eq!(wire.read(standalone, MULTIPLE, None).await.unwrap(), empty);

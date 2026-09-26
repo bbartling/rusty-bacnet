@@ -17,7 +17,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{NetworkPriority, ObjectType, UnconfirmedServiceChoice};
+use bacnet_types::enums::{NetworkPriority, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -741,12 +741,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     limiter: Option<&Arc<DiscoveryLimiter>>,
 ) -> Result<(), Error> {
-    let device_oid = db
-        .read()
-        .await
-        .list_objects()
-        .into_iter()
-        .find(|oid| oid.object_type() == ObjectType::DEVICE)
+    let device_oid = crate::local_device::selected_device(&*db.read().await)
         .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
 
     // RB-16 alignment: this construction is field-for-field identical to
