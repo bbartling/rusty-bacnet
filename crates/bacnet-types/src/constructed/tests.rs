@@ -491,11 +491,15 @@ fn value_source_none_variant() {
 
 #[test]
 fn value_source_object_variant() {
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
-    let vs = BACnetValueSource::Object(dev_oid);
-    match vs {
-        BACnetValueSource::Object(oid) => assert_eq!(oid.instance_number(), 1),
-        _ => panic!("wrong variant"),
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let object = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 7).unwrap();
+    for device_identifier in [None, Some(device)] {
+        let reference = BACnetDeviceObjectReference {
+            device_identifier,
+            object_identifier: object,
+        };
+        let source = BACnetValueSource::Object(reference.clone());
+        assert_eq!(source, BACnetValueSource::Object(reference));
     }
 }
 

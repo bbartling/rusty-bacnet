@@ -95,6 +95,29 @@ let (value, bytes_consumed) = decode_application_value(&bytes, 0)?;
 assert_eq!(value, PropertyValue::Real(72.5));
 ```
 
+### ValueSource CHOICE
+
+`bacnet_types::constructed::BACnetValueSource` represents `None`,
+`Object(BACnetDeviceObjectReference)`, or `Address(BACnetAddress)`.
+The Object payload contains a required object identifier and an optional device
+identifier; it replaces the earlier bare ObjectIdentifier payload.
+
+`bacnet_encoding::constructed::encode_value_source(&mut BytesMut, &BACnetValueSource)`
+returns `Result<(), Error>` and appends one framed CHOICE. Invalid object-type or
+instance widths in either reference field, and unencodable MAC lengths, are rejected
+before changing the buffer.
+`decode_value_source(&[u8], offset)` returns `Result<(BACnetValueSource, usize), Error>`;
+the second value is the next absolute offset, and suffix bytes remain available.
+A consumer decoding a complete property payload must check that this offset equals
+the payload length. Array or stream consumers can decode subsequent choices.
+
+This generic datatype preserves wire-valid object types and wildcard instances,
+network zero and empty broadcast MAC addresses. Decoding does not establish that a
+source is an actual or authorized command origin. This codec foundation adds no
+object Value_Source producer, source-array property, or source-correction policy;
+those remain separate work under #824. The existing BACnetTimeStamp type and codec
+continue to serve timestamp encoding.
+
 ### APDU Types
 
 ```rust

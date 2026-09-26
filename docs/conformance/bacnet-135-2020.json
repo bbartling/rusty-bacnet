@@ -2221,6 +2221,35 @@
    "notes": "Needs service-by-service fixture coverage in later PRs."
   },
   {
+   "id": "BACNET-21-VALUE-SOURCE-CHOICE",
+   "standard_anchor": "Clause 21 BACnetValueSource, BACnetDeviceObjectReference and BACnetAddress; Clause 20.2.1 tag framing",
+   "priority": "P1",
+   "requirement_summary": "Typed ValueSource codec encodes/decodes none [0] NULL, object [1] DeviceObjectReference and address [2] BACnetAddress. Object retains optional device plus required object identifiers. The stream decoder returns the next absolute offset after one choice; required fields, primitive ranges and closing tags are validated.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/mod.rs",
+    "crates/bacnet-encoding/src/constructed/value_source.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-types/src/constructed/tests.rs::value_source_object_variant",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_all_choices_match_independent_wire_vectors",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_stream_offsets_and_encoder_append_preserve_surrounding_bytes"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_every_truncated_vector_and_invalid_start_without_panic",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_malformed_choices_members_and_framing",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_oid_width_is_atomic_for_both_reference_fields",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_device_instance_is_atomic",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_encode_invalid_object_instance_is_atomic"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md ValueSource CHOICE",
+    "CHANGELOG.md typed ValueSource codec prerequisite"
+   ],
+   "notes": "Bounded typed-codec prerequisite for #824; neither #824 nor #823 is closed. Golden bytes are independently derived from Clause21 productions and Clause20.2 OID fields, not round-trip-only evidence. Generic decoding preserves any legal 10-bit OID type/22-bit instance including wildcard and non-Device optional identifiers, network0 and empty MAC. Those forms are datatype acceptance, not trusted source provenance. Encoding validates fallible ranges before output mutation. No source producer, object property-array behavior, correction authorization, specialized COV, new PropertyValue variant or exact-whole-value wrapper is added. A later complete-property writer must require end == payload.len(); concatenated consumers retain suffixes. Existing timestamp codecs are reused unchanged. Broader object/service support statuses are not promoted."
+  },
+  {
    "id": "BACNET-21-TIMESTAMP-CHOICE",
    "standard_anchor": "Clause 21 (BACnetTimeStamp), Clause 20.2.1.5",
    "priority": "P1",
