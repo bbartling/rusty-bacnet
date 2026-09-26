@@ -229,7 +229,11 @@ pub fn decode_destination_list(data: &[u8]) -> Result<Vec<BACnetDestination>, Er
 // ---------------------------------------------------------------------------
 
 /// Decode an application-tagged Unsigned member, returning raw value + offset.
-fn decode_app_unsigned(data: &[u8], offset: usize, what: &str) -> Result<(u64, usize), Error> {
+pub(super) fn decode_app_unsigned(
+    data: &[u8],
+    offset: usize,
+    what: &str,
+) -> Result<(u64, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
         return Err(Error::decoding(
@@ -247,7 +251,7 @@ fn decode_app_unsigned(data: &[u8], offset: usize, what: &str) -> Result<(u64, u
 }
 
 /// Decode an application-tagged OCTET STRING member.
-fn decode_app_octet_string(
+pub(super) fn decode_app_octet_string(
     data: &[u8],
     offset: usize,
     what: &str,

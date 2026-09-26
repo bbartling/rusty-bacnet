@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add the typed Clause 21 ValueSource CHOICE codec as a prerequisite for #824.
+  `BACnetValueSource::Object` now carries `BACnetDeviceObjectReference`, retaining
+  the optional device qualifier. `encode_value_source` and `decode_value_source`
+  handle none, object and address alternatives; decoding consumes one choice
+  and returns the next offset. This pre-1.0 type change adds no source producer,
+  Value_Source property-array behavior, correction authorization or Python API.
+  Issues #824 and #823 remain open.
+
 - `Priority_Array` is read-only across all 20 first-party commandable object
   families that previously accepted direct property writes (#842). WP, WPM,
   `write_local`, and raw trait writes now deny whole-array and indexed writes,

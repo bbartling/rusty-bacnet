@@ -665,8 +665,11 @@ pub struct BACnetCOVReference {
 /// BACnet Value Source — identifies the source of a property value write.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetValueSource {
+    /// No identified source: context [0] NULL.
     None,
-    Object(ObjectIdentifier),
+    /// Source object, optionally qualified by a device: constructed context [1].
+    Object(BACnetDeviceObjectReference),
+    /// Source network/MAC address: constructed context [2].
     Address(BACnetAddress),
 }
 

@@ -12,6 +12,7 @@ mod event_parameter;
 mod fault_parameter;
 mod recipient;
 mod staging;
+mod value_source;
 
 /// A local BACnetDeviceObjectPropertyReference for tests.
 pub(crate) fn dopr_ai(instance: u32, property: u32) -> BACnetDeviceObjectPropertyReference {
