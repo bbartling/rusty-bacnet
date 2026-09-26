@@ -14,15 +14,15 @@ use crate::property_metadata::{
 // Priority_Array O2, Relinquish_Default O2, Property_List R (plus
 // Object_Identifier/Object_Name/Object_Type R, Description O).
 // Order and shape match the Time Value precedent (mod.rs): Present_Value
-// RequiredRead/Always; Priority_Array/Relinquish_Default
-// Optional/Commandable/Always; Out_Of_Service Optional/Always; Reliability
-// Optional/ReadOnly; Property_List RequiredRead/ReadOnly (appended so the
-// projection helper omits it while required_properties keeps it).
-// Writability mirrors the shared dispatch arms exactly: Object_Name,
-// Description, and Out_Of_Service carry the routed common write arms, so
-// Always; Present_Value/Priority_Array/Relinquish_Default carry the
-// commandable arms, so Always. The legacy hardcoded writability set equals
-// the new Always set, so no writability change.
+// RequiredRead/Always; Priority_Array Optional/Commandable/ReadOnly;
+// Relinquish_Default Optional/Commandable/Always; Out_Of_Service
+// Optional/Always; Reliability Optional/ReadOnly; Property_List
+// RequiredRead/ReadOnly (appended so the projection helper omits it while
+// required_properties keeps it). Object_Name, Description, and Out_Of_Service
+// carry common write arms; Present_Value and Relinquish_Default carry the
+// commandable write arms. These properties are Always writable.
+// Priority_Array is intentionally read-only under §19.2.1; its slots change
+// through prioritized Present_Value commands, not direct property writes.
 // Only implemented rows are described. Units (table R on Integer,
 // Positive-Integer, and Large Analog Value) stays absent by design: adding
 // rows without dispatch would break the readable-rows contract. Bit_Text,

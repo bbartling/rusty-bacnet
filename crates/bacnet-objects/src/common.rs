@@ -894,8 +894,8 @@ pub(crate) fn is_common_writable(property: bacnet_types::enums::PropertyIdentifi
 }
 
 /// Writable properties for commandable Multi-State objects (MSO, MSV):
-/// commandable (PRIORITY_ARRAY + PRESENT_VALUE) + common + STATE_TEXT.
-/// Mirrors the `write_property` arms of MultiStateOutput/Value.
+/// PRESENT_VALUE + RELINQUISH_DEFAULT + common + STATE_TEXT. Priority_Array
+/// remains read-only, matching the MultiStateOutput/Value write dispatch.
 #[inline]
 pub(crate) fn is_multistate_commandable_writable(
     property: bacnet_types::enums::PropertyIdentifier,
