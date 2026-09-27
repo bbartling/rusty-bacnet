@@ -199,9 +199,10 @@ async fn stale_completion(
     kind: CovNotificationKind,
     confirmed: bool,
     change: Change,
+    property: PropertyIdentifier,
 ) {
     let fixture = Fixture::new(!confirmed);
-    let original = proposal(kind, confirmed, PropertyIdentifier::PRESENT_VALUE);
+    let original = proposal(kind, confirmed, property);
     let mut snapshots = vec![fixture
         .table
         .write()
@@ -305,7 +306,14 @@ async fn cov_identity_held_initial_completion_cannot_overwrite_renewal_or_recrea
     for kind in [CovNotificationKind::Single, CovNotificationKind::Multiple] {
         for confirmed in [false, true] {
             for change in [Change::Renew, Change::Recreate, Change::Remove] {
-                stale_completion(true, kind, confirmed, change).await;
+                stale_completion(
+                    true,
+                    kind,
+                    confirmed,
+                    change,
+                    PropertyIdentifier::PRESENT_VALUE,
+                )
+                .await;
             }
         }
     }
@@ -316,7 +324,14 @@ async fn cov_identity_held_fanout_completion_fences_each_reference_and_mode() {
     for kind in [CovNotificationKind::Single, CovNotificationKind::Multiple] {
         for confirmed in [false, true] {
             for change in [Change::Renew, Change::Recreate, Change::Remove] {
-                stale_completion(false, kind, confirmed, change).await;
+                stale_completion(
+                    false,
+                    kind,
+                    confirmed,
+                    change,
+                    PropertyIdentifier::PRESENT_VALUE,
+                )
+                .await;
             }
         }
     }
@@ -335,3 +350,7 @@ mod status_contract;
 mod route_migration;
 
 mod recipient_route;
+
+mod value_source;
+
+mod value_source_contract;

@@ -187,8 +187,24 @@ changes the effective `(value, active priority, source)` tuple. Noncurrent-only
 writes, source corrections and fallback configuration do not increment it.
 A NULL command retains the relinquishing writer in that slot's source (the
 selected interpretation of the last command), while the visible source moves to
-the next active slot or none. Source tracking does not add specialized COV support
-for these properties; that remains separate work under #823.
+the next active slot or none.
+
+Single and Multiple subscriptions to commandable `Value_Source` on these six
+families report `Present_Value`, `Status_Flags`, `Value_Source`,
+`Last_Command_Time`, and `Current_Command_Priority` together. The trigger uses
+the object's PV criterion (its `COV_Increment` for analogs), flags, source, or
+priority changes; time alone does not trigger. A Value_Source subscription's
+increment does not replace the analog object's increment. Initial and renewal
+reports contain the same five fields. A failed or malformed required companion
+suppresses that reference without advancing its delivered baseline; valid
+Multiple siblings continue. Overlapping Multiple selectors share captured values
+and deduplicate report fields, while only qualifying references advance their
+own baselines and contribute timestamps. A qualifying explicit property selector
+controls its field's timestamp, including an explicit false choice. For implicit
+companions only, this implementation merges timestamp intent from qualifying
+contributors; that overlap policy does not give unqualified selectors authority.
+Existing delivery, lifetime and renewal
+fences apply; same-generation concurrent completion ordering is separate (#826).
 
 ### APDU Types
 

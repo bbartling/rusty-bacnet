@@ -2327,7 +2327,38 @@
     "docs/python-api.md write_property_local",
     "CHANGELOG.md six-family command-source producer"
    ],
-   "notes": "Refs #824. This bounded six-family profile enables paired Value_Source, Value_Source_Array and Last_Command_Time metadata/Property_List/REQUIRED RPM/PICS. Actual origins validate source syntax; generic correction payload grammar stays broader. Remote correlation snapshots Unknown/Unique/Ambiguous independently of Audit; unique same-Device ownership permits address changes, otherwise retained actual address is required without conflicting unique IDs or ambiguity. Routed origin uses SNET/SADR, not router MAC. Trusted local owner is the selected concrete Device; optional initiator must exist under the mutation guard. Missing/wildcard-only identity fails closed for tracked writes, unrelated writes remain available. A valid correction may assert none, forwarded objects or addresses and never replaces the original token. New PV commands replace slot ownership. Sequence starts0, first effective tuple change1, wraps at65535, and excludes noncurrent-only updates, correction and fallback configuration. NULL retaining the relinquishing writer in its inactive slot is the selected documented inference. Context-free tracked writes and direct Priority_Array writes are denied; the unsourced AV setter is removed. WPM preserves prefix/coordinate, CreateObject rolls back initialization failure, factory AV remains unsupported, Schedule priority16 and complete target index remain unchanged, Staging generation checks remain. Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. No Command_Time_Array, specialized source-property COV (#823), broader object-family support or authentication claim."
+   "notes": "Refs #824. This bounded six-family profile enables paired Value_Source, Value_Source_Array and Last_Command_Time metadata/Property_List/REQUIRED RPM/PICS. Actual origins validate source syntax; generic correction payload grammar stays broader. Remote correlation snapshots Unknown/Unique/Ambiguous independently of Audit; unique same-Device ownership permits address changes, otherwise retained actual address is required without conflicting unique IDs or ambiguity. Routed origin uses SNET/SADR, not router MAC. Trusted local owner is the selected concrete Device; optional initiator must exist under the mutation guard. Missing/wildcard-only identity fails closed for tracked writes, unrelated writes remain available. A valid correction may assert none, forwarded objects or addresses and never replaces the original token. New PV commands replace slot ownership. Sequence starts0, first effective tuple change1, wraps at65535, and excludes noncurrent-only updates, correction and fallback configuration. NULL retaining the relinquishing writer in its inactive slot is the selected documented inference. Context-free tracked writes and direct Priority_Array writes are denied; the unsourced AV setter is removed. WPM preserves prefix/coordinate, CreateObject rolls back initialization failure, factory AV remains unsupported, Schedule priority16 and complete target index remain unchanged, Staging generation checks remain. Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. Specialized source-property COV is evidenced separately by BACNET-13-VALUE-SOURCE-COV. No Command_Time_Array, broader object-family support or authentication claim."
+  },
+  {
+   "id": "BACNET-13-VALUE-SOURCE-COV",
+   "standard_anchor": "Table 13-1 and Table 13-1a-2; Clause 19.5.2; Clauses 13.15, 13.16.3, 13.17.3.1.2.4 and 13.18.3.1.2.4",
+   "priority": "P1",
+   "requirement_summary": "Single and Multiple commandable Value_Source subscriptions on AO/AV/BO/BV/MSO/MSV report PV, Status_Flags, Value_Source, Last_Command_Time and Current_Command_Priority from one bounded capture. Object PV criteria, flags, source and priority trigger reports; command time alone does not.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-server/src/cov/value_source.rs",
+    "crates/bacnet-server/src/cov/observation.rs",
+    "crates/bacnet-server/src/server/cov_notifications.rs",
+    "crates/bacnet-server/src/server/cov_notifications/multiple.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source.rs::value_source_cov_initial_wire_five_fields",
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source.rs::value_source_cov_six_families_initial_renewal_and_triggers",
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source_contract.rs::value_source_cov_multiple_dedup_qualification_and_timestamps"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source_contract.rs::value_source_cov_failed_companion_atomicity_and_recovery",
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source_contract.rs::value_source_cov_time_only_and_noncommandable_control",
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source_contract.rs::value_source_cov_multiple_failed_source_keeps_healthy_sibling",
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source.rs::value_source_cov_stale_completion_and_cancellation_fences",
+    "crates/bacnet-server/src/server/cov_identity_completion_tests/value_source.rs::value_source_cov_send_failure_and_confirmation_baselines"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md Command-source tracking",
+    "CHANGELOG.md specialized commandable Value_Source COV"
+   ],
+   "notes": "Refs #823. Uses #824 producer state without changing source ownership or codecs. Analog PV uses the object increment, not the Value_Source reference increment; binary/multistate use any PV change. Complete constructed CHOICE and companion shape/retention validation precede admission. Initial/renewal force bypasses only the trigger. Overlapping Multiple fields reuse one capture; only qualified references complete baselines and contribute per-reference timestamps. A qualified explicit selector controls its field timestamp, including false; otherwise implicit companion timestamp intent is ORed as a local overlap policy, not a Standard tie-break claim. Unqualified selectors cannot suppress timestamps. Failed specialized references do not block independent healthy siblings. Existing route, generation, lifetime, budget and confirmed/unconfirmed completion rules remain. Same-generation completion ordering (#826), other object families and broader product conformance are not claimed."
   },
   {
    "id": "BACNET-21-TIMESTAMP-CHOICE",

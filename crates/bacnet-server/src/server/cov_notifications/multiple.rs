@@ -146,6 +146,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // One capture per object in this context; all selected values and
             // companions share this DB/snapshot borrow, never a cross-context cache.
             let mut flags_by_object = HashMap::new();
+            let mut sources_by_object = HashMap::new();
+            for sub in subscriptions {
+                let Some(object) = snapshot
+                    .filter(|object| object.object_identifier() == sub.monitored_object_identifier)
+                    .or_else(|| db.as_deref()?.get(&sub.monitored_object_identifier))
+                else {
+                    continue;
+                };
+                if sub.monitored_property != Some(PropertyIdentifier::VALUE_SOURCE)
+                    || !crate::cov::value_source::applies(object, PropertyIdentifier::VALUE_SOURCE)
+                {
+                    continue;
+                }
+                let flags = flags_by_object
+                    .entry(sub.monitored_object_identifier)
+                    .or_insert_with(|| crate::cov::flags::PreparedFlags::read(object));
+                if let Ok(flags) = flags {
+                    sources_by_object
+                        .entry(sub.monitored_object_identifier)
+                        .or_insert_with(|| {
+                            crate::cov::value_source::PreparedValueSource::read(object, flags)
+                        });
+                }
+            }
             for sub in subscriptions {
                 let Some(property_identifier) = sub.monitored_property else {
                     continue;
@@ -162,11 +186,51 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let Ok(flags) = flags else {
                     continue;
                 };
+                if crate::cov::value_source::applies(object, property_identifier) {
+                    if sub.monitored_property_array_index.is_some() {
+                        continue;
+                    }
+                    let Some(Ok(prepared)) =
+                        sources_by_object.get(&sub.monitored_object_identifier)
+                    else {
+                        continue;
+                    };
+                    if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
+                        continue;
+                    }
+                    candidates.push((
+                        sub,
+                        prepared
+                            .values()
+                            .into_iter()
+                            .map(|value| COVNotificationValue {
+                                property_identifier: value.property_identifier,
+                                property_array_index: value.property_array_index,
+                                value: value.value,
+                                time_of_change: None,
+                            })
+                            .collect::<Vec<_>>(),
+                        prepared.observation.clone(),
+                    ));
+                    continue;
+                }
                 let prepared = if property_identifier == PropertyIdentifier::STATUS_FLAGS {
                     flags.selected(object, sub.monitored_property_array_index)
                 } else {
-                    object
-                        .read_property(property_identifier, sub.monitored_property_array_index)
+                    let captured = sources_by_object
+                        .get(&sub.monitored_object_identifier)
+                        .and_then(|source| source.as_ref().ok())
+                        .filter(|_| sub.monitored_property_array_index.is_none())
+                        .and_then(|source| source.value(property_identifier));
+                    captured
+                        .cloned()
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            object.read_property(
+                                property_identifier,
+                                sub.monitored_property_array_index,
+                            )
+                        })
                         .and_then(|value| {
                             crate::cov::prepare::prepare_value(
                                 object,
@@ -189,12 +253,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 candidates.push((
                     sub,
-                    COVNotificationValue {
+                    vec![COVNotificationValue {
                         property_identifier,
                         property_array_index: sub.monitored_property_array_index,
                         value: prepared.encoded,
                         time_of_change: None,
-                    },
+                    }],
                     observation,
                 ));
             }
@@ -236,48 +300,90 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut items: Vec<COVNotificationItem> = Vec::new();
             let mut last_notified = Vec::new();
             let mut retained_subscriptions = Vec::new();
-            for (sub, mut value, baseline, _) in retained {
-                value.time_of_change = sub
-                    .timestamped
-                    .then(|| timestamp.map(|(_, time)| time))
-                    .flatten();
+            for (sub, mut values, baseline, _) in retained {
+                for value in &mut values {
+                    value.time_of_change = sub
+                        .timestamped
+                        .then(|| timestamp.map(|(_, time)| time))
+                        .flatten();
+                }
                 last_notified.push((sub.clone(), baseline));
                 retained_subscriptions.push(sub.clone());
-                if let Some(item) = items.iter_mut().find(|item| {
-                    item.monitored_object_identifier == sub.monitored_object_identifier
-                }) {
-                    item.list_of_values.push(value);
-                } else {
-                    items.push(COVNotificationItem {
-                        monitored_object_identifier: sub.monitored_object_identifier,
-                        list_of_values: vec![value],
+                let item_index = items
+                    .iter()
+                    .position(|item| {
+                        item.monitored_object_identifier == sub.monitored_object_identifier
+                    })
+                    .unwrap_or_else(|| {
+                        items.push(COVNotificationItem {
+                            monitored_object_identifier: sub.monitored_object_identifier,
+                            list_of_values: Vec::new(),
+                        });
+                        items.len() - 1
                     });
+                for value in values {
+                    if let Some(existing) = items[item_index].list_of_values.iter_mut().find(|v| {
+                        v.property_identifier == value.property_identifier
+                            && v.property_array_index == value.property_array_index
+                    }) {
+                        existing.time_of_change = existing.time_of_change.or(value.time_of_change);
+                    } else {
+                        items[item_index].list_of_values.push(value);
+                    }
                 }
             }
             for item in &mut items {
-                if item
-                    .list_of_values
+                // A shared flags field inherits time from any qualified
+                // reference contributing that companion, even if a non-timestamped
+                // source report already supplied the same field.
+                let time_of_change = retained_subscriptions
                     .iter()
-                    .any(|v| v.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+                    .any(|sub| {
+                        sub.monitored_object_identifier == item.monitored_object_identifier
+                            && sub.timestamped
+                    })
+                    .then(|| timestamp.map(|(_, time)| time))
+                    .flatten();
+                if let Some(existing) = item
+                    .list_of_values
+                    .iter_mut()
+                    .find(|v| v.property_identifier == PropertyIdentifier::STATUS_FLAGS)
                 {
+                    existing.time_of_change = existing.time_of_change.or(time_of_change);
                     continue;
                 }
                 let Some(Ok(flags)) = flags_by_object.get(&item.monitored_object_identifier) else {
                     continue;
                 };
                 if let Some(encoded) = &flags.encoded {
-                    let timestamped = retained_subscriptions.iter().any(|sub| {
-                        sub.monitored_object_identifier == item.monitored_object_identifier
-                            && sub.timestamped
-                    });
                     item.list_of_values.push(COVNotificationValue {
                         property_identifier: PropertyIdentifier::STATUS_FLAGS,
                         property_array_index: None,
                         value: encoded.clone(),
-                        time_of_change: timestamped
-                            .then(|| timestamp.map(|(_, time)| time))
-                            .flatten(),
+                        time_of_change,
                     });
+                }
+            }
+            // Qualified explicit selectors control their own coordinates. OR
+            // above combines only implicit companion intent; an explicit false
+            // remains false. Unqualified references have no entry in this list.
+            for sub in &retained_subscriptions {
+                if let Some(value) = items
+                    .iter_mut()
+                    .find(|item| {
+                        item.monitored_object_identifier == sub.monitored_object_identifier
+                    })
+                    .and_then(|item| {
+                        item.list_of_values.iter_mut().find(|value| {
+                            Some(value.property_identifier) == sub.monitored_property
+                                && value.property_array_index == sub.monitored_property_array_index
+                        })
+                    })
+                {
+                    value.time_of_change = sub
+                        .timestamped
+                        .then(|| timestamp.map(|(_, time)| time))
+                        .flatten();
                 }
             }
             (

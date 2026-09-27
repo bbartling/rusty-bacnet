@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Implement specialized commandable Value_Source COV for AO/AV/BO/BV/MSO/MSV
+  (#823). Single and Multiple reports capture PV, Status_Flags, Value_Source,
+  Last_Command_Time and Current_Command_Priority together. Object PV criteria,
+  flags, source and priority trigger reports; time alone does not. Failed
+  companions preserve the baseline, healthy Multiple siblings proceed, and
+  overlapping fields are deduplicated without completing unqualified references.
+
 - Track command sources end to end for Analog Output/Value, Binary Output/Value
   and Multi-state Output/Value (#824). Object-owned state retains original
   correction owners, typed current/per-priority sources, and a wrapping sequence
@@ -15,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the original owner. Pre-1.0 API changes add `write_property_from`, require
   `LocalCommandSource` on Rust local writes and keyword `source_object` on Python
   local writes, and remove the unsourced Analog Value setter. Context-free tracked
-  writes fail closed. Specialized source-property COV remains outside this change.
+  writes fail closed. Specialized source-property COV is described above.
 
 - Schedule execution retains each local target's array index through the public
   `BACnetObject::tick_schedule` hook, endpoint forwarding and server write queue
@@ -43,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle none, object and address alternatives; decoding consumes one choice
   and returns the next offset. This pre-1.0 type change adds no source producer,
   Value_Source property-array behavior, correction authorization or Python API.
-  The end-to-end #824 producer is described above; specialized COV #823 remains separate.
+  The end-to-end #824 producer is described above; specialized COV #823 is described above.
 
 - `Priority_Array` is read-only across all 20 first-party commandable object
   families that previously accepted direct property writes (#842). WP, WPM,
