@@ -33,6 +33,14 @@ impl BACnetServer {
             }
         }
         let mut builder = server::BACnetServer::generic_builder();
+        if let Some(instance) = self.registered_network_port {
+            let oid = bacnet_types::primitives::ObjectIdentifier::new(
+                bacnet_types::enums::ObjectType::NETWORK_PORT,
+                instance,
+            )
+            .map_err(to_py_err)?;
+            builder = builder.registered_network_port(oid);
+        }
         if let Some(profile) = audit_reporter {
             builder = builder.audit_reporters(profile);
         }

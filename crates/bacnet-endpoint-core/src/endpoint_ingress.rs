@@ -91,6 +91,12 @@ pub struct PolicyOutcome {
 
 /// Single-consumer queues produced when endpoint ingress starts.
 pub struct IngressReceivers {
+    /// Post-bind registration capability and independently supported port capacity.
+    #[doc(hidden)]
+    pub normal_bip_port: Option<(std::net::SocketAddrV4, u16)>,
+    /// Actual announced IPv4 address and bound UDP port, when this is B/IP.
+    #[doc(hidden)]
+    pub bip_local_address: Option<std::net::SocketAddrV4>,
     /// Actual IPv4 B/IP broadcast endpoint after transport startup.
     #[doc(hidden)]
     pub bip_broadcast_endpoint: Option<std::net::SocketAddrV4>,
@@ -121,6 +127,7 @@ pub enum ClassifierExit {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lifecycle {
     Ready,
+    Starting,
     Running,
     Stopping,
     Stopped,
@@ -155,6 +162,23 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.network.as_ref()?.transport().bip_broadcast_endpoint()
     }
 
+    /// Pre-bind NORMAL B/IP registration capability.
+    #[doc(hidden)]
+    pub fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        self.network.as_ref()?.transport().normal_bip_endpoint()
+    }
+    /// Attach selected-object protection before starting the transport.
+    #[doc(hidden)]
+    pub fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        if self.lifecycle != Lifecycle::Ready {
+            return Err(Error::Encoding("ingress already started".into()));
+        }
+        self.network
+            .as_mut()
+            .ok_or_else(|| Error::Encoding("missing network".into()))?
+            .retain_network_port_lease_internal(lease)
+    }
+
     /// Starts the transport, network layer, and classifier task once.
     pub async fn start(&mut self) -> Result<IngressReceivers, Error> {
         if self.lifecycle != Lifecycle::Ready {
@@ -172,8 +196,18 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .network
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
+        self.lifecycle = Lifecycle::Starting;
         let apdu_rx = network.start().await?;
+        let normal_bip_port = network
+            .transport()
+            .normal_bip_endpoint()
+            .map(|address| (address, network.transport().max_apdu_length()));
         let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
+        let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
+            bacnet_transport::bvll::decode_bip_mac(network.local_mac())
+                .ok()
+                .map(|(ip, port)| std::net::SocketAddrV4::new(ip.into(), port))
+        });
         let (inbound_tx, inbound_requests) = mpsc::channel(self.queue_capacity);
         let (terminal_tx, terminal_or_segment) = mpsc::channel(self.queue_capacity);
         let (policy_tx, policy_outcomes) = mpsc::channel(self.queue_capacity);
@@ -204,6 +238,8 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.lifecycle = Lifecycle::Running;
 
         Ok(IngressReceivers {
+            normal_bip_port,
+            bip_local_address,
             bip_broadcast_endpoint,
             inbound_requests,
             terminal_or_segment,
@@ -214,8 +250,19 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
     /// Cancels classification, stops the network layer, and reports classifier exit.
     pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
-        if !matches!(self.lifecycle, Lifecycle::Running | Lifecycle::Stopping) {
+        if !matches!(
+            self.lifecycle,
+            Lifecycle::Starting | Lifecycle::Running | Lifecycle::Stopping
+        ) {
             return Err(Error::Encoding("endpoint ingress is not running".into()));
+        }
+        if self.lifecycle == Lifecycle::Starting {
+            if let Some(mut network) = self.network.take() {
+                self.session_task = Some(tokio::spawn(async move {
+                    network.stop().await?;
+                    Ok(ClassifierExit::Cancelled)
+                }));
+            }
         }
         self.lifecycle = Lifecycle::Stopping;
         if let Some(open) = self.egress_open.take() {

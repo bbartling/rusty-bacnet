@@ -381,8 +381,8 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
         second = None
         try:
             await asyncio.wait_for(first.start(), 10)
-            # local_address() retains configured port0. Observe the actual
-            # source port on a request while the first socket remains bound.
+            # Observe the actual source independently while the first socket
+            # remains bound, and compare it with the active address projection.
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
                 peer.bind(("127.0.0.1", 0))
                 peer.setblocking(False)
@@ -396,6 +396,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                     wire, source = await asyncio.wait_for(
                         asyncio.get_running_loop().sock_recvfrom(peer, 2048), 5
                     )
+                    self.assertEqual(await first.local_address(), f"{source[0]}:{source[1]}")
                     self.assertEqual(wire[:2], b"\x81\x0a")
                     self.assertEqual(wire[9], 12)  # ReadProperty
                     expected = b"\x0c" + ((8 << 22) | 2001).to_bytes(4, "big") + b"\x19\x1c"

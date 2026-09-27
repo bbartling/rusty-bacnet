@@ -17,6 +17,7 @@ use crate::traits::BACnetObject;
 
 mod bip_config;
 mod metadata;
+mod registration;
 pub use bip_config::BipPortConfig;
 
 /// A declared application-port configuration, independent of a live transport.
@@ -32,6 +33,7 @@ pub struct NetworkPortObject {
     mac_address: MacAddr,
     apdu_length: u32,
     bip: Option<BipPortConfig>,
+    binding: std::sync::Weak<()>,
 }
 
 impl NetworkPortObject {
@@ -57,6 +59,7 @@ impl NetworkPortObject {
             mac_address: mac,
             apdu_length: config.apdu_length,
             bip: Some(config),
+            binding: std::sync::Weak::new(),
         })
     }
 
@@ -89,6 +92,7 @@ impl NetworkPortObject {
             mac_address,
             apdu_length,
             bip: None,
+            binding: std::sync::Weak::new(),
         })
     }
 
@@ -175,6 +179,9 @@ impl BACnetObject for NetworkPortObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if property == PropertyIdentifier::OUT_OF_SERVICE && self.is_bound() {
+            return Err(common::write_access_denied_error());
+        }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {

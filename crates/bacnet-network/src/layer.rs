@@ -549,6 +549,12 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             .await
     }
 
+    /// Attach selected-object protection before starting the owned transport.
+    #[doc(hidden)]
+    pub fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        self.transport.retain_network_port_lease_internal(lease)
+    }
+
     /// Access the underlying transport.
     ///
     /// Useful for transport-specific operations like BBMD registration

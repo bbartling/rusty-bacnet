@@ -718,6 +718,9 @@ pub(crate) mod event_timestamp;
 mod handles;
 mod lifecycle;
 mod local_writes;
+mod network_port;
+#[cfg(test)]
+mod network_port_tests;
 mod notification_transactions;
 #[doc(hidden)]
 pub use notification_transactions::{

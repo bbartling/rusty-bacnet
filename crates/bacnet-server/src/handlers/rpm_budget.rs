@@ -84,7 +84,11 @@ fn plan(
     let mut plan = Vec::new();
     let mut count = 0usize;
     for spec in &request.list_of_read_access_specs {
-        let lookup_oid = read_property::resolve_device_wildcard(db, &spec.object_identifier);
+        let lookup_oid = read_property::resolve_read_target(
+            db,
+            &spec.object_identifier,
+            view.and_then(|view| view.registered_port),
+        );
         let mut properties = Vec::new();
         for reference in &spec.list_of_property_references {
             let mut push = |id| {
@@ -102,7 +106,7 @@ fn plan(
                 });
                 Ok(())
             };
-            match db.get(&lookup_oid) {
+            match read_property::read_target_object(db, &lookup_oid) {
                 Some(object) => {
                     let served = view.map(|view| view.object(object));
                     let object: &dyn BACnetObject = served.as_ref().map_or(object, |served| served);
@@ -237,7 +241,7 @@ pub(crate) fn rpm_budgeted_request_observed(
         ReadAccessResult::encode_header(&mut header, &spec.lookup_oid);
         scratch.append(&header, footer.len())?;
         for reference in spec.properties {
-            let object = db.get(&spec.lookup_oid);
+            let object = read_property::read_target_object(db, &spec.lookup_oid);
             let served = object.and_then(|object| view.map(|view| view.object(object)));
             let object = served
                 .as_ref()

@@ -23,11 +23,12 @@ async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
 
 #[tokio::test]
 async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -122,11 +123,12 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
 
 #[tokio::test]
 async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let origin_fd_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await

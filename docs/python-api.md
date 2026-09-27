@@ -323,8 +323,9 @@ Standalone and endpoint clients validate the ACK's object, property and array
 index. Device or Network Port instance `4194303` requests accept a concrete
 same-type identifier reported by the peer; unresolved wildcard and mismatched
 ACKs raise `BacnetError`. The return value remains the decoded property value.
-The bundled server resolves the Device alias; its Network Port receiving-port
-resolution is tracked separately in #785.
+The bundled server resolves the Device alias. Full-server RP/RPM and endpoint RP
+also resolve the Network Port alias when that owner explicitly registers a port;
+see [registered B/IP ports](#registered-bip-network-port).
 
 ```python
 value = await client.read_property(
@@ -1875,6 +1876,31 @@ remains false, Command and obsolete Network Port property62 are absent. Descript
 and Out_Of_Service retain their existing object-local behavior. This is not a live
 port control or complete Network Port/BBMD/foreign/DHCP support claim. The pre-1.0
 raw `add_network_port(network_type=...)` API is removed.
+
+### Registered B/IP Network Port
+
+This receiving-port association does not claim a complete active Network Port profile. Single-link nonrouter Network Number discovery and learning remain tracked in [#875](https://github.com/jscott3201/rusty-bacnet/issues/875).
+
+`BipEndpoint(..., network_port_instance=2, registered_network_port=2)` explicitly
+associates its declared port 2 with one owned NORMAL B/IP transport. Omitting
+`registered_network_port` leaves the declaration unbound. Selection requires a
+concrete unicast `interface`, matching declared instances 1–255 and a matching
+configured IP/UDP snapshot; `port=0` is supported. The full server accepts the same
+`registered_network_port=2` constructor keyword, with the selected object supplied
+separately by `add_bip_network_port(2, ..., ip_address=..., udp_port=...)` before
+start. Declaring or adding an object alone never selects a live port.
+
+Successful start publishes actual announced IP/UDP/derived MAC and `APDU_Length` (399) = 1476.
+The selected configuration and Out_Of_Service are read-only while its lifetime
+lease survives; pending activation, BBMD/foreign modes, rebind and same-device
+multiport routing remain unsupported. Other configured rows remain unbound.
+
+`BipEndpoint.local_address()` and `status()["local_address"]` report the same
+active announced address and actual ephemeral port for **all** active B/IP
+endpoints, including unregistered wildcard-interface defaults. They raise
+`RuntimeError` before successful publication, while stopping, after failure and
+after close. Queries ordered behind startup wait for its publication/cleanup;
+creating a Future is not admission. SC/MS/TP address behavior is unchanged.
 
 The seven File configuration methods are synchronous and operate only on a
 pending built-in File before `start()`:

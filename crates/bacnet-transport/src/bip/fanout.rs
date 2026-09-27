@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -327,7 +326,7 @@ impl FanoutDispatcher {
 
 /// Background worker loop dequeuing fanout jobs and sending them asynchronously.
 pub(crate) async fn run_fanout_worker(
-    socket: Arc<UdpSocket>,
+    socket: Arc<super::BipSocket>,
     mut rx: mpsc::Receiver<FanoutJob>,
     counters: Arc<AtomicFanoutCounters>,
 ) {

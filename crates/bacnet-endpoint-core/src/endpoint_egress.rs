@@ -66,6 +66,12 @@ pub struct EndpointEgress {
 }
 
 impl EndpointEgress {
+    /// Whether this ingress still admits transport work.
+    #[doc(hidden)]
+    pub fn is_open(&self) -> bool {
+        self.open.load(Ordering::Acquire) && !self.commands.is_closed()
+    }
+
     /// Sends one APDU without granting network lifecycle access.
     #[doc(hidden)]
     pub async fn send_apdu(

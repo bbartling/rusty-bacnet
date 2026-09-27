@@ -125,11 +125,12 @@ async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
 
 #[tokio::test]
 async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
-    let socket = Arc::new(
+    let socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = socket.local_addr().unwrap().port();
     let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
     let ctx = RecvContext {
@@ -176,11 +177,12 @@ async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
 
 #[tokio::test]
 async fn original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await

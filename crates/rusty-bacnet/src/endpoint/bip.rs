@@ -41,6 +41,7 @@ struct BipEndpointConfig {
     queue_capacity: usize,
     apdu_timeout_ms: u64,
     apdu_retries: u8,
+    registered_network_port: Option<u32>,
 }
 
 type BipSession = EndpointSession<BipTransport>;
@@ -67,14 +68,21 @@ impl BipEndpointConfig {
         }
         let boxes = build_pending_boxes(&objects)?;
         let db = build_database(&config.identity, boxes)?;
-        let session = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
+        let mut builder = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
             .database(db)
-            .identity(config.identity.clone())
-            .build_session()
+            .identity(config.identity.clone());
+        if let Some(instance) = config.registered_network_port {
+            let oid = bacnet_types::primitives::ObjectIdentifier::new(
+                bacnet_types::enums::ObjectType::NETWORK_PORT,
+                instance,
+            )
             .map_err(to_py_err)?;
+            builder = builder.registered_network_port(oid);
+        }
+        let session = builder.build_session().map_err(to_py_err)?;
         Ok(session)
     }
 }
@@ -116,10 +124,6 @@ impl PyBipEndpoint {
             )
         })
     }
-
-    fn local_address_string(&self) -> String {
-        format!("{}:{}", self.config.interface, self.config.port)
-    }
 }
 
 #[pymethods]
@@ -129,15 +133,14 @@ impl PyBipEndpoint {
     /// Args:
     ///     device_instance: BACnet Device instance (validated range).
     ///     device_name: Device object name (default "BACnet Device").
-    ///     vendor_id: Vendor identifier; default 555 preserves the old
-    ///         hardcoded server value through the single identity.
+    ///     vendor_id: Vendor identifier (default 555).
     ///     interface: Announced IPv4 (socket binds INADDR_ANY for broadcast).
-    ///     port: UDP port (production 47808; tests use explicit free ports
-    ///         so `local_address()` is exact; port 0 is ephemeral and the
-    ///         Network-Port entry keeps the configured 0).
+    ///     port: UDP port; zero selects an ephemeral port reported after startup.
     ///     broadcast_address: Local broadcast address.
     ///     network_number: BACnet network number for the Network-Port entry.
-    ///     network_port_instance: Network-Port instance (B/IP=1 by convention).
+    ///     network_port_instance: Declared Network Port instance (default 1).
+    ///     registered_network_port: Explicit instance to associate with the live
+    ///         NORMAL B/IP transport; None leaves the declaration unbound.
     ///     max_apdu: Wire-legal APDU (50/128/206/480/1024/1476).
     ///     segmentation: `Segmentation` override (default NONE, the proven value).
     ///     services: Optional service-bit list (default [READ_PROPERTY], the
@@ -162,7 +165,8 @@ impl PyBipEndpoint {
         device_uuid=None,
         queue_capacity=16,
         apdu_timeout_ms=6000,
-        apdu_retries=0
+        apdu_retries=0,
+        registered_network_port=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -181,6 +185,7 @@ impl PyBipEndpoint {
         queue_capacity: usize,
         apdu_timeout_ms: u64,
         apdu_retries: u8,
+        registered_network_port: Option<u32>,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
@@ -189,6 +194,17 @@ impl PyBipEndpoint {
         }
         let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
+        if let Some(selected) = registered_network_port {
+            if !(1..=255).contains(&selected)
+                || selected != network_port_instance
+                || interface_ip.is_unspecified()
+                || interface_ip.is_multicast()
+                || interface_ip.is_broadcast()
+                || interface_ip == broadcast
+            {
+                return Err(PyValueError::new_err("registered_network_port must select the declared 1..255 port on a concrete unicast interface"));
+            }
+        }
         let segmentation = parse_segmentation(segmentation);
         let service_list = parse_services(services);
         let uuid = parse_device_uuid(device_uuid, false, "device_uuid")?;
@@ -218,6 +234,7 @@ impl PyBipEndpoint {
                 queue_capacity,
                 apdu_timeout_ms,
                 apdu_retries,
+                registered_network_port,
             },
         })
     }
@@ -398,14 +415,18 @@ impl PyBipEndpoint {
         })
     }
 
-    /// Bound address as "ip:port" from the validated startup config.
-    ///
-    /// For explicit ports this is the bound socket; port 0 keeps the
-    /// configured 0 in the Network-Port entry (use explicit free ports when
-    /// peers must unicast).
+    /// Actual announced IP and bound UDP port while the endpoint is active.
+    /// Raises RuntimeError before startup publication and during/after teardown.
     fn local_address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let addr = self.local_address_string();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(addr) })
+        let inner = self.lifecycle.session.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            guard
+                .as_ref()
+                .and_then(EndpointSession::bip_local_address)
+                .map(|address| address.to_string())
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint is not active"))
+        })
     }
 
     /// Bounded snapshot: liveness, identity, transport, leases, policy counts.
@@ -421,10 +442,13 @@ impl PyBipEndpoint {
                 let session = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                let address = session
+                    .bip_local_address()
+                    .ok_or_else(|| PyRuntimeError::new_err("endpoint is not active"))?;
                 let counters = session.policy_counters().await;
                 let leases = session.active_leases();
                 let running = session.is_running();
-                (counters, leases, running)
+                (counters, leases, running, address)
             };
             // Lock released before touching Python.
             Python::attach(|py| {
@@ -434,10 +458,7 @@ impl PyBipEndpoint {
                 dict.set_item("vendor_id", config.identity.vendor_id())?;
                 dict.set_item("max_apdu", config.identity.max_apdu_length())?;
                 dict.set_item("transport", "bip")?;
-                dict.set_item(
-                    "local_address",
-                    format!("{}:{}", config.interface, config.port),
-                )?;
+                dict.set_item("local_address", snapshot.3.to_string())?;
                 dict.set_item("active_leases", snapshot.1)?;
                 dict.set_item("ingress_policy", snapshot.0.ingress_policy)?;
                 dict.set_item("no_server_role", snapshot.0.no_server_role)?;

@@ -181,11 +181,12 @@ async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
     let bbmd_dest = SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port);
 
     // Flood BBMD with continuous broadcast traffic in background
-    let flood_sock = Arc::new(
+    let flood_sock = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let stop_flood = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_flood_clone = Arc::clone(&stop_flood);
     let flood_handle = tokio::spawn(async move {
@@ -390,11 +391,12 @@ async fn fanout_counters_accurately_track_all_metrics() {
 
 #[tokio::test]
 async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -521,7 +523,10 @@ async fn fanout_policy_zero_queue_capacity_does_not_panic() {
 
 #[tokio::test]
 async fn fanout_worker_records_send_errors_in_telemetry() {
-    let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let socket = Arc::new(super::BipSocket::new(
+        UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+        None,
+    ));
     let (tx, rx) = mpsc::channel(4);
     let counters = Arc::new(fanout::AtomicFanoutCounters::default());
     let worker = tokio::spawn(fanout::run_fanout_worker(socket, rx, Arc::clone(&counters)));

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Explicit registered NORMAL B/IP Network Port selection now reconciles the chosen
+  object/identity with its actual bind, protects it through admitted work and final
+  cleanup, and resolves receiving-port wildcard RP/RPM with concrete Audit targets.
+  Python B/IP endpoint address/status are active-only and report actual port-zero
+  binds. Removed the pre-1.0 `DeviceIdentity::sync_bip_bind` mutation hook; endpoint
+  stop now reports ingress cleanup failures. Multiport/rebind remains separate (#863).
+
+
 - Make full-server shutdown retire exported I-Am admission, join admitted sends,
   and stop its owned transport (#872). Retained broadcaster handles no longer
   keep sockets alive; local broadcasts have a shared 32-operation bound. Stop

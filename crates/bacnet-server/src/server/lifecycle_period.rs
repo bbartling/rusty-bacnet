@@ -18,3 +18,21 @@ pub(in crate::server) fn event_enrollment_period(secs: u64) -> Duration {
     }
     Duration::from_secs(secs)
 }
+
+/// Install wall and monotonic clocks before the database becomes shared.
+pub(super) fn install_database_clocks(
+    db: &mut ObjectDatabase,
+    clock_config: Option<ClockConfig>,
+) -> (Option<Arc<ServerClock>>, tokio::time::Instant) {
+    let clock = clock_config.map(|config| Arc::new(ServerClock::new(config)));
+    let reader = clock
+        .as_ref()
+        .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);
+    db.set_clock_reader(reader);
+    let monotonic_origin = tokio::time::Instant::now();
+    let monotonic_clock: Arc<bacnet_objects::traits::MonotonicClock> =
+        Arc::new(move || tokio::time::Instant::now().saturating_duration_since(monotonic_origin));
+    db.set_monotonic_clock_internal(Some(monotonic_clock));
+
+    (clock, monotonic_origin)
+}

@@ -586,7 +586,7 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
         .add(Box::new(DeviceObject::new(config).unwrap()))
         .unwrap();
     let selected =
-        handlers::resolve_device_wildcard(&*wire.server.database().read().await, &wildcard());
+        handlers::resolve_read_target(&*wire.server.database().read().await, &wildcard(), None);
     assert_eq!(
         selected,
         device(),

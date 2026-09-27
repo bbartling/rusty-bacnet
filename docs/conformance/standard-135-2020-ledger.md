@@ -39,6 +39,40 @@ The [target contract](../target-audit-reporters.md) links behavioral evidence an
 separates local policy from clause requirements. Source mode remains exactly one,
 network configuration remains limited, and parent #345/global pins/statuses stay unchanged.
 
+## Registered NORMAL B/IP Network Port
+
+The `BACNET-12-REGISTERED-BIP-PORT` row covers explicit single-port association
+(#785), independently of the configured snapshot row (#867). Clauses 15.5.2 and
+15.7.2 select the receiving Network Port for wildcard instance 4194303; successful
+ACKs use concrete identity under 15.5.1.2/15.7.3.2, including target Audit identities
+under Tables 19-4/19-5. Full-server RP/RPM and endpoint RP have real UDP fixtures;
+mixed RPM retains inline missing-registration errors and accessible properties.
+[Routed fixtures](../../crates/bacnet-endpoint/src/registered_port_routed_tests.rs)
+exercise both owners with an unrelated remote source network and full-server
+request reassembly; the endpoint preserves its segmentation-not-supported refusal.
+
+[Wire and capacity fixtures](../../crates/bacnet-endpoint/src/registered_port_wire_tests.rs)
+cover post-bind port zero, selected versus unregistered/shared databases, multiple
+configured rows, concrete/Device controls, successful Audit targets, valid exactly
+1476-byte WP and independently sized RP ACKs through both owners. A separate local
+BVLL fixture verifies the 1482-byte frame; these results do not establish blanket
+oversized rejection. `APDU_Length` (399) remains independent of Device property 62.
+[Lifetime fixtures](../../crates/bacnet-endpoint/src/registered_port_lifetime_tests.rs),
+[final-network-owner coverage](../../crates/bacnet-server/src/server/network_port_tests.rs)
+and [socket ownership coverage](../../crates/bacnet-transport/src/bip/registration_tests.rs)
+exercise cancellation, failure, cleanup panic/retry, bare Drop and admitted reads.
+[Installed Python coverage](../../crates/rusty-bacnet/tests/test_endpoint_bound_address.py)
+checks explicit selection and active-only actual address reporting.
+
+The instance range 1–255 is local policy. The transport must remain NORMAL B/IP,
+with a concrete configured unicast interface; activation configuration is read-only
+and bound Out_Of_Service/structural changes are refused. This is not complete active
+Network Port profile conformance: [#875](https://github.com/jscott3201/rusty-bacnet/issues/875)
+tracks single-link nonrouter Network Number control/learning, and #863 tracks
+same-device multiport/router generation. Pending configuration, rebind, BBMD,
+foreign-device and DHCP support are not claimed. See the [Rust contract](../rust-api.md#registered-bip-network-port).
+Global evidence pins remain unchanged.
+
 ## Endpoint WriteProperty source WRITE
 
 Refs #852 extends the bounded source profile under the still-in-progress #345
@@ -88,7 +122,7 @@ shared standalone direct/routed and endpoint ACK correlation rule. Property and
 array index match exactly; Device/Network Port instance4194303 aliases accept a
 same-type concrete peer-reported object. [Client wire tests](../../crates/bacnet-endpoint/tests/read_property_correlation.rs)
 include the bundled server's Device alias and controlled Network Port replies.
-Its receiving-port server mapping remains separate (#785).
+The registered receiving-port mapping is documented below (#785).
 
 [Source wire tests](../../crates/bacnet-endpoint/src/source_property_identity_tests.rs)
 prove concrete successful Target Object attribution. A validated concrete Device

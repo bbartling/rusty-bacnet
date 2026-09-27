@@ -60,9 +60,9 @@
 //!   common application rows, with no IPv4 properties or complete SC claim.
 //! - Port APDU_Length399 is declared1476 independently of Device62/role limits.
 //!
-//! Instance numbering is stable per device (proofs use B/IP1, SC2). Updating
-//! an entry with [`DeviceIdentity::sync_bip_bind`] changes future database
-//! construction only; it does not synchronize an already built object database.
+//! Instance numbering is stable per device (proofs use B/IP1, SC2). Explicit
+//! endpoint registration reconciles the selected entry and database together
+//! before publishing the owned B/IP transport; declarations alone remain unbound.
 //!
 //! # SC UUID rule (durable-caller-owned)
 //!
@@ -126,8 +126,8 @@ impl NetworkPortEntry {
     /// B/IP entry with the configured IP/UDP port (possibly unbound).
     ///
     /// Derives the 6-byte B/IP MAC (IP octets + big-endian UDP port) from the
-    /// configured socket address. Ephemeral-port callers can refresh the entry via
-    /// [`DeviceIdentity::sync_bip_bind`] after `start()`.
+    /// configured socket address. Explicit endpoint registration reconciles the
+    /// selected entry with its actual ephemeral port during startup.
     ///
     /// ```
     /// use std::net::Ipv4Addr;
@@ -360,22 +360,45 @@ impl DeviceIdentity {
         self.with_network_port(NetworkPortEntry::sc(instance, network_number, vmac))
     }
 
-    /// Refreshes the B/IP entry with the actual bound socket address.
-    ///
-    /// Call after `start()` when the port was 0 (ephemeral): replaces the
-    /// matching instance entry, or pushes instance 1 when no B/IP entry
-    /// exists yet. SC/loopback entries are untouched.
-    pub fn sync_bip_bind(&mut self, instance: u32, network_number: u32, ip: Ipv4Addr, port: u16) {
-        let entry = NetworkPortEntry::bip(instance, network_number, ip, port);
-        if let Some(slot) = self
+    pub(crate) fn validate_registered_bip(
+        &self,
+        oid: ObjectIdentifier,
+        config: &BipPortConfig,
+    ) -> Result<(), Error> {
+        let entry = self
+            .network_ports
+            .iter()
+            .find(|entry| entry.instance == oid.instance_number())
+            .ok_or_else(|| Error::Encoding("selected Network Port missing from identity".into()))?;
+        entry.build_object()?;
+        if entry.network_type != NetworkType::IPV4.to_raw()
+            || entry.ip != config.ip_address
+            || entry.udp_port != config.udp_port
+            || entry.network_number != u32::from(config.network_number)
+        {
+            return Err(Error::Encoding(
+                "selected identity Network Port differs from database".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn publish_registered_bip(
+        &mut self,
+        oid: ObjectIdentifier,
+        address: std::net::SocketAddrV4,
+    ) {
+        let entry = self
             .network_ports
             .iter_mut()
-            .find(|e| e.instance == instance)
-        {
-            *slot = entry;
-        } else {
-            self.network_ports.push(entry);
-        }
+            .find(|entry| entry.instance == oid.instance_number())
+            .expect("validated identity registration");
+        *entry = NetworkPortEntry::bip(
+            entry.instance,
+            entry.network_number,
+            *address.ip(),
+            address.port(),
+        );
     }
 
     /// Device instance number.

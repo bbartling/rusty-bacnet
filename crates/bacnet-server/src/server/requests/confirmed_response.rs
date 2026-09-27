@@ -8,11 +8,13 @@ pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
     writes: bool,
+    registered_port: Option<ObjectIdentifier>,
 ) -> Apdu {
     read_property_response_observed(
         db,
         None,
         DeviceExecution::Endpoint { writes },
+        registered_port,
         request,
         |_, _, _, _| {},
     )
@@ -45,6 +47,7 @@ pub(super) async fn read_property_multiple_observed(
     service_request: &[u8],
     service_ack: &mut BytesMut,
     budget: crate::server::ReadPropertyMultipleBudget,
+    registered_port: Option<ObjectIdentifier>,
     mut completed: impl FnMut(
         &ObjectDatabase,
         ObjectIdentifier,
@@ -60,7 +63,8 @@ pub(super) async fn read_property_multiple_observed(
         Some(selection) => Some(active_cov_snapshot(&db, cov_table, selection).await),
         None => None,
     };
-    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref());
+    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref())
+        .with_registered_port(registered_port);
     handlers::rpm_budgeted_request_observed(
         &db,
         Some(&view),
@@ -75,6 +79,7 @@ pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
     cov_table: Option<&RwLock<CovSubscriptionTable>>,
     execution: DeviceExecution,
+    registered_port: Option<ObjectIdentifier>,
     request: &ConfirmedRequestPdu,
     mut completed: impl FnMut(
         &ObjectDatabase,
@@ -87,7 +92,8 @@ pub(super) async fn read_property_response_observed(
     let db = db.read().await;
     let result = match ReadPropertyRequest::decode(&request.service_request) {
         Ok(decoded) => {
-            let lookup_oid = handlers::resolve_device_wildcard(&db, &decoded.object_identifier);
+            let lookup_oid =
+                handlers::resolve_read_target(&db, &decoded.object_identifier, registered_port);
             let live = match (
                 cov_table,
                 handlers::active_cov_device(&db, lookup_oid, decoded.property_identifier),
@@ -97,7 +103,8 @@ pub(super) async fn read_property_response_observed(
                 }
                 _ => None,
             };
-            let view = DeviceReadContext::new(&db, execution, live.as_ref());
+            let view = DeviceReadContext::new(&db, execution, live.as_ref())
+                .with_registered_port(registered_port);
             handlers::read_property_request_observed(
                 &db,
                 Some(&view),

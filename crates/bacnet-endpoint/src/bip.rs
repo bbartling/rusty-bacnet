@@ -64,6 +64,7 @@ pub struct BipEndpointBuilder {
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
+    registered_network_port: Option<ObjectIdentifier>,
     identity: Option<crate::identity::DeviceIdentity>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
@@ -89,6 +90,7 @@ impl BipEndpointBuilder {
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
+            registered_network_port: None,
             identity: None,
             device_write_authorizer: None,
             source_audit_bindings: Vec::new(),
@@ -129,6 +131,13 @@ impl BipEndpointBuilder {
     /// [`identity`](Self::identity) so Device readback agrees with I-Am.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
+        self
+    }
+
+    /// Explicitly associate the selected concrete built-in port with this NORMAL
+    /// B/IP transport. Declaring an identity entry alone does not register it.
+    pub fn registered_network_port(mut self, oid: ObjectIdentifier) -> Self {
+        self.registered_network_port = Some(oid);
         self
     }
 
@@ -234,6 +243,11 @@ impl BipEndpointBuilder {
     /// is set (it requires [`build_session`](Self::build_session), not a bare
     /// transport that would discard the endpoint-owned configuration).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
+        if self.registered_network_port.is_some() {
+            return Err(Error::Encoding(
+                "Network Port registration requires build_session()".into(),
+            ));
+        }
         if self.device_write_authorizer.is_some() {
             return Err(Error::Encoding(
                 "Device writes require build_session()".into(),
@@ -299,6 +313,7 @@ impl BipEndpointBuilder {
         let session = self.session.clone();
         let database = self.database.take();
         let identity = self.identity.take();
+        let registered_network_port = self.registered_network_port.take();
         let transport = self.build_transport()?;
         let mut endpoint = EndpointSession::new(transport, role, session)?;
         if let Some(db) = database {
@@ -309,6 +324,9 @@ impl BipEndpointBuilder {
         }
         if let Some(authorizer) = device_write_authorizer {
             endpoint = endpoint.with_device_writes(authorizer);
+        }
+        if let Some(oid) = registered_network_port {
+            endpoint = endpoint.with_registered_network_port(oid);
         }
         endpoint.source_audit_bindings = bindings;
         Ok(endpoint)

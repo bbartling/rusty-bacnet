@@ -37,7 +37,19 @@ const BIP: &[PropertyMetadata] = &[
 ];
 pub(super) fn for_object(object: &NetworkPortObject) -> Cow<'_, [PropertyMetadata]> {
     if object.bip.is_some() {
-        Cow::Owned(COMMON.iter().chain(BIP).copied().collect())
+        Cow::Owned(
+            COMMON
+                .iter()
+                .chain(BIP)
+                .copied()
+                .map(|mut row| {
+                    if row.property_identifier == P::OUT_OF_SERVICE && object.is_bound() {
+                        row.write_capability = ReadOnly;
+                    }
+                    row
+                })
+                .collect(),
+        )
     } else {
         Cow::Borrowed(COMMON)
     }

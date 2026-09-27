@@ -180,6 +180,7 @@ mod tests {
 
     fn test_server() -> BACnetServer {
         BACnetServer {
+            registered_network_port: None,
             inner: Arc::new(Mutex::new(None)),
             device_instance: 1,
             device_name: "Test Device".into(),

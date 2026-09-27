@@ -71,6 +71,8 @@ mod startup;
 
 #[path = "device_writes.rs"]
 mod device_writes;
+#[path = "registered_port.rs"]
+mod registered_port;
 
 use crate::roles::{
     admit_once, decode_terminal, inbound_canonical_peer, is_requester_lease, ClientRoleHandle,
@@ -237,7 +239,11 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
+    ingress_stopped: bool,
     identity: Option<crate::identity::DeviceIdentity>,
+    bip_local_address: Option<std::net::SocketAddrV4>,
+    registered_network_port: Option<ObjectIdentifier>,
+    registered_port_lease: std::sync::Weak<()>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
 }
@@ -321,7 +327,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_audit_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
+            ingress_stopped: false,
             identity: None,
+            bip_local_address: None,
+            registered_network_port: None,
+            registered_port_lease: std::sync::Weak::new(),
             device_write_authorizer: None,
             egress: None,
         })
@@ -447,6 +457,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         let device_write_target = self.validate_device_execution()?;
         let source_routes = self.prepare_source_audit_reporter()?;
+        self.prepare_registered_port().await?;
         self.commit_device_write_profile(device_write_target);
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
@@ -463,13 +474,28 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .ingress
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?;
-        let receivers = ingress.start().await?;
+        let receivers = match ingress.start().await {
+            Ok(receivers) => receivers,
+            Err(error) => {
+                let _ = self.stop().await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = self
+            .publish_registered_port(receivers.normal_bip_port)
+            .await
+        {
+            let _ = self.stop().await;
+            return Err(error);
+        }
+        let bip_local_address = receivers.bip_local_address;
         if let Err(error) = self.start_roles(receivers, source_routes, device_write_target) {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
             return Err(error);
         }
+        self.bip_local_address = bip_local_address;
         Ok(())
     }
 
@@ -518,8 +544,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 NotificationTransactions::observe(Some(result));
             }
         }
-        if let Some(ingress) = self.ingress.as_mut() {
-            let _ = ingress.stop().await;
+        if !self.ingress_stopped {
+            if let Some(ingress) = self.ingress.as_mut() {
+                if let Err(error) = ingress.stop().await {
+                    if self.stop_exit.as_ref().is_some_and(Result::is_ok) {
+                        self.stop_exit = Some(Err(error));
+                    }
+                }
+            }
+            self.ingress_stopped = true;
         }
         // The owner remains in the session through every await. The DB barrier
         // observes completed synchronous commits; queued source readers recheck
@@ -616,6 +649,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// time (no such method) and at runtime its post-stop calls fail closed.
     pub fn identity(&self) -> Option<&crate::identity::DeviceIdentity> {
         self.identity.as_ref()
+    }
+
+    /// Actual announced B/IP address after successful startup.
+    /// Absent before publication, while stopping, after stop, or for other links.
+    pub fn bip_local_address(&self) -> Option<std::net::SocketAddrV4> {
+        (self.is_running() && self.egress.as_ref().is_some_and(|egress| egress.is_open()))
+            .then_some(self.bip_local_address)
+            .flatten()
     }
 
     /// Returns the composed session role (narrow admin).
@@ -876,3 +917,10 @@ async fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutco
 #[cfg(test)]
 #[path = "source_read_tests.rs"]
 mod source_read_tests;
+
+#[cfg(test)]
+#[path = "registered_port_lifetime_tests.rs"]
+mod registered_port_lifetime_tests;
+#[cfg(test)]
+#[path = "registered_port_wire_tests.rs"]
+mod registered_port_wire_tests;

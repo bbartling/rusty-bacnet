@@ -53,7 +53,8 @@ impl BACnetServer {
         event_information_max_objects=4096,
         event_information_max_returned_summaries=256,
         event_information_max_service_ack_bytes=16384,
-        sc_device_uuid=None
+        sc_device_uuid=None,
+        registered_network_port=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -106,7 +107,19 @@ impl BACnetServer {
         event_information_max_returned_summaries: usize,
         event_information_max_service_ack_bytes: usize,
         sc_device_uuid: Option<Vec<u8>>,
+        registered_network_port: Option<u32>,
     ) -> PyResult<Self> {
+        if registered_network_port.is_some_and(|instance| !(1..=255).contains(&instance)) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "registered_network_port must be 1..255",
+            ));
+        }
+        if registered_network_port.is_some() && transport != "bip" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "registered_network_port requires B/IP",
+            ));
+        }
+
         let mutation_policy = match mutation_policy {
             "permissive" => bacnet_server::mutation::MutationPolicy::Permissive,
             "deny_all" => bacnet_server::mutation::MutationPolicy::DenyAll,
@@ -236,6 +249,7 @@ impl BACnetServer {
             interface: interface.to_string(),
             port,
             broadcast_address: broadcast_address.to_string(),
+            registered_network_port,
             sc_hub,
             sc_vmac,
             sc_device_uuid,

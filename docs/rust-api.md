@@ -2248,6 +2248,48 @@ SC or Ethernet profile. Both `DeviceIdentity` database builders use these same
 constructors with declared1476 port capacity independent of Device/role limits.
 Live transport association, post-bind synchronization and activation are separate.
 
+### Registered B/IP Network Port
+
+This receiving-port association does not claim a complete active Network Port profile. Single-link nonrouter Network Number discovery and learning remain tracked in [#875](https://github.com/jscott3201/rusty-bacnet/issues/875).
+
+A configured object becomes the receiving port only through explicit selection:
+`ServerConfig.registered_network_port = Some(oid)`, the server builder's
+`.registered_network_port(oid)`, or the B/IP endpoint builder's method of the same
+name (`EndpointSession::with_registered_network_port` for direct composition).
+The selected built-in IPV4/NORMAL object must already exist with instance 1–255,
+matching concrete unicast interface and configured UDP port. Port zero is valid
+before bind. BBMD, foreign-device, wildcard-interface and non-B/IP registration
+are rejected before publication; declarations alone remain unregistered.
+Custom objects and wrappers cannot impersonate a selected built-in: the database
+uses crate-authorized concrete storage access before configuration callbacks.
+Borrowed Device read views remain supported; no public mutable downcast is exposed.
+
+Startup validates the actual NORMAL capability again after bind and reconciles
+only the selected object and optional identity entry with the announced IP, actual
+UDP port and derived MAC. Port `APDU_Length` (399) is independently supported at 1476;
+Device `Max_APDU_Length_Accepted` (62) may remain 480. Mask, gateway and DNS remain explicit configuration, with
+no NIC discovery or fabricated subnet. The obsolete identity `sync_bip_bind`
+setter is removed. Configuration/activation writes remain denied, and registered
+Out_Of_Service writes, object replacement/removal and adapters are refused before
+effects. Protection lasts through admitted work and the final socket/cleanup
+owner, including cancellation and Drop; an idle exported role is not a lease.
+
+Full-server RP/RPM and bounded endpoint RP resolve Network-Port instance 4194303
+using this owner's selected identity, with concrete ACK object identifiers.
+Unregistered responders cannot inherit another owner's association from a shared
+database. Mixed RPM succeeds with inline UNKNOWN_OBJECT for an unavailable port
+when another property is accessible. Successful target Audit uses the same
+concrete object and preserves per-target records. Endpoint responder RPM remains
+unsupported. Same-device multiport/router generations, rebind, pending activation,
+BBMD/foreign/DHCP and full Network Port conformance remain outside this profile.
+
+`EndpointSession::bip_local_address()` returns the active post-bind announced
+address, including the actual ephemeral UDP port, for registered and unregistered
+B/IP sessions. It is absent before publication, during/after shutdown and for
+other links. This is a logical announced address, not physical NIC provenance.
+Cancelled startup can be stopped and joined; transport cleanup failures are
+reported by endpoint stop rather than discarded.
+
 ## bacnet-endpoint (forward path, RB-18)
 
 `bacnet-endpoint` composes client and server roles for one BACnet device under

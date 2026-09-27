@@ -1,0 +1,53 @@
+//! The reservation follows the final network owner even when stop cannot unwrap it.
+use super::*;
+use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
+
+#[tokio::test]
+async fn registered_port_bare_drop_and_retained_network_refusal_keep_lease() {
+    for stop_first in [false, true] {
+        let oid = ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(
+            NetworkPortObject::new_bip(
+                1,
+                "selected",
+                BipPortConfig {
+                    ip_address: [127, 0, 0, 1],
+                    udp_port: 0,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+        let config = ServerConfig {
+            registered_network_port: Some(oid),
+            ..Default::default()
+        };
+        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let mut server = BACnetServer::start(config, db, transport).await.unwrap();
+        let db = server.database().clone();
+        let network = server.test_network().clone();
+        let address = network.transport().normal_bip_endpoint().unwrap();
+        if stop_first {
+            assert!(server.stop().await.is_err());
+        }
+        drop(server);
+        assert!(db.write().await.remove(&oid).is_err());
+        assert!(std::net::UdpSocket::bind(address).is_err());
+        drop(network);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match db.write().await.remove(&oid) {
+                    Ok(Some(_)) => break,
+                    Err(_) => tokio::task::yield_now().await,
+                    other => panic!("unexpected removal result: {}", other.is_ok()),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        // Lease cannot disappear before the socket's final destruction.
+        let _reused = std::net::UdpSocket::bind(address).unwrap();
+    }
+}

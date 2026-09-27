@@ -2313,6 +2313,7 @@ class BACnetServer:
         event_information_max_returned_summaries: int = 256,
         event_information_max_service_ack_bytes: int = 16384,
         sc_device_uuid: Optional[bytes | bytearray] = None,
+        registered_network_port: Optional[int] = None,
     ) -> None: ...
 
     # --- Analog objects ---
@@ -2935,6 +2936,9 @@ class BipEndpoint:
     have no endpoint owner.
     """
 
+    # network_port_instance declares a snapshot; registered_network_port explicitly
+    # selects it for one concrete-interface NORMAL B/IP bind. None stays unbound.
+
     def __init__(
         self,
         device_instance: int,
@@ -2952,6 +2956,7 @@ class BipEndpoint:
         queue_capacity: int = 16,
         apdu_timeout_ms: int = 6000,
         apdu_retries: int = 0,
+        registered_network_port: Optional[int] = None,
     ) -> None: ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -2988,7 +2993,7 @@ class BipEndpoint:
         ...
 
     def local_address(self) -> Awaitable[str]:
-        """Bound address as "ip:port" from the validated startup config."""
+        """Active announced IP and actual UDP port; RuntimeError outside active state."""
         ...
 
     def status(self) -> Awaitable[EndpointStatus]:

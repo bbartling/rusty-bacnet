@@ -4,6 +4,9 @@ use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, Mutation
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
+    /// Explicit concrete Network Port for one owned NORMAL B/IP transport.
+    /// None leaves configured objects unbound and receiving-port wildcard unavailable.
+    pub registered_network_port: Option<ObjectIdentifier>,
     /// Optional target Audit Reporter profile. Its recipient is provisioned on
     /// the built-in Device and becomes writable while the runtime is installed.
     pub audit_reporters: Option<AuditReportersConfig>,
@@ -227,6 +230,7 @@ impl std::fmt::Debug for ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            registered_network_port: None,
             audit_reporters: None,
             interface: Ipv4Addr::UNSPECIFIED,
             read_property_multiple_budget: ReadPropertyMultipleBudget::default(),

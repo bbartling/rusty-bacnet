@@ -43,6 +43,7 @@ impl DeviceExecution {
 
 /// One execution profile and clock observation, shared across a served request.
 pub(crate) struct DeviceReadContext<'a> {
+    pub(crate) registered_port: Option<ObjectIdentifier>,
     execution: DeviceExecution,
     clock: bool,
     live: Option<&'a LiveDeviceCov>,
@@ -55,10 +56,15 @@ impl<'a> DeviceReadContext<'a> {
         live: Option<&'a LiveDeviceCov>,
     ) -> Self {
         Self {
+            registered_port: None,
             execution,
             clock: db.clock_frame().is_some(),
             live,
         }
+    }
+    pub(crate) fn with_registered_port(mut self, oid: Option<ObjectIdentifier>) -> Self {
+        self.registered_port = oid;
+        self
     }
     pub(crate) fn object<'b>(&'b self, object: &'b dyn BACnetObject) -> DeviceReadView<'b> {
         DeviceReadView {

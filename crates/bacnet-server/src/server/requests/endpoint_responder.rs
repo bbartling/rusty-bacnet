@@ -74,6 +74,7 @@ pub struct EndpointResponder {
     egress: EndpointEgress,
     open: AtomicBool,
     device_writes: Option<(ObjectIdentifier, MutationAuthorizer)>,
+    registered_port: Option<(ObjectIdentifier, std::sync::Weak<()>)>,
 }
 
 impl EndpointResponder {
@@ -84,7 +85,19 @@ impl EndpointResponder {
             egress,
             open: AtomicBool::new(true),
             device_writes: None,
+            registered_port: None,
         }
+    }
+
+    /// Receiving-port identity selected by this owner, never inferred from DB rows.
+    #[doc(hidden)]
+    pub fn with_registered_port(
+        mut self,
+        oid: ObjectIdentifier,
+        lease: std::sync::Weak<()>,
+    ) -> Self {
+        self.registered_port = Some((oid, lease));
+        self
     }
 
     /// Install the Device authority validated by the session before startup.
@@ -198,6 +211,10 @@ impl EndpointResponder {
         if !self.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
+        let _registration_lease = match &self.registered_port {
+            Some((_, lease)) => Some(lease.upgrade().ok_or_else(shutdown_error)?),
+            None => None,
+        };
         // Structural preservation: bind raw + effective group, attributes,
         // ingress identity and provenance so a future drop is compile-visible.
         let _link_layer_group = received.link_layer_group;
@@ -223,6 +240,7 @@ impl EndpointResponder {
                 &self.db,
                 &request,
                 self.device_writes.is_some(),
+                self.registered_port.as_ref().map(|(oid, _)| *oid),
             )
             .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY

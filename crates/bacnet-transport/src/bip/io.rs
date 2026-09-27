@@ -74,7 +74,7 @@ pub(super) async fn send_register_foreign_device(
 /// process incoming BVLL messages.
 pub(super) struct RecvContext {
     pub(super) local_mac: [u8; 6],
-    pub(super) socket: Arc<UdpSocket>,
+    pub(super) socket: Arc<super::BipSocket>,
     pub(super) npdu_tx: mpsc::Sender<ReceivedNpdu>,
     pub(super) bbmd: Option<Arc<Mutex<BbmdState>>>,
     pub(super) broadcast_addr: Ipv4Addr,
