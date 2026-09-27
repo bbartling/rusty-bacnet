@@ -95,7 +95,7 @@ async fn start_logger(
             AuditLogObject::new(1, "log", 16, persistence.clone()).unwrap(),
         ))
         .unwrap();
-    BACnetServer::builder()
+    BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(logger_db)
@@ -166,7 +166,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
             .unwrap();
     }
     target_db.add(Box::new(reporter)).unwrap();
-    let mut target = BACnetServer::builder()
+    let mut target = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(target_db)

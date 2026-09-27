@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Remove the pre-1.0 Rust `BACnetClient::builder()` and
+  `BACnetServer::builder()` aliases. Rust callers must use `bip_builder()` for
+  B/IP; builder options/defaults, SC/generic builders and Python constructors
+  are unchanged (#873).
+
 ### Fixed
 
 - NORMAL B/IP full servers and endpoints now own local Network Number discovery/learning, using only explicit registration for configured provenance. Selected Number/Quality readback follows configured-source precedence; unregistered owners start unknown. Control workers preserve APDU/Audit progress and join shutdown with socket/registration ownership. Other links, BBMD/foreign mode and multiport routing remain separate (#875).

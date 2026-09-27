@@ -109,7 +109,7 @@ mod policy_precommit;
 /// reporter.set_auditable_operations(operations)?;
 /// reporter.set_issue_confirmed_notifications(true)?;
 /// db.add(Box::new(reporter))?;
-/// let mut server = BACnetServer::builder().database(db)
+/// let mut server = BACnetServer::bip_builder().database(db)
 ///     .audit_reporters(AuditReportersConfig {
 ///         reporters: vec![ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1)?],
 ///     })

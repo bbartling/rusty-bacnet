@@ -486,10 +486,6 @@ impl BACnetClient<BipTransport> {
         }
     }
 
-    pub fn builder() -> BipClientBuilder {
-        Self::bip_builder()
-    }
-
     /// Read the Broadcast Distribution Table from a BBMD.
     pub async fn read_bdt(
         &self,
