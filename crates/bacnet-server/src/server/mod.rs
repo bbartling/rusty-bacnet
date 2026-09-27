@@ -598,6 +598,7 @@ pub struct BACnetServer<T: TransportPort> {
     broadcaster: Arc<broadcaster::BroadcasterState<T>>,
     transport_cleanup: Option<TransportCleanup<T>>,
     transport_cleanup_error: Option<String>,
+    network_number_task: Option<JoinHandle<()>>,
     /// Shared object database.
     db: Arc<RwLock<ObjectDatabase>>,
     /// COV subscription table (also held by dispatch task; read by

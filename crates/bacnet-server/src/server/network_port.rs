@@ -122,23 +122,75 @@ pub(super) async fn start<T: TransportPort + 'static>(
         NetworkLayer<T>,
         mpsc::Receiver<ReceivedApdu>,
         Arc<super::audit_recipient_routes::AuditRoutes>,
+        Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
     ),
     Error,
 > {
     prepare(db, &mut transport, config.registered_network_port)?;
     let mut starting = StartingNetwork::new(transport);
     let started = async {
+        let controls = if starting
+            .network()
+            .transport()
+            .normal_bip_endpoint()
+            .is_some()
+        {
+            Some(starting.network().enable_network_control_receiver()?)
+        } else {
+            None
+        };
         let apdu_rx = starting.network().start().await?;
         publish(db, starting.network(), config.registered_network_port)?;
         let routes = audit_routes.finish(db, config, starting.network()).await?;
-        Ok::<_, Error>((apdu_rx, routes))
+        let controls = starting
+            .network()
+            .transport()
+            .normal_bip_endpoint()
+            .and(controls);
+        Ok::<_, Error>((apdu_rx, routes, controls))
     }
     .await;
     match started {
-        Ok((apdu_rx, routes)) => Ok((starting.finish(), apdu_rx, routes)),
+        Ok((apdu_rx, routes, controls)) => Ok((starting.finish(), apdu_rx, routes, controls)),
         Err(error) => {
             starting.cleanup().await?;
             Err(error)
         }
     }
+}
+
+pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
+    network: &Arc<NetworkLayer<T>>,
+    db: &Arc<RwLock<ObjectDatabase>>,
+    selected: Option<ObjectIdentifier>,
+    mut controls: mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>,
+) -> JoinHandle<()> {
+    let network = Arc::clone(network);
+    let mut owner =
+        crate::network_number::NetworkNumberOwner::new(selected.map(|oid| (Arc::clone(db), oid)));
+    tokio::spawn(async move {
+        while let Some(control) = controls.recv().await {
+            if let Some(npdu) = owner.handle(control).await {
+                if let Err(error) = network.transport().send_broadcast(&npdu).await {
+                    tracing::debug!(%error, "Network-Number-Is broadcast failed");
+                }
+            }
+        }
+    })
+}
+
+pub(super) fn validate_apdu_capacity<T: TransportPort>(
+    config: &mut ServerConfig,
+    transport: &T,
+) -> Result<(), Error> {
+    let transport_max = transport.max_apdu_length() as u32;
+    config.max_apdu_length = config.max_apdu_length.min(transport_max);
+    let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {
+        Error::Encoding(format!(
+            "invalid max_apdu_length {}; expected one of 50, 128, 206, 480, 1024, 1476",
+            config.max_apdu_length
+        ))
+    })?;
+    validate_max_apdu_length(max_apdu)?;
+    Ok(())
 }

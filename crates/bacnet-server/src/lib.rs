@@ -10,6 +10,8 @@ pub mod life_safety;
 mod life_safety_cov;
 mod local_device;
 pub mod mutation;
+#[doc(hidden)]
+pub mod network_number;
 pub mod pics;
 pub mod schedule;
 pub mod server;

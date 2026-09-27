@@ -2938,6 +2938,8 @@ class BipEndpoint:
 
     # network_port_instance declares a snapshot; registered_network_port explicitly
     # selects it for one concrete-interface NORMAL B/IP bind. None stays unbound.
+    # NORMAL B/IP answers/learns local Network Number controls. Only explicit
+    # registration supplies configured provenance; an unregistered owner starts unknown.
 
     def __init__(
         self,

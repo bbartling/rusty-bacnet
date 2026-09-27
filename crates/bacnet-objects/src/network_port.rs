@@ -1,9 +1,11 @@
-//! Configured, unbound Network Port snapshots (135-2020 Clause 12.56).
+//! Configured Network Port snapshots and selected live state (135-2020 Clause 12.56).
 //!
 //! The B/IP constructor supplies the flat application-level IPV4/NORMAL
 //! profile. Configuration is read-only over BACnet: this object has no pending
 //! activation owner, socket, or NIC discovery. Reconstruct it to change local
-//! configuration. Non-B/IP snapshots expose only the common application rows;
+//! configuration. An explicit NORMAL B/IP owner may publish its actual bind and
+//! learn Network_Number/Quality without changing configured provenance.
+//! Non-B/IP snapshots expose only the common application rows;
 //! they do not claim a complete transport-specific SC, Ethernet or MS/TP profile.
 
 use bacnet_types::enums::{NetworkType, ObjectType, PropertyIdentifier};
@@ -17,10 +19,13 @@ use crate::traits::BACnetObject;
 
 mod bip_config;
 mod metadata;
+mod number;
 mod registration;
 pub use bip_config::BipPortConfig;
+#[doc(hidden)]
+pub use number::NetworkNumber;
 
-/// A declared application-port configuration, independent of a live transport.
+/// A declared application-port snapshot, optionally associated with an owned link.
 pub struct NetworkPortObject {
     oid: ObjectIdentifier,
     name: String,
@@ -29,7 +34,7 @@ pub struct NetworkPortObject {
     out_of_service: bool,
     reliability: u32,
     network_type: NetworkType,
-    network_number: u16,
+    network_number: NetworkNumber,
     mac_address: MacAddr,
     apdu_length: u32,
     bip: Option<BipPortConfig>,
@@ -55,7 +60,7 @@ impl NetworkPortObject {
             out_of_service: false,
             reliability: 0,
             network_type: NetworkType::IPV4,
-            network_number: config.network_number,
+            network_number: NetworkNumber::configured(config.network_number),
             mac_address: mac,
             apdu_length: config.apdu_length,
             bip: Some(config),
@@ -88,7 +93,7 @@ impl NetworkPortObject {
             out_of_service: false,
             reliability: 0,
             network_type,
-            network_number,
+            network_number: NetworkNumber::configured(network_number),
             mac_address,
             apdu_length,
             bip: None,
@@ -123,14 +128,12 @@ impl BACnetObject for NetworkPortObject {
             P::OBJECT_TYPE => Ok(PropertyValue::Enumerated(ObjectType::NETWORK_PORT.to_raw())),
             P::NETWORK_TYPE => Ok(PropertyValue::Enumerated(self.network_type.to_raw())),
             P::PROTOCOL_LEVEL => Ok(PropertyValue::Enumerated(2)),
-            P::NETWORK_NUMBER => Ok(PropertyValue::Unsigned(self.network_number.into())),
-            P::NETWORK_NUMBER_QUALITY => {
-                Ok(PropertyValue::Enumerated(if self.network_number == 0 {
-                    0
-                } else {
-                    3
-                }))
-            }
+            P::NETWORK_NUMBER => Ok(PropertyValue::Unsigned(
+                self.network_number.snapshot().0.into(),
+            )),
+            P::NETWORK_NUMBER_QUALITY => Ok(PropertyValue::Enumerated(
+                self.network_number.snapshot().1.into(),
+            )),
             P::MAC_ADDRESS => Ok(PropertyValue::OctetString(self.mac_address.to_vec())),
             P::APDU_LENGTH => Ok(PropertyValue::Unsigned(self.apdu_length.into())),
             // Optional unknown rate, not a measured NIC speed (errata item 23).

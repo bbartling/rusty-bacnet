@@ -55,8 +55,8 @@ pub enum EndpointApduDestination {
 
 #[path = "endpoint_egress.rs"]
 mod egress;
-use egress::NetworkServiceCommand;
 pub use egress::{EndpointEgress, EndpointEgressAdmissionError, EndpointSend, EndpointSendOutcome};
+use egress::{NetworkServiceCommand, NetworkServicePayload};
 
 /// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +91,9 @@ pub struct PolicyOutcome {
 
 /// Single-consumer queues produced when endpoint ingress starts.
 pub struct IngressReceivers {
+    /// The NORMAL B/IP local control stream; other links retain discard behavior.
+    #[doc(hidden)]
+    pub network_controls: Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
     /// Post-bind registration capability and independently supported port capacity.
     #[doc(hidden)]
     pub normal_bip_port: Option<(std::net::SocketAddrV4, u16)>,
@@ -197,6 +200,11 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
         self.lifecycle = Lifecycle::Starting;
+        let controls = if network.transport().normal_bip_endpoint().is_some() {
+            Some(network.enable_network_control_receiver()?)
+        } else {
+            None
+        };
         let apdu_rx = network.start().await?;
         let normal_bip_port = network
             .transport()
@@ -238,6 +246,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.lifecycle = Lifecycle::Running;
 
         Ok(IngressReceivers {
+            network_controls: normal_bip_port.and(controls),
             normal_bip_port,
             bip_local_address,
             bip_broadcast_endpoint,
@@ -408,7 +417,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
     prefer_ingress: &mut bool,
 ) -> EgressDrive {
     let NetworkServiceCommand {
-        apdu,
+        payload,
         destination,
         expecting_reply,
         priority,
@@ -436,14 +445,24 @@ async fn drive_network_service<T: TransportPort + 'static>(
     };
     tokio::pin!(expiry);
     let outcome = {
-        let send = send_network_service_apdu(
-            network,
-            &apdu,
-            &destination,
-            expecting_reply,
-            priority,
-            &data_attributes,
-        );
+        let send = async {
+            match &payload {
+                NetworkServicePayload::Apdu(apdu) => {
+                    send_network_service_apdu(
+                        network,
+                        apdu,
+                        &destination,
+                        expecting_reply,
+                        priority,
+                        &data_attributes,
+                    )
+                    .await
+                }
+                NetworkServicePayload::LocalControl(npdu) => {
+                    network.transport().send_broadcast(npdu).await
+                }
+            }
+        };
         tokio::pin!(send);
         loop {
             let event = if *prefer_ingress {

@@ -1879,7 +1879,20 @@ raw `add_network_port(network_type=...)` API is removed.
 
 ### Registered B/IP Network Port
 
-This receiving-port association does not claim a complete active Network Port profile. Single-link nonrouter Network Number discovery and learning remain tracked in [#875](https://github.com/jscott3201/rusty-bacnet/issues/875).
+This receiving-port association remains a bounded single NORMAL B/IP profile. Local Network Number behavior is described below; complete Network Port conformance, BBMD/foreign-device ownership, other data links and multiport routing remain outside this contract.
+
+### Local Network Number controls
+
+The full server and endpoint automatically consume the two local nonrouter controls on a NORMAL B/IP link. A valid local What-Is-Network-Number receives a local-broadcast Network-Number-Is when the owner knows its number. There is no proactive startup announcement. An explicit registered Network Port with a nonzero configured number reports `CONFIGURED` and never replaces that number from an announcement. Zero starts `UNKNOWN`; an owner without registration also starts unknown, regardless of other declared objects.
+
+A valid local-broadcast announcement with flag zero updates an unknown/learned owner to `LEARNED`. Flag one sets `LEARNED_CONFIGURED` and takes precedence over all subsequent flag-zero announcements. Further flag-one announcements may replace that learned value, including conflicts; an equal value still upgrades its quality. Both learned qualities transmit flag zero in their own responses. Selected-object `Network_Number` and `Network_Number_Quality` reads use the same database-owned state. Configuration remains immutable, so a new registration resets the pair from configured provenance; a new unregistered runtime starts unknown. There is no persistence of learned state across constructing a new runtime. After stop, the object retains the last observed pair until reconstruction or a new registration.
+
+Routed controls, malformed payloads and Original-Unicast Network-Number-Is are ignored. A BBMD Forwarded-NPDU is a logical broadcast even when its UDP hop is unicast and remains eligible. Ignoring number zero, 65535 and flags outside zero/one is this implementation's validation policy, rather than an additional quoted Standard mandate. Conflicting announcements against a locally configured number produce a debug diagnostic without changing configuration.
+
+Control work has its own bounded receiver and serial worker, so a blocked learning operation does not stop APDU/Audit acknowledgment dispatch. Stop seals, aborts and joins that worker before transport cleanup; cancellation retains cleanup ownership. Queued endpoint control sends are caller-owned and canceled with the worker, while a send already started may have reached the wire. The registered-object lease remains with the final socket and admitted work.
+
+The [conformance evidence](conformance/support-summary.md#bacnet-06-nonrouter-network-number) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The new owner fixture does not capture outgoing BVLL frames. These controls do not establish a complete Network Port or router profile.
+
 
 `BipEndpoint(..., network_port_instance=2, registered_network_port=2)` explicitly
 associates its declared port 2 with one owned NORMAL B/IP transport. Omitting
