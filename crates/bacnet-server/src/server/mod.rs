@@ -672,11 +672,6 @@ impl BACnetServer<BipTransport> {
             configured_device_bindings: Vec::new(),
         }
     }
-
-    /// Create a BIP-specific builder (alias for backward compatibility).
-    pub fn builder() -> BipServerBuilder {
-        Self::bip_builder()
-    }
 }
 
 mod clock;

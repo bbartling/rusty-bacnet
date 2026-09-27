@@ -25,7 +25,7 @@ async fn device_recipient_bip_address_change_delivers_to_both_real_loggers() {
             .unwrap();
         // The mandatory property-specific pair applies even at Audit_Level NONE.
         db.add(Box::new(reporter)).unwrap();
-        let mut target = BACnetServer::builder()
+        let mut target = BACnetServer::bip_builder()
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .database(db)

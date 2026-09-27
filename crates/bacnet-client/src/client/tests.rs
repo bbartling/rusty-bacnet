@@ -16,7 +16,7 @@ use tokio::time::Duration;
 mod wpm_error_projection;
 
 async fn make_client() -> BACnetClient<BipTransport> {
-    BACnetClient::builder()
+    BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(2000)
@@ -125,7 +125,7 @@ async fn client_stop_releases_bip_socket_before_drop() {
 
     timeout(Duration::from_secs(1), async {
         loop {
-            match BACnetClient::builder()
+            match BACnetClient::bip_builder()
                 .interface(Ipv4Addr::LOCALHOST)
                 .port(port)
                 .build()
@@ -174,7 +174,7 @@ async fn client_drop_releases_bip_socket() {
 
     timeout(Duration::from_secs(1), async {
         loop {
-            match BACnetClient::builder()
+            match BACnetClient::bip_builder()
                 .interface(Ipv4Addr::LOCALHOST)
                 .port(port)
                 .build()
@@ -246,7 +246,7 @@ async fn device_table_purge_runs_without_inbound_apdu() {
 
 #[tokio::test]
 async fn client_rejects_invalid_max_apdu_length() {
-    let result = BACnetClient::builder()
+    let result = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .max_apdu_length(1000)
@@ -499,7 +499,7 @@ async fn segmented_complex_ack_reassembly() {
 
 #[tokio::test]
 async fn segmented_confirmed_request_sends_segments() {
-    let mut client = BACnetClient::builder()
+    let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(5000)
@@ -591,7 +591,7 @@ async fn segmented_confirmed_request_sends_segments() {
 
 #[tokio::test]
 async fn segmented_request_with_complex_ack_response() {
-    let mut client = BACnetClient::builder()
+    let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(5000)
@@ -774,7 +774,7 @@ async fn routed_segmented_request_uses_routed_tsm_key() {
 
 #[tokio::test]
 async fn segment_overflow_guard() {
-    let mut client = BACnetClient::builder()
+    let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(2000)

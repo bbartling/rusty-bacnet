@@ -274,7 +274,7 @@ async fn started() -> (
     BACnetClient<bacnet_transport::bip::BipTransport>,
     Vec<u8>,
 ) {
-    let server = BACnetServer::builder()
+    let server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(database())

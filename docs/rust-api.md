@@ -1293,7 +1293,8 @@ let client = BACnetClient::sc_builder()
     .await?;
 ```
 
-`BACnetClient::builder()` is an alias for `bip_builder()`.
+Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
+`generic_builder()` with a prebuilt transport.
 
 ### Routed Confirmed-Request Limits
 
@@ -1901,7 +1902,8 @@ let state = server.comm_state(); // 0=Enable, 1=Disable, 2=DisableInitiation
 server.stop().await?;
 ```
 
-`BACnetServer::builder()` is an alias for `bip_builder()`.
+Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
+`generic_builder()` with a prebuilt transport.
 
 All three Rust builders accept `.mutation_authorizer(|context| ...)`, also
 available as `ServerConfig::mutation_authorizer`. It covers only confirmed
