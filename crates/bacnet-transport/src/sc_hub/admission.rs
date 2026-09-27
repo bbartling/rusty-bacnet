@@ -235,8 +235,8 @@ pub type ScHubAdmissionPolicy =
 /// - `handshake_count` derives from existing state (accepted slots minus
 ///   registered clients); it is approximate under replacement churn, not a
 ///   transactional read, and never a second state machine.
-/// - `admin_denied` is the saturating lifetime count of admin-policy
-///   denials. Capacity NAKs and silent accept drops are not included.
+/// - `admin_denied` is the saturating lifetime count of certificate-binding
+///   and admin-policy denials. Capacity NAKs and silent accept drops are not included.
 /// - `broadcast_drops` reuses the existing saturating relay counters.
 ///
 /// Redacted by construction: no certificates, keys, VMAC maps, or payloads.
