@@ -5,7 +5,7 @@ Use it to build BACnet clients, model devices and serve their properties, or
 explore protocol behavior in a local lab. The project targets ASHRAE Standard
 135-2020 and tracks implementation evidence at the clause level.
 
-[GitLab CI (sign-in required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/pipelines)
+[GitLab CI (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/pipelines)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **[Documentation](https://jscott3201.github.io/rusty-bacnet/)** ·
@@ -486,9 +486,9 @@ non-published Rust `cdylib`, and integration tests are internal test infrastruct
   [support scope](https://jscott3201.github.io/rusty-bacnet/project/support/).
 - Checkout references: [Rust](docs/rust-api.md), [Python](docs/python-api.md),
   [CLI](docs/CLI.md), [architecture](docs/architecture.md), and [changelog](CHANGELOG.md).
-- [Issues](https://github.com/jscott3201/rusty-bacnet/issues) — include the package
+- [GitLab issues (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues) — include the package
   version/source revision, OS, transport, and a sanitized minimal reproduction.
-  Issues are public: do not post private keys, credentials, sensitive deployment
+  Do not post private keys, credentials, sensitive deployment
   details, or captures from real networks. Prefer synthetic/local-lab fixtures.
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — companion MCP gateway.
 - [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — companion test harness;
