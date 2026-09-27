@@ -11,10 +11,30 @@ violations=0
 scan() {
   local pattern="$1"
   local label="$2"
-  if git grep -nE "$pattern" -- ':!_spec' >/dev/null 2>&1; then
+  local path path_id line matched status count=0 limit=20
+  if git grep -qE -e "$pattern" -- ':(exclude)_spec' 2>/dev/null; then
     echo "FAIL: matched $label pattern in tracked files:"
-    git grep -nE "$pattern" -- ':!_spec' || true
+    # NUL-delimited path/line fields handle colons and newlines in filenames.
+    # Consume matching text without printing it, including for binary files.
+    # Limit diagnostics per pattern so repeated matches cannot flood CI logs.
+    while IFS= read -r -d '' path && IFS= read -r -d '' line && IFS= read -r matched; do
+      if [ "$count" -ge "$limit" ]; then
+        echo "  (additional matches omitted)"
+        break
+      fi
+      # Filenames can contain credentials too. Hash the path bytes without
+      # writing an object; retain a stable location ID without echoing a path.
+      path_id=$(printf '%s' "$path" | git hash-object --stdin)
+      printf '  path-id=%s:%s: [REDACTED]\n' "$path_id" "$line"
+      count=$((count + 1))
+    done < <(git grep --text -n -z -E -e "$pattern" -- ':(exclude)_spec' || true)
     violations=$((violations + 1))
+  else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+      echo 'ERROR: unable to scan tracked files.' >&2
+      exit 2
+    fi
   fi
 }
 
