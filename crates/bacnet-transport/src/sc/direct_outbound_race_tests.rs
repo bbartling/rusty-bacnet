@@ -251,12 +251,20 @@ async fn concurrent_outbound_crossed_accept_order_releases_both_and_redials() {
         .unwrap();
     let mut d = Dials::new(&ca, url(&listener)).await;
     let a = d.start();
-    d.event(0, "accept").await; // Accept A sent/committed remotely, held locally.
+    // Accept A is received and held locally. Receiving bytes does not prove
+    // the remote send future has returned; wait for its subsequent publication.
+    d.event(0, "accept").await;
+    until(|| remote.current_generations().len() == 1).await;
     let remote_a = remote.current_generations();
     assert_eq!(remote_a.len(), 1);
     assert_eq!(listener.active_connections(), 1);
     let b = d.start();
-    d.event(1, "accept").await; // Remote sends/commits B after A, retiring A.
+    d.event(1, "accept").await; // Accept B received and held locally.
+    until(|| {
+        let current = remote.current_generations();
+        current.len() == 1 && current != remote_a
+    })
+    .await; // Remote has committed B after A and retired A.
     let remote_b = remote.current_generations();
     assert_eq!(remote_b.len(), 1);
     assert_ne!(remote_a, remote_b);
