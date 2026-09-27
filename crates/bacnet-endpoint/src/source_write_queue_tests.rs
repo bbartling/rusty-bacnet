@@ -104,3 +104,114 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends() {
+    for queued in [true, false] {
+        let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
+        let peer_mac = encode_bip_mac([127, 0, 0, 1], 30002);
+        let (transport, peer) = LoopbackTransport::pair(source_mac.to_vec(), peer_mac.to_vec());
+        let entered = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let mut session = EndpointSession::new(
+            Gated {
+                inner: transport,
+                entered: entered.clone(),
+                gate: gate.clone(),
+            },
+            SessionRole::ClientOnly,
+            SessionConfig::default(),
+        )
+        .unwrap();
+        let mut peer = NetworkLayer::new(peer);
+        let mut received = peer.start().await.unwrap();
+        session.start().await.unwrap();
+        let destination = bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Direct {
+            destination_mac: MacAddr::from_slice(&peer_mac),
+        };
+        if queued {
+            // A genuine fire-and-forget marker survives dropping its completion.
+            let blocker = session
+                .egress
+                .as_ref()
+                .unwrap()
+                .admit_apdu(
+                    vec![0x10, 8],
+                    destination.clone(),
+                    false,
+                    NetworkPriority::NORMAL,
+                    Vec::new(),
+                    None,
+                )
+                .unwrap();
+            timeout(WAIT, entered.notified()).await.unwrap();
+            drop(blocker);
+        }
+        let client = session.cloned_client_handle().unwrap();
+        let task = tokio::spawn(async move {
+            client
+                .write_property(
+                    &peer_mac,
+                    target(),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    vec![0],
+                    None,
+                    Commandability::Noncommandable,
+                )
+                .await
+        });
+        timeout(WAIT, async {
+            while session.active_leases() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if !queued {
+            timeout(WAIT, entered.notified()).await.unwrap();
+        } else {
+            tokio::task::yield_now().await;
+        }
+        task.abort();
+        let _ = task.await;
+        assert_eq!(session.active_leases(), 0);
+        // Flush with an owned completion so absence is not a scheduling guess.
+        let marker = session
+            .egress
+            .as_ref()
+            .unwrap()
+            .admit_apdu(
+                vec![0x10, 8],
+                destination,
+                false,
+                NetworkPriority::NORMAL,
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        gate.add_permits(3);
+        timeout(WAIT, marker.complete())
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        let expected = if queued { 2 } else { 1 };
+        for _ in 0..expected {
+            let envelope = receive(&mut received).await;
+            assert!(
+                matches!(
+                    decode_apdu(envelope.apdu).unwrap(),
+                    Apdu::UnconfirmedRequest(_)
+                ),
+                "canceled WP must not reach peer"
+            );
+        }
+        assert!(
+            received.try_recv().is_err(),
+            "only explicit markers may remain"
+        );
+        session.stop().await.unwrap();
+        peer.stop().await.unwrap();
+    }
+}

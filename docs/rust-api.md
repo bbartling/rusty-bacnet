@@ -2316,8 +2316,9 @@ The shared requester validates zero or more complete TLVs, priority 1–16 when
 supplied, and the complete unsegmented APDU size before reserving an Invoke ID.
 Empty lists and encoded NULL are distinct valid representations. The wire priority
 and bytes remain unchanged. A matching SimpleACK returns `Ok(())`; Error, Reject,
-Abort and timeout retain the established error mapping. A wrong-service or wrong
-ACK shape cannot complete the write successfully.
+Abort and timeout retain the established error mapping. A wrong-service Error or ACK, or a wrong
+ACK shape, cannot complete the write. Error correlation also protects notification
+leases in the shared coordinator.
 
 The same session source Audit owner captures live Reporter policy, recipient,
 source Device, timestamp, identity and Invoke ID once. Commandable omitted priority
@@ -2330,7 +2331,10 @@ never invents remote `Current_Value`, target timestamp, or execution evidence.
 
 Before source admission, cancellation releases caller-owned work. Eligible admitted
 writes retain terminal observation after caller cancellation. Nonreported writes
-remain caller-owned. The existing 64-operation budget, notification budget,
+remain caller-owned: cancellation retracts queued requester sends and drops any
+in-progress transport future. A transport attempt may already have reached the
+peer, so cancellation never proves the write was not executed. Ordinary detached
+egress sends retain their existing semantics. The existing 64-operation budget, notification budget,
 recipient generation fences, three-second delivery deadline and stop/drop behavior
 are shared with reads. Notification failure cannot replace the caller's write result.
 Source WP is a bounded extension under #345/#852; WPM, routed writes, standalone

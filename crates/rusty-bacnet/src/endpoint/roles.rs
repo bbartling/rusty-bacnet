@@ -129,7 +129,8 @@ impl PyEndpointClient {
                     commandability,
                 )
                 .await
-                .map_err(to_py_err)
+                .map_err(to_py_err)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 

@@ -131,7 +131,7 @@ async fn notification_terminals_complete_exactly_once() {
 
     for (pdu, expected) in [
         (simple_ack(0, COV_SERVICE), CovAckResult::Ack),
-        (error(0, EVENT_SERVICE), CovAckResult::Error),
+        (error(0, COV_SERVICE), CovAckResult::Error),
         (reject(0), CovAckResult::Error),
         (abort(0, false), CovAckResult::Error),
     ] {
@@ -158,6 +158,12 @@ async fn notification_terminals_complete_exactly_once() {
             _ => unreachable!(),
         };
 
+        assert!(!transactions.admit_terminal(&direct_mac, None, &error(invoke_id, EVENT_SERVICE)));
+        assert_eq!(
+            transactions.active_count(),
+            1,
+            "wrong-service Error must retain notification ownership"
+        );
         assert!(transactions.admit_terminal(&direct_mac, None, &pdu));
         assert_eq!(receiver.await.unwrap(), expected);
         assert_eq!(transactions.active_count(), 0);

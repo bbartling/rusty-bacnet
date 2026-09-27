@@ -50,7 +50,10 @@ required caller-declared commandability, omitted effective priority 16,
 source filtering, captured identity/result and whole 0–32-byte Target_Value.
 Tests decode real request/notification traffic, peer terminals, empty Recipient_List
 success and scalar Error, 32/33 bounds, framing/prewire refusal, retries, caller
-cancellation, stop/drop, recipient changes and shared resource budgets. One shared
+cancellation, stop/drop, recipient changes and shared resource budgets. Additional
+regressions require matching Error service choice in requester and notification
+leases, and retract canceled no-Reporter writes both queued and in transport
+while preserving audited-worker and explicitly detached-send ownership. One shared
 requester and one SourceAudit owner serve RP/RR/RPM/WP; read-family semantics are
 retained. WPM, routed writes, other transport source profiles, standalone ownership
 and full Audit/BIBB/BTL qualification remain unclaimed.

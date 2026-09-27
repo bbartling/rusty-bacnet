@@ -257,3 +257,45 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
     remote.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn source_write_wrong_service_error_cannot_finish_or_steal_retry_identity() {
+    let (mut peer, mut requests) = network().await;
+    let (mut sink, mut records) = network().await;
+    let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
+    session.client_config.apdu_retries = 1;
+    session.start().await.unwrap();
+    let pending = start_write(
+        &session,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+    );
+    let first = receive(&mut requests).await;
+    let (invoke, wp) = write_request(&first);
+    send(
+        &peer,
+        &first.source_mac,
+        Apdu::Error(ErrorPdu {
+            invoke_id: invoke,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::WRITE_ACCESS_DENIED,
+            error_data: Bytes::new(),
+        }),
+    )
+    .await;
+    let retry = receive(&mut requests).await;
+    assert_eq!(retry.apdu, first.apdu);
+    assert!(!pending.is_finished());
+    assert!(records.try_recv().is_err());
+    send(&peer, &retry.source_mac, write_ack(invoke, &wp)).await;
+    pending.await.unwrap().unwrap();
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(record.result, None);
+    assert!(records.try_recv().is_err());
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}

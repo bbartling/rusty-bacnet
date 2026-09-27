@@ -59,13 +59,12 @@ impl PreparedEndpointOperation {
                 *attempted = true;
                 return self.terminal(response);
             }
-            let send = inner.egress.admit_apdu(
+            let send = inner.egress.admit_owned_apdu(
                 self.encoded.clone(),
                 self.destination.clone(),
                 true,
                 NetworkPriority::NORMAL,
                 self.data_attributes.clone(),
-                None,
             );
             let send_result = match send {
                 Ok(send) => {

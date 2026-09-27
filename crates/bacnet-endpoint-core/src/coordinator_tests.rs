@@ -435,27 +435,37 @@ fn notification_accepts_simple_ack_but_never_complex_ack() {
 }
 
 #[test]
-fn error_is_terminal_without_service_validation_and_claims_once() {
-    let coordinator = OutboundTransactionCoordinator::new();
-    let expected_peer = peer(4);
-    let error_token = coordinator
-        .reserve(requester(expected_peer.clone(), TerminalPolicy::ComplexAck))
-        .unwrap();
-
-    assert_admitted_kind(
-        coordinator
-            .admit(
-                &expected_peer,
-                &error_pdu(error_token.invoke_id(), OTHER_SERVICE),
-            )
-            .unwrap(),
-        AdmissionKind::Terminal,
-    );
-    assert_eq!(
-        coordinator.admit(&expected_peer, &error_pdu(error_token.invoke_id(), SERVICE)),
-        Ok(AdmissionOutcome::DuplicateTerminal)
-    );
-    coordinator.complete(error_token).unwrap();
+fn error_requires_matching_service_for_requesters_and_notifications_and_claims_once() {
+    for notification in [false, true] {
+        let coordinator = OutboundTransactionCoordinator::new();
+        let expected_peer = peer(4);
+        let metadata = if notification {
+            LeaseMetadata::notification(expected_peer.clone(), SERVICE)
+        } else {
+            requester(expected_peer.clone(), TerminalPolicy::ComplexAck)
+        };
+        let token = coordinator.reserve(metadata).unwrap();
+        assert_eq!(
+            coordinator.admit(&expected_peer, &error_pdu(token.invoke_id(), OTHER_SERVICE)),
+            Ok(AdmissionOutcome::ServiceMismatch {
+                expected: SERVICE,
+                observed: OTHER_SERVICE
+            })
+        );
+        assert_eq!(coordinator.active_count(), Ok(1));
+        assert_admitted_kind(
+            coordinator
+                .admit(&expected_peer, &error_pdu(token.invoke_id(), SERVICE))
+                .unwrap(),
+            AdmissionKind::Terminal,
+        );
+        assert_eq!(
+            coordinator.admit(&expected_peer, &error_pdu(token.invoke_id(), SERVICE)),
+            Ok(AdmissionOutcome::DuplicateTerminal)
+        );
+        coordinator.complete(token).unwrap();
+        assert_eq!(coordinator.active_count(), Ok(0));
+    }
 }
 
 #[test]
