@@ -43,6 +43,23 @@ pub enum AnyTransport<S: SerialPort + 'static> {
 }
 
 impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
+    fn retain_network_port_lease_internal(
+        &mut self,
+        lease: std::sync::Arc<()>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Bip(transport) => transport.retain_network_port_lease_internal(lease),
+            _ => Err(Error::Encoding(
+                "registered ports require NORMAL B/IP".into(),
+            )),
+        }
+    }
+    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        match self {
+            Self::Bip(transport) => transport.normal_bip_endpoint(),
+            _ => None,
+        }
+    }
     fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
         match self {
             Self::Bip(transport) => transport.bip_broadcast_endpoint(),

@@ -40,7 +40,7 @@ async fn send_raw(
 }
 
 fn test_ctx(
-    socket: Arc<UdpSocket>,
+    socket: Arc<super::BipSocket>,
     bbmd: Option<BbmdState>,
     npdu_tx: mpsc::Sender<ReceivedNpdu>,
 ) -> RecvContext {
@@ -297,11 +297,12 @@ async fn rate_limit_bounds_non_bbmd_naks() {
 
 #[tokio::test]
 async fn rate_limit_discards_malformed_and_unauthorized_before_normal_handling() {
-    let server_socket = Arc::new(
+    let server_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = server_socket.local_addr().unwrap().port();
     let peer = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -461,11 +462,12 @@ async fn rate_limit_write_bdt_still_naks_after_quota_exhaustion() {
 
 #[tokio::test]
 async fn rate_limit_leaves_dbtn_and_npdu_outside_limiter() {
-    let server_socket = Arc::new(
+    let server_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = server_socket.local_addr().unwrap().port();
     let peer = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await

@@ -64,6 +64,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     .database
                     .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
                 let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone());
+                if let Some(oid) = self.registered_network_port {
+                    responder =
+                        responder.with_registered_port(oid, self.registered_port_lease.clone());
+                }
                 if let Some(device) = device_write_target {
                     responder = responder.with_device_writes(
                         device,
@@ -97,7 +101,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let audit_lease = source_recipient
             .as_ref()
             .map(|runtime| Arc::clone(&runtime.owner));
+        let registration_lease = self.registered_port_lease.upgrade();
         let task = tokio::spawn(async move {
+            let _registration_lease = registration_lease;
             let _audit_lease = audit_lease;
             dispatch_loop(dispatch, cancel_rx).await
         });

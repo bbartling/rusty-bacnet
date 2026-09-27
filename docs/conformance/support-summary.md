@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 58 |
+| Priority | P1 | 59 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 26 |
+| Status | supported-with-clause-evidence | 27 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -117,6 +117,7 @@
 | `BACNET-14-FILE-ACCESS-METHOD` | Clause 12.13 (Table 12-16 File_Access_Method), Clauses 14.1 and 14.2 (Incorrect File access method), Clauses 14.1.4.1 and 14.2.4.1 (non-File Object Identifier), Clause 14.2.4.1 (Write to a read-only File), Clause 18 (INVALID_FILE_ACCESS_METHOD, FILE_ACCESS_DENIED, and INCONSISTENT_OBJECT_TYPE), Clause 21 (BACnetFileAccessMethod production; AtomicReadFile/AtomicWriteFile access-method CHOICE) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-14-FILE-STORAGE` | Clause 12.13 / Table 12-16 and footnotes 1-2 (File object property model; File_Size stream-only conditional writability; Record_Count record-only presence and conditional writability; truncate, clear, local-matter expansion fill; Modification_Date events and Archive reset), Clause 14.1 (AtomicReadFile parameters, End Of File, Service Procedure), Clause 14.2 (AtomicWriteFile parameters, -1 append, Service Procedure, Result(+) position), Clauses 14.1.4.1 and 14.2.4.1 (INVALID_FILE_START_POSITION), Clause 14.2.4.1 (FILE_FULL), Clause 18 (INVALID_FILE_START_POSITION, FILE_FULL, FILE_ACCESS_DENIED), Clause 19.1.3.3 (restore context writes File_Size=0 before rewriting a differently-sized stream configuration file), Clause 21 (Date, Time, and BACnetDateTime), Annex F (AtomicWriteFile append example) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` | Clause 13.2.2.1.4 transition actions; Clause 13.2.5 notification distribution | P1 | in-progress | 1 |
+| `BACNET-12-REGISTERED-BIP-PORT` | Clause12.56/Table12-71 and APDU_Length12.56.10; receiving Network Port wildcard15.5.2/15.7.2; concrete ACK15.5.1.2/15.7.3.2; Audit Tables19-4/19-5; AnnexJ local BVLL framing | P1 | supported-with-clause-evidence | 3 |
 
 ## Follow-Up Source
 

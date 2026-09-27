@@ -38,20 +38,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
         }
 
-        let clock = clock_config.map(|config| Arc::new(ServerClock::new(config)));
-        let reader = clock
-            .as_ref()
-            .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);
-        db.set_clock_reader(reader);
-        let monotonic_origin = tokio::time::Instant::now();
-        let monotonic_clock: Arc<bacnet_objects::traits::MonotonicClock> = Arc::new(move || {
-            tokio::time::Instant::now().saturating_duration_since(monotonic_origin)
-        });
-        db.set_monotonic_clock_internal(Some(monotonic_clock));
+        let (clock, monotonic_origin) = period::install_database_clocks(&mut db, clock_config);
 
-        let mut network = NetworkLayer::new(transport);
-        let mut apdu_rx = network.start().await?;
-        let audit_routes = audit_routes.finish(&mut db, &config, &mut network).await?;
+        let (network, mut apdu_rx, audit_routes) =
+            super::network_port::start(&mut db, &config, transport, audit_routes).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -80,6 +70,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
         let mutation_decisions_dispatch = Arc::clone(&mutation_decisions);
 
+        let target_audit = super::audit_recipient::TargetAudit::install(
+            &mut *db.write().await,
+            &config,
+            audit_routes,
+            &network,
+            &notification_transactions,
+            &comm_state,
+        );
+        let target_audit = match target_audit {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let network = Arc::try_unwrap(network).map_err(|_| {
+                    Error::Encoding("startup cleanup has an unexpected network owner".into())
+                })?;
+                super::network_port::StartingNetwork::from_network(network)
+                    .cleanup()
+                    .await?;
+                return Err(error);
+            }
+        };
         let network_dispatch = Arc::clone(&network);
         let db_dispatch = Arc::clone(&db);
         let cov_dispatch = Arc::clone(&cov_table);
@@ -96,14 +106,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let clock_dispatch = clock.clone();
         let limiters_dispatch = (discovery_limiter.clone(), time_sync_limiter.clone());
 
-        let target_audit = super::audit_recipient::TargetAudit::install(
-            &mut *db.write().await,
-            &config,
-            audit_routes,
-            &network,
-            &notification_transactions,
-            &comm_state,
-        )?;
         let audit_owner = target_audit
             .as_ref()
             .map(|runtime| Arc::clone(&runtime.owner));

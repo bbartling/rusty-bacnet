@@ -45,7 +45,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         let db = self.db.read().await;
-        let lookup_oid = handlers::resolve_device_wildcard(&db, oid);
+        let lookup_oid =
+            handlers::resolve_read_target(&db, oid, self.config.registered_network_port);
         let live = match handlers::active_cov_device(&db, lookup_oid, property) {
             Some(selection) if self.dispatch_task.is_none() => {
                 Some(crate::cov::active::LiveDeviceCov::stopped(selection))

@@ -1,5 +1,9 @@
 //! BACnetObject trait — the interface all BACnet objects implement.
 
+#[path = "object_storage.rs"]
+mod object_storage;
+pub(crate) use object_storage::ObjectStorageAccess;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -70,9 +74,15 @@ pub enum ReliabilityEvaluation {
 
 /// The core trait for all BACnet objects.
 ///
+/// Stored objects have crate-authorized concrete access; borrowed read views
+/// remain valid implementors. Applications cannot manufacture its access permit:
+/// ```compile_fail
+/// use bacnet_objects::traits::ObjectStorageAccess;
+/// let permit = ObjectStorageAccess(());
+/// ```
 /// Implementors represent a single BACnet object (Device, AnalogInput, etc.)
 /// and provide read/write access to their properties.
-pub trait BACnetObject: Send + Sync {
+pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Typed local Device authority for composition-owned configuration.
     /// This does not grant network write access to the object database.
     #[doc(hidden)]

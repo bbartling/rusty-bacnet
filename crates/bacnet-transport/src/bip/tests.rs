@@ -91,11 +91,12 @@ fn expect_bvlc_function_rejects_unexpected_response_function() {
 
 #[tokio::test]
 async fn pending_bvlc_response_requires_sender_and_expected_function() {
-    let socket = Arc::new(
+    let socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let (npdu_tx, _npdu_rx) = mpsc::channel(1);
     let pending_bvlc_response = Arc::new(Mutex::new(None));
     let (tx, mut rx) = oneshot::channel();
@@ -794,7 +795,7 @@ async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
     );
     assert!(
         socket2::SockRef::from(
-            transport
+            &**transport
                 .socket
                 .as_ref()
                 .expect("socket exists after start")

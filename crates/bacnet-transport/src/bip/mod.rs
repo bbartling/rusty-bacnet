@@ -23,6 +23,8 @@ use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 
 mod fanout;
+mod socket;
+use socket::BipSocket;
 mod io;
 mod rate_limit;
 pub use fanout::{FanoutCounters, FanoutPolicy};
@@ -128,7 +130,9 @@ pub struct BipTransport {
     port: u16,
     broadcast_address: Ipv4Addr,
     local_mac: [u8; 6],
-    socket: Option<Arc<UdpSocket>>,
+    socket: Option<Arc<BipSocket>>,
+    network_port_lease: Option<Arc<()>>,
+    registration_closed: bool,
     recv_task: Option<JoinHandle<()>>,
     /// BBMD configuration before start (consumed by `start()`).
     bbmd_config: Option<BbmdConfig>,
@@ -176,6 +180,8 @@ impl BipTransport {
             broadcast_address,
             local_mac: [0; 6],
             socket: None,
+            network_port_lease: None,
+            registration_closed: false,
             recv_task: None,
             bbmd_config: None,
             bbmd: None,
@@ -292,7 +298,7 @@ impl BipTransport {
     const BBMD_FDT_PURGE_INTERVAL: Duration = Duration::from_millis(20);
 
     /// Get the socket, returning an error if not started.
-    fn require_socket(&self) -> Result<&Arc<UdpSocket>, Error> {
+    fn require_socket(&self) -> Result<&Arc<BipSocket>, Error> {
         self.socket.as_ref().ok_or_else(|| {
             Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
@@ -482,10 +488,41 @@ impl BipTransport {
 }
 
 impl TransportPort for BipTransport {
+    fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        if self.registration_closed
+            || self.socket.is_some()
+            || self.recv_task.is_some()
+            || self.network_port_lease.is_some()
+            || self.normal_bip_endpoint().is_none()
+        {
+            return Err(Error::Encoding(
+                "registered B/IP lease requires unstarted NORMAL transport".into(),
+            ));
+        }
+        self.network_port_lease = Some(lease);
+        Ok(())
+    }
+    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
+        if self.bbmd_config.is_some() || self.bbmd.is_some() || self.foreign_device.is_some() {
+            return None;
+        }
+        let ip = if self.socket.is_some() {
+            Ipv4Addr::new(
+                self.local_mac[0],
+                self.local_mac[1],
+                self.local_mac[2],
+                self.local_mac[3],
+            )
+        } else {
+            self.interface
+        };
+        Some(SocketAddrV4::new(ip, self.port))
+    }
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
         Some(SocketAddrV4::new(self.broadcast_address, self.port))
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        self.registration_closed = true;
         if self.recv_task.is_some() {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -557,7 +594,7 @@ impl TransportPort for BipTransport {
 
         self.local_mac = encode_bip_mac(local_ip.octets(), local_port);
 
-        let socket = Arc::new(socket);
+        let socket = Arc::new(BipSocket::new(socket, self.network_port_lease.clone()));
         self.socket = Some(Arc::clone(&socket));
 
         if let Some(config) = self.bbmd_config.take() {
@@ -722,6 +759,7 @@ impl TransportPort for BipTransport {
         for task in self.abort_background_tasks() {
             let _ = task.await;
         }
+        self.network_port_lease = None;
         Ok(())
     }
 
@@ -816,3 +854,6 @@ mod rate_limit_tests;
 mod response_amplification_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod registration_tests;

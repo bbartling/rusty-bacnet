@@ -256,6 +256,31 @@ pub trait TransportPort: Send + Sync {
         None
     }
 
+    /// Explicit capability for registration as one NORMAL IPv4 Network Port.
+    ///
+    /// Before start this is the configured announced interface/UDP port; after
+    /// start it is the actual announced address. BBMD and foreign-device modes
+    /// must return None, including staged configuration. Custom implementations
+    /// asserting this capability must preserve NORMAL mode through ownership.
+    /// The default refuses registration; broadcast support alone is insufficient.
+    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        None
+    }
+
+    /// Retain selected Network Port protection through the last socket owner.
+    /// Must be installed once before start, only on a NORMAL B/IP transport.
+    /// Successful stop releases it after quiescence; abort/drop must retain it
+    /// in every surviving socket worker. Custom implementors own this contract.
+    #[doc(hidden)]
+    fn retain_network_port_lease_internal(
+        &mut self,
+        _lease: std::sync::Arc<()>,
+    ) -> Result<(), Error> {
+        Err(Error::Encoding(
+            "transport cannot retain a registered B/IP port".into(),
+        ))
+    }
+
     /// Start the transport. Returns a receiver for incoming NPDUs.
     ///
     /// The transport spawns a background receive task that decodes incoming

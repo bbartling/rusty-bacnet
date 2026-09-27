@@ -23,11 +23,12 @@ async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
 
 #[tokio::test]
 async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
-    let socket = Arc::new(
+    let socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -108,11 +109,12 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
 
 #[tokio::test]
 async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -178,11 +180,12 @@ async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
 
 #[tokio::test]
 async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let fdt_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -273,11 +276,12 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
 
 #[tokio::test]
 async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await

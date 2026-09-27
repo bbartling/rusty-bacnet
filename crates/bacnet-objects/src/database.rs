@@ -11,6 +11,7 @@ use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
 use crate::traits::{BACnetObject, MonotonicClock};
 
+mod network_port;
 mod trend_poll;
 use trend_poll::TrendPollSchedule;
 
@@ -20,6 +21,7 @@ use trend_poll::TrendPollSchedule;
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
     audit_owner: Option<std::sync::Weak<AuditOwnership>>,
+    network_port: Option<network_port::NetworkPortRegistration>,
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     trend_poll: TrendPollSchedule,
     /// Shared Device clock reader. `None` is an explicit clockless database.
@@ -75,6 +77,7 @@ impl ObjectDatabase {
             monotonic_clock: None,
             event_sequence: Arc::default(),
             audit_owner: None,
+            network_port: None,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
@@ -88,6 +91,7 @@ impl ObjectDatabase {
     /// Replacing an object with the same OID is allowed unless an installed
     /// Audit runtime protects its membership. Protection is checked before any binding.
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
+        self.check_network_port_membership(&object.object_identifier())?;
         self.check_audit_membership(&object.object_identifier(), true)?;
         object.bind_clock_internal(self.clock.clone());
         object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
@@ -207,6 +211,7 @@ impl ObjectDatabase {
     where
         F: for<'slot> FnOnce(&'slot mut Box<dyn BACnetObject>) -> R,
     {
+        self.check_network_port_membership(oid)?;
         self.check_audit_membership(oid, false)?;
         self.trend_poll.retire(oid);
         Ok(self.objects.get_mut(oid).map(adapt))
@@ -277,6 +282,7 @@ impl ObjectDatabase {
         &mut self,
         oid: &ObjectIdentifier,
     ) -> Result<Option<Box<dyn BACnetObject>>, Error> {
+        self.check_network_port_membership(oid)?;
         self.check_audit_membership(oid, false)?;
         self.trend_poll.retire(oid);
         if self.objects.contains_key(oid) {
@@ -421,3 +427,6 @@ impl ObjectDatabase {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod network_port_tests;

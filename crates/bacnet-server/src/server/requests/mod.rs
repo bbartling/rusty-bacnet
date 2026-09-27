@@ -153,6 +153,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db,
                     Some(cov_table.as_ref()),
                     crate::device_view::DeviceExecution::FullServer,
+                    config.registered_network_port,
                     &req,
                     |db, oid, req, result| {
                         let result = match result {
@@ -192,6 +193,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &req.service_request,
                     &mut ack_buf,
                     config.read_property_multiple_budget,
+                    config.registered_network_port,
                     |db, oid, property, index, result| {
                         read_audits.extend(audit.read_intent(db, oid, property, index, result));
                     },

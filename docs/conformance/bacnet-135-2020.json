@@ -3982,6 +3982,46 @@
     "docs/rust-api.md (intrinsic proposal/commit contract)"
    ],
    "notes": "Refs #746. The pre-1.0 contract removes the opt-in atomic-commit flag and exported immediate-delegation macro; custom implementations own their state and use public commit types. Runtime fixtures prove exact sequence timestamp, acknowledgment bit, stored message and typed EventValues projection. Standalone detector probe/tick behavior and non-intrinsic/acknowledgment send-time paths remain separate. This row records the tested intrinsic contract only; it does not claim general event algorithm, recipient routing, delivery, or persistence completion."
+  },
+  {
+   "id": "BACNET-12-REGISTERED-BIP-PORT",
+   "standard_anchor": "Clause12.56/Table12-71 and APDU_Length12.56.10; receiving Network Port wildcard15.5.2/15.7.2; concrete ACK15.5.1.2/15.7.3.2; Audit Tables19-4/19-5; AnnexJ local BVLL framing",
+   "priority": "P1",
+   "requirement_summary": "Explicit single NORMAL B/IP receiving-port association publishes actual bind facts, preserves selected identity through transport and admitted-work lifetime, and resolves wildcard reads and successful target Audit identities.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/database/network_port.rs",
+    "crates/bacnet-objects/src/object_storage.rs",
+    "crates/bacnet-transport/src/bip/socket.rs",
+    "crates/bacnet-server/src/server/network_port.rs",
+    "crates/bacnet-server/src/handlers/read_property.rs",
+    "crates/bacnet-endpoint/src/registered_port.rs",
+    "crates/rusty-bacnet/src/endpoint/bip.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-endpoint/src/registered_port_wire_tests.rs::registered_port_real_owners_snapshot_wildcard_and_release",
+    "crates/bacnet-endpoint/src/registered_port_routed_tests.rs",
+    "crates/bacnet-endpoint/src/registered_port_wire_tests.rs::registered_port_rpm_mixed_targets_and_missing_registration",
+    "crates/bacnet-endpoint/src/registered_port_wire_tests.rs::registered_port_successful_audit_uses_concrete_targets_per_property",
+    "crates/bacnet-endpoint/src/registered_port_wire_tests.rs::registered_port_capacity_1476_valid_wp_and_rp_through_both_owners",
+    "crates/bacnet-endpoint/src/registered_port_wire_tests.rs::registered_port_capacity_independent_local_bvll_framing",
+    "crates/rusty-bacnet/tests/test_endpoint_bound_address.py"
+   ],
+   "negative_tests": [
+    "crates/bacnet-endpoint/src/registered_port_boundary_tests.rs",
+    "crates/bacnet-endpoint/src/registered_port_lifetime_tests.rs",
+    "crates/bacnet-endpoint/src/registered_port_wire_tests.rs::registered_port_shared_database_does_not_register_other_ingress",
+    "crates/bacnet-server/src/server/network_port_tests.rs",
+    "crates/bacnet-objects/src/database/network_port_tests.rs",
+    "crates/bacnet-transport/src/bip/registration_tests.rs"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "README.md Capabilities and conformance",
+    "docs/rust-api.md Registered B/IP Network Port",
+    "docs/python-api.md Registered B/IP Network Port"
+   ],
+   "notes": "Refs #785; configured snapshot prerequisite #867 and shutdown ownership #872. Explicit selected built-in instance 1..255 is local policy, with concrete unicast interface and optional pre-bind UDP zero. NORMAL capability excludes staged/running BBMD and foreign mode. Only selected snapshot and identity reconcile; other rows remain unbound. Activation writes stay denied, bound OOS and structural replacement/removal/adapter changes are denied before effects. Strong protection accompanies socket allocation and admitted work, not idle exported roles. Full server supports RP/RPM; bounded endpoint responder supports RP only. Mixed RPM succeeds with inline errors when any property is accessible. Valid 1476-byte Device Description WP and separately sized 1476-byte RP ACK run through both owners; independent local frame is 1482 bytes. No blanket oversized rejection claim. Port399 capacity is independent of Device62. Active-only Python BIP address applies even without registration. This is receiving-port identity and ownership evidence, not full active Network Port profile conformance: nonrouter Network Number control/learning remains #875; multiport/router generation remains #863; no pending/rebind, DHCP or other link profile claim."
   }
  ]
 }

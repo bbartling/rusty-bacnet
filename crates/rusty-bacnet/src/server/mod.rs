@@ -90,6 +90,7 @@ pub struct BACnetServer {
     interface: String,
     port: u16,
     broadcast_address: String,
+    registered_network_port: Option<u32>,
     // SC config
     sc_hub: Option<String>,
     sc_vmac: Option<Vec<u8>>,

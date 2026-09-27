@@ -27,7 +27,11 @@ pub(crate) fn read_property_request_observed(
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
 ) -> Result<(), Error> {
-    let lookup_oid = resolve_device_wildcard(db, &request.object_identifier);
+    let lookup_oid = resolve_read_target(
+        db,
+        &request.object_identifier,
+        view.and_then(|view| view.registered_port),
+    );
     let result = read_property_decoded(db, view, request, lookup_oid, buf);
     completed(lookup_oid, request, &result);
     result
@@ -43,7 +47,7 @@ pub(crate) fn read_property_value(
     property: PropertyIdentifier,
     array_index: Option<u32>,
 ) -> Result<PropertyValue, Error> {
-    let object = db.get(&lookup_oid).ok_or(Error::Protocol {
+    let object = read_target_object(db, &lookup_oid).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
@@ -96,15 +100,33 @@ fn read_property_decoded(
     Ok(())
 }
 
+pub(crate) fn read_target_object<'a>(
+    db: &'a ObjectDatabase,
+    oid: &ObjectIdentifier,
+) -> Option<&'a dyn bacnet_objects::traits::BACnetObject> {
+    // An unregistered wildcard is never an ordinary stored object, even if a
+    // custom database supplied that reserved identifier.
+    if oid.object_type() == ObjectType::NETWORK_PORT && oid.instance_number() == 4194303 {
+        return None;
+    }
+    db.get(oid)
+}
+
 fn is_device_wildcard(oid: &ObjectIdentifier) -> bool {
     oid.object_type() == ObjectType::DEVICE && oid.instance_number() == 4194303
 }
 
-/// Resolve Device wildcard instance 4194303 to the actual Device object.
-pub(crate) fn resolve_device_wildcard(
+/// Resolve Device or explicitly registered receiving-port wildcard identity.
+pub(crate) fn resolve_read_target(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
+    registered_port: Option<ObjectIdentifier>,
 ) -> ObjectIdentifier {
+    if oid.object_type() == ObjectType::NETWORK_PORT && oid.instance_number() == 4194303 {
+        return registered_port
+            .filter(|selected| Some(*selected) == db.registered_bip_port_internal())
+            .unwrap_or(*oid);
+    }
     if is_device_wildcard(oid) {
         if let Some(device) = selected_device(db) {
             return device;
@@ -270,8 +292,8 @@ pub fn handle_read_property_multiple(
     for spec in &request.list_of_read_access_specs {
         let mut elements = Vec::new();
 
-        let lookup_oid = resolve_device_wildcard(db, &spec.object_identifier);
-        match db.get(&lookup_oid) {
+        let lookup_oid = resolve_read_target(db, &spec.object_identifier, None);
+        match read_target_object(db, &lookup_oid) {
             Some(object) => {
                 for prop_ref in &spec.list_of_property_references {
                     let prop_ids = expand_property_reference(object, prop_ref.property_identifier);
