@@ -33,7 +33,7 @@ class BoundAddressTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await endpoint.status())["local_address"], address)
             # Independent RP of Device:786 Object_Identifier (invoke ID 1).
             await asyncio.get_running_loop().sock_sendto(
-                peer, bytes.fromhex("810a001101000005010c0c00800312194b"), (host, int(port))
+                peer, bytes.fromhex("810a001101000005010c0c02000312194b"), (host, int(port))
             )
             reply, source = await asyncio.wait_for(
                 asyncio.get_running_loop().sock_recvfrom(peer, 2048), 2

@@ -21,6 +21,7 @@ impl ObjectDatabase {
             .as_mut()
             .as_stored_any_mut(crate::traits::ObjectStorageAccess(()))
             .downcast_mut::<NetworkPortObject>()
+            .filter(|port| port.object_identifier() == *oid)
     }
 
     /// Snapshot only the concrete built-in object; adapters cannot impersonate it.

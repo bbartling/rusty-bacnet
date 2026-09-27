@@ -152,3 +152,24 @@ fn registered_port_forwarding_wrapper_is_refused_before_callbacks() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(db.remove(&oid(1)).unwrap().is_some());
 }
+
+#[test]
+fn registered_port_rejects_actual_identifier_different_from_selected_key() {
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object(1))).unwrap();
+    // Deliberately violate the adapter's documented identity-preservation
+    // precondition. This is defensive admission, not a supported mutation path.
+    db.with_object_adapter(&oid(1), |slot| *slot = Box::new(object(2)))
+        .unwrap();
+    assert!(db
+        .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+        .is_err());
+    assert_eq!(db.registered_bip_port_internal(), None);
+    assert_eq!(db.get(&oid(1)).unwrap().object_identifier(), oid(2));
+    // Failed admission neither takes a lease nor changes the object's state.
+    db.get_mut(&oid(1))
+        .unwrap()
+        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+        .unwrap();
+    assert!(db.remove(&oid(1)).unwrap().is_some());
+}
