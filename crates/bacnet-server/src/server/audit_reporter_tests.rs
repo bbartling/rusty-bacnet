@@ -113,7 +113,7 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
 
     // Exercise the representation boundary directly: malformed wire requests
     // are separately tested through dispatch and must never reach this hook.
-    // Application NULL is one encoded octet, so these cover exactly 32 and 33.
+    // Empty is present; application NULL is one octet, covering exactly 32 and 33.
     let mut fixture = server(reporter()).await;
     let mut audit = audit_reporter::WriteAudit::new(
         &fixture.server.config,
@@ -128,12 +128,17 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
     .await;
     let accepted = vec![0; 32];
     let mut count = 0;
-    for omitted in [vec![], vec![0; 33], vec![0x0e, 0xd1, 0, 0x0f]] {
-        for omit_target in [false, true] {
-            let (delta, current) = if omit_target {
-                (omitted.clone(), accepted.clone())
+    for (candidate, included) in [
+        (vec![], true),
+        (vec![0; 32], true),
+        (vec![0; 33], false),
+        (vec![0x0e, 0xd1, 0, 0x0f], false),
+    ] {
+        for candidate_is_target in [false, true] {
+            let (delta, current) = if candidate_is_target {
+                (candidate.clone(), accepted.clone())
             } else {
-                (accepted.clone(), omitted.clone())
+                (accepted.clone(), candidate.clone())
             };
             let request = ListElementRequest {
                 object_identifier: oid(ObjectType::BINARY_VALUE, 1),
@@ -158,9 +163,20 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
             let record = &records[count - 1].notifications[0];
             assert_eq!(
                 record.target_value,
-                (!omit_target).then(|| accepted.clone())
+                if candidate_is_target {
+                    included.then(|| candidate.clone())
+                } else {
+                    Some(accepted.clone())
+                }
             );
-            assert_eq!(record.current_value, omit_target.then(|| accepted.clone()));
+            assert_eq!(
+                record.current_value,
+                if candidate_is_target {
+                    Some(accepted.clone())
+                } else {
+                    included.then(|| candidate.clone())
+                }
+            );
             assert_eq!(
                 record
                     .target_property
@@ -656,3 +672,6 @@ mod batch_shutdown;
 
 #[path = "audit_batch_history_tests.rs"]
 mod batch_history;
+
+#[path = "audit_reporter_empty_tests.rs"]
+mod empty_values;

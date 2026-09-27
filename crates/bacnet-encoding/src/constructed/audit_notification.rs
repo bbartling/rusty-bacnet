@@ -104,11 +104,6 @@ fn validate_raw_value(value: Option<&[u8]>, field: &str) -> Result<(), Error> {
     let Some(value) = value else {
         return Ok(());
     };
-    if value.is_empty() {
-        return Err(Error::Encoding(format!(
-            "AuditNotification {field} must contain a BACnet value"
-        )));
-    }
     validate_tlv_sequence(value, &format!("AuditNotification {field}"))
         .map_err(|error| Error::Encoding(error.to_string()))
 }
@@ -469,12 +464,6 @@ fn decode_raw_value(
     field: &str,
 ) -> Result<(Vec<u8>, usize), Error> {
     let (value, next) = decode_constructed_body(data, offset, tag_number, field)?;
-    if value.is_empty() {
-        return Err(Error::decoding(
-            offset,
-            format!("AuditNotification {field} must not be empty"),
-        ));
-    }
     validate_tlv_sequence(value, &format!("AuditNotification {field}"))?;
     Ok((value.to_vec(), next))
 }

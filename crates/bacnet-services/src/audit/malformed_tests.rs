@@ -264,27 +264,23 @@ fn target_priority_enforces_inclusive_one_to_sixteen_range() {
 }
 
 #[test]
-fn raw_values_must_be_nonempty_structural_tlv_and_encoding_is_atomic() {
-    for raw in [Vec::new(), vec![0x21]] {
-        let mut notification = minimal_notification(AuditOperation::WRITE);
-        notification.target_value = Some(raw);
-        let request = AuditNotificationRequest {
-            notifications: vec![notification],
-        };
-        let mut output = BytesMut::from(&b"prefix"[..]);
-        assert!(request.encode(&mut output).is_err());
-        assert_eq!(output.as_ref(), b"prefix");
+fn raw_values_require_structural_tlv_and_encoding_is_atomic() {
+    for raw in [vec![0x21], vec![0x0e, 0xd1, 0, 0x0f]] {
+        for target in [false, true] {
+            let mut notification = minimal_notification(AuditOperation::WRITE);
+            if target {
+                notification.target_value = Some(raw.clone());
+            } else {
+                notification.current_value = Some(raw.clone());
+            }
+            let request = AuditNotificationRequest {
+                notifications: vec![notification],
+            };
+            let mut output = BytesMut::from(&b"prefix"[..]);
+            assert!(request.encode(&mut output).is_err());
+            assert_eq!(output.as_ref(), b"prefix");
+        }
     }
-
-    let mut notification = minimal_notification(AuditOperation::WRITE);
-    notification.target_value = Some(vec![0x00]);
-    let mut empty = encode_one(notification);
-    let raw = empty
-        .windows(3)
-        .position(|bytes| bytes == [0xee, 0x00, 0xef])
-        .unwrap();
-    empty.remove(raw + 1);
-    assert!(AuditNotificationRequest::decode(&empty).is_err());
 
     let mut notification = minimal_notification(AuditOperation::WRITE);
     notification.target_value = Some(vec![0x00]);

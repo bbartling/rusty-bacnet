@@ -1123,6 +1123,11 @@ An `AuditNotificationInput` requires `source_device`, `operation`, and
 `property_array_index`; `result` is an `(ErrorClass, ErrorCode)` tuple.
 `target_value` and `current_value` are `bytes | None` containing structurally
 valid raw `ABSTRACT-SYNTAX.&Type` values, not `PropertyValue` objects.
+`b""` is a present empty value (for example, an empty list); `None` omits
+the optional field. Encoded NULL (`b"\x00"`) remains distinct. Typed
+notification input and query projection preserve these distinctions. The
+codec has no 32-octet limit; target Reporters include known complete values
+through 32 encoded octets and omit larger values without truncating them.
 
 #### `confirmed_audit_notification_typed(address, request) -> None`
 

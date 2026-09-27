@@ -1729,5 +1729,35 @@ class AuditContractArtifactTests(unittest.TestCase):
                 await server.stop()
 
 
+    def test_present_empty_audit_values_survive_typed_notification_and_query(self) -> None:
+        asyncio.run(bounded_reporter_test(self._present_empty_audit_values()))
+
+    async def _present_empty_audit_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(853, interface="127.0.0.1", port=0)
+            server.add_audit_log(1, "empty-values", str(Path(directory) / "audit"), buffer_size=10)
+            server.configure_audit_notification_sink(1, policy="allow_all")
+            try:
+                await server.start()
+                async with BACnetClient(interface="127.0.0.1", port=0) as client:
+                    address = await server.local_address()
+                    # Empty bytes, absence, and encoded NULL retain separate meanings.
+                    for target, current in ((None, None), (b"", None), (None, b""), (b"", b""), (b"\x00", b"")):
+                        notification = cast("AuditNotificationInput", {
+                            **minimal_notification(AuditOperation.WRITE),
+                            "target_value": target, "current_value": current,
+                        })
+                        await client.confirmed_audit_notification_typed(address, {"notifications": [notification]})
+                    ack = await client.audit_log_query_typed(address, cast("AuditLogQueryRequestInput", target_query()))
+                    saved = []
+                    for record in ack["records"]:
+                        datum = record["record"]["datum"]
+                        self.assertEqual(datum["kind"], "audit_notification")
+                        saved.append((datum["audit_notification"]["target_value"], datum["audit_notification"]["current_value"]))
+                    self.assertEqual(saved, [(None, None), (b"", None), (None, b""), (b"", b""), (b"\x00", b"")])
+            finally:
+                await server.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

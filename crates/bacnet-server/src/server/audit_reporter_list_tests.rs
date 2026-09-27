@@ -416,7 +416,7 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
 }
 
 #[tokio::test]
-async fn audit_reporter_list_value_bounds_and_empty_delta_are_omitted_not_wrapped() {
+async fn audit_reporter_list_value_bounds_preserve_empty_and_omit_large() {
     for service in SERVICES {
         for (current_count, delta_count) in [
             (0, 0),
@@ -446,11 +446,11 @@ async fn audit_reporter_list_value_bounds_and_empty_delta_are_omitted_not_wrappe
             assert_eq!(records.len(), 1);
             assert_eq!(
                 records[0].notifications[0].target_value,
-                (delta_count == 16).then_some(delta)
+                (delta_count <= 16).then_some(delta)
             );
             assert_eq!(
                 records[0].notifications[0].current_value,
-                (current_count == 16).then(|| [0x21, 1].repeat(current_count))
+                (current_count <= 16).then(|| [0x21, 1].repeat(current_count))
             );
             assert_eq!(records[0].notifications[0].result, None);
             fixture.server.stop().await.unwrap();

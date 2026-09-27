@@ -155,3 +155,7 @@ mod tests;
 #[cfg(test)]
 #[path = "audit/malformed_tests.rs"]
 mod malformed_tests;
+
+#[cfg(test)]
+#[path = "audit/empty_value_tests.rs"]
+mod empty_value_tests;

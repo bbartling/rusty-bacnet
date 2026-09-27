@@ -1735,6 +1735,13 @@ let raw = client.vt_data(&mac, session_id, &data, data_flag).await?;
 
 ### Audit Services
 
+Audit `target_value` and `current_value` distinguish `None` (absent) from
+`Some(Vec::new())` (present empty, such as an empty list). Both codecs retain
+that distinction; encoded NULL remains a separate one-octet value. Structurally
+valid values above 32 octets are permitted by the codec. Target Reporters
+include complete known values of 0–32 encoded octets and omit larger values
+whole under the existing local inclusion policy.
+
 ```rust
 use bacnet_services::audit::{
     AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest,
