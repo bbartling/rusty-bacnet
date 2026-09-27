@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 60 |
+| Priority | P1 | 61 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 28 |
+| Status | supported-with-clause-evidence | 29 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -119,6 +119,7 @@
 | `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` | Clause 13.2.2.1.4 transition actions; Clause 13.2.5 notification distribution | P1 | in-progress | 1 |
 | `BACNET-12-REGISTERED-BIP-PORT` | Clause12.56/Table12-71 and APDU_Length12.56.10; receiving Network Port wildcard15.5.2/15.7.2; concrete ACK15.5.1.2/15.7.3.2; Audit Tables19-4/19-5; AnnexJ local BVLL framing | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-06-NONROUTER-NETWORK-NUMBER` | 135-2020 6.4.14–6.4.15, 6.5.2.2; 12.56 Network_Number and Network_Number_Quality; Annex J logical broadcast delivery | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-15-BUILT-IN-WRITE-PROPERTY-PRESENCE` | 135-2020 Clause15.9 printed752-753/PDF754-755 and15.10 printed754/PDF756; local licensed source inspected | P1 | supported-with-clause-evidence | 3 |
 
 ## Follow-Up Source
 

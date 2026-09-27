@@ -120,7 +120,11 @@ impl BACnetObject for CommandObject {
                 // ACTION is read-only from the network
                 Err(common::write_access_denied_error())
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 

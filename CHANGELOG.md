@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Return `PROPERTY/UNKNOWN_PROPERTY` for absent unindexed properties at built-in
+  object write fallbacks, including NULL values, unprovisioned Staging names and absent stream File
+  `RECORD_COUNT`.
+  Present read-only properties still deny writes; earlier state/source/security
+  and indexed guards, plus WPM successful-prefix behavior, remain intact (#870).
+
 - NORMAL B/IP full servers and endpoints now own local Network Number discovery/learning, using only explicit registration for configured provenance. Selected Number/Quality readback follows configured-source precedence; unregistered owners start unknown. Control workers preserve APDU/Audit progress and join shutdown with socket/registration ownership. Other links, BBMD/foreign mode and multiport routing remain separate (#875).
 
 - Explicit registered NORMAL B/IP Network Port selection now reconciles the chosen

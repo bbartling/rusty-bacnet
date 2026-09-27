@@ -382,7 +382,11 @@ mod tests {
                 object
                     .write_property(p, None, PropertyValue::Null, None)
                     .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
+                if matches!(p, P::LOG_BUFFER | P::RELIABILITY) {
+                    ErrorCode::UNKNOWN_PROPERTY
+                } else {
+                    ErrorCode::WRITE_ACCESS_DENIED
+                },
             );
         }
         assert_error(

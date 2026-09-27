@@ -672,8 +672,18 @@ impl BACnetObject for FileObject {
             p if p == PropertyIdentifier::MODIFICATION_DATE => {
                 Err(common::write_access_denied_error())
             }
-            p if p == PropertyIdentifier::RECORD_COUNT => resize::write_records(self, value),
-            _ => Err(common::write_access_denied_error()),
+            p if p == PropertyIdentifier::RECORD_COUNT => {
+                if _array_index.is_none() && self.record_count.is_none() {
+                    Err(common::unknown_property_error())
+                } else {
+                    resize::write_records(self, value)
+                }
+            }
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 

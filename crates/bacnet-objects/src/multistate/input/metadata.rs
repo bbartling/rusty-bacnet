@@ -336,7 +336,7 @@ mod tests {
                     object
                         .write_property(P::ALL, None, PropertyValue::Null, None)
                         .unwrap_err(),
-                    ErrorCode::WRITE_ACCESS_DENIED,
+                    ErrorCode::UNKNOWN_PROPERTY,
                 );
             }
         }

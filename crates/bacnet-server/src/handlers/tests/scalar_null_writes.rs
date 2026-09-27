@@ -136,20 +136,38 @@ fn scalar_null_wp_preserves_property_state_and_error_precedence() {
                 assert_eq!(snapshot(&db, oid), before);
             }
         }
-        for property in [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::from_raw(5555),
+        for (property, expected) in [
+            (
+                PropertyIdentifier::OBJECT_IDENTIFIER,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            ),
+            (
+                PropertyIdentifier::from_raw(5555),
+                ErrorCode::UNKNOWN_PROPERTY,
+            ),
         ] {
+            for input in [PropertyValue::Null, PropertyValue::Unsigned(17)] {
+                assert_error(
+                    wp(&mut db, oid, property, None, input, None).unwrap_err(),
+                    ErrorClass::PROPERTY,
+                    expected,
+                );
+                assert_eq!(snapshot(&db, oid), before);
+            }
+        }
+        for index in [0, 1] {
             assert_error(
-                wp(&mut db, oid, property, None, PropertyValue::Null, None).unwrap_err(),
+                wp(
+                    &mut db,
+                    oid,
+                    PropertyIdentifier::from_raw(5555),
+                    Some(index),
+                    PropertyValue::Null,
+                    None,
+                )
+                .unwrap_err(),
                 ErrorClass::PROPERTY,
-                if oid.object_type() == ObjectType::NETWORK_PORT
-                    && property == PropertyIdentifier::from_raw(5555)
-                {
-                    ErrorCode::UNKNOWN_PROPERTY
-                } else {
-                    ErrorCode::WRITE_ACCESS_DENIED
-                },
+                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
             );
             assert_eq!(snapshot(&db, oid), before);
         }
@@ -320,4 +338,39 @@ fn scalar_null_handlers_keep_commandable_nullable_and_readonly_semantics() {
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
     );
+}
+
+#[test]
+fn unknown_writes_file_record_count_wp_presence_and_read_only() {
+    use bacnet_objects::file::FileObject;
+    use bacnet_types::enums::FileAccessMethod;
+    for records in [false, true] {
+        let mut file = FileObject::new(1, "File", "raw").unwrap();
+        if records {
+            file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+            file.set_read_only(true);
+        }
+        let oid = file.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(file)).unwrap();
+        for value in [PropertyValue::Null, PropertyValue::Unsigned(17)] {
+            assert_error(
+                wp(
+                    &mut db,
+                    oid,
+                    PropertyIdentifier::RECORD_COUNT,
+                    None,
+                    value,
+                    None,
+                )
+                .unwrap_err(),
+                ErrorClass::PROPERTY,
+                if records {
+                    ErrorCode::WRITE_ACCESS_DENIED
+                } else {
+                    ErrorCode::UNKNOWN_PROPERTY
+                },
+            );
+        }
+    }
 }

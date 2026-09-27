@@ -594,10 +594,11 @@ impl BACnetObject for DeviceObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-        })
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

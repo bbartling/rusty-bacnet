@@ -127,7 +127,11 @@ impl BACnetObject for AccessZoneObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 

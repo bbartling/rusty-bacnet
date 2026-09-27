@@ -50,6 +50,25 @@ pub(crate) fn protocol_error(
     }
 }
 
+/// Classify an unhandled built-in write after its specific guards and routes.
+/// Effective metadata includes PROPERTY_LIST and per-instance optional properties.
+pub(crate) fn unhandled_write_error(
+    metadata: &[crate::property_metadata::PropertyMetadata],
+    property: bacnet_types::enums::PropertyIdentifier,
+    array_index: Option<u32>,
+) -> bacnet_types::error::Error {
+    // Indexed fallback precedence is outside this unindexed correction.
+    if array_index.is_some()
+        || metadata
+            .iter()
+            .any(|row| row.property_identifier == property)
+    {
+        write_access_denied_error()
+    } else {
+        unknown_property_error()
+    }
+}
+
 /// Read the PROPERTY_LIST property for any object that implements property_list().
 /// Handles array_index variants: None = full list, Some(0) = length, Some(n) = nth element.
 /// Object_Name, Object_Type, Object_Identifier, and Property_List itself are excluded.

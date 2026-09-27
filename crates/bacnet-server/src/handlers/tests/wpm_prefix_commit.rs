@@ -371,7 +371,7 @@ fn semantic_index_value_name_and_write_arm_failures_keep_exact_reference() {
             None,
             encode_value(&PropertyValue::Null),
             ErrorClass::PROPERTY,
-            ErrorCode::WRITE_ACCESS_DENIED,
+            ErrorCode::UNKNOWN_PROPERTY,
         ),
         (
             PropertyIdentifier::DESCRIPTION,
@@ -544,3 +544,135 @@ fn malformed_after_prefix_uses_exact_or_sentinel_reference_and_keeps_prefix() {
 
 #[path = "wpm_state_ownership.rs"]
 mod state_ownership;
+
+#[test]
+fn unknown_writes_wpm_reports_coordinate_and_retains_successful_prefix() {
+    use bacnet_objects::schedule::ScheduleObject;
+    for value in [PropertyValue::Null, PropertyValue::Unsigned(17)] {
+        for (property, expected) in [
+            (
+                PropertyIdentifier::from_raw(5555),
+                ErrorCode::UNKNOWN_PROPERTY,
+            ),
+            (
+                PropertyIdentifier::OBJECT_IDENTIFIER,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            ),
+        ] {
+            let objects: Vec<Box<dyn BACnetObject>> = vec![
+                Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
+                Box::new(ScheduleObject::new(1, "Schedule", PropertyValue::Real(0.0)).unwrap()),
+            ];
+            for object in objects {
+                let oid = object.object_identifier();
+                let mut db = ObjectDatabase::new();
+                db.add(object).unwrap();
+                let property_value =
+                    |property_identifier, input: PropertyValue| BACnetPropertyValue {
+                        property_identifier,
+                        property_array_index: None,
+                        value: encode_value(&input),
+                        priority: None,
+                    };
+                let request = encode_request(
+                    oid,
+                    vec![
+                        property_value(
+                            PropertyIdentifier::DESCRIPTION,
+                            PropertyValue::CharacterString("committed".into()),
+                        ),
+                        property_value(property, value.clone()),
+                        property_value(
+                            PropertyIdentifier::DESCRIPTION,
+                            PropertyValue::CharacterString("unreached".into()),
+                        ),
+                    ],
+                );
+                let WritePropertyMultipleOutcome::Error {
+                    error,
+                    first_failed_write_attempt,
+                    committed_oids,
+                } = detailed(&mut db, &request)
+                else {
+                    panic!("expected WPM error");
+                };
+                assert_protocol(error, ErrorClass::PROPERTY, expected);
+                assert_reference(&first_failed_write_attempt, oid, property, None);
+                assert_eq!(committed_oids, vec![oid]);
+                assert_eq!(
+                    db.get(&oid)
+                        .unwrap()
+                        .read_property(PropertyIdentifier::DESCRIPTION, None)
+                        .unwrap(),
+                    PropertyValue::CharacterString("committed".into())
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unknown_writes_file_record_count_wpm_prefix_and_coordinate() {
+    use bacnet_objects::file::FileObject;
+    use bacnet_types::enums::FileAccessMethod;
+    for records in [false, true] {
+        for value in [PropertyValue::Null, PropertyValue::Unsigned(17)] {
+            let mut file = FileObject::new(1, "File", "raw").unwrap();
+            if records {
+                file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+                file.set_read_only(true);
+            }
+            let oid = file.object_identifier();
+            let mut db = ObjectDatabase::new();
+            db.add(Box::new(file)).unwrap();
+            let request = encode_request(
+                oid,
+                vec![
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::DESCRIPTION,
+                        property_array_index: None,
+                        value: encode_value(&PropertyValue::CharacterString("committed".into())),
+                        priority: None,
+                    },
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::RECORD_COUNT,
+                        property_array_index: None,
+                        value: encode_value(&value),
+                        priority: None,
+                    },
+                ],
+            );
+            let WritePropertyMultipleOutcome::Error {
+                error,
+                first_failed_write_attempt,
+                committed_oids,
+            } = detailed(&mut db, &request)
+            else {
+                panic!("expected failure");
+            };
+            assert_protocol(
+                error,
+                ErrorClass::PROPERTY,
+                if records {
+                    ErrorCode::WRITE_ACCESS_DENIED
+                } else {
+                    ErrorCode::UNKNOWN_PROPERTY
+                },
+            );
+            assert_reference(
+                &first_failed_write_attempt,
+                oid,
+                PropertyIdentifier::RECORD_COUNT,
+                None,
+            );
+            assert_eq!(committed_oids, vec![oid]);
+            assert_eq!(
+                db.get(&oid)
+                    .unwrap()
+                    .read_property(PropertyIdentifier::DESCRIPTION, None)
+                    .unwrap(),
+                PropertyValue::CharacterString("committed".into())
+            );
+        }
+    }
+}

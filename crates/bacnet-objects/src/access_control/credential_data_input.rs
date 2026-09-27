@@ -116,7 +116,11 @@ impl BACnetObject for CredentialDataInputObject {
             return result;
         }
         // CredentialDataInput is primarily read-only (driven by hardware)
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

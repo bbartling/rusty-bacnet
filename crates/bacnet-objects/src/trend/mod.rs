@@ -261,10 +261,11 @@ impl BACnetObject for TrendLogObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-        })
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
@@ -518,10 +519,11 @@ impl BACnetObject for TrendLogMultipleObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-        })
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
