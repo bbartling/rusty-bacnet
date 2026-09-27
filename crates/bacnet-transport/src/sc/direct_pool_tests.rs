@@ -52,7 +52,7 @@ fn ack_for(id: u16, payload: &'static [u8]) -> Vec<u8> {
 
 fn direct_accept(id: u16) -> Vec<u8> {
     let mut payload = Vec::with_capacity(26);
-    payload.extend_from_slice(&[0x33; 6]);
+    payload.extend_from_slice(&TARGET);
     payload.extend_from_slice(&[0x44; 16]);
     payload.extend_from_slice(&1476u16.to_be_bytes());
     payload.extend_from_slice(&1476u16.to_be_bytes());
@@ -177,7 +177,7 @@ fn redial_backoff_table_bounds_and_expiry_without_sleep() {
 
 #[test]
 fn direct_pool_hit_miss_eviction_idle_expiry_without_sleep() {
-    let mut pool: DirectPool<LoopbackWebSocket> = DirectPool::new();
+    let mut pool: DirectPool = DirectPool::new();
     let now = Instant::now();
     let vmac = [0x22; 6];
     assert!(pool.get(&vmac, now).is_none());

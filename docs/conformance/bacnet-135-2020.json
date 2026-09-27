@@ -4121,6 +4121,45 @@
       "docs/python-api.md#hub-certificate-bindings"
     ],
     "notes": "Refs #800. This is opt-in installation policy, not an Annex AB default requirement or complete SC security-profile claim. Exact verified leaf DER SHA-256 maps to one nonzero UUID and allowed VMACs, with nonempty distinct rotation digests. Configured maps reserve identities offline and deny unmapped leaves even on unreserved claims; no-map retains CA-valid admission. Existing callbacks can further deny but cannot override binding failure. Same-CA distinct-leaf real-TLS cases cover offline/live reservations, denied replacement with surviving incumbent relay, rotation/reconnect, no-map controls and joined shutdown. Python named frozen groups use the same native validation before PEM I/O, preserve copied inputs, and exercise real TLS parity. No raw leaf/digest map is logged or exposed in status. Every Hub feeding a trusted router ingress needs installation policy; #518/#524/#803 retain router integration, relayed operation-principal and direct-peer work."
+  },
+  {
+    "id": "BACNET-AB-SC-DIRECT-MEMBERSHIP",
+    "standard_anchor": "135-2020 Annex AB.4.2/AB.4.2.1, AB.6.2.1/AB.6.2.3 and AB.2.4.1",
+    "priority": "P1",
+    "requirement_summary": "One direct peer UUID/VMAC owner across accepted and outbound roles; commit replacement after successful Accept, preserve incumbents on conflict/failure, and fence stale-generation work.",
+    "status": "supported-with-clause-evidence",
+    "code_anchors": [
+      "crates/bacnet-transport/src/sc/direct_membership.rs",
+      "crates/bacnet-transport/src/sc/direct_pool.rs",
+      "crates/bacnet-transport/src/sc/direct_discovery.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_accept.rs"
+    ],
+    "positive_tests": [
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::known_uuid_replaces_at_capacity_one",
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::repeated_replacement_bounds_fence_old_npdu_and_preserve_queued_work",
+      "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::accepted_replaces_outbound_and_old_pool_cleanup_cannot_erase_successor",
+      "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::accepted_publication_while_outbound_dial_waits_then_outbound_replaces",
+      "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::concurrent_outbound_real_tls_dials_publish_one_generation",
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::registered_listener_membership_survives_discovery_toggles"
+    ],
+    "negative_tests": [
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::distinct_uuid_duplicate_vmac_rejected_incumbent_routable",
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::third_peer_collision_preserves_both_incumbents",
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::accepted_capacity_nak_preserves_incumbent",
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::incumbent_plus_pending_reaches_physical_cap_and_connect_timeout_recovers",
+      "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::positive_limit_overflow_rejected_before_bind_and_zero_normalizes",
+      "crates/bacnet-transport/src/sc_tls/direct_reservation_tests.rs::failed_cancelled_timed_out_accept_preserves_real_tls_incumbent",
+      "crates/bacnet-transport/src/sc_tls/direct_reservation_tests.rs::generation_survives_owner_restarts_and_late_cleanup_cannot_erase_successor",
+      "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::accepted_full_and_third_peer_conflict_preserve_outbound",
+      "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::expiry_eviction_disable_release_membership_and_close_workers",
+      "crates/bacnet-transport/src/sc/direct_handshake_tests.rs::direct_handshake_wrong_peer_vmac_never_receives_destination_npdu"
+    ],
+    "benchmarks": [],
+    "public_claims": [
+      "README.md",
+      "docs/rust-api.md#direct-peer-membership-and-limits"
+    ],
+    "notes": "Refs #851. Real TLS loopback and deterministic write/cancellation evidence; no broader connection-state promotion. Accepted M, pending M, physical2M including retirement, default16 and zero-to-one are local bounds; checked overflow before bind. Known UUID claiming a third peer VMAC rejects with duplicate-VMAC; capacity uses local RESOURCES/OTHER. Outbound and accepted numeric quotas remain separate. Private process-wide generations are never reused; failed Accept preserves incumbent and new old-socket NPDUs are fenced without purging queued complete work. No direct certificate binding, #803 principal/reassembly/authorization propagation, #524 confirmed-response confinement or certification is claimed."
   }
  ]
 }

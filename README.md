@@ -373,6 +373,13 @@ CA-valid admission. See [Rust configuration](docs/rust-api.md#hub-certificate-bi
 Every Hub feeding a trusted router ingress must enforce its installation policy;
 this does not authenticate relayed operations end to end or direct SC peers.
 
+Opt-in direct listeners and outbound discovery share UUID/VMAC membership.
+A successful same-UUID Connect replaces the old direct connection; a VMAC
+owned by another UUID is rejected. `with_max_established_peers(M)` bounds
+established accepted peers separately from pending handshakes and physical
+sockets. See [direct peer limits and migration](docs/rust-api.md#direct-peer-membership-and-limits)
+and the [scoped evidence](docs/conformance/standard-135-2020-ledger.md#direct-peer-membership).
+
 CA membership alone is not BACnet-operation authorization and does not bind a
 certificate to a VMAC or Device UUID. These checks are not a claim of the entire
 Annex AB security profile or qualification of your credential provisioning.

@@ -127,7 +127,9 @@ impl<W: WebSocketPort> super::ScTransport<W> {
                 "SC direct listener identity does not match transport".into(),
             ));
         }
-        let (listener, rx) = crate::sc_tls::DirectListener::start(config).await?;
+        let (listener, rx) =
+            crate::sc_tls::DirectListener::start_shared(config, self.direct_membership.clone())
+                .await?;
         self.direct_intake = DirectIntake {
             npdus: Some(rx),
             listener: Some(ListenerStatus {

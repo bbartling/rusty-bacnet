@@ -7,8 +7,8 @@
 mod tls_config;
 pub use tls_config::ScNodeTlsConfig;
 
-mod direct_accept;
-pub use direct_accept::{DirectAcceptConfig, DirectListener};
+pub(crate) mod direct_accept;
+pub use direct_accept::{DirectAcceptConfig, DirectListener, DIRECT_ACCEPT_MAX_ESTABLISHED_PEERS};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;

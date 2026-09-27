@@ -60,11 +60,18 @@
 //! added. All waits reuse `connect_timeout_ms`; expiry uses `Instant` checks
 //! like the URI cache.
 
+use super::direct_membership::{DirectMembership, DirectRole, Refusal};
+pub(crate) use super::direct_pool::DirectPool;
+use super::direct_pool::PooledDirect;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex as StdMutex,
+};
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 
 use tokio::sync::{oneshot, Mutex};
 
@@ -182,103 +189,6 @@ impl RedialBackoff {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct PooledDirect<W> {
-    ws: Arc<W>,
-    uri: String,
-    peer_max_bvlc_length: u16,
-    peer_max_apdu_length: u16,
-    idle_deadline: Instant,
-}
-
-impl<W> Clone for PooledDirect<W> {
-    fn clone(&self) -> Self {
-        Self {
-            ws: Arc::clone(&self.ws),
-            uri: self.uri.clone(),
-            peer_max_bvlc_length: self.peer_max_bvlc_length,
-            peer_max_apdu_length: self.peer_max_apdu_length,
-            idle_deadline: self.idle_deadline,
-        }
-    }
-}
-
-/// Bounded per-VMAC pool of handshaked direct connections.
-///
-/// Single reusable connection per destination VMAC with lazy idle expiry;
-/// inserts evict the oldest VMAC first (FIFO) while over cap.
-pub(crate) struct DirectPool<W> {
-    entries: HashMap<Vmac, PooledDirect<W>>,
-    order: VecDeque<Vmac>,
-}
-
-impl<W> DirectPool<W> {
-    pub(crate) fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub(crate) fn get(&mut self, vmac: &Vmac, now: Instant) -> Option<PooledDirect<W>> {
-        let expired = match self.entries.get(vmac) {
-            Some(entry) if now < entry.idle_deadline => return Some(entry.clone()),
-            Some(_) => true,
-            None => return None,
-        };
-        if expired {
-            self.entries.remove(vmac);
-            self.order.retain(|existing| existing != vmac);
-        }
-        None
-    }
-
-    pub(crate) fn insert(&mut self, vmac: Vmac, pooled: PooledDirect<W>) {
-        if self.entries.contains_key(&vmac) {
-            self.order.retain(|existing| existing != &vmac);
-        }
-        self.order.push_back(vmac);
-        self.entries.insert(vmac, pooled);
-        while self.entries.len() > DIRECT_POOL_MAX_ENTRIES {
-            match self.order.pop_front() {
-                Some(oldest) => {
-                    self.entries.remove(&oldest);
-                }
-                None => break,
-            }
-        }
-    }
-
-    pub(crate) fn remove(&mut self, vmac: &Vmac) {
-        if self.entries.remove(vmac).is_some() {
-            self.order.retain(|existing| existing != vmac);
-        }
-    }
-
-    pub(crate) fn refresh(&mut self, vmac: &Vmac, now: Instant) {
-        if let Some(entry) = self.entries.get_mut(vmac) {
-            entry.idle_deadline = now + DIRECT_POOL_IDLE_TTL;
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn insert_test_entry(&mut self, vmac: Vmac, ws: Arc<W>, uri: String, now: Instant) {
-        let pooled = PooledDirect {
-            ws,
-            uri,
-            peer_max_bvlc_length: 1476,
-            peer_max_apdu_length: 1476,
-            idle_deadline: now + DIRECT_POOL_IDLE_TTL,
-        };
-        self.insert(vmac, pooled);
-    }
-}
-
 #[derive(Debug, Clone)]
 struct CacheEntry {
     uris: Vec<String>,
@@ -374,17 +284,27 @@ pub(crate) struct DirectShared<W: WebSocketPort> {
     pending: Mutex<HashMap<u16, oneshot::Sender<Vec<String>>>>,
     dialer: Mutex<Option<DirectDialer<W>>>,
     backoff: Mutex<RedialBackoff>,
-    pool: Mutex<DirectPool<W>>,
+    pool: StdMutex<DirectPool>,
+    enabled: AtomicBool,
+    workers: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    membership: Arc<DirectMembership>,
+    pending_dials: Arc<Semaphore>,
+    physical: Arc<Semaphore>,
 }
 
 impl<W: WebSocketPort> DirectShared<W> {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(membership: Arc<DirectMembership>) -> Self {
         Self {
             cache: Mutex::new(DirectUriCache::new()),
             pending: Mutex::new(HashMap::new()),
             dialer: Mutex::new(None),
             backoff: Mutex::new(RedialBackoff::new()),
-            pool: Mutex::new(DirectPool::new()),
+            pool: StdMutex::new(DirectPool::new()),
+            enabled: AtomicBool::new(true),
+            workers: StdMutex::new(Vec::new()),
+            membership,
+            pending_dials: Arc::new(Semaphore::new(DIRECT_POOL_MAX_ENTRIES)),
+            physical: Arc::new(Semaphore::new(DIRECT_POOL_MAX_ENTRIES * 2)),
         }
     }
 }
@@ -407,10 +327,12 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     pub fn with_direct_discovery(mut self, enabled: bool) -> Self {
         if enabled {
             if self.direct.is_none() {
-                self.direct = Some(Arc::new(DirectShared::new()));
+                self.direct = Some(Arc::new(DirectShared::new(self.direct_membership.clone())));
             }
         } else {
-            self.direct = None;
+            if let Some(shared) = self.direct.take() {
+                shared.disable();
+            }
         }
         self
     }
@@ -431,7 +353,7 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     {
         let shared = match self.direct.take() {
             Some(shared) => shared,
-            None => Arc::new(DirectShared::new()),
+            None => Arc::new(DirectShared::new(self.direct_membership.clone())),
         };
         if let Ok(mut slot) = shared.dialer.try_lock() {
             *slot = Some(Arc::new(move |uri: String| {
@@ -486,6 +408,17 @@ pub(crate) fn parse_ack_uris(payload: &[u8]) -> Option<Vec<String>> {
 }
 
 impl<W: WebSocketPort> DirectShared<W> {
+    pub(super) fn disable(&self) {
+        // Same lock as publication seals in-flight dials before clearing owners.
+        let mut pool = self.pool.lock().unwrap();
+        self.enabled.store(false, Ordering::Release);
+        self.pending_dials.close();
+        pool.clear();
+        for task in self.workers.lock().unwrap().drain(..) {
+            task.abort();
+        }
+    }
+
     pub(super) async fn cached_uris(&self, vmac: &Vmac) -> Option<Vec<String>> {
         let now = Instant::now();
         self.cache.lock().await.get(vmac, now)
@@ -496,35 +429,8 @@ impl<W: WebSocketPort> DirectShared<W> {
         self.cache.lock().await.insert(vmac, uris, now);
     }
 
-    async fn pooled_get(&self, vmac: &Vmac, now: Instant) -> Option<PooledDirect<W>> {
-        self.pool.lock().await.get(vmac, now)
-    }
-
-    async fn pooled_insert(
-        &self,
-        vmac: Vmac,
-        ws: Arc<W>,
-        uri: String,
-        peer_max_bvlc_length: u16,
-        peer_max_apdu_length: u16,
-        now: Instant,
-    ) {
-        let pooled = PooledDirect {
-            ws,
-            uri,
-            peer_max_bvlc_length,
-            peer_max_apdu_length,
-            idle_deadline: now + DIRECT_POOL_IDLE_TTL,
-        };
-        self.pool.lock().await.insert(vmac, pooled);
-    }
-
-    async fn pooled_remove(&self, vmac: &Vmac) {
-        self.pool.lock().await.remove(vmac);
-    }
-
-    async fn pooled_refresh(&self, vmac: &Vmac, now: Instant) {
-        self.pool.lock().await.refresh(vmac, now);
+    fn pooled_get(&self, vmac: &Vmac, now: Instant) -> Option<PooledDirect> {
+        self.pool.lock().unwrap().get(vmac, now)
     }
 
     /// URIs still eligible for dial (ACK order preserved).
@@ -562,7 +468,7 @@ impl<W: WebSocketPort> DirectShared<W> {
 
     #[cfg(test)]
     pub(crate) async fn test_pool_len(&self) -> usize {
-        self.pool.lock().await.len()
+        self.pool.lock().unwrap().len()
     }
 
     /// Wake the pending discovery matching an inbound hub message, if any.
@@ -685,8 +591,8 @@ impl<W: WebSocketPort> DirectShared<W> {
     /// allocation; the caller must fall back to hub delivery. Never mutates
     /// hub connection state besides consuming fresh message IDs, and never
     /// touches hub failover or reconnect state. Locks are never held across
-    /// dial/handshake/send awaits; concurrent sends may duplicate a dial in
-    /// the race window (last-writer-wins pool insert) but never deadlock.
+    /// dial/handshake/send awaits. Concurrent dials publish through the shared
+    /// UUID/VMAC owner; only the committed generation admits new direct work.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn try_direct_uris(
         &self,
@@ -698,6 +604,9 @@ impl<W: WebSocketPort> DirectShared<W> {
         hub_max_apdu_length: u16,
         connect_timeout_ms: u64,
     ) -> Result<(), ()> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return Err(());
+        }
         let dialer = self.dialer.lock().await.clone().ok_or(())?;
         if uris.is_empty() || dest == BROADCAST_VMAC {
             return Err(());
@@ -708,7 +617,7 @@ impl<W: WebSocketPort> DirectShared<W> {
         // Pooled reuse: one handshaked connection per destination VMAC.
         // Snapshot under the pool lock, then release before any await.
         let now = Instant::now();
-        if let Some(pooled) = self.pooled_get(&dest, now).await {
+        if let Some(pooled) = self.pooled_get(&dest, now) {
             if npdu.len() <= pooled.peer_max_apdu_length as usize {
                 let direct_msg = {
                     let mut c = conn.lock().await;
@@ -722,15 +631,22 @@ impl<W: WebSocketPort> DirectShared<W> {
                     encode_sc_message(&mut buf, &direct_msg);
                     if buf.len() <= pooled.peer_max_bvlc_length as usize {
                         let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
-                        match tokio::time::timeout(send_wait, pooled.ws.send(&buf)).await {
+                        match tokio::time::timeout(send_wait, pooled.send(&buf)).await {
                             Ok(Ok(())) => {
                                 let refresh_now = Instant::now();
-                                self.pooled_refresh(&dest, refresh_now).await;
+                                self.pool.lock().unwrap().refresh(
+                                    &dest,
+                                    pooled.member.generation,
+                                    refresh_now,
+                                );
                                 self.note_direct_success(&pooled.uri).await;
                                 return Ok(());
                             }
                             _ => {
-                                self.pooled_remove(&dest).await;
+                                self.pool
+                                    .lock()
+                                    .unwrap()
+                                    .remove_generation(&dest, pooled.member.generation);
                             }
                         }
                     }
@@ -752,7 +668,13 @@ impl<W: WebSocketPort> DirectShared<W> {
         // tries the next eligible URI. Size mismatches against freshly
         // learned peer limits are per-NPDU, not URI health, so they skip
         // without recording backoff.
+        let _pending = self
+            .pending_dials
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ())?;
         for uri in &candidates {
+            let physical = self.physical.clone().try_acquire_owned().map_err(|_| ())?;
             let dial_wait = Duration::from_millis(connect_timeout_ms.max(1));
             let direct_ws = match tokio::time::timeout(dial_wait, dialer(uri.clone())).await {
                 Ok(Ok(ws)) => ws,
@@ -776,9 +698,20 @@ impl<W: WebSocketPort> DirectShared<W> {
                 self.note_direct_failure(uri).await;
                 continue;
             }
-            let (peer_max_bvlc_length, peer_max_apdu_length) = {
+            let (peer_max_bvlc_length, peer_max_apdu_length, peer_uuid, local_uuid, local_vmac) = {
                 let p = probe.lock().await;
-                (p.hub_max_bvlc_length, p.hub_max_apdu_length)
+                // An AR/cache destination is a routing hint. The peer's Connect
+                // identity must match it before this socket can carry its NPDU.
+                if p.hub_vmac != Some(dest) {
+                    continue;
+                }
+                (
+                    p.hub_max_bvlc_length,
+                    p.hub_max_apdu_length,
+                    p.hub_device_uuid.ok_or(())?,
+                    p.device_uuid,
+                    p.local_vmac,
+                )
             };
             if npdu.len() > peer_max_apdu_length as usize {
                 continue;
@@ -799,26 +732,71 @@ impl<W: WebSocketPort> DirectShared<W> {
                 continue;
             }
             let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
-            match tokio::time::timeout(send_wait, direct_ws.send(&buf)).await {
+            let pooled = {
+                let mut pool = self.pool.lock().unwrap();
+                if !self.enabled.load(Ordering::Acquire) {
+                    return Err(());
+                }
+                pool.prune(Instant::now());
+                let mut reservation = self.membership.reserve(
+                    peer_uuid,
+                    dest,
+                    local_uuid,
+                    local_vmac,
+                    DirectRole::Outbound,
+                    DIRECT_POOL_MAX_ENTRIES,
+                );
+                if matches!(reservation, Err(Refusal::Resources)) {
+                    pool.evict_oldest();
+                    reservation = self.membership.reserve(
+                        peer_uuid,
+                        dest,
+                        local_uuid,
+                        local_vmac,
+                        DirectRole::Outbound,
+                        DIRECT_POOL_MAX_ENTRIES,
+                    );
+                }
+                let member = reservation.map_err(|_| ())?.commit();
+                pool.prune(Instant::now());
+                let (pooled, worker) = PooledDirect::start(
+                    direct_ws,
+                    member,
+                    uri.clone(),
+                    (peer_max_bvlc_length, peer_max_apdu_length),
+                    send_wait,
+                    physical,
+                );
+                let mut workers = self.workers.lock().unwrap();
+                workers.retain(|task| !task.is_finished());
+                workers.push(worker);
+                pool.insert(dest, pooled.clone());
+                pooled
+            };
+            match tokio::time::timeout(send_wait, pooled.send(&buf)).await {
                 Ok(Ok(())) => {
                     self.note_direct_success(uri).await;
-                    self.pooled_insert(
-                        dest,
-                        Arc::new(direct_ws),
-                        uri.clone(),
-                        peer_max_bvlc_length,
-                        peer_max_apdu_length,
-                        Instant::now(),
-                    )
-                    .await;
                     return Ok(());
                 }
                 _ => {
+                    self.pool
+                        .lock()
+                        .unwrap()
+                        .remove_generation(&dest, pooled.member.generation);
                     self.note_direct_failure(uri).await;
-                    continue;
                 }
             }
         }
         Err(())
     }
 }
+
+impl<W: WebSocketPort> Drop for DirectShared<W> {
+    fn drop(&mut self) {
+        self.disable();
+    }
+}
+
+#[cfg(all(test, feature = "sc-tls"))]
+#[path = "direct_membership_tls_tests.rs"]
+mod direct_membership_tls_tests;

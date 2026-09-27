@@ -105,7 +105,9 @@ async fn dialed_peer(
     .await
     .expect("direct dial timed out")
     .expect("direct dial must succeed");
-    let mut conn = ScConnection::new(vmac, PEER_UUID);
+    let mut uuid = PEER_UUID;
+    uuid[..6].copy_from_slice(&vmac);
+    let mut conn = ScConnection::new(vmac, uuid);
     let request = conn.build_connect_request();
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &request);
