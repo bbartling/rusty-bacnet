@@ -40,7 +40,7 @@ pub enum ControlTrust {
 
 impl ControlTrust {
     pub fn from_provenance(p: TransportProvenance) -> Self {
-        if p.is_direct_peer() {
+        if p.is_direct_peer() || p.is_hub_channel() {
             Self::VerifiedChannel
         } else if p.is_relayed_origin() {
             Self::VerifiedRelay

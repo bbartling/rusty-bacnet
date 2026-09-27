@@ -4164,6 +4164,52 @@
       "docs/rust-api.md#direct-peer-membership-and-limits"
     ],
     "notes": "Refs #851. Real TLS loopback and deterministic write/cancellation evidence; no broader connection-state promotion. Accepted M, pending M, physical2M including retirement, default16 and zero-to-one are local bounds; checked overflow before bind. Known UUID claiming a third peer VMAC rejects with duplicate-VMAC; capacity uses local RESOURCES/OTHER. Outbound and accepted numeric quotas remain separate. Simultaneous crossed replacement may retire both sockets; at-most-one membership and normal bounded fallback/retry apply, without remote-delivery guarantees from local writes. Private process-wide generations are never reused; failed Accept preserves incumbent and new old-socket NPDUs are fenced without purging queued complete work. No direct certificate binding, #803 principal/reassembly/authorization propagation, #524 confirmed-response confinement or certification is claimed. Idle outbound workers observe remote EOF/Close and validate/respond to Disconnect control with generation-specific cleanup; no application NPDU receive admission is added. Ordinary bidirectional direct application NPDU routing remains the pre-existing [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886) follow-up, separate from #524 response affinity."
+  },
+  {
+   "id": "BACNET-AB-SC-DIRECT-PRINCIPAL",
+   "standard_anchor": "135-2020 Annex AB.7.4 connection authentication; local request ownership policy",
+   "priority": "P0",
+   "requirement_summary": "Carry the verified accepted-direct TLS leaf and nonreused connection incarnation as immutable request provenance; isolate authorization, duplicate/replay admission and receive reassembly across replacements.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-transport/src/port.rs::DirectScIdentity",
+    "crates/bacnet-transport/src/sc_tls/direct_accept.rs",
+    "crates/bacnet-transport/src/sc/npdu_admission.rs::admit_direct_peer",
+    "crates/bacnet-transport/src/sc_hub/admission.rs::channel_provenance",
+    "crates/bacnet-network/src/layer_admission.rs",
+    "crates/bacnet-server/src/mutation.rs::MutationAuthorizationContext",
+    "crates/bacnet-server/src/life_safety.rs::LifeSafetyOperationAuthorizationContext",
+    "crates/bacnet-server/src/server/dispatch.rs",
+    "crates/bacnet-server/src/server/confirmed_request_tracker.rs",
+    "crates/bacnet-server/src/server/lso_replay.rs",
+    "crates/bacnet-server/src/server/segmented_receive.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-transport/src/sc_tls/direct_principal_tests.rs::direct_principal_different_leaf_replacement_has_distinct_snapshot",
+    "crates/bacnet-transport/src/sc_tls/direct_principal_tests.rs::direct_principal_same_leaf_reconnect_has_distinct_incarnation",
+    "crates/bacnet-transport/src/sc_tls/direct_principal_tests.rs::direct_principal_verified_leaf_survives_real_tls_resumption",
+    "crates/bacnet-server/src/server/direct_principal_complete_tests.rs::direct_principal_wp_replacement_pending_and_completed",
+    "crates/bacnet-server/src/server/direct_principal_complete_tests.rs::direct_principal_wp_same_leaf_reconnect_pending_and_completed",
+    "crates/bacnet-server/src/server/direct_principal_complete_tests.rs::direct_principal_lso_replacement_pending_and_completed",
+    "crates/bacnet-server/src/server/direct_principal_complete_tests.rs::direct_principal_lso_same_leaf_reconnect_pending_and_completed",
+    "crates/bacnet-server/src/server/direct_principal_complete_tests.rs::direct_principal_wpm_elements_keep_admitted_snapshot_and_order",
+    "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_principal_two_admitted_contexts_finish_without_merging"
+   ],
+   "negative_tests": [
+    "crates/bacnet-transport/src/sc_tls/direct_principal_tests.rs::direct_principal_absent_chain_fails_closed_and_hashes_exact_leaf",
+    "crates/bacnet-transport/src/rb07_provenance_tests.rs::provenance_variants_and_scope",
+    "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_principal_new_leaf_segments_and_abort_preserve_queued_old_context",
+    "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_principal_same_leaf_segments_and_abort_preserve_queued_old_context",
+    "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_principal_queued_old_abort_preserves_new_context",
+    "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_principal_reconnect_does_not_expand_reassembly_peer_capacity"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "README.md",
+    "docs/rust-api.md#accepted-direct-tls-identity",
+    "docs/python-api.md"
+   ],
+   "notes": "Refs #803. Local identity is SHA-256 of exact verified leaf DER plus the existing checked process-wide membership generation; captured before upgrade and admitted under with_current. Same-cert reconnect changes incarnation. Complete admitted work retains its original snapshot after retirement. Real TLS listener-to-network-to-server tests use deterministic queued envelopes and DB barriers; old A segment controls are admitted before replacement, never freshly accepted from retired A. Generic duplicate and LSO replay entries add direct identity while preserving existing same-socket/non-direct behavior and bounds; generic completed retention is local implementation policy, not permanent API. Direct partial contexts and Abort cancellation isolate incarnations; non-direct address sweeps cannot remove direct contexts. Hub admission migrates to a distinct scope-only channel with no downstream direct leaf identity. Copy/Eq/Hash and redacted Debug are retained. No mandatory or enabled direct certificate-to-claimed-ID binding, Hub-relayed end-to-end identity, Python principal callback, #524 response socket/replay delivery/segmented-response control confinement, #886 outbound application NPDU intake, broader security-profile promotion or external certification. Source APIs postdate published0.11.0. Independent duplicate-partition and Abort-sweep negative controls are recorded in the scoped evidence narrative."
   }
  ]
 }

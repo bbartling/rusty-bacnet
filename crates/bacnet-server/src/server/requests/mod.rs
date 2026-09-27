@@ -424,6 +424,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 ))
                             } else {
                                 let context = LifeSafetyOperationAuthorizationContext {
+                                    provenance,
                                     source_mac: MacAddr::from_slice(source_mac),
                                     source_network: source_network.clone(),
                                     invoke_id,

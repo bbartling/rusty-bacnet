@@ -25,50 +25,71 @@ pub struct DataAttribute {
     pub data: Vec<u8>,
 }
 
-/// Honest transport + origin provenance (RB-07, internal contract).
+/// Verified immediate direct-SC peer and connection incarnation.
 ///
-/// Immutable, `Copy` by value. Three mutually exclusive assertions:
+/// The fingerprint is SHA-256 of the exact verified leaf DER, not of the
+/// claimed VMAC, UUID or routed address. Certificate renewal changes the
+/// fingerprint; reconnecting with the same leaf changes the incarnation.
+/// This sealed snapshot survives queueing and connection retirement. It is
+/// evidence for application policy, not authorization or a response route.
 ///
-/// - [`TransportProvenance::unverified`] — Unverified legacy origin. No
-///   transport or relay authentication is asserted. Covers B/IP, B/IPv6,
-///   MS/TP, Ethernet, Loopback, test doubles, and any caller-supplied
-///   [`TransportPort`] that does not implement SC-TLS validation. Claimed
-///   SNET/SADR/MAC fields remain *claims*, never credentials. Compat mode
-///   (RB-09 consumes this later; forwarding/learning/admission unchanged).
-/// - Verified direct peer — Authenticated immediate transport peer, direct
-///   SC-TLS post-handshake peer only. Scope: the TLS handshake verified the
-///   peer's operational certificate and the Connect-Request/Accept exchange
-///   completed on *this* connection, and `source_mac` is that peer's VMAC.
-///   The VMAC itself is payload-claimed in the Connect-Request inside the
-///   TLS channel and is not bound to the operational certificate.
-///   It asserts nothing about a routed origin behind the peer (there is none
-///   on a direct connection). Expires with the connection (idle timeout,
-///   close, or disconnect); snapshots compare by value.
-/// - Verified relayed origin — Independently validated relayed origin, SC hub
-///   path post `source_admission` only. Scope: the hub TLS connection is
-///   authenticated *and* the originating VMAC passed hub source admission
-///   (present, non-reserved). The originating VMAC is a hub-relayed claim
-///   checked only for presence/non-reserved, not certificate-bound. It asserts
-///   the relay validated the origin field. An SC node's authenticated hub peer
-///   is NOT the origin leaf:
-///   the hub VMAC is never substituted for the leaf origin.
+/// Verified identities cannot be constructed by downstream callers:
+/// ```compile_fail
+/// use bacnet_transport::port::DirectScIdentity;
+/// let forged = DirectScIdentity { leaf_sha256: [0; 32], incarnation: 1 };
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DirectScIdentity {
+    leaf_sha256: [u8; 32],
+    incarnation: u64,
+}
+impl DirectScIdentity {
+    /// Exact verified leaf-DER SHA-256, suitable for an installation's pins.
+    pub fn leaf_sha256(self) -> [u8; 32] {
+        self.leaf_sha256
+    }
+
+    /// Opaque process-lifetime connection identifier. Never persist or reuse it
+    /// as an identity across processes; no ordering contract is exposed.
+    pub fn incarnation(self) -> u64 {
+        self.incarnation
+    }
+
+    pub(crate) fn verified(leaf_sha256: [u8; 32], incarnation: u64) -> Self {
+        Self {
+            leaf_sha256,
+            incarnation,
+        }
+    }
+}
+impl std::fmt::Debug for DirectScIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DirectScIdentity").finish_non_exhaustive()
+    }
+}
+
+/// Sealed transport provenance, copied unchanged through queued ingress.
 ///
-/// Only trusted transport/relay validation code may construct a verified
-/// assertion. Verified constructors are `pub(crate)` and the only call sites
-/// are `sc/*` (hub receive loop + `source_admission`) and `sc_tls/*`
-/// (`direct_accept` post-handshake). Everything else — all plain transports,
-/// [`crate::any::AnyTransport`] delegation (which preserves the inner
-/// value), and test doubles — builds the unverified variant via
-/// [`TransportProvenance::unverified`] / [`Default`].
+/// Direct SC provenance records the verified immediate TLS leaf and the
+/// committed connection incarnation after Connect acceptance. Complete work
+/// already admitted may finish under this original snapshot after close or
+/// replacement. Claimed VMAC/UUID/SNET/SADR remain separate claims; there is
+/// no certificate-to-claim binding or response-channel confinement here.
 ///
-/// Trust boundary: callers supplying an explicitly trusted local
-/// [`TransportPort`] implementation are part of the trust boundary for the
-/// values they construct (they must use `unverified()` unless they implement
-/// equivalent TLS + admission validation). A caller-provided untrusted option
-/// stays untrusted. No new wire field, cert format, or revision.
+/// Relayed provenance asserts the authenticated Hub channel and admitted
+/// origin-field shape, never an end-to-end leaf principal. Hub admission's
+/// own TLS-client channel has a separate scope-only assertion, before Connect
+/// acceptance, and cannot mint a downstream direct identity.
 ///
-/// There is no public boolean named `authenticated` anywhere on the
-/// [`DataAttribute`] input; `DataAttribute` stays a wire representation.
+/// Plain transports and test doubles use [`Self::unverified`]. Verified
+/// constructors are crate-private to trusted TLS/admission owners. A custom
+/// transport that forwards a verified envelope is part of that trust boundary.
+/// Data attributes remain wire values and cannot upgrade provenance.
+///
+/// ```compile_fail
+/// use bacnet_transport::port::TransportProvenance;
+/// let forged = TransportProvenance::verified_hub_channel();
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TransportProvenance {
     kind: ProvenanceKind,
@@ -77,38 +98,45 @@ pub struct TransportProvenance {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ProvenanceKind {
     Unverified,
-    DirectPeer,
+    DirectPeer(DirectScIdentity),
+    HubChannel,
     RelayedOrigin,
 }
 
 impl TransportProvenance {
-    /// Unverified legacy origin: the only constructor available outside
-    /// trusted SC validation code. No authentication asserted.
+    /// Unverified legacy origin; no authentication assertion.
     pub fn unverified() -> Self {
         Self {
             kind: ProvenanceKind::Unverified,
         }
     }
 
-    /// Verified direct SC-TLS peer (trusted validation code only).
-    ///
-    /// Confined to `sc/*` and `sc_tls/*` call sites by discipline; `pub(crate)`
-    /// keeps it internal to this crate while those modules own the handshake
-    /// evidence. No other transport may call this.
-    pub(crate) fn verified_direct_peer() -> Self {
+    /// Only accepted direct TLS ingress may mint this principal-bearing value.
+    pub(crate) fn verified_direct_peer(identity: DirectScIdentity) -> Self {
         Self {
-            kind: ProvenanceKind::DirectPeer,
+            kind: ProvenanceKind::DirectPeer(identity),
         }
     }
 
-    /// Verified SC-hub relayed origin (trusted validation code only).
-    ///
-    /// Confined to `sc/*` (hub receive loop + `source_admission`) by
-    /// discipline; `pub(crate)` keeps it internal while that code owns the
-    /// admission evidence. No other transport may call this.
+    /// Hub registration callback's own verified TLS-client channel, not a leaf
+    /// identity for application ingress relayed through that Hub.
+    pub(crate) fn verified_hub_channel() -> Self {
+        Self {
+            kind: ProvenanceKind::HubChannel,
+        }
+    }
+
     pub(crate) fn verified_relayed_origin() -> Self {
         Self {
             kind: ProvenanceKind::RelayedOrigin,
+        }
+    }
+
+    /// Verified direct identity, absent on unverified and both Hub scopes.
+    pub fn direct_sc_identity(self) -> Option<DirectScIdentity> {
+        match self.kind {
+            ProvenanceKind::DirectPeer(identity) => Some(identity),
+            _ => None,
         }
     }
 
@@ -117,9 +145,14 @@ impl TransportProvenance {
         self.kind == ProvenanceKind::Unverified
     }
 
-    /// True only for the verified direct-peer variant.
+    /// True only for accepted direct-SC ingress with a verified identity.
     pub fn is_direct_peer(self) -> bool {
-        self.kind == ProvenanceKind::DirectPeer
+        matches!(self.kind, ProvenanceKind::DirectPeer(_))
+    }
+
+    /// True only for the Hub admission callback's own TLS-client channel.
+    pub fn is_hub_channel(self) -> bool {
+        self.kind == ProvenanceKind::HubChannel
     }
 
     /// True only for the verified relayed-origin variant.
@@ -127,37 +160,32 @@ impl TransportProvenance {
         self.kind == ProvenanceKind::RelayedOrigin
     }
 
-    /// True for either verified variant.
+    /// True for any verified scope; this does not imply a direct principal.
     pub fn is_verified(self) -> bool {
         self.kind != ProvenanceKind::Unverified
     }
 
-    /// Human-readable scope of this assertion (no identity material).
+    /// Human-readable scope, with no identity material.
     pub fn scope(self) -> &'static str {
         match self.kind {
             ProvenanceKind::Unverified => "unverified legacy origin (no assertion)",
-            ProvenanceKind::DirectPeer => {
-                "authenticated immediate direct SC-TLS peer (post-handshake VMAC only)"
-            }
-            ProvenanceKind::RelayedOrigin => {
-                "independently validated SC-hub relayed origin (post source_admission; hub peer is not the leaf)"
-            }
+            ProvenanceKind::DirectPeer(_) => "authenticated immediate direct SC-TLS peer and connection incarnation",
+            ProvenanceKind::HubChannel => "authenticated Hub admission TLS-client channel (scope only)",
+            ProvenanceKind::RelayedOrigin => "independently validated SC-hub relayed origin (post source_admission; hub peer is not the leaf)",
         }
     }
 }
-
 impl Default for TransportProvenance {
     fn default() -> Self {
         Self::unverified()
     }
 }
-
 impl std::fmt::Debug for TransportProvenance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Redacted by construction: kind label only, no key or identity bytes.
         let label = match self.kind {
             ProvenanceKind::Unverified => "unverified",
-            ProvenanceKind::DirectPeer => "verified-direct-peer",
+            ProvenanceKind::DirectPeer(_) => "verified-direct-peer",
+            ProvenanceKind::HubChannel => "verified-hub-channel",
             ProvenanceKind::RelayedOrigin => "verified-relayed-origin",
         };
         f.debug_struct("TransportProvenance")

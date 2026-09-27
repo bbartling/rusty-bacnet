@@ -70,18 +70,31 @@ async fn peer_admission_logical_identity_and_duplicate_fallback_matrix() {
         let Apdu::ConfirmedRequest(req) = request(1) else {
             unreachable!()
         };
-        let ConfirmedRequestAdmission::New(pending) =
-            tracker.begin(b"router-a", source.as_ref(), req.clone())
-        else {
+        let ConfirmedRequestAdmission::New(pending) = tracker.begin(
+            b"router-a",
+            source.as_ref(),
+            bacnet_transport::port::TransportProvenance::unverified(),
+            req.clone(),
+        ) else {
             panic!("new")
         };
         assert!(matches!(
-            tracker.begin(b"router-a", source.as_ref(), req.clone()),
+            tracker.begin(
+                b"router-a",
+                source.as_ref(),
+                bacnet_transport::port::TransportProvenance::unverified(),
+                req.clone()
+            ),
             ConfirmedRequestAdmission::Duplicate
         ));
         assert_eq!(
             matches!(
-                tracker.begin(b"router-b", source.as_ref(), req),
+                tracker.begin(
+                    b"router-b",
+                    source.as_ref(),
+                    bacnet_transport::port::TransportProvenance::unverified(),
+                    req
+                ),
                 ConfirmedRequestAdmission::Duplicate
             ),
             valid

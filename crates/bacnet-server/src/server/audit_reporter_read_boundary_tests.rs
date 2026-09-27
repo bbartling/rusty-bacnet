@@ -28,10 +28,13 @@ async fn audit_reporter_read_duplicate_admission_is_silent() {
             service_choice: service,
             service_request: data.clone(),
         };
-        let ConfirmedRequestAdmission::New(pending) = fixture
-            .server
-            .confirmed_request_tracker
-            .begin(SOURCE, None, request)
+        let ConfirmedRequestAdmission::New(pending) =
+            fixture.server.confirmed_request_tracker.begin(
+                SOURCE,
+                None,
+                bacnet_transport::port::TransportProvenance::unverified(),
+                request,
+            )
         else {
             panic!("first admission");
         };

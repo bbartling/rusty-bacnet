@@ -139,10 +139,13 @@ async fn audit_reporter_range_file_dcc_duplicate_and_overload_are_silent() {
             let reads = add_target(&fixture, kind, None, false).await;
             let req = request(kind, kind.request(1, 1), false);
             let pending = if case == "duplicate" {
-                let ConfirmedRequestAdmission::New(pending) = fixture
-                    .server
-                    .confirmed_request_tracker
-                    .begin(SOURCE, None, req.clone())
+                let ConfirmedRequestAdmission::New(pending) =
+                    fixture.server.confirmed_request_tracker.begin(
+                        SOURCE,
+                        None,
+                        bacnet_transport::port::TransportProvenance::unverified(),
+                        req.clone(),
+                    )
                 else {
                     panic!("first admission")
                 };

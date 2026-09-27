@@ -2286,7 +2286,7 @@ contents in status/errors.
 This is explicit installation policy under Annex AB.7.4. It does not authenticate
 relayed operations end to end, authorize operations, or secure direct SC ingress.
 Every Hub feeding a trusted router ingress must enforce the selected policy;
-#518/#524/#803 remain separate. See the [native contract](rust-api.md#hub-certificate-bindings)
+#518/#524 remain separate. See the [native contract](rust-api.md#hub-certificate-bindings)
 and [scoped evidence](conformance/standard-135-2020-ledger.md#hub-certificate-bindings).
 
 ## ScHub
@@ -2758,6 +2758,15 @@ preserved and may not retransmit certificates. Credentials are offered if reques
 and compatible; a trusted server with no CertificateRequest can complete without
 receiving the node certificate. Local configuration does not attest an arbitrary
 remote hub's verification policy (#513 remains open/partial).
+
+Current native source also retains a verified accepted-direct leaf fingerprint
+and connection incarnation through queued server work, duplicate/replay admission,
+and partial request reassembly. Python does not expose a principal authorizer or
+the direct listener through this API; its mutation policy remains the existing
+static `permissive`/`deny_all` choice. The Rust identity APIs postdate published
+0.11.0. Hub admission's scope-only channel assertion and Hub-relayed application
+traffic never become downstream direct leaf identities. See the
+[Rust identity contract and response-routing limits](rust-api.md#accepted-direct-tls-identity).
 
 ```python
 # Client connecting to a hub

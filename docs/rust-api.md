@@ -562,12 +562,51 @@ connection per peer; normal Hub fallback and bounded URI backoff/retry apply.
 A successful local WebSocket write does not confirm remote NPDU delivery.
 
 Private process-wide generations fence new work from old sockets and stale
-cleanup. Already queued complete NPDUs retain their original values; no reply
-routing or certificate principal is attached by this change. UUID claims are
-not certificate bindings. Direct request principal/reassembly authorization
-(#803) and confirmed-response confinement (#524) remain separate. Ordinary
+cleanup. Already queued complete NPDUs retain their original values, including
+the [direct TLS identity snapshot](#accepted-direct-tls-identity). UUID claims
+are not certificate bindings. Confirmed-response confinement (#524) remains
+separate. Ordinary
 bidirectional application NPDU routing over established direct sockets remains
 a pre-existing gap tracked in [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
+
+### Accepted direct TLS identity
+
+Current source carries `TransportProvenance::direct_sc_identity()` through
+accepted-direct ingress, the network queue, and server dispatch. It returns a
+sealed, immutable `DirectScIdentity` with read-only `leaf_sha256()` and
+`incarnation()` accessors. The fingerprint hashes the exact verified TLS leaf
+DER; it does not hash PEM text, a public key, or claimed UUID/VMAC/SNET/SADR.
+Same-leaf reconnects have different incarnations, and certificate rotation
+changes the fingerprint. Incarnations are process-lifetime identifiers, not
+persisted identity or an ordering API. Both values are `Copy + Eq + Hash`;
+their `Debug` output omits fingerprint and incarnation.
+
+The listener captures the verified leaf before WebSocket upgrade and admits
+NPDUs under the committed membership generation's fence. A missing verified
+chain fails closed. Already admitted complete work may finish after close or
+replacement under its original snapshot; it is not revoked or reinterpreted
+using the new VMAC owner. Generic confirmed duplicate admission and the local
+LSO replay store partition by this leaf/incarnation in addition to their existing
+request keys. Same-socket and non-direct behavior and bounds remain unchanged;
+generic completed retention is local implementation policy, not a permanent API.
+Receive reassembly and client Abort cancellation also isolate direct incarnations.
+Delayed, already-admitted A segments can finish A's context after replacement;
+new frames from retired A cannot enter it.
+
+Mutation and LifeSafetyOperation authorization contexts expose
+`direct_sc_identity()`. Every WPM element retains the request's one snapshot,
+with existing per-element ordering and authorized-prefix behavior. Application
+policy still decides permission. `MutationTrust` and `ControlTrust` remain
+scope labels; claimed addresses remain claims. **Pre-1.0 API change:**
+`LifeSafetyOperationAuthorizationContext` now includes `provenance`, and its
+`Debug` output redacts addresses and request inputs. Hub admission callbacks
+report `is_hub_channel()` rather than `is_direct_peer()`; that scope-only value,
+Hub-relayed ingress, and unverified transports return no direct identity.
+
+These source APIs postdate published 0.11.0. This does not provide a Python
+principal callback, certificate-to-claim binding, Hub-relayed end-to-end identity,
+response socket affinity/replay delivery/segmented-response ACK or Abort
+confinement (#524), or outbound application NPDU intake (#886).
 
 ### Hub certificate bindings
 
@@ -600,7 +639,8 @@ This is opt-in installation policy allowed by 135-2020 Annex AB.7.4, not its
 default authentication requirement. Configure every Hub feeding a trusted router
 ingress consistently. It does not convey a certificate principal in relayed BVLC
 frames, authorize BACnet operations, bind direct-peer requests, or complete the
-Annex AB security profile (#518/#524/#803 remain separate). Runtime tests use
+Annex AB security profile (#518/#524 remain separate; accepted-direct identity
+is described [above](#accepted-direct-tls-identity)). Runtime tests use
 distinct real same-CA leaves, native registration/relay and joined shutdown;
 [the ledger](conformance/standard-135-2020-ledger.md#hub-certificate-bindings)
 records the bounded evidence.
@@ -2024,8 +2064,10 @@ reads, discovery, unconfirmed services, and trusted local writes are unchanged.
 Each decision context also carries the reassembled ingress snapshot
 (`provenance: TransportProvenance`) and the derived channel/relay scope
 (`trust: MutationTrust`, mirroring RB-09 `ControlTrust`): `Unverified`,
-`VerifiedChannel` (direct SC-TLS peer), or `VerifiedRelay` (SC-hub relayed
-origin). Scope only, never leaf identity. Baseline-only profile: an unknown
+`VerifiedChannel` (SC-TLS channel), or `VerifiedRelay` (SC-hub relayed
+origin). These enums are scope-only; `context.direct_sc_identity()` separately
+exposes the [accepted-direct leaf/incarnation](#accepted-direct-tls-identity).
+Baseline-only profile: an unknown
 origin — including a hub-mediated unknown leaf, which arrives unverified —
 never satisfies a baseline-only allow rule, and receive-permission is never
 write-permission; the callback owns the rule. Context `Debug` is redacted

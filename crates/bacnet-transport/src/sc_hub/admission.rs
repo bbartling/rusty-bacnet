@@ -175,8 +175,9 @@ impl super::HubClientRegistrationDecision {
 ///   configured CA. No subject, fingerprint, or other certificate field is
 ///   exposed to the callback. Optional certificate bindings are checked
 ///   independently before this callback and cannot be overridden by it.
-/// - `provenance` is the RB-07 peer context for this channel: the verified
-///   direct-peer variant when `tls_client_verified` holds, else unverified.
+/// - `provenance` describes this channel: the scope-only verified Hub-channel
+///   variant when `tls_client_verified` holds, else unverified. It never
+///   carries a downstream direct leaf principal or connection incarnation.
 ///   Its scope is the TLS channel before Connect-Accept; the claimed VMAC
 ///   and UUID are payload claims inside that channel, not certificate-bound
 ///   (see [`TransportProvenance`]).
@@ -328,12 +329,12 @@ impl Default for AdmissionRuntime {
 
 /// RB-07 peer context for the hub admission channel.
 ///
-/// Verified direct peer exactly when the TLS handshake verified a client
+/// Verified Hub channel exactly when the TLS handshake verified a client
 /// certificate against the configured CA; unverified otherwise. Scope is
 /// the pre-Connect-Accept TLS channel: claims stay claims.
 pub(super) fn channel_provenance(tls_client_verified: bool) -> TransportProvenance {
     if tls_client_verified {
-        TransportProvenance::verified_direct_peer()
+        TransportProvenance::verified_hub_channel()
     } else {
         TransportProvenance::unverified()
     }
@@ -454,7 +455,7 @@ mod tests {
 
     #[test]
     fn channel_provenance_maps_the_boolean_channel() {
-        assert!(channel_provenance(true).is_direct_peer());
+        assert!(channel_provenance(true).is_hub_channel());
         assert!(channel_provenance(false).is_unverified());
     }
 
@@ -490,7 +491,7 @@ mod tests {
             claimed_max_bvlc: 8192,
             claimed_max_npdu: 4096,
             tls_client_verified: true,
-            provenance: TransportProvenance::verified_direct_peer(),
+            provenance: TransportProvenance::verified_hub_channel(),
         }
     }
 }

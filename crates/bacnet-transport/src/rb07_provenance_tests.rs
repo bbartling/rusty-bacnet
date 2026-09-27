@@ -30,8 +30,11 @@ fn provenance_variants_and_scope() {
     assert!(!unverified.is_direct_peer());
     assert!(!unverified.is_relayed_origin());
     assert!(unverified.scope().contains("unverified"));
+    assert!(unverified.direct_sc_identity().is_none());
 
-    let direct = TransportProvenance::verified_direct_peer();
+    let direct = TransportProvenance::verified_direct_peer(
+        crate::port::DirectScIdentity::verified([1; 32], 1),
+    );
     assert!(direct.is_direct_peer());
     assert!(direct.is_verified());
     assert!(!direct.is_unverified());
@@ -42,6 +45,18 @@ fn provenance_variants_and_scope() {
     assert!(relayed.is_verified());
     assert!(!relayed.is_unverified());
     assert!(relayed.scope().contains("hub"));
+    assert!(relayed.direct_sc_identity().is_none());
+
+    let hub = TransportProvenance::verified_hub_channel();
+    assert!(hub.is_verified() && hub.is_hub_channel());
+    assert!(!hub.is_direct_peer());
+    assert!(hub.direct_sc_identity().is_none());
+    assert_ne!(hub, direct);
+    assert_ne!(hub, relayed);
+
+    fn value_traits<T: Copy + Eq + std::hash::Hash>() {}
+    value_traits::<TransportProvenance>();
+    value_traits::<crate::port::DirectScIdentity>();
 
     // Snapshots compare by value; conflicting contexts fail closed elsewhere.
     assert_ne!(unverified, direct);
@@ -332,7 +347,9 @@ async fn queueing_cannot_change_provenance_meaning() {
     let (tx, mut rx) = mpsc::channel(4);
     for provenance in [
         TransportProvenance::unverified(),
-        TransportProvenance::verified_direct_peer(),
+        TransportProvenance::verified_direct_peer(crate::port::DirectScIdentity::verified(
+            [1; 32], 1,
+        )),
         TransportProvenance::verified_relayed_origin(),
     ] {
         tx.send(ReceivedNpdu {
@@ -358,7 +375,9 @@ fn debug_is_redacted_no_key_material() {
         source_mac: MacAddr::from_slice(&secret_mac),
         link_layer_group: true,
         data_attributes: Vec::new(),
-        provenance: TransportProvenance::verified_direct_peer(),
+        provenance: TransportProvenance::verified_direct_peer(
+            crate::port::DirectScIdentity::verified([1; 32], 1),
+        ),
         reply_tx: None,
     };
     let rendered = format!("{:?}", envelope);

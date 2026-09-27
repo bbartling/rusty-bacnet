@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use super::request_peer::{canonical_requester, CanonicalRequester};
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 
 /// Local retention and resource policy for exact confirmed-request detection.
 ///
@@ -21,6 +22,7 @@ const MAX_TRACKED_SERVICE_REQUEST_BYTES: usize = 64 * 1024;
 struct Entry {
     id: u64,
     requester: CanonicalRequester,
+    direct_identity: Option<DirectScIdentity>,
     invoke_id: u8,
     request: ConfirmedRequest,
     completed_at: Option<Instant>,
@@ -38,6 +40,9 @@ struct TrackerState {
 /// LSO-only replay store below is a separate budget with its own limits and
 /// TTL, held on the same server-owned [`Arc`] so dispatch admission can reach
 /// it without changing the dispatch signature shared with non-LSO callers.
+/// Accepted direct SC requests additionally partition by the immutable verified
+/// leaf and connection incarnation. Non-direct canonicalization is unchanged.
+/// Completed retention remains local implementation policy, not a public API.
 #[derive(Default)]
 pub(super) struct ConfirmedRequestTracker {
     state: Mutex<TrackerState>,
@@ -65,15 +70,23 @@ impl ConfirmedRequestTracker {
         self: &Arc<Self>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        provenance: TransportProvenance,
         request: ConfirmedRequest,
     ) -> ConfirmedRequestAdmission {
-        self.begin_at(source_mac, source_network, request, Instant::now())
+        self.begin_at(
+            source_mac,
+            source_network,
+            provenance,
+            request,
+            Instant::now(),
+        )
     }
 
     fn begin_at(
         self: &Arc<Self>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        provenance: TransportProvenance,
         request: ConfirmedRequest,
         now: Instant,
     ) -> ConfirmedRequestAdmission {
@@ -82,6 +95,7 @@ impl ConfirmedRequestTracker {
         }
 
         let requester = canonical_requester(source_mac, source_network);
+        let direct_identity = provenance.direct_sc_identity();
         let invoke_id = request.invoke_id;
         let mut state = self
             .state
@@ -92,7 +106,10 @@ impl ConfirmedRequestTracker {
             Some(completed_at) => completed_at + COMPLETED_RETENTION > now,
         });
         if state.entries.iter().any(|entry| {
-            entry.requester == requester && entry.invoke_id == invoke_id && entry.request == request
+            entry.requester == requester
+                && entry.direct_identity == direct_identity
+                && entry.invoke_id == invoke_id
+                && entry.request == request
         }) {
             return ConfirmedRequestAdmission::Duplicate;
         }
@@ -121,6 +138,7 @@ impl ConfirmedRequestTracker {
         state.entries.push_back(Entry {
             id,
             requester,
+            direct_identity,
             invoke_id,
             request,
             completed_at: None,
@@ -222,15 +240,33 @@ mod tests {
         let tracker = Arc::new(ConfirmedRequestTracker::default());
         let started_at = Instant::now();
         let req = request(1, Bytes::from_static(b"request"));
-        let pending = expect_new(tracker.begin_at(b"peer", None, req.clone(), started_at));
+        let pending = expect_new(tracker.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            req.clone(),
+            started_at,
+        ));
         assert!(matches!(
-            tracker.begin_at(b"peer", None, req.clone(), started_at),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                started_at
+            ),
             ConfirmedRequestAdmission::Duplicate
         ));
 
         let completed_at = started_at + COMPLETED_RETENTION + Duration::from_secs(30);
         assert!(matches!(
-            tracker.begin_at(b"peer", None, req.clone(), completed_at),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                completed_at
+            ),
             ConfirmedRequestAdmission::Duplicate
         ));
         pending.complete_at(completed_at);
@@ -238,13 +274,20 @@ mod tests {
             tracker.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 req.clone(),
                 completed_at + COMPLETED_RETENTION - Duration::from_millis(1)
             ),
             ConfirmedRequestAdmission::Duplicate
         ));
         assert!(matches!(
-            tracker.begin_at(b"peer", None, req, completed_at + COMPLETED_RETENTION),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req,
+                completed_at + COMPLETED_RETENTION
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
     }
@@ -254,15 +297,23 @@ mod tests {
         let tracker = Arc::new(ConfirmedRequestTracker::default());
         let now = Instant::now();
         let first = request(7, Bytes::from_static(b"one"));
-        expect_new(tracker.begin_at(b"peer", None, first.clone(), now)).complete_at(now);
+        expect_new(tracker.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            first.clone(),
+            now,
+        ))
+        .complete_at(now);
 
         assert!(matches!(
-            tracker.begin_at(b"peer", None, first, now),
+            tracker.begin_at(b"peer", None, TransportProvenance::unverified(), first, now),
             ConfirmedRequestAdmission::Duplicate
         ));
         let changed_body = expect_new(tracker.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(7, Bytes::from_static(b"two")),
             now,
         ));
@@ -270,7 +321,13 @@ mod tests {
         let mut changed_service = request(7, Bytes::from_static(b"one"));
         changed_service.service_choice = ConfirmedServiceChoice::DELETE_OBJECT;
         assert!(matches!(
-            tracker.begin_at(b"peer", None, changed_service, now),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                changed_service,
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
     }
@@ -281,30 +338,72 @@ mod tests {
         let now = Instant::now();
         let req = request(2, Bytes::from_static(b"same"));
         let origin = routed(5, b"origin");
-        expect_new(tracker.begin_at(b"router-a", Some(&origin), req.clone(), now)).complete_at(now);
+        expect_new(tracker.begin_at(
+            b"router-a",
+            Some(&origin),
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ))
+        .complete_at(now);
         assert!(matches!(
-            tracker.begin_at(b"router-b", Some(&origin), req.clone(), now),
+            tracker.begin_at(
+                b"router-b",
+                Some(&origin),
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             ConfirmedRequestAdmission::Duplicate
         ));
         assert!(matches!(
-            tracker.begin_at(b"router-b", Some(&routed(6, b"origin")), req.clone(), now),
+            tracker.begin_at(
+                b"router-b",
+                Some(&routed(6, b"origin")),
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
         assert!(matches!(
-            tracker.begin_at(b"direct-a", None, req.clone(), now),
+            tracker.begin_at(
+                b"direct-a",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
         assert!(matches!(
-            tracker.begin_at(b"direct-b", None, req.clone(), now),
+            tracker.begin_at(
+                b"direct-b",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
 
         let invalid = routed(0, b"claimed-origin");
-        let invalid_pending =
-            expect_new(tracker.begin_at(b"router-c", Some(&invalid), req.clone(), now));
+        let invalid_pending = expect_new(tracker.begin_at(
+            b"router-c",
+            Some(&invalid),
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ));
         invalid_pending.complete_at(now);
         assert!(matches!(
-            tracker.begin_at(b"router-d", Some(&invalid), req, now),
+            tracker.begin_at(
+                b"router-d",
+                Some(&invalid),
+                TransportProvenance::unverified(),
+                req,
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
     }
@@ -315,24 +414,43 @@ mod tests {
         let now = Instant::now();
         for index in 0..MAX_ENTRIES {
             let req = request(3, Bytes::from(vec![index as u8, (index >> 8) as u8]));
-            expect_new(tracker.begin_at(b"peer", None, req, now))
-                .complete_at(now + Duration::from_millis(index as u64));
+            expect_new(tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req,
+                now,
+            ))
+            .complete_at(now + Duration::from_millis(index as u64));
         }
 
         expect_new(tracker.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(3, Bytes::from_static(b"newest")),
             now + Duration::from_millis(MAX_ENTRIES as u64),
         ))
         .complete_at(now + Duration::from_millis(MAX_ENTRIES as u64));
         assert_eq!(tracker.state.lock().unwrap().entries.len(), MAX_ENTRIES);
         assert!(matches!(
-            tracker.begin_at(b"peer", None, request(3, Bytes::from_static(&[1, 0])), now),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                request(3, Bytes::from_static(&[1, 0])),
+                now
+            ),
             ConfirmedRequestAdmission::Duplicate
         ));
         assert!(matches!(
-            tracker.begin_at(b"peer", None, request(3, Bytes::from_static(&[0, 0])), now),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                request(3, Bytes::from_static(&[0, 0])),
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
     }
@@ -346,17 +464,25 @@ mod tests {
             pending.push(expect_new(tracker.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 request(4, Bytes::from(vec![index as u8, (index >> 8) as u8])),
                 now,
             )));
         }
         assert!(matches!(
-            tracker.begin_at(b"peer", None, request(4, Bytes::from_static(&[0, 0])), now),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                request(4, Bytes::from_static(&[0, 0])),
+                now
+            ),
             ConfirmedRequestAdmission::Duplicate
         ));
         let fallback = expect_new(tracker.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(4, Bytes::from_static(b"fallback")),
             now,
         ));
@@ -367,6 +493,7 @@ mod tests {
             tracker.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 request(4, Bytes::from_static(b"fallback")),
                 now
             ),
@@ -377,6 +504,7 @@ mod tests {
         let oversized = expect_new(tracker.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(
                 5,
                 Bytes::from(vec![0; MAX_TRACKED_SERVICE_REQUEST_BYTES + 1]),
@@ -391,16 +519,28 @@ mod tests {
         let tracker = Arc::new(ConfirmedRequestTracker::default());
         let now = Instant::now();
         let req = request(6, Bytes::from_static(b"cancelled"));
-        let pending = expect_new(tracker.begin_at(b"peer", None, req.clone(), now));
+        let pending = expect_new(tracker.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ));
         drop(pending);
         assert!(matches!(
-            tracker.begin_at(b"peer", None, req.clone(), now),
+            tracker.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             ConfirmedRequestAdmission::New(_)
         ));
 
         let restarted = Arc::new(ConfirmedRequestTracker::default());
         assert!(matches!(
-            restarted.begin_at(b"peer", None, req, now),
+            restarted.begin_at(b"peer", None, TransportProvenance::unverified(), req, now),
             ConfirmedRequestAdmission::New(_)
         ));
     }
@@ -424,6 +564,7 @@ mod tests {
                 let pending = match tracker.begin(
                     b"peer",
                     None,
+                    TransportProvenance::unverified(),
                     request(8, Bytes::from_static(b"concurrent")),
                 ) {
                     ConfirmedRequestAdmission::Duplicate => None,

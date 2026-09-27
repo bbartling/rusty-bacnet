@@ -1008,7 +1008,8 @@ real TLS paths through frozen named groups. No-map CA-valid admission remains
 intentional. See [Rust](../rust-api.md#hub-certificate-bindings) and
 [Python](../python-api.md#hub-certificate-bindings) for the exact contract.
 This neither authenticates relayed operations end to end nor closes the full SC
-security profile; #518/#524/#803 remain separate.
+security profile; #518/#524 remain separate. Accepted-direct identity is
+covered by the narrower evidence below.
 
 ## Direct peer membership
 
@@ -1025,8 +1026,8 @@ The accepted M/pending M/physical 2M bounds, compound collision precedence and
 capacity RESOURCES/OTHER signal are local policy. Public migration is described
 in [the Rust API](../rust-api.md#direct-peer-membership-and-limits). Different
 CA-valid certificates may claim the same UUID under this membership policy.
-This row does not promote the broader connection-state audit or claim #803
-request-principal isolation, #524 response confinement, BTL certification,
+This row does not promote the broader connection-state audit or claim the
+separate request-principal isolation row below, #524 response confinement, BTL certification,
 external interoperability or hardware qualification. Idle outbound workers observe
 remote EOF/Close and handle Disconnect control with generation-specific cleanup.
 Ordinary bidirectional application NPDU routing remains a pre-existing gap in
@@ -1037,3 +1038,41 @@ peer sockets remain open from deterministic crossed replacement at two endpoints
 Crossed replacement can close both sockets; the tests require generation-specific
 cleanup, recovered physical capacity, and successful fresh demand after normal
 URI backoff. Local write success alone does not establish remote NPDU delivery.
+
+## Accepted direct request identity
+
+`BACNET-AB-SC-DIRECT-PRINCIPAL` records #803's accepted-direct identity boundary.
+Annex AB.7.4 supplies TLS connection authentication; exact leaf-DER SHA-256,
+process-lifetime connection incarnations, request ownership and authorizer policy
+are the selected local contract. This does not make certificate-to-UUID/VMAC
+mapping mandatory or enable such installation policy for direct connections.
+
+The listener captures its verified leaf before WebSocket upgrade, fails closed
+without that chain, and combines it with #851's committed generation under the
+existing NPDU admission fence. The sealed snapshot reaches the network queue,
+mutation/WPM and LSO authorizers, generic duplicate admission, LSO replay, and
+receive reassembly/cancellation. Already admitted complete A work may finish under
+A's original snapshot after replacement; newly arriving retired-socket frames
+remain fenced. Direct identities partition partial contexts and duplicate/replay
+entries without expanding existing global or claimed-peer capacity bounds.
+Hub admission has its own scope-only channel variant; Hub-relayed and unverified
+ingress do not gain a downstream direct principal.
+
+Real TLS tests use different same-CA leaves and same-leaf reconnects claiming
+identical UUID/VMAC and routed addresses. Listener-produced envelopes pass through
+the actual network/server loop with explicit queue/database barriers. They prove
+fresh authorization for byte-identical WP/LSO requests across pending/completed
+entries, preserved same-socket behavior, WPM order and old snapshot retention,
+independent segment completion/cancellation, and unchanged reassembly capacity.
+Queued-A segment controls were admitted before retirement. Separate tests cover
+exact DER hashing, absent-chain refusal, TLS resumption, redaction, and sealed
+construction. Independent negative controls omit the duplicate identity partition
+or restore address-wide Abort sweeping and fail the corresponding regressions.
+
+The response observer is a transport send boundary. This evidence does not
+qualify #524 reply socket affinity, replay delivery, segmented-response ACK/Abort
+confinement, #886 bidirectional/outbound application NPDU intake, Hub-relayed
+end-to-end identity, full Annex AB conformance, BTL certification, or external
+interoperability. Generic completed retention remains changeable local policy.
+Global evidence pins and broad security-row status are unchanged. See the
+[Rust API and public breaks](../rust-api.md#accepted-direct-tls-identity).

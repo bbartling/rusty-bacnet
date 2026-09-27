@@ -18,7 +18,8 @@
 //! Safety invariants (life-safety-adjacent, all held):
 //! 1. Any doubt (oversize, full-pending, empty/restarted store) executes
 //!    normally; first execution is never suppressed.
-//! 2. Full key match required: canonical requester + invoke ID + full
+//! 2. Full key match required: canonical requester + accepted-direct verified
+//!    leaf/incarnation (when present) + invoke ID + full
 //!    ConfirmedRequest equality (service choice LSO + exact service-request
 //!    bytes). The Requesting Source is fingerprint bytes inside the request,
 //!    NEVER an authenticated identity.
@@ -35,6 +36,8 @@
 //! service requests larger than 64 KiB are served untracked (execute, never
 //! store), oldest-completed-first eviction, all-pending-full serves untracked.
 //! In-memory only; a restart clears the store.
+//! Retiring a connection does not reinterpret or revoke already admitted work;
+//! a replacement cannot consume that old incarnation's pending/completed entry.
 //!
 //! Locking: `std::sync::Mutex`, lock → clone → unlock → send, never held
 //! across `.await` (same convention as the generic tracker).
@@ -48,6 +51,7 @@ use bytes::Bytes;
 use super::request_peer::{canonical_requester, CanonicalRequester};
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 
 /// Completed LSO responses are retained for this long after the response time.
 const COMPLETED_RETENTION: Duration = Duration::from_secs(60);
@@ -60,6 +64,7 @@ const MAX_TRACKED_SERVICE_REQUEST_BYTES: usize = 64 * 1024;
 struct Entry {
     id: u64,
     requester: CanonicalRequester,
+    direct_identity: Option<DirectScIdentity>,
     invoke_id: u8,
     request: ConfirmedRequest,
     completed_at: Option<Instant>,
@@ -104,15 +109,23 @@ impl LsoReplayCache {
         self: &Arc<Self>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        provenance: TransportProvenance,
         request: ConfirmedRequest,
     ) -> LsoAdmission {
-        self.begin_at(source_mac, source_network, request, Instant::now())
+        self.begin_at(
+            source_mac,
+            source_network,
+            provenance,
+            request,
+            Instant::now(),
+        )
     }
 
     fn begin_at(
         self: &Arc<Self>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        provenance: TransportProvenance,
         request: ConfirmedRequest,
         now: Instant,
     ) -> LsoAdmission {
@@ -121,6 +134,7 @@ impl LsoReplayCache {
         }
 
         let requester = canonical_requester(source_mac, source_network);
+        let direct_identity = provenance.direct_sc_identity();
         let invoke_id = request.invoke_id;
         let mut state = self
             .state
@@ -131,7 +145,10 @@ impl LsoReplayCache {
             Some(completed_at) => completed_at + COMPLETED_RETENTION > now,
         });
         if let Some(hit) = state.entries.iter().find(|entry| {
-            entry.requester == requester && entry.invoke_id == invoke_id && entry.request == request
+            entry.requester == requester
+                && entry.direct_identity == direct_identity
+                && entry.invoke_id == invoke_id
+                && entry.request == request
         }) {
             match (hit.completed_at, hit.response.clone()) {
                 (Some(_), Some(response)) => return LsoAdmission::Replay(response),
@@ -173,6 +190,7 @@ impl LsoReplayCache {
         state.entries.push_back(Entry {
             id,
             requester,
+            direct_identity,
             invoke_id,
             request,
             completed_at: None,
@@ -291,29 +309,54 @@ mod tests {
         let cache = Arc::new(LsoReplayCache::default());
         let started_at = Instant::now();
         let req = request(1, Bytes::from_static(b"lso"));
-        let pending = expect_new(cache.begin_at(b"peer", None, req.clone(), started_at));
+        let pending = expect_new(cache.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            req.clone(),
+            started_at,
+        ));
         assert!(matches!(
-            cache.begin_at(b"peer", None, req.clone(), started_at),
+            cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                started_at
+            ),
             LsoAdmission::DuplicatePending
         ));
 
         let completed_at = started_at + Duration::from_secs(30);
         pending.complete_with_response_at(Bytes::from_static(b"ack"), completed_at);
         assert_eq!(
-            expect_replay(cache.begin_at(b"peer", None, req.clone(), completed_at)),
+            expect_replay(cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                completed_at
+            )),
             Bytes::from_static(b"ack")
         );
         assert_eq!(
             expect_replay(cache.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 req.clone(),
                 completed_at + COMPLETED_RETENTION - Duration::from_millis(1)
             )),
             Bytes::from_static(b"ack")
         );
         assert!(matches!(
-            cache.begin_at(b"peer", None, req, completed_at + COMPLETED_RETENTION),
+            cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req,
+                completed_at + COMPLETED_RETENTION
+            ),
             LsoAdmission::New(_)
         ));
     }
@@ -323,10 +366,22 @@ mod tests {
         let cache = Arc::new(LsoReplayCache::default());
         let now = Instant::now();
         let req = request(9, Bytes::from_static(b"denied"));
-        expect_new(cache.begin_at(b"peer", None, req.clone(), now))
-            .complete_with_response_at(Bytes::from_static(b"error"), now);
+        expect_new(cache.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ))
+        .complete_with_response_at(Bytes::from_static(b"error"), now);
         assert_eq!(
-            expect_replay(cache.begin_at(b"peer", None, req, now)),
+            expect_replay(cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req,
+                now
+            )),
             Bytes::from_static(b"error")
         );
     }
@@ -336,26 +391,48 @@ mod tests {
         let cache = Arc::new(LsoReplayCache::default());
         let now = Instant::now();
         let first = request(7, Bytes::from_static(b"one"));
-        expect_new(cache.begin_at(b"peer", None, first.clone(), now))
-            .complete_with_response_at(Bytes::from_static(b"r1"), now);
+        expect_new(cache.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            first.clone(),
+            now,
+        ))
+        .complete_with_response_at(Bytes::from_static(b"r1"), now);
 
         assert!(matches!(
-            cache.begin_at(b"peer", None, first, now),
+            cache.begin_at(b"peer", None, TransportProvenance::unverified(), first, now),
             LsoAdmission::Replay(_)
         ));
         // Changed invoke ID re-executes.
-        let changed_invoke =
-            expect_new(cache.begin_at(b"peer", None, request(8, Bytes::from_static(b"one")), now));
+        let changed_invoke = expect_new(cache.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            request(8, Bytes::from_static(b"one")),
+            now,
+        ));
         drop(changed_invoke);
         // Changed bytes re-execute.
-        let changed_body =
-            expect_new(cache.begin_at(b"peer", None, request(7, Bytes::from_static(b"two")), now));
+        let changed_body = expect_new(cache.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            request(7, Bytes::from_static(b"two")),
+            now,
+        ));
         drop(changed_body);
         // Changed service choice re-executes.
         let mut changed_service = request(7, Bytes::from_static(b"one"));
         changed_service.service_choice = ConfirmedServiceChoice::ACKNOWLEDGE_ALARM;
         assert!(matches!(
-            cache.begin_at(b"peer", None, changed_service, now),
+            cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                changed_service,
+                now
+            ),
             LsoAdmission::New(_)
         ));
     }
@@ -366,29 +443,64 @@ mod tests {
         let now = Instant::now();
         let req = request(2, Bytes::from_static(b"same"));
         let origin = routed(5, b"origin");
-        expect_new(cache.begin_at(b"router-a", Some(&origin), req.clone(), now))
-            .complete_with_response_at(Bytes::from_static(b"ack"), now);
+        expect_new(cache.begin_at(
+            b"router-a",
+            Some(&origin),
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ))
+        .complete_with_response_at(Bytes::from_static(b"ack"), now);
         assert!(matches!(
-            cache.begin_at(b"router-b", Some(&origin), req.clone(), now),
+            cache.begin_at(
+                b"router-b",
+                Some(&origin),
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             LsoAdmission::Replay(_)
         ));
         assert!(matches!(
-            cache.begin_at(b"router-b", Some(&routed(6, b"origin")), req.clone(), now),
+            cache.begin_at(
+                b"router-b",
+                Some(&routed(6, b"origin")),
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             LsoAdmission::New(_)
         ));
         assert!(matches!(
-            cache.begin_at(b"direct-a", None, req.clone(), now),
+            cache.begin_at(
+                b"direct-a",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             LsoAdmission::New(_)
         ));
         let invalid = routed(0, b"claimed-origin");
-        let invalid_pending =
-            expect_new(cache.begin_at(b"router-c", Some(&invalid), req.clone(), now));
+        let invalid_pending = expect_new(cache.begin_at(
+            b"router-c",
+            Some(&invalid),
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ));
         assert!(invalid_pending.is_tracked());
         invalid_pending.complete_with_response_at(Bytes::from_static(b"ack"), now);
         // Network 0 is not a valid routed origin, so it collapses to direct
         // peers keyed by immediate MAC and stays independent.
         assert!(matches!(
-            cache.begin_at(b"router-d", Some(&invalid), req, now),
+            cache.begin_at(
+                b"router-d",
+                Some(&invalid),
+                TransportProvenance::unverified(),
+                req,
+                now
+            ),
             LsoAdmission::New(_)
         ));
     }
@@ -399,15 +511,17 @@ mod tests {
         let now = Instant::now();
         for index in 0..MAX_ENTRIES {
             let req = request(3, Bytes::from(vec![index as u8, (index >> 8) as u8]));
-            expect_new(cache.begin_at(b"peer", None, req, now)).complete_with_response_at(
-                Bytes::from_static(b"r"),
-                now + Duration::from_millis(index as u64),
-            );
+            expect_new(cache.begin_at(b"peer", None, TransportProvenance::unverified(), req, now))
+                .complete_with_response_at(
+                    Bytes::from_static(b"r"),
+                    now + Duration::from_millis(index as u64),
+                );
         }
 
         expect_new(cache.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(3, Bytes::from_static(b"newest")),
             now + Duration::from_millis(MAX_ENTRIES as u64),
         ))
@@ -421,13 +535,20 @@ mod tests {
             cache.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 request(3, Bytes::from_static(b"newest")),
                 now
             ),
             LsoAdmission::Replay(_)
         ));
         assert!(matches!(
-            cache.begin_at(b"peer", None, request(3, Bytes::from_static(&[0, 0])), now),
+            cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                request(3, Bytes::from_static(&[0, 0])),
+                now
+            ),
             LsoAdmission::New(_)
         ));
     }
@@ -441,18 +562,26 @@ mod tests {
             pending.push(expect_new(cache.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 request(4, Bytes::from(vec![index as u8, (index >> 8) as u8])),
                 now,
             )));
         }
         // Exact pending duplicate still discards.
         assert!(matches!(
-            cache.begin_at(b"peer", None, request(4, Bytes::from_static(&[0, 0])), now),
+            cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                request(4, Bytes::from_static(&[0, 0])),
+                now
+            ),
             LsoAdmission::DuplicatePending
         ));
         let fallback = expect_new(cache.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(4, Bytes::from_static(b"fallback")),
             now,
         ));
@@ -464,6 +593,7 @@ mod tests {
             cache.begin_at(
                 b"peer",
                 None,
+                TransportProvenance::unverified(),
                 request(4, Bytes::from_static(b"fallback")),
                 now
             ),
@@ -474,6 +604,7 @@ mod tests {
         let oversized = expect_new(cache.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(
                 5,
                 Bytes::from(vec![0; MAX_TRACKED_SERVICE_REQUEST_BYTES + 1]),
@@ -486,6 +617,7 @@ mod tests {
         let again = expect_new(cache.begin_at(
             b"peer",
             None,
+            TransportProvenance::unverified(),
             request(
                 5,
                 Bytes::from(vec![0; MAX_TRACKED_SERVICE_REQUEST_BYTES + 1]),
@@ -500,16 +632,28 @@ mod tests {
         let cache = Arc::new(LsoReplayCache::default());
         let now = Instant::now();
         let req = request(6, Bytes::from_static(b"cancelled"));
-        let pending = expect_new(cache.begin_at(b"peer", None, req.clone(), now));
+        let pending = expect_new(cache.begin_at(
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            req.clone(),
+            now,
+        ));
         drop(pending);
         assert!(matches!(
-            cache.begin_at(b"peer", None, req.clone(), now),
+            cache.begin_at(
+                b"peer",
+                None,
+                TransportProvenance::unverified(),
+                req.clone(),
+                now
+            ),
             LsoAdmission::New(_)
         ));
 
         let restarted = Arc::new(LsoReplayCache::default());
         assert!(matches!(
-            restarted.begin_at(b"peer", None, req, now),
+            restarted.begin_at(b"peer", None, TransportProvenance::unverified(), req, now),
             LsoAdmission::New(_)
         ));
     }
@@ -530,16 +674,19 @@ mod tests {
             let finish = Arc::clone(&finish);
             workers.push(std::thread::spawn(move || {
                 start.wait();
-                let pending =
-                    match cache.begin(b"peer", None, request(8, Bytes::from_static(b"concurrent")))
-                    {
-                        LsoAdmission::DuplicatePending => None,
-                        LsoAdmission::Replay(_) => panic!("no response yet"),
-                        LsoAdmission::New(pending) => {
-                            admitted.fetch_add(1, Ordering::AcqRel);
-                            Some(pending)
-                        }
-                    };
+                let pending = match cache.begin(
+                    b"peer",
+                    None,
+                    TransportProvenance::unverified(),
+                    request(8, Bytes::from_static(b"concurrent")),
+                ) {
+                    LsoAdmission::DuplicatePending => None,
+                    LsoAdmission::Replay(_) => panic!("no response yet"),
+                    LsoAdmission::New(pending) => {
+                        admitted.fetch_add(1, Ordering::AcqRel);
+                        Some(pending)
+                    }
+                };
                 finish.wait();
                 drop(pending);
             }));

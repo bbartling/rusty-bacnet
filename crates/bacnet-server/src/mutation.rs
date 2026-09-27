@@ -25,9 +25,9 @@ use bacnet_types::MacAddr;
 /// is the authenticated peer. Provenance alone never authorizes; only the
 /// callback does (callback-only, no static allowlist).
 ///
-/// Baseline-only profile (RB-08): there is no cert-bound leaf identity at
-/// this layer — the SC VMAC is payload-claimed inside the TLS channel, not
-/// bound to the operational certificate. An unknown origin (including a
+/// Direct ingress exposes its verified leaf through the provenance snapshot;
+/// this enum remains scope-only. The SC VMAC is payload-claimed inside the TLS
+/// channel and is not bound to the operational certificate. An unknown origin (including a
 /// hub-mediated unknown leaf, which arrives [`TransportProvenance::unverified`])
 /// never satisfies a baseline-only allow rule; receive-permission (e.g. an
 /// accepted COV subscription or audit receipt) is never write-permission.
@@ -35,7 +35,7 @@ use bacnet_types::MacAddr;
 pub enum MutationTrust {
     /// Unverified legacy origin, including hub-mediated unknown leaves.
     Unverified,
-    /// Authenticated immediate direct SC-TLS peer (post-handshake VMAC only).
+    /// Authenticated immediate SC-TLS channel; leaf identity is separate.
     VerifiedChannel,
     /// Independently validated SC-hub relayed origin (post source admission;
     /// the hub peer is not the leaf).
@@ -45,7 +45,7 @@ pub enum MutationTrust {
 impl MutationTrust {
     /// Derive the channel/relay scope from one reassembled ingress snapshot.
     pub fn from_provenance(provenance: TransportProvenance) -> Self {
-        if provenance.is_direct_peer() {
+        if provenance.is_direct_peer() || provenance.is_hub_channel() {
             Self::VerifiedChannel
         } else if provenance.is_relayed_origin() {
             Self::VerifiedRelay
@@ -58,8 +58,8 @@ impl MutationTrust {
 /// Local authorization mode for the ten services represented by [`MutationTarget`].
 ///
 /// SC mTLS channel/peer authentication is **not service authorization**. Identities
-/// here are claimed link/routed addresses, never certificate principals; distinguishing
-/// SC certificate principals is out of scope because none reaches this layer.
+/// include claimed link/routed addresses separately from the sealed direct-SC
+/// leaf/incarnation snapshot available to an installed authorizer.
 /// DCC, admission, decoding and WPM element validation retain their existing precedence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MutationPolicy {
@@ -147,6 +147,13 @@ pub struct MutationAuthorizationContext {
     pub service_choice: ConfirmedServiceChoice,
     /// Decoded target and parameters; current element for WPM.
     pub target: MutationTarget,
+}
+
+impl MutationAuthorizationContext {
+    /// Original accepted direct-SC leaf and incarnation; absent on other ingress.
+    pub fn direct_sc_identity(&self) -> Option<bacnet_transport::port::DirectScIdentity> {
+        self.provenance.direct_sc_identity()
+    }
 }
 
 impl std::fmt::Debug for MutationAuthorizationContext {

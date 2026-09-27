@@ -361,6 +361,7 @@ impl ScNpduAdmission {
         npdu: Bytes,
         peer: Vmac,
         peer_addr: SocketAddr,
+        identity: crate::port::DirectScIdentity,
     ) {
         let source_mac = MacAddr::from_slice(&peer);
         let item = ReceivedNpdu {
@@ -368,7 +369,7 @@ impl ScNpduAdmission {
             source_mac: source_mac.clone(),
             link_layer_group: false,
             data_attributes: data_attributes::from_data_options(msg),
-            provenance: TransportProvenance::verified_direct_peer(),
+            provenance: TransportProvenance::verified_direct_peer(identity),
             reply_tx: None,
         };
         match self.admit(tx, ScIngressPath::Direct, &source_mac, item) {
@@ -604,8 +605,22 @@ mod tests {
         assert_eq!(admission.drop_counts().full_drops, 0);
         // Identical bytes on the direct path are a separate key and progress.
         let peer_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        admission.admit_direct_peer(&tx, &encapsulated(None), npdu.clone(), source, peer_addr);
-        admission.admit_direct_peer(&tx, &encapsulated(None), npdu.clone(), source, peer_addr);
+        admission.admit_direct_peer(
+            &tx,
+            &encapsulated(None),
+            npdu.clone(),
+            source,
+            peer_addr,
+            crate::port::DirectScIdentity::verified([1; 32], 1),
+        );
+        admission.admit_direct_peer(
+            &tx,
+            &encapsulated(None),
+            npdu.clone(),
+            source,
+            peer_addr,
+            crate::port::DirectScIdentity::verified([1; 32], 1),
+        );
         assert_eq!(rx.len(), 6);
         assert_eq!(admission.drop_counts().fairness_drops, 2);
         assert_eq!(admission.test_live_entries(), (2, 6));

@@ -795,6 +795,8 @@ mod dcc_event_detection_tests;
 mod device_bindings_tests;
 #[cfg(test)]
 mod device_recipient_routing_tests;
+#[cfg(all(test, feature = "sc-tls"))]
+mod direct_principal_tests;
 #[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]
