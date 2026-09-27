@@ -2739,3 +2739,29 @@ and prevents queued requests from starting; it cannot retract writes already sen
 Remote WP inputs remain six-tuples; the server's local `source_object` argument
 is unrelated. Results do not echo complete requests or encoded write values.
 Returned values remain inspectable; this is not a general secrecy guarantee.
+
+### Endpoint direct WriteProperty
+
+`EndpointClient.write_property(address, object_id, property_id, value,
+priority=None, array_index=None, *, commandability=...)` returns `Awaitable[None]`
+through the endpoint's shared requester. The required keyword is exactly
+`"commandable"` or `"noncommandable"`, including when no Reporter is configured.
+It declares remote property semantics and never changes the supplied wire priority.
+Only direct IPv4 B/IP peers are supported. This adds no Python source Reporter
+configuration surface; Rust owns that existing optional profile.
+
+Invalid commandability, priority, raw TLV framing and complete request size fail
+synchronously with `ValueError`; priorities outside the native u8 range raise
+`OverflowError`. `PropertyValue.application_data(b"")` can represent an empty list;
+`PropertyValue.null()` represents NULL. The target still decides datatype validity
+and may return a protocol error. Existing endpoint read methods keep their native
+Awaitable results and established correlation rules.
+
+```python
+role = await endpoint.client()
+await role.write_property(
+    "127.0.0.1:47808", ObjectIdentifier(ObjectType.ANALOG_VALUE, 7),
+    PropertyIdentifier.PRESENT_VALUE, PropertyValue.real(21.0),
+    priority=8, commandability="commandable",
+)
+```

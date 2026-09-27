@@ -3,7 +3,7 @@ use super::*;
 use tokio::time::{timeout_at, Instant};
 
 pub(super) fn record_drop(
-    source: &Arc<SourceRead>,
+    source: &Arc<SourceAudit>,
     owner: &NotificationTransactions,
     ticket: Option<AuditFailureTicket<MacAddr>>,
     timestamp: BACnetTimeStamp,

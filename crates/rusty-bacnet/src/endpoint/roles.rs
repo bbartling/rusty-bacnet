@@ -19,7 +19,7 @@ use bacnet_encoding::primitives::decode_application_value;
 use crate::errors::to_py_err;
 use crate::types::{parse_address, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 
-/// Client role: initiates ReadProperty/ReadRange/ReadPropertyMultiple over the owner's single transport.
+/// Client role: initiates ReadProperty/ReadRange/ReadPropertyMultiple/WriteProperty over the owner's single transport.
 ///
 /// Cloned out of a running endpoint via `await endpoint.client()`. No
 /// lifecycle methods; survives the owner as a value but fails closed after
@@ -69,6 +69,68 @@ impl PyEndpointClient {
                 .map_err(to_py_err)?;
             let (value, _) = decode_application_value(&ack.property_value, 0).map_err(to_py_err)?;
             Ok(PyPropertyValue::from_rust(value))
+        })
+    }
+
+    /// Write a property to a direct IPv4 B/IP peer through the owner's transport.
+    /// `commandability` is a required caller assertion, including without a Reporter.
+    /// Invalid commandability, priority, framing and APDU size fail synchronously.
+    #[pyo3(signature = (address, object_id, property_id, value, priority=None, array_index=None, *, commandability))]
+    #[allow(clippy::too_many_arguments)]
+    fn write_property<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        object_id: PyObjectIdentifier,
+        property_id: PyPropertyIdentifier,
+        value: PyPropertyValue,
+        priority: Option<u8>,
+        array_index: Option<u32>,
+        commandability: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        use bacnet_endpoint::roles::Commandability;
+        let commandability = match commandability {
+            "commandable" => Commandability::Commandable,
+            "noncommandable" => Commandability::Noncommandable,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "commandability must be 'commandable' or 'noncommandable'",
+                ))
+            }
+        };
+        let invalid = |error: bacnet_types::error::Error| {
+            pyo3::exceptions::PyValueError::new_err(error.to_string())
+        };
+        bacnet_services::write_property::validate_priority(priority).map_err(invalid)?;
+        let mut encoded = bytes::BytesMut::new();
+        bacnet_encoding::primitives::encode_property_value(&mut encoded, &value.inner)
+            .map_err(invalid)?;
+        let request = bacnet_services::write_property::WritePropertyRequest {
+            object_identifier: object_id.to_rust(),
+            property_identifier: property_id.to_rust(),
+            property_array_index: array_index,
+            property_value: encoded.to_vec(),
+            priority,
+        };
+        self.inner
+            .validate_write_property(&request)
+            .map_err(invalid)?;
+        let mac = parse_address(&address)?;
+        let handle = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle
+                .write_property(
+                    &mac,
+                    request.object_identifier,
+                    request.property_identifier,
+                    request.property_array_index,
+                    request.property_value,
+                    request.priority,
+                    commandability,
+                )
+                .await
+                .map_err(to_py_err)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
@@ -148,7 +210,7 @@ impl PyEndpointClient {
         })
     }
 
-    /// Narrow service scope: the endpoint client initiates ReadProperty, ReadRange and ReadPropertyMultiple.
+    /// Narrow service scope: the endpoint client initiates ReadProperty, ReadRange, ReadPropertyMultiple and direct B/IP WriteProperty.
     ///
     /// Snapshot accessor with no I/O; documents the proven subset
     /// (direct read here; routed variants stay on the Rust handle).
@@ -156,14 +218,19 @@ impl PyEndpointClient {
         let dict = PyDict::new(py);
         dict.set_item(
             "initiates",
-            vec!["read_property", "read_range", "read_property_multiple"],
+            vec![
+                "read_property",
+                "read_range",
+                "read_property_multiple",
+                "write_property",
+            ],
         )?;
         dict.set_item("executes", Vec::<String>::new())?;
         Ok(dict.into_any())
     }
 
     fn __repr__(&self) -> String {
-        "EndpointClient(shared-transport read_property read_range read_property_multiple)"
+        "EndpointClient(shared-transport read_property read_range read_property_multiple write_property)"
             .to_string()
     }
 }

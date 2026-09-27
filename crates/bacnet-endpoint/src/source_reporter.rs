@@ -103,7 +103,7 @@ impl BACnetObject for SourceReporter {
     ) -> Result<(), Error> {
         if self.active() && (selectors.is_some() || maximum_send_delay.is_some()) {
             return Err(Error::Encoding(
-                "source READ does not support Monitored_Objects or delayed notifications".into(),
+                "source Audit does not support Monitored_Objects or delayed notifications".into(),
             ));
         }
         self.wrapped.configure_audit_reporter_internal(

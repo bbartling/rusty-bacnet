@@ -364,5 +364,5 @@ async fn pre_admitted_segmented_response_sends_one_abort_and_releases_exact_leas
     peer.stop().await.unwrap();
 }
 
-#[path = "endpoint_read_operation_tests.rs"]
+#[path = "endpoint_operation_tests.rs"]
 mod operation_tests;

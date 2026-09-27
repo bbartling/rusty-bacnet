@@ -536,3 +536,6 @@ async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
 
 #[path = "source_delay_rejection_tests.rs"]
 mod delay_rejection;
+
+#[path = "source_write_tests.rs"]
+mod write;

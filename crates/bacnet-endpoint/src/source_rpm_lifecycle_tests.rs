@@ -80,7 +80,11 @@ async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() 
         assert!(received.try_recv().is_err());
         if source {
             assert_eq!(
-                session.source_read.as_ref().unwrap().available_operations(),
+                session
+                    .source_audit
+                    .as_ref()
+                    .unwrap()
+                    .available_operations(),
                 64
             );
         }

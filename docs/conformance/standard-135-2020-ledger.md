@@ -39,6 +39,25 @@ The [target contract](../target-audit-reporters.md) links behavioral evidence an
 separates local policy from clause requirements. Source mode remains exactly one,
 network configuration remains limited, and parent #345/global pins/statuses stay unchanged.
 
+## Endpoint WriteProperty source WRITE
+
+Refs #852 extends the bounded source profile under the still-in-progress #345
+tracker. Evidence: `crates/bacnet-endpoint/src/source_write_tests.rs`,
+`source_write_preflight_tests.rs`, `source_write_lifecycle_tests.rs`,
+`source_write_queue_tests.rs` and installed `test_endpoint_write_property.py`.
+Clause 15.9, 19.2.1 and 19.6/Table 19-4/19-5 govern the direct B/IP request,
+required caller-declared commandability, omitted effective priority 16,
+source filtering, captured identity/result and whole 0–32-byte Target_Value.
+Tests decode real request/notification traffic, peer terminals, empty Recipient_List
+success and scalar Error, 32/33 bounds, framing/prewire refusal, retries, caller
+cancellation, stop/drop, recipient changes and shared resource budgets. Additional
+regressions require matching Error service choice in requester and notification
+leases, and retract canceled no-Reporter writes both queued and in transport
+while preserving audited-worker and explicitly detached-send ownership. One shared
+requester and one SourceAudit owner serve RP/RR/RPM/WP; read-family semantics are
+retained. WPM, routed writes, other transport source profiles, standalone ownership
+and full Audit/BIBB/BTL qualification remain unclaimed.
+
 ## Endpoint RPM source READ
 
 Refs #780 extends the in-progress `BACNET-19-SOURCE-READ-PROPERTY` row with

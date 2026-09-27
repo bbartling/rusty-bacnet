@@ -121,7 +121,13 @@ async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop()
         ));
     }
     timeout(WAIT, async {
-        while session.source_read.as_ref().unwrap().available_operations() != 0 {
+        while session
+            .source_audit
+            .as_ref()
+            .unwrap()
+            .available_operations()
+            != 0
+        {
             tokio::task::yield_now().await;
         }
     })

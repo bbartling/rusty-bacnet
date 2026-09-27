@@ -210,7 +210,7 @@ async fn source_failure_pending_worker_stop_and_drop_reclaim_owner() {
         session.start().await.unwrap();
         let client = session.cloned_client_handle().unwrap();
         let weak_db = Arc::downgrade(session.database.as_ref().unwrap());
-        let weak_source = Arc::downgrade(session.source_read.as_ref().unwrap());
+        let weak_source = Arc::downgrade(session.source_audit.as_ref().unwrap());
         let coordinator = Arc::clone(&session.coordinator);
         let permits: Vec<_> = (0..64)
             .map(|_| {

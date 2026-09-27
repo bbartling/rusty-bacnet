@@ -59,7 +59,7 @@ impl Drop for Completion {
 }
 
 pub(super) fn admit(
-    source: &Arc<SourceRead>,
+    source: &Arc<SourceAudit>,
     owner: &NotificationTransactions,
     confirmed: bool,
     mac: MacAddr,
@@ -261,7 +261,7 @@ pub(super) fn result<T>(outcome: &Result<T, Error>) -> Option<(ErrorClass, Error
 mod tests {
     use super::*;
     #[test]
-    fn source_read_result_codes_preserve_peer_errors_and_cover_reason_boundaries() {
+    fn source_audit_result_codes_preserve_peer_errors_and_cover_reason_boundaries() {
         let abort_codes = [56, 51, 52, 53, 54, 136, 135, 127, 124, 125, 126, 123];
         let reject_codes = [69, 59, 60, 61, 62, 63, 64, 65, 66, 67];
         for (reason, code) in abort_codes.into_iter().enumerate() {

@@ -2803,7 +2803,7 @@ class ReadAccessResult(TypedDict):
 class EndpointClient:
     """Client role cloned from a running endpoint (no lifecycle).
 
-    Initiates ``read_property``, ``read_range`` and ``read_property_multiple`` through the owner's single transport.
+    Initiates ``read_property``, ``read_range``, ``read_property_multiple`` and direct B/IP ``write_property`` through the owner's single transport.
     After the owner closes, calls fail closed with ``BacnetError``.
     """
 
@@ -2819,6 +2819,29 @@ class EndpointClient:
         ACK object/property/index must match. Device/Network Port instance 4194303
         requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
         BacnetError; this method returns the property value, not ACK metadata.
+        """
+        ...
+
+    def write_property(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        property_id: PropertyIdentifier,
+        value: PropertyValue,
+        priority: Optional[int] = None,
+        array_index: Optional[int] = None,
+        *,
+        commandability: Literal["commandable", "noncommandable"],
+    ) -> Awaitable[None]:
+        """Write to a direct IPv4 B/IP peer through the shared requester.
+
+        Commandability is required even without a source Reporter. It controls
+        Audit filtering, never the wire priority. Omitted commandable priority
+        means effective 16, including NULL. Invalid literals, priority, raw TLV
+        framing and APDU size raise ValueError synchronously (out-of-u8 priorities
+        raise OverflowError). Empty encoded lists are valid. Eligible source
+        records preserve complete 0–32-byte values and omit longer values.
+        After source admission, caller cancellation does not cancel the attempt.
         """
         ...
 
@@ -2863,7 +2886,7 @@ class EndpointClient:
         ...
 
     def service_scope(self) -> dict[str, Any]:
-        """Narrow scope: initiates ``read_property``, ``read_range`` and ``read_property_multiple``."""
+        """Narrow scope: initiates reads and direct B/IP ``write_property``."""
         ...
 
 class EndpointServer:

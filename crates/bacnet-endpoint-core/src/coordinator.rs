@@ -505,7 +505,10 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
                 Ok(AdmissionKind::Terminal)
             }
         }
-        Apdu::Error(_) => Ok(AdmissionKind::Terminal),
+        Apdu::Error(pdu) => {
+            validate_service(metadata, pdu.service_choice)?;
+            Ok(AdmissionKind::Terminal)
+        }
         Apdu::Reject(_) => Ok(AdmissionKind::Terminal),
         Apdu::Abort(pdu) => {
             let expected_server_bit = match metadata.owner {

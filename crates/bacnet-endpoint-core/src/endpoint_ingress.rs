@@ -53,164 +53,10 @@ pub enum EndpointApduDestination {
     GlobalBroadcast,
 }
 
-struct NetworkServiceCommand {
-    apdu: Vec<u8>,
-    destination: EndpointApduDestination,
-    expecting_reply: bool,
-    priority: NetworkPriority,
-    data_attributes: Vec<DataAttribute>,
-    completion: oneshot::Sender<EndpointSendOutcome>,
-    deadline: Option<tokio::time::Instant>,
-}
-
-/// Completion of an admitted endpoint send, without claiming remote receipt.
-#[doc(hidden)]
-pub struct EndpointSendOutcome {
-    /// Local send completion; success is not remote receipt or execution.
-    pub result: Result<(), Error>,
-    /// Transport execution began; an error may have an ambiguous wire outcome.
-    pub attempted: bool,
-}
-
-/// One queued send completion. Deadline-bound sends cancel when this is dropped.
-#[doc(hidden)]
-pub struct EndpointSend(oneshot::Receiver<EndpointSendOutcome>);
-
-impl EndpointSend {
-    #[doc(hidden)]
-    pub async fn complete(self) -> EndpointSendOutcome {
-        self.0.await.unwrap_or_else(|_| EndpointSendOutcome {
-            result: Err(shutdown_error()),
-            attempted: false,
-        })
-    }
-}
-
-/// Known local outcome before any endpoint transport execution.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndpointEgressAdmissionError {
-    /// The bounded command queue has no free slot.
-    QueueFull,
-    /// The endpoint has sealed or its command receiver has closed.
-    Closed,
-}
-
-impl From<EndpointEgressAdmissionError> for Error {
-    fn from(error: EndpointEgressAdmissionError) -> Self {
-        match error {
-            EndpointEgressAdmissionError::QueueFull => {
-                Error::Encoding("endpoint egress queue is full".into())
-            }
-            EndpointEgressAdmissionError::Closed => shutdown_error(),
-        }
-    }
-}
-
-/// Bounded APDU network-service sender for roles attached to an endpoint session.
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct EndpointEgress {
-    commands: mpsc::Sender<NetworkServiceCommand>,
-    open: Arc<AtomicBool>,
-}
-
-impl EndpointEgress {
-    /// Sends one APDU without granting network lifecycle access.
-    #[doc(hidden)]
-    pub async fn send_apdu(
-        &self,
-        apdu: Vec<u8>,
-        destination: EndpointApduDestination,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-        data_attributes: Vec<DataAttribute>,
-    ) -> Result<(), Error> {
-        self.admit_apdu(
-            apdu,
-            destination,
-            expecting_reply,
-            priority,
-            data_attributes,
-            None,
-        )?
-        .complete()
-        .await
-        .result
-    }
-
-    /// Queue one send synchronously, distinguishing admission from execution.
-    /// A deadline also makes receiver cancellation retract queued work. Sends
-    /// already in progress may have reached the peer when cancellation wins.
-    #[doc(hidden)]
-    pub fn admit_apdu(
-        &self,
-        apdu: Vec<u8>,
-        destination: EndpointApduDestination,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-        data_attributes: Vec<DataAttribute>,
-        deadline: Option<tokio::time::Instant>,
-    ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
-        if !self.open.load(Ordering::Acquire) {
-            return Err(EndpointEgressAdmissionError::Closed);
-        }
-        let (completion, result) = oneshot::channel();
-        let command = NetworkServiceCommand {
-            apdu,
-            destination,
-            expecting_reply,
-            priority,
-            data_attributes,
-            completion,
-            deadline,
-        };
-        match self.commands.try_send(command) {
-            Ok(()) => Ok(EndpointSend(result)),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(EndpointEgressAdmissionError::Closed),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(EndpointEgressAdmissionError::QueueFull),
-        }
-    }
-
-    /// Wait for queue capacity without retaining an ordinary notification.
-    /// This is a wake hint, not a reserved slot; callers retry synchronous admission.
-    #[doc(hidden)]
-    pub async fn wait_for_capacity(&self) -> Result<(), EndpointEgressAdmissionError> {
-        if !self.open.load(Ordering::Acquire) {
-            return Err(EndpointEgressAdmissionError::Closed);
-        }
-        let permit = self
-            .commands
-            .reserve()
-            .await
-            .map_err(|_| EndpointEgressAdmissionError::Closed)?;
-        drop(permit);
-        if self.open.load(Ordering::Acquire) {
-            Ok(())
-        } else {
-            Err(EndpointEgressAdmissionError::Closed)
-        }
-    }
-
-    /// Sends one direct unicast APDU without granting network lifecycle access.
-    #[doc(hidden)]
-    pub async fn send_direct(
-        &self,
-        apdu: Vec<u8>,
-        destination_mac: MacAddr,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-    ) -> Result<(), Error> {
-        self.send_apdu(
-            apdu,
-            EndpointApduDestination::Direct { destination_mac },
-            expecting_reply,
-            priority,
-            Vec::new(),
-        )
-        .await
-    }
-}
+#[path = "endpoint_egress.rs"]
+mod egress;
+use egress::NetworkServiceCommand;
+pub use egress::{EndpointEgress, EndpointEgressAdmissionError, EndpointSend, EndpointSendOutcome};
 
 /// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,9 +368,10 @@ async fn drive_network_service<T: TransportPort + 'static>(
         data_attributes,
         mut completion,
         deadline,
+        cancel_on_drop,
     } = command;
-    if deadline
-        .is_some_and(|deadline| deadline <= tokio::time::Instant::now() || completion.is_closed())
+    if (cancel_on_drop && completion.is_closed())
+        || deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now())
     {
         let _ = completion.send(EndpointSendOutcome {
             result: Err(Error::Encoding(
@@ -562,7 +409,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                         });
                         return EgressDrive::Complete;
                     },
-                    _ = completion.closed(), if deadline.is_some() => return EgressDrive::Complete,
+                    _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
                     received = apdu_rx.recv() => PendingEvent::Received(received),
                     result = &mut send => PendingEvent::Sent(result),
                 }
@@ -576,7 +423,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                         });
                         return EgressDrive::Complete;
                     },
-                    _ = completion.closed(), if deadline.is_some() => return EgressDrive::Complete,
+                    _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
                     result = &mut send => PendingEvent::Sent(result),
                     received = apdu_rx.recv() => PendingEvent::Received(received),
                 }

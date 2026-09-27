@@ -8,8 +8,8 @@ pub mod tsm;
 
 #[doc(hidden)]
 pub use endpoint_requester::{
-    EndpointReadAck, EndpointReadOutcome, EndpointReadRequest, EndpointRequester,
-    PreparedEndpointRead,
+    EndpointOperationAck, EndpointOperationOutcome, EndpointOperationRequest, EndpointReadAck,
+    EndpointReadRequest, EndpointRequester, PreparedEndpointOperation,
 };
 mod read_property;
 mod read_range;

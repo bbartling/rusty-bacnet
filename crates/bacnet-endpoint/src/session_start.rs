@@ -4,7 +4,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     pub(super) fn start_roles(
         &mut self,
         receivers: bacnet_endpoint_core::endpoint_ingress::IngressReceivers,
-        mut source_routes: Option<crate::source_read::recipient::SourceRoutes>,
+        mut source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
         device_write_target: Option<ObjectIdentifier>,
     ) -> Result<(), Error> {
         let egress = receivers.egress.clone();
@@ -17,13 +17,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             || self.source_audit_reporter.is_some())
         .then(|| NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator)));
         let notifications = self.notifications.clone();
-        let (source_read, source_recipient) = if let Some(selected) = self.source_audit_reporter {
+        let (source_audit, source_recipient) = if let Some(selected) = self.source_audit_reporter {
             let broadcast = receivers.bip_broadcast_endpoint.ok_or_else(|| {
                 Error::Encoding("source Audit lost its B/IP capability at startup".into())
             })?;
             let mut routes = source_routes.take().expect("preflight routes");
             routes.finalize(broadcast);
-            let (source, recipient) = crate::source_read::SourceRead::new(
+            let (source, recipient) = crate::source_audit::SourceAudit::new(
                 Arc::clone(self.database.as_ref().expect("validated source database")),
                 selected,
                 routes,
@@ -36,7 +36,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         } else {
             (None, None)
         };
-        self.source_read = source_read.clone();
+        self.source_audit = source_audit.clone();
         self.source_recipient = source_recipient.clone();
         let (requester, client_handle) =
             if matches!(self.role, SessionRole::ClientOnly | SessionRole::Both) {
@@ -45,9 +45,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     Arc::clone(&self.coordinator),
                     self.client_config.clone(),
                 )?;
-                let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone());
-                if let Some(source) = &source_read {
-                    handle = handle.with_source_read(source);
+                let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone())
+                    .with_bip_broadcast(
+                        receivers
+                            .bip_broadcast_endpoint
+                            .map(|address| *address.ip()),
+                    );
+                if let Some(source) = &source_audit {
+                    handle = handle.with_source_audit(source);
                 }
                 (Some(requester), Some(handle))
             } else {
@@ -101,7 +106,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // session retains one egress clone for the identity I-Am path while
         // the receiver halves move into dispatch. No second demultiplexer.
         self.egress = Some(egress);
-        self.source_read = source_read;
+        self.source_audit = source_audit;
         self.source_recipient = source_recipient;
         self.requester = requester;
         self.responder = responder;

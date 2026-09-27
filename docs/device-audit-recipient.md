@@ -98,9 +98,9 @@ With no source selection, provision and bindings remain inert. Startup sends no
 notifications. Preflight validation errors leave configuration retryable. A
 profile initialization error after ingress starts joins cleanup and leaves a
 terminal session. Canceling that cleanup leaves `Stopping`; another `stop` or
-Drop completes teardown rather than permitting restart. Ordinary source READ captures the selected route at admission;
+Drop completes teardown rather than permitting restart. Ordinary source READ/WRITE captures the selected route at admission;
 an in-flight request and its loss context retain that route after a later change.
-A missing Device route suppresses ordinary records without changing READ results
+A missing Device route suppresses ordinary records without changing operation results
 or consuming audit resources. Direct Address choices require no Device binding.
 
 The pair's logical permits, confirmed leases, encoded size and owned worker are
@@ -108,7 +108,7 @@ secured before commit. Bounded endpoint egress admission occurs afterward, so a
 full/closed queue is an independent delivery failure and cannot roll back the
 value or cancel the sibling. There is no durable queue or notification retry.
 
-Other address/link choices, ordinary source operations beyond READ, per-object
+Other address/link choices, ordinary source operations beyond RP/RR/RPM and direct B/IP WriteProperty, per-object
 policy, source batching/send delay, durable delivery and broader Audit/BIBB conformance
 remain incomplete; #345 remains open.
 

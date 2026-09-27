@@ -208,7 +208,9 @@ impl Tsm {
             {
                 Some(pdu.service_choice)
             }
-            (Apdu::Error(pdu), TsmResponse::Error { .. }) if pdu.invoke_id == invoke_id => None,
+            (Apdu::Error(pdu), TsmResponse::Error { .. }) if pdu.invoke_id == invoke_id => {
+                Some(pdu.service_choice)
+            }
             (Apdu::Reject(pdu), TsmResponse::Reject { .. }) if pdu.invoke_id == invoke_id => None,
             (Apdu::Abort(pdu), TsmResponse::Abort { .. }) if pdu.invoke_id == invoke_id => None,
             _ => return CoordinatedCompletion::Rejected,
@@ -313,7 +315,8 @@ impl Tsm {
         let observed_service_choice = match apdu {
             Apdu::SimpleAck(pdu) => Some(pdu.service_choice),
             Apdu::ComplexAck(pdu) if !pdu.segmented => Some(pdu.service_choice),
-            Apdu::Error(_) | Apdu::Reject(_) | Apdu::Abort(_) => None,
+            Apdu::Error(pdu) => Some(pdu.service_choice),
+            Apdu::Reject(_) | Apdu::Abort(_) => None,
             _ => return CoordinatedCompletion::Rejected,
         };
         CoordinatedCompletion::Completed(self.complete_transaction_inner(

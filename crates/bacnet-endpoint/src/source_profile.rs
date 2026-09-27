@@ -35,7 +35,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     pub(super) fn prepare_source_audit_reporter(
         &mut self,
-    ) -> Result<Option<crate::source_read::recipient::SourceRoutes>, Error> {
+    ) -> Result<Option<crate::source_audit::recipient::SourceRoutes>, Error> {
         let Some(selected) = self.source_audit_reporter else {
             return Ok(None);
         };
@@ -54,7 +54,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .as_ref()
             .and_then(|ingress| ingress.bip_broadcast_endpoint())
             .ok_or_else(|| Error::Encoding("source Audit requires IPv4 B/IP".into()))?;
-        let routes = crate::source_read::recipient::SourceRoutes::new(
+        let routes = crate::source_audit::recipient::SourceRoutes::new(
             &self.source_audit_bindings,
             broadcast,
         )?;
@@ -118,7 +118,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     .is_some()
         }) {
             return Err(Error::Encoding(
-                "source READ does not support Monitored_Objects or delayed notifications".into(),
+                "source Audit does not support Monitored_Objects or delayed notifications".into(),
             ));
         }
         for (oid, object) in db.iter_objects() {

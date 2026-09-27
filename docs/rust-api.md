@@ -2302,6 +2302,44 @@ in `BACNET-15-ENDPOINT-DEVICE-WRITE` (in progress). This is not general endpoint
 mutation parity or inbound replay suppression. The source recipient extension
 is described below and in the [Device recipient contract](device-audit-recipient.md).
 
+### Direct endpoint WriteProperty and source WRITE reporting
+
+`ClientRoleHandle::write_property` accepts a direct B/IP IPv4 unicast MAC, object,
+property, optional index, complete encoded property value, optional wire priority,
+and required `bacnet_endpoint::roles::Commandability::{Commandable, Noncommandable}`.
+This assertion is required with or without a source Reporter; neither object type,
+property identifier, local object state nor the supplied priority establishes it.
+The method refuses other endpoint transports and invalid/group destinations before
+traffic. There is no routed WP method in this subset.
+
+The shared requester validates zero or more complete TLVs, priority 1–16 when
+supplied, and the complete unsegmented APDU size before reserving an Invoke ID.
+Empty lists and encoded NULL are distinct valid representations. The wire priority
+and bytes remain unchanged. A matching SimpleACK returns `Ok(())`; Error, Reject,
+Abort and timeout retain the established error mapping. A wrong-service Error or ACK, or a wrong
+ACK shape, cannot complete the write. Error correlation also protects notification
+leases in the shared coordinator.
+
+The same session source Audit owner captures live Reporter policy, recipient,
+source Device, timestamp, identity and Invoke ID once. Commandable omitted priority
+is effective 16 for filtering and reporting, including NULL. Noncommandable writes
+ignore priority for Audit, even when it was supplied on the wire. The source
+Reporter controls level/operation/priority filtering; remote policy is not consulted.
+Eligible attempted writes generate at most one WRITE record across retries, with
+complete 0–32-byte `Target_Value` and no value field for larger payloads. The source
+never invents remote `Current_Value`, target timestamp, or execution evidence.
+
+Before source admission, cancellation releases caller-owned work. Eligible admitted
+writes retain terminal observation after caller cancellation. Nonreported writes
+remain caller-owned: cancellation retracts queued requester sends and drops any
+in-progress transport future. A transport attempt may already have reached the
+peer, so cancellation never proves the write was not executed. Ordinary detached
+egress sends retain their existing semantics. The existing 64-operation budget, notification budget,
+recipient generation fences, three-second delivery deadline and stop/drop behavior
+are shared with reads. Notification failure cannot replace the caller's write result.
+Source WP is a bounded extension under #345/#852; WPM, routed writes, standalone
+source ownership and other transports remain outside this profile.
+
 ### Bounded endpoint source READ reporting
 
 Standalone direct/routed and endpoint ReadProperty share ACK object/property/index
@@ -2347,7 +2385,8 @@ Device IDs retain Address attribution without rejecting the otherwise valid ACK.
 This is operation-local knowledge, with no discovery cache. Direct B/IP source
 limits and the absence of Python source Reporter configuration remain unchanged.
 
-The initiating role supports `read_property`, `read_range` and `read_property_multiple`, plus explicit
+The initiating role supports `read_property`, `read_range`, `read_property_multiple`
+and direct B/IP `write_property`, plus explicit
 endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
 record. Request encoding validates before output/transaction admission: ALL,

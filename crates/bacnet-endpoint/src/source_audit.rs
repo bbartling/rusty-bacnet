@@ -1,8 +1,11 @@
-//! Session-private source READ ownership. No discovery cache or persistent outbox.
+//! Session-private source Audit ownership. No discovery cache or persistent outbox.
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
-use bacnet_client::{EndpointReadAck, EndpointReadRequest, EndpointRequester};
+use bacnet_client::{
+    EndpointOperationAck, EndpointOperationRequest, EndpointReadAck, EndpointReadRequest,
+    EndpointRequester,
+};
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_objects::audit::AuditReporterStatus;
@@ -32,12 +35,12 @@ use bacnet_objects::database::AuditOwnership;
 use bacnet_objects::device::AuditRecipientChangeSink;
 use recipient::{SourceRecipient, SourceRoutes};
 
-#[path = "source_read_delivery.rs"]
+#[path = "source_audit_delivery.rs"]
 mod delivery;
-#[path = "source_read_failures.rs"]
+#[path = "source_audit_failures.rs"]
 mod failures;
 
-pub(crate) struct SourceRead {
+pub(crate) struct SourceAudit {
     db: Arc<RwLock<ObjectDatabase>>,
     selected: ObjectIdentifier,
     device: ObjectIdentifier,
@@ -52,7 +55,7 @@ pub(crate) struct SourceRead {
     pub(crate) summary_queue_full: tokio::sync::Notify,
 }
 
-impl SourceRead {
+impl SourceAudit {
     pub(crate) fn new(
         db: Arc<RwLock<ObjectDatabase>>,
         selected: ObjectIdentifier,
@@ -138,13 +141,64 @@ impl SourceRead {
         attributes: Vec<DataAttribute>,
         request: EndpointReadRequest,
     ) -> Result<EndpointReadAck, Error> {
+        self.operate(
+            requester,
+            destination,
+            attributes,
+            EndpointOperationRequest::Read(request),
+            None,
+        )
+        .await?
+        .into_read()
+    }
+
+    pub(crate) async fn write(
+        self: &Arc<Self>,
+        requester: &EndpointRequester,
+        destination: EndpointApduDestination,
+        request: bacnet_services::write_property::WritePropertyRequest,
+        commandability: crate::roles::Commandability,
+    ) -> Result<(), Error> {
+        let priority = match commandability {
+            crate::roles::Commandability::Commandable => Some(request.priority.unwrap_or(16)),
+            crate::roles::Commandability::Noncommandable => None,
+        };
+        self.operate(
+            requester,
+            destination,
+            Vec::new(),
+            EndpointOperationRequest::Write(request),
+            priority,
+        )
+        .await?
+        .into_write()
+    }
+
+    async fn operate(
+        self: &Arc<Self>,
+        requester: &EndpointRequester,
+        destination: EndpointApduDestination,
+        attributes: Vec<DataAttribute>,
+        request: EndpointOperationRequest,
+        command_priority: Option<u8>,
+    ) -> Result<EndpointOperationAck, Error> {
         request.validate()?;
         let identities = request.identities();
+        let audit_operation = match &request {
+            EndpointOperationRequest::Read(_) => AuditOperation::READ,
+            EndpointOperationRequest::Write(_) => AuditOperation::WRITE,
+        };
+        let target_value = match &request {
+            EndpointOperationRequest::Write(write) if write.property_value.len() <= 32 => {
+                Some(write.property_value.clone())
+            }
+            _ => None,
+        };
         // Bound every retained operation, including time before lease acquisition
         // and after dispatch releases the request lease. Never spawn permit waiters.
         let permit = Arc::clone(&self.operations)
             .try_acquire_owned()
-            .map_err(|_| Error::Encoding("source READ admission is closed or full".into()))?;
+            .map_err(|_| Error::Encoding("source Audit admission is closed or full".into()))?;
         let mut db = self.db.write().await;
         if self.operations.is_closed() {
             return Err(Error::Encoding("endpoint shutdown".into()));
@@ -164,7 +218,7 @@ impl SourceRead {
         {
             reporter.status_internal().set_configured(false);
             return Err(Error::Encoding(
-                "source READ does not support Monitored_Objects".into(),
+                "source Audit does not support Monitored_Objects".into(),
             ));
         }
         let level = match reporter.read_property(PropertyIdentifier::AUDIT_LEVEL, None)? {
@@ -178,12 +232,24 @@ impl SourceRead {
                 }
                 _ => return Err(Error::Encoding("invalid source operation flags".into())),
             };
+        let priority_allowed = if let Some(priority) = command_priority {
+            match reporter.read_property(PropertyIdentifier::AUDIT_PRIORITY_FILTER, None)? {
+                PropertyValue::BitString { unused_bits, data } => {
+                    bacnet_types::bitstring::BACnetPriorityFilter::from_bacnet(unused_bits, &data)?
+                        .contains(priority)
+                }
+                _ => return Err(Error::Encoding("invalid source priority filter".into())),
+            }
+        } else {
+            true
+        };
         let eligible: Vec<_> = identities
             .into_iter()
             .enumerate()
             .filter(|(_, (_, property, _))| {
                 level != AuditLevel::NONE
-                    && operations.contains(AuditOperation::READ)
+                    && operations.contains(audit_operation)
+                    && priority_allowed
                     && !(level == AuditLevel::AUDIT_CONFIG
                         && *property == PropertyIdentifier::PRESENT_VALUE)
             })
@@ -193,7 +259,7 @@ impl SourceRead {
             drop(runtime);
             drop(permit);
             return requester
-                .prepare_read(destination, attributes, request)?
+                .prepare_operation(destination, attributes, request)?
                 .execute()
                 .await
                 .result;
@@ -222,14 +288,14 @@ impl SourceRead {
             drop(runtime);
             drop(permit);
             return requester
-                .prepare_read(destination, attributes, request)?
+                .prepare_operation(destination, attributes, request)?
                 .execute()
                 .await
                 .result;
         };
         let EndpointApduDestination::Direct { destination_mac } = &destination else {
             return Err(Error::Encoding(
-                "audited READ requires direct B/IP IPv4 unicast".into(),
+                "audited operation requires direct B/IP IPv4 unicast".into(),
             ));
         };
         let (ip, port) = decode_bip_mac(destination_mac)?;
@@ -241,7 +307,7 @@ impl SourceRead {
             || port == 0
         {
             return Err(Error::Encoding(
-                "audited READ requires direct B/IP IPv4 unicast".into(),
+                "audited operation requires direct B/IP IPv4 unicast".into(),
             ));
         }
         let devices = db.find_by_type(ObjectType::DEVICE);
@@ -249,7 +315,7 @@ impl SourceRead {
             status.set_configured(false);
             return Err(Error::Encoding("source Device is unavailable".into()));
         }
-        let operation = requester.prepare_read(destination.clone(), attributes, request)?;
+        let operation = requester.prepare_operation(destination.clone(), attributes, request)?;
         let timestamp = match db
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime())
@@ -277,7 +343,7 @@ impl SourceRead {
             target_timestamp: None,
             source_device: BACnetRecipient::Device(devices[0]),
             source_object: None,
-            operation: AuditOperation::READ,
+            operation: audit_operation,
             source_comment: None,
             target_comment: None,
             invoke_id: Some(operation.invoke_id()),
@@ -289,8 +355,8 @@ impl SourceRead {
             }),
             target_object: None,
             target_property: None,
-            target_priority: None,
-            target_value: None,
+            target_priority: command_priority,
+            target_value,
             current_value: None,
             result: None,
         };
@@ -316,11 +382,13 @@ impl SourceRead {
                     .result
                     .as_ref()
                     .ok()
+                    .and_then(EndpointOperationAck::as_read)
                     .map(EndpointReadAck::audit_results);
                 let device = outcome
                     .result
                     .as_ref()
                     .ok()
+                    .and_then(EndpointOperationAck::as_read)
                     .and_then(EndpointReadAck::target_device);
                 if let Some(owner) = weak_owner.upgrade() {
                     for (position, (object, property, index)) in eligible {
