@@ -1338,7 +1338,7 @@ class CovNotificationIterator:
     """Async iterator yielding ``CovNotification`` objects."""
 
     def __aiter__(self) -> CovNotificationIterator: ...
-    async def __anext__(self) -> CovNotification: ...
+    def __anext__(self) -> Awaitable[CovNotification]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -1460,23 +1460,23 @@ class BACnetClient:
         sc_device_uuid: Optional[bytes | bytearray] = None,
     ) -> None: ...
 
-    async def __aenter__(self) -> BACnetClient: ...
-    async def __aexit__(
+    def __aenter__(self) -> Awaitable[BACnetClient]: ...
+    def __aexit__(
         self,
         _exc_type: Any = None,
         _exc_val: Any = None,
         _exc_tb: Any = None,
-    ) -> None: ...
+    ) -> Awaitable[None]: ...
 
     # --- Property operations ---
 
-    async def read_property(
+    def read_property(
         self,
         address: str,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-    ) -> PropertyValue:
+    ) -> Awaitable[PropertyValue]:
         """Read a single property from a remote device.
 
         ACK object/property/index must match. Device/Network Port instance 4194303
@@ -1485,7 +1485,7 @@ class BACnetClient:
         """
         ...
 
-    async def write_property(
+    def write_property(
         self,
         address: str,
         object_id: ObjectIdentifier,
@@ -1493,7 +1493,7 @@ class BACnetClient:
         value: PropertyValue,
         priority: Optional[int] = None,
         array_index: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Write a single property on a remote device.
 
         Priority is None or 1..16. Invalid u8 priorities raise ValueError
@@ -1501,13 +1501,13 @@ class BACnetClient:
         """
         ...
 
-    async def read_property_multiple(
+    def read_property_multiple(
         self,
         address: str,
         specs: list[
             tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]
         ],
-    ) -> list[ReadAccessResult]:
+    ) -> Awaitable[list[ReadAccessResult]]:
         """Read multiple properties from a remote device (ReadPropertyMultiple).
 
         ``specs`` is a list of ``(object_id, [(property_id, array_index), ...])`` tuples.
@@ -1516,7 +1516,7 @@ class BACnetClient:
         """
         ...
 
-    async def write_property_multiple(
+    def write_property_multiple(
         self,
         address: str,
         specs: list[
@@ -1525,7 +1525,7 @@ class BACnetClient:
                 list[tuple[PropertyIdentifier, PropertyValue, Optional[int], Optional[int]]],
             ]
         ],
-    ) -> None:
+    ) -> Awaitable[None]:
         """Write multiple properties on a remote device (WritePropertyMultiple).
 
         ``specs`` is ``[(object_id, [(property_id, value, priority, array_index), ...]), ...]``.
@@ -1614,75 +1614,75 @@ class BACnetClient:
 
     # --- Discovery ---
 
-    async def who_is(
+    def who_is(
         self,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Broadcast a Who-Is request. Responses are collected asynchronously;
         use ``discovered_devices()`` to retrieve them."""
         ...
 
-    async def discover(
+    def discover(
         self,
         timeout_ms: int = 3000,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
-    ) -> list[DiscoveredDevice]:
+    ) -> Awaitable[list[DiscoveredDevice]]:
         """Convenience: send WhoIs, wait ``timeout_ms``, return discovered devices."""
         ...
 
-    async def who_has_by_id(
+    def who_has_by_id(
         self,
         object_id: ObjectIdentifier,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Broadcast Who-Has by object identifier."""
         ...
 
-    async def who_has_by_name(
+    def who_has_by_name(
         self,
         name: str,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Broadcast Who-Has by object name."""
         ...
 
-    async def discovered_devices(self) -> list[DiscoveredDevice]:
+    def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]:
         """Return all devices discovered so far."""
         ...
 
-    async def get_device(self, instance: int) -> Optional[DiscoveredDevice]:
+    def get_device(self, instance: int) -> Awaitable[Optional[DiscoveredDevice]]:
         """Look up a discovered device by instance number."""
         ...
 
-    async def clear_devices(self) -> None:
+    def clear_devices(self) -> Awaitable[None]:
         """Clear the discovered device table."""
         ...
 
-    async def who_am_i(self) -> None:
+    def who_am_i(self) -> Awaitable[None]:
         """Broadcast a Who-Am-I request."""
         ...
 
-    async def who_is_directed(
+    def who_is_directed(
         self,
         address: str,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a Who-Is to a specific device address (unicast)."""
         ...
 
     # --- Time synchronization ---
 
-    async def time_synchronization(
+    def time_synchronization(
         self,
         address: str,
         date: tuple[int, int, int, int],
         time: tuple[int, int, int, int],
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a TimeSynchronization request (unconfirmed).
 
         ``date`` is ``(year, month, day, day_of_week)``; ``time`` is
@@ -1690,38 +1690,38 @@ class BACnetClient:
         """
         ...
 
-    async def utc_time_synchronization(
+    def utc_time_synchronization(
         self,
         address: str,
         date: tuple[int, int, int, int],
         time: tuple[int, int, int, int],
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a UTCTimeSynchronization request (unconfirmed)."""
         ...
 
     # --- Auto-routing (by device instance) ---
 
-    async def read_property_from_device(
+    def read_property_from_device(
         self,
         device_instance: int,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-    ) -> PropertyValue:
+    ) -> Awaitable[PropertyValue]:
         """Read a property from a device by instance number (auto-routing)."""
         ...
 
-    async def read_property_multiple_from_device(
+    def read_property_multiple_from_device(
         self,
         device_instance: int,
         specs: list[
             tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]
         ],
-    ) -> Any:
+    ) -> Awaitable[Any]:
         """Read multiple properties from a device by instance number (auto-routing)."""
         ...
 
-    async def write_property_to_device(
+    def write_property_to_device(
         self,
         device_instance: int,
         object_id: ObjectIdentifier,
@@ -1729,7 +1729,7 @@ class BACnetClient:
         value: PropertyValue,
         priority: Optional[int] = None,
         array_index: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Write a property on a device by instance number (auto-routing).
 
         Priority is None or 1..16. Invalid u8 priorities raise ValueError
@@ -1737,7 +1737,7 @@ class BACnetClient:
         """
         ...
 
-    async def write_property_multiple_to_device(
+    def write_property_multiple_to_device(
         self,
         device_instance: int,
         specs: list[
@@ -1746,7 +1746,7 @@ class BACnetClient:
                 list[tuple[PropertyIdentifier, PropertyValue, Optional[int], Optional[int]]],
             ]
         ],
-    ) -> None:
+    ) -> Awaitable[None]:
         """Write multiple properties to a device by instance number (auto-routing).
 
         Same whole-request validation as write_property_multiple, synchronously
@@ -1756,22 +1756,22 @@ class BACnetClient:
         """
         ...
 
-    async def add_device(
+    def add_device(
         self, device_instance: int, address: str
-    ) -> None:
+    ) -> Awaitable[None]:
         """Add a device to the discovery table manually (useful when address is known without WhoIs)."""
         ...
 
     # --- COV subscriptions ---
 
-    async def subscribe_cov(
+    def subscribe_cov(
         self,
         address: str,
         subscriber_process_identifier: int,
         monitored_object_identifier: ObjectIdentifier,
         confirmed: bool,
         lifetime: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Subscribe to Change-of-Value notifications for an object.
 
         lifetime=None or 0 is indefinite; positive values are seconds.
@@ -1779,16 +1779,16 @@ class BACnetClient:
         """
         ...
 
-    async def unsubscribe_cov(
+    def unsubscribe_cov(
         self,
         address: str,
         subscriber_process_identifier: int,
         monitored_object_identifier: ObjectIdentifier,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Cancel a COV subscription."""
         ...
 
-    async def subscribe_cov_property_multiple(
+    def subscribe_cov_property_multiple(
         self,
         address: str,
         subscriber_process_identifier: int,
@@ -1801,7 +1801,7 @@ class BACnetClient:
         issue_confirmed_notifications: bool,
         max_notification_delay: Optional[int] = None,
         lifetime: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Subscribe to COV notifications for multiple properties on multiple objects.
 
         ``specs`` is ``[(object_id, [(property_id, array_index, cov_increment, timestamped), ...]), ...]``.
@@ -1816,26 +1816,26 @@ class BACnetClient:
         """
         ...
 
-    async def cov_notifications(self) -> CovNotificationIterator:
+    def cov_notifications(self) -> Awaitable[CovNotificationIterator]:
         """Get an async iterator for incoming COV notifications."""
         ...
 
     # --- Object management ---
 
-    async def delete_object(
+    def delete_object(
         self, address: str, object_id: ObjectIdentifier
-    ) -> None:
+    ) -> Awaitable[None]:
         """Delete an object on a remote device (DeleteObject service)."""
         ...
 
-    async def create_object(
+    def create_object(
         self,
         address: str,
         object_specifier: Union[ObjectType, ObjectIdentifier],
         initial_values: Optional[
             list[tuple[PropertyIdentifier, PropertyValue, Optional[int], Optional[int]]]
         ] = None,
-    ) -> bytes:
+    ) -> Awaitable[bytes]:
         """Create an object on a remote device (CreateObject service).
 
         ``object_specifier`` is an ``ObjectType`` (server assigns instance) or
@@ -1847,28 +1847,28 @@ class BACnetClient:
 
     # --- Device management ---
 
-    async def device_communication_control(
+    def device_communication_control(
         self,
         address: str,
         enable_disable: EnableDisable,
         time_duration: Optional[int] = None,
         password: Optional[str] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send DeviceCommunicationControl to a remote device."""
         ...
 
-    async def reinitialize_device(
+    def reinitialize_device(
         self,
         address: str,
         reinitialized_state: ReinitializedState,
         password: Optional[str] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send ReinitializeDevice to a remote device."""
         ...
 
     # --- Alarms and events ---
 
-    async def acknowledge_alarm_request(
+    def acknowledge_alarm_request(
         self,
         address: str,
         acknowledging_process_identifier: int,
@@ -1877,7 +1877,7 @@ class BACnetClient:
         timestamp: BACnetTimeStamp,
         acknowledgment_source: str,
         time_of_acknowledgment: BACnetTimeStamp,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Acknowledge an alarm with exact caller-supplied BACnetTimeStamp values.
 
         ``timestamp`` must echo the original event notification timestamp;
@@ -1885,14 +1885,14 @@ class BACnetClient:
         """
         ...
 
-    async def acknowledge_alarm(
+    def acknowledge_alarm(
         self,
         address: str,
         acknowledging_process_identifier: int,
         event_object_identifier: ObjectIdentifier,
         event_state_acknowledged: int,
         acknowledgment_source: str,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Deprecated compatibility method.
 
         This method fabricates sequence-number zero for both timestamps. Use
@@ -1900,15 +1900,15 @@ class BACnetClient:
         """
         ...
 
-    async def get_event_information(
+    def get_event_information(
         self,
         address: str,
         last_received_object_identifier: Optional[ObjectIdentifier] = None,
-    ) -> bytes:
+    ) -> Awaitable[bytes]:
         """Get event information from a remote device. Returns raw response bytes."""
         ...
 
-    async def get_alarm_summary(self, address: str) -> list[dict[str, Any]]:
+    def get_alarm_summary(self, address: str) -> Awaitable[list[dict[str, Any]]]:
         """Get alarm summary from a remote device.
 
         Returns ``[{"object_id": ObjectIdentifier, "alarm_state": EventState,
@@ -1916,7 +1916,7 @@ class BACnetClient:
         """
         ...
 
-    async def get_enrollment_summary(
+    def get_enrollment_summary(
         self,
         address: str,
         acknowledgment_filter: int = 0,
@@ -1925,7 +1925,7 @@ class BACnetClient:
         min_priority: Optional[int] = None,
         max_priority: Optional[int] = None,
         notification_class_filter: Optional[int] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> Awaitable[list[dict[str, Any]]]:
         """Get enrollment summary from a remote device.
 
         Returns ``[{"object_id": ObjectIdentifier, "event_type": EventType,
@@ -1936,7 +1936,7 @@ class BACnetClient:
 
     # --- Range operations ---
 
-    async def read_range(
+    def read_range(
         self,
         address: str,
         object_id: ObjectIdentifier,
@@ -1946,7 +1946,7 @@ class BACnetClient:
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
-    ) -> ReadRangeResult:
+    ) -> Awaitable[ReadRangeResult]:
         """Read a range of items from a list or log object.
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
@@ -1963,7 +1963,7 @@ class BACnetClient:
 
     # --- File operations ---
 
-    async def atomic_read_file(
+    def atomic_read_file(
         self,
         address: str,
         file_identifier: ObjectIdentifier,
@@ -1972,12 +1972,12 @@ class BACnetClient:
         requested_octet_count: int = 0,
         start_record: int = 0,
         requested_record_count: int = 0,
-    ) -> bytes:
+    ) -> Awaitable[bytes]:
         """Read from a file object. ``access_method`` is ``"stream"`` or ``"record"``.
         Returns raw response bytes."""
         ...
 
-    async def atomic_write_file(
+    def atomic_write_file(
         self,
         address: str,
         file_identifier: ObjectIdentifier,
@@ -1987,21 +1987,21 @@ class BACnetClient:
         start_record: int = 0,
         record_count: int = 0,
         file_record_data: Optional[list[bytes]] = None,
-    ) -> bytes:
+    ) -> Awaitable[bytes]:
         """Write to a file object. ``access_method`` is ``"stream"`` or ``"record"``.
         Returns raw response bytes."""
         ...
 
     # --- List manipulation ---
 
-    async def add_list_element(
+    def add_list_element(
         self,
         address: str,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         list_of_elements: bytes,
         array_index: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Add elements to a list property (AddListElement service).
         Requires nonempty, completely framed element bytes and a nonzero optional
         index. Invalid framing/index zero raises ValueError synchronously before
@@ -2012,14 +2012,14 @@ class BACnetClient:
         """
         ...
 
-    async def remove_list_element(
+    def remove_list_element(
         self,
         address: str,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         list_of_elements: bytes,
         array_index: Optional[int] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Remove elements from a list property (RemoveListElement service).
         Requires nonempty, completely framed element bytes and a nonzero optional
         index. Invalid framing/index zero raises ValueError synchronously before
@@ -2032,32 +2032,32 @@ class BACnetClient:
 
     # --- Private transfer ---
 
-    async def confirmed_private_transfer(
+    def confirmed_private_transfer(
         self,
         address: str,
         vendor_id: int,
         service_number: int,
         service_parameters: Optional[bytes] = None,
-    ) -> dict[str, Any]:
+    ) -> Awaitable[dict[str, Any]]:
         """Send a ConfirmedPrivateTransfer request.
 
         Returns ``{"vendor_id": int, "service_number": int, "result_block": bytes | None}``.
         """
         ...
 
-    async def unconfirmed_private_transfer(
+    def unconfirmed_private_transfer(
         self,
         address: str,
         vendor_id: int,
         service_number: int,
         service_parameters: Optional[bytes] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send an UnconfirmedPrivateTransfer request."""
         ...
 
     # --- Text messaging ---
 
-    async def confirmed_text_message(
+    def confirmed_text_message(
         self,
         address: str,
         source_device: ObjectIdentifier,
@@ -2065,14 +2065,14 @@ class BACnetClient:
         message: str,
         message_class_type: Optional[str] = None,
         message_class_value: Optional[Any] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a ConfirmedTextMessage.
 
         ``message_class_type`` is ``"numeric"`` or ``"text"`` (or ``None`` for no class).
         """
         ...
 
-    async def unconfirmed_text_message(
+    def unconfirmed_text_message(
         self,
         address: str,
         source_device: ObjectIdentifier,
@@ -2080,33 +2080,33 @@ class BACnetClient:
         message: str,
         message_class_type: Optional[str] = None,
         message_class_value: Optional[Any] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send an UnconfirmedTextMessage."""
         ...
 
     # --- Life safety ---
 
-    async def life_safety_operation(
+    def life_safety_operation(
         self,
         address: str,
         requesting_process_identifier: int,
         requesting_source: str,
         operation: LifeSafetyOperation,
         object_identifier: Optional[ObjectIdentifier] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a LifeSafetyOperation request."""
         ...
 
     # --- WriteGroup ---
 
-    async def write_group(
+    def write_group(
         self,
         address: str,
         group_number: int,
         write_priority: int,
         change_list: list[tuple[Optional[ObjectIdentifier], Optional[int], bytes]],
         inhibit_delay: Optional[bool] = None,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a WriteGroup request (unconfirmed).
 
         ``change_list`` is ``[(channel_oid_or_none, override_priority_or_none, value_bytes), ...]``.
@@ -2116,21 +2116,21 @@ class BACnetClient:
 
     # --- Virtual terminal ---
 
-    async def vt_open(self, address: str, vt_class: int) -> int:
+    def vt_open(self, address: str, vt_class: int) -> Awaitable[int]:
         """Open a virtual terminal session. Returns the remote session identifier."""
         ...
 
-    async def vt_close(self, address: str, session_ids: list[int]) -> None:
+    def vt_close(self, address: str, session_ids: list[int]) -> Awaitable[None]:
         """Close one or more virtual terminal sessions."""
         ...
 
-    async def vt_data(
+    def vt_data(
         self,
         address: str,
         session_id: int,
         data: bytes,
         data_flag: bool,
-    ) -> dict[str, Any]:
+    ) -> Awaitable[dict[str, Any]]:
         """Send data over a virtual terminal session.
 
         Returns ``{"all_new_data_accepted": bool, "accepted_octet_count": int}``.
@@ -2139,33 +2139,33 @@ class BACnetClient:
 
     # --- Audit ---
 
-    async def confirmed_audit_notification_typed(
+    def confirmed_audit_notification_typed(
         self,
         address: str,
         request: AuditNotificationRequestInput,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a validated mapping through the native confirmed Audit helper."""
         ...
 
-    async def unconfirmed_audit_notification_typed(
+    def unconfirmed_audit_notification_typed(
         self,
         address: str,
         request: AuditNotificationRequestInput,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a validated mapping through the native unconfirmed Audit helper."""
         ...
 
-    async def audit_log_query_typed(
+    def audit_log_query_typed(
         self,
         address: str,
         request: AuditLogQueryRequestInput,
-    ) -> AuditLogQueryAck:
+    ) -> Awaitable[AuditLogQueryAck]:
         """Send a typed Audit Log query and return a canonical decoded mapping."""
         ...
 
-    async def confirmed_audit_notification(
+    def confirmed_audit_notification(
         self, address: str, service_data: bytes
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a pre-encoded Clause 21 ConfirmedAuditNotification payload.
 
         This is a raw escape hatch; the bundled server does not execute the
@@ -2173,9 +2173,9 @@ class BACnetClient:
         """
         ...
 
-    async def unconfirmed_audit_notification(
+    def unconfirmed_audit_notification(
         self, address: str, service_data: bytes
-    ) -> None:
+    ) -> Awaitable[None]:
         """Send a pre-encoded Clause 21 UnconfirmedAuditNotification payload.
 
         This is a raw escape hatch; the bundled server does not execute the
@@ -2183,11 +2183,11 @@ class BACnetClient:
         """
         ...
 
-    async def audit_log_query(
+    def audit_log_query(
         self,
         address: str,
         service_data: bytes,
-    ) -> bytes:
+    ) -> Awaitable[bytes]:
         """Send a pre-encoded Clause 21 AuditLogQuery payload.
 
         This raw escape hatch returns the peer's response payload. The bundled
@@ -2197,7 +2197,7 @@ class BACnetClient:
 
     # --- Lifecycle ---
 
-    async def stop(self) -> None:
+    def stop(self) -> Awaitable[None]:
         """Explicitly stop the client and release resources."""
         ...
 
@@ -2526,29 +2526,29 @@ class BACnetServer:
     def add_network_port(self, instance: int, name: str, network_type: int = 0) -> None: ...
 
     # --- Server lifecycle ---
-    async def start(self) -> None:
+    def start(self) -> Awaitable[None]:
         """Start the server and begin accepting BACnet requests."""
         ...
 
-    async def stop(self) -> None:
+    def stop(self) -> Awaitable[None]:
         """Stop the server and release resources."""
         ...
 
-    async def local_address(self) -> str:
+    def local_address(self) -> Awaitable[str]:
         """Get the local address the server is listening on."""
         ...
 
     # --- Server-side property access ---
-    async def read_property(
+    def read_property(
         self,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-    ) -> PropertyValue:
+    ) -> Awaitable[PropertyValue]:
         """Read a property from a local object."""
         ...
 
-    async def write_property_local(
+    def write_property_local(
         self,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
@@ -2557,7 +2557,7 @@ class BACnetServer:
         array_index: Optional[int] = None,
         *,
         source_object: Optional[ObjectIdentifier],
-    ) -> None:
+    ) -> Awaitable[None]:
         """Write locally with an explicit source: None selects the server Device.
 
         A source object must exist in the database. Tracked commands require a
@@ -2565,11 +2565,11 @@ class BACnetServer:
         """
         ...
 
-    async def set_present_value_local(
+    def set_present_value_local(
         self,
         object_id: ObjectIdentifier,
         value: PropertyValue,
-    ) -> None:
+    ) -> Awaitable[None]:
         """Update Present_Value through the narrow, non-generic application Input authority.
 
         Accepted values are a finite REAL for Analog Input, logical Enumerated 0/1
@@ -2581,11 +2581,11 @@ class BACnetServer:
         """
         ...
 
-    async def comm_state(self) -> int:
+    def comm_state(self) -> Awaitable[int]:
         """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
         ...
 
-    async def dcc_outcome_counters(self) -> DccOutcomeCounters:
+    def dcc_outcome_counters(self) -> Awaitable[DccOutcomeCounters]:
         """Sample completed admitted DCC handlers; zero on each new server lifetime.
 
         Accepted means state/timer commit, not response delivery. Independent
@@ -2595,7 +2595,7 @@ class BACnetServer:
         """
         ...
 
-    async def request_admission_counters(self) -> RequestAdmissionCounters:
+    def request_admission_counters(self) -> Awaitable[RequestAdmissionCounters]:
         """Sample counters; RuntimeError before start and after stop.
 
         Admitted totals count registered work, not successful response sends.
@@ -2729,35 +2729,35 @@ class ScHub:
         relay_send_budget_ms: int = 5000,
     ) -> None: ...
 
-    async def start(self) -> None:
+    def start(self) -> Awaitable[None]:
         """Start the SC hub."""
         ...
 
-    async def stop(self) -> None:
+    def stop(self) -> Awaitable[None]:
         """Stop the SC hub (forceful, idempotent)."""
         ...
 
-    async def shutdown_gracefully(self) -> Literal["graceful", "forced"]:
+    def shutdown_gracefully(self) -> Awaitable[Literal["graceful", "forced"]]:
         """Graceful shutdown; consumes the hub (RuntimeError if not started)."""
         ...
 
-    async def status(self) -> ScHubStatus:
+    def status(self) -> Awaitable[ScHubStatus]:
         """Bounded redacted snapshot (RuntimeError before start/after stop)."""
         ...
 
-    async def __aenter__(self) -> ScHub: ...
-    async def __aexit__(
+    def __aenter__(self) -> Awaitable[ScHub]: ...
+    def __aexit__(
         self,
         _exc_type: Any = None,
         _exc_val: Any = None,
         _exc_tb: Any = None,
-    ) -> None: ...
+    ) -> Awaitable[None]: ...
 
-    async def address(self) -> Optional[str]:
+    def address(self) -> Awaitable[Optional[str]]:
         """Get the address the hub is listening on (None before start)."""
         ...
 
-    async def url(self) -> Optional[str]:
+    def url(self) -> Awaitable[Optional[str]]:
         """Get the WebSocket URL of the hub (None before start)."""
         ...
 
@@ -2807,13 +2807,13 @@ class EndpointClient:
     After the owner closes, calls fail closed with ``BacnetError``.
     """
 
-    async def read_property(
+    def read_property(
         self,
         address: str,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-    ) -> PropertyValue:
+    ) -> Awaitable[PropertyValue]:
         """Read a property through the shared transport.
 
         ACK object/property/index must match. Device/Network Port instance 4194303
@@ -2822,11 +2822,11 @@ class EndpointClient:
         """
         ...
 
-    async def read_property_multiple(
+    def read_property_multiple(
         self,
         address: str,
         specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
-    ) -> list[ReadAccessResult]:
+    ) -> Awaitable[list[ReadAccessResult]]:
         """Read 1–64 explicit property occurrences on concrete objects.
 
         Empty lists, ALL/REQUIRED/OPTIONAL and wildcard instances raise ValueError
@@ -2837,7 +2837,7 @@ class EndpointClient:
         """
         ...
 
-    async def read_range(
+    def read_range(
         self,
         address: str,
         object_id: ObjectIdentifier,
@@ -2847,7 +2847,7 @@ class EndpointClient:
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
-    ) -> ReadRangeResult:
+    ) -> Awaitable[ReadRangeResult]:
         """Read a range of items from a list or log object.
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
@@ -2927,39 +2927,39 @@ class BipEndpoint:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
         ...
 
-    async def start(self) -> None:
+    def start(self) -> Awaitable[None]:
         """Start the endpoint (start-once; second start raises BacnetError)."""
         ...
 
-    async def close(self) -> None:
+    def close(self) -> Awaitable[None]:
         """Close the endpoint (idempotent)."""
         ...
 
-    async def __aenter__(self) -> BipEndpoint: ...
-    async def __aexit__(
+    def __aenter__(self) -> Awaitable[BipEndpoint]: ...
+    def __aexit__(
         self,
         _exc_type: Any = None,
         _exc_val: Any = None,
         _exc_tb: Any = None,
-    ) -> None: ...
+    ) -> Awaitable[None]: ...
 
-    async def client(self) -> EndpointClient:
+    def client(self) -> Awaitable[EndpointClient]:
         """Clone the client role (RuntimeError before start/after close)."""
         ...
 
-    async def server(self) -> EndpointServer:
+    def server(self) -> Awaitable[EndpointServer]:
         """Clone the server role (RuntimeError before start/after close)."""
         ...
 
-    async def local_address(self) -> str:
+    def local_address(self) -> Awaitable[str]:
         """Bound address as "ip:port" from the validated startup config."""
         ...
 
-    async def status(self) -> EndpointStatus:
+    def status(self) -> Awaitable[EndpointStatus]:
         """Bounded snapshot (RuntimeError before start/after close)."""
         ...
 
-    async def broadcast_i_am(self) -> None:
+    def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am consistent with the composed identity."""
         ...
 
@@ -3006,39 +3006,39 @@ class ScEndpoint:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
         ...
 
-    async def start(self) -> None:
+    def start(self) -> Awaitable[None]:
         """Dial the hub and start (start-once)."""
         ...
 
-    async def close(self) -> None:
+    def close(self) -> Awaitable[None]:
         """Close the endpoint (idempotent)."""
         ...
 
-    async def __aenter__(self) -> ScEndpoint: ...
-    async def __aexit__(
+    def __aenter__(self) -> Awaitable[ScEndpoint]: ...
+    def __aexit__(
         self,
         _exc_type: Any = None,
         _exc_val: Any = None,
         _exc_tb: Any = None,
-    ) -> None: ...
+    ) -> Awaitable[None]: ...
 
-    async def client(self) -> EndpointClient:
+    def client(self) -> Awaitable[EndpointClient]:
         """Clone the client role."""
         ...
 
-    async def server(self) -> EndpointServer:
+    def server(self) -> Awaitable[EndpointServer]:
         """Clone the server role."""
         ...
 
-    async def local_address(self) -> str:
+    def local_address(self) -> Awaitable[str]:
         """VMAC hex for this SC node."""
         ...
 
-    async def status(self) -> EndpointStatus:
+    def status(self) -> Awaitable[EndpointStatus]:
         """Bounded snapshot (RuntimeError before start/after close)."""
         ...
 
-    async def broadcast_i_am(self) -> None:
+    def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am via the hub relay."""
         ...
 
@@ -3082,39 +3082,39 @@ class MstpEndpoint:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
         ...
 
-    async def start(self) -> None:
+    def start(self) -> Awaitable[None]:
         """Open serial once and start (start-once)."""
         ...
 
-    async def close(self) -> None:
+    def close(self) -> Awaitable[None]:
         """Close the endpoint (idempotent)."""
         ...
 
-    async def __aenter__(self) -> MstpEndpoint: ...
-    async def __aexit__(
+    def __aenter__(self) -> Awaitable[MstpEndpoint]: ...
+    def __aexit__(
         self,
         _exc_type: Any = None,
         _exc_val: Any = None,
         _exc_tb: Any = None,
-    ) -> None: ...
+    ) -> Awaitable[None]: ...
 
-    async def client(self) -> EndpointClient:
+    def client(self) -> Awaitable[EndpointClient]:
         """Clone the client role."""
         ...
 
-    async def server(self) -> EndpointServer:
+    def server(self) -> Awaitable[EndpointServer]:
         """Clone the server role."""
         ...
 
-    async def local_address(self) -> str:
+    def local_address(self) -> Awaitable[str]:
         """Station MAC as a decimal string."""
         ...
 
-    async def status(self) -> EndpointStatus:
+    def status(self) -> Awaitable[EndpointStatus]:
         """Bounded snapshot (RuntimeError before start/after close)."""
         ...
 
-    async def broadcast_i_am(self) -> None:
+    def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am (MS/TP local broadcast)."""
         ...
 

@@ -28,7 +28,7 @@ NOTIFICATION_TIMEOUT = 2.0
 SILENCE_TIMEOUT = 0.25
 
 
-def installed_stub_method() -> ast.AsyncFunctionDef:
+def installed_stub_method() -> ast.FunctionDef:
     stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
     tree = ast.parse(stub_path.read_text(encoding="utf-8"), filename=str(stub_path))
     server = next(
@@ -39,7 +39,7 @@ def installed_stub_method() -> ast.AsyncFunctionDef:
     method = next(
         node
         for node in server.body
-        if isinstance(node, ast.AsyncFunctionDef)
+        if isinstance(node, ast.FunctionDef)
         and node.name == "set_present_value_local"
     )
     return method
@@ -91,7 +91,7 @@ class InputPresentValueArtifactTests(unittest.TestCase):
             [annotation_text(argument.annotation) for argument in stub_args[1:]],
             ["ObjectIdentifier", "PropertyValue"],
         )
-        self.assertEqual(annotation_text(method.returns), "None")
+        self.assertEqual(annotation_text(method.returns), "Awaitable[None]")
 
         docs = ast.get_docstring(method)
         self.assertIsNotNone(docs)

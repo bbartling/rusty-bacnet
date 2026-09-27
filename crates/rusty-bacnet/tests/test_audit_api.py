@@ -64,11 +64,11 @@ def stub_classes(tree: ast.Module) -> dict[str, ast.ClassDef]:
     }
 
 
-def stub_method(class_node: ast.ClassDef, name: str) -> ast.AsyncFunctionDef:
+def stub_method(class_node: ast.ClassDef, name: str) -> ast.FunctionDef:
     return next(
         node
         for node in class_node.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == name
+        if isinstance(node, ast.FunctionDef) and node.name == name
     )
 
 
@@ -288,7 +288,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 )
                 self.assertEqual(annotation_text(arguments[1].annotation), "str")
                 self.assertEqual(annotation_text(arguments[2].annotation), request_type)
-                self.assertEqual(annotation_text(method.returns), return_type)
+                self.assertEqual(annotation_text(method.returns), f"Awaitable[{return_type}]")
 
         name = "configure_audit_notification_sink"
         parameters = list(inspect.signature(getattr(BACnetServer, name)).parameters.values())
@@ -363,7 +363,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                     ["self", "address", "service_data"],
                 )
                 self.assertEqual(annotation_text(arguments[2].annotation), "bytes")
-                self.assertEqual(annotation_text(method.returns), return_type)
+                self.assertEqual(annotation_text(method.returns), f"Awaitable[{return_type}]")
 
     def test_notification_validation_uses_documented_exception_classes(self) -> None:
         client = BACnetClient()

@@ -70,7 +70,7 @@ class DccOutcomeTests(unittest.IsolatedAsyncioTestCase):
                   if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)}
         self.assertEqual(fields, dict.fromkeys(FIELDS, "int"))
         method = next(node for node in classes["BACnetServer"].body
-                      if isinstance(node, ast.AsyncFunctionDef)
+                      if isinstance(node, ast.FunctionDef)
                       and node.name == "dcc_outcome_counters")
         assert method.returns is not None
-        self.assertEqual(ast.unparse(method.returns), "DccOutcomeCounters")
+        self.assertEqual(ast.unparse(method.returns), "Awaitable[DccOutcomeCounters]")

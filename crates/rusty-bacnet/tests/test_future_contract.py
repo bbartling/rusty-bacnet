@@ -1,0 +1,140 @@
+"""Native Futures, semantic installed signatures, and protocol boundaries."""
+import asyncio
+import ast
+import inspect
+from pathlib import Path
+import unittest
+
+import rusty_bacnet as rb
+
+
+def installed_classes():
+    tree = ast.parse(Path(rb.__file__).with_suffix(".pyi").read_text(), feature_version=(3, 11))
+    return {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+
+
+class NativeFutureTests(unittest.IsolatedAsyncioTestCase):
+    async def future_result(self, owner, name, future):
+        try:
+            self.assertTrue(asyncio.isfuture(future))
+            self.assertFalse(inspect.iscoroutine(future))
+            self.assertTrue(inspect.isawaitable(future))
+            with self.assertRaises(TypeError):
+                asyncio.create_task(future)
+            self.assertIs(asyncio.ensure_future(future), future)
+            result = await asyncio.wait_for(future, 5)
+            method = next(n for n in installed_classes()[owner].body
+                          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+            self.assertIsInstance(method, ast.FunctionDef, "native Future must not advertise a coroutine function")
+            self.assertIsInstance(method.returns, ast.Subscript)
+            self.assertEqual(ast.unparse(method.returns.value), "Awaitable")
+            return result
+        finally:
+            if not future.done():
+                future.cancel()
+            await asyncio.gather(future, return_exceptions=True)
+
+    async def test_client_native_future_and_installed_signature(self):
+        async with rb.BACnetClient(interface="127.0.0.1", port=0) as client:
+            result = await self.future_result("BACnetClient", "discovered_devices", client.discovered_devices())
+            self.assertEqual(result, [])
+
+    async def test_server_hub_endpoint_role_and_context_futures(self):
+        server = rb.BACnetServer(858, interface="127.0.0.1", port=0)
+        endpoint = rb.BipEndpoint(device_instance=859, interface="127.0.0.1", port=0)
+        hub = rb.ScHub("127.0.0.1:0", "unused-cert", "unused-key", b"\x02\x00\x00\x00\x00\x01",
+                       ca_cert="unused-ca", device_uuid=b"\x01" * 16)
+        try:
+            self.assertIsNone(await self.future_result("ScHub", "address", hub.address()))
+            await self.future_result("ScHub", "stop", hub.stop())
+            await self.future_result("BACnetServer", "start", server.start())
+            address = await self.future_result("BACnetServer", "local_address", server.local_address())
+            entered = await self.future_result("BipEndpoint", "__aenter__", endpoint.__aenter__())
+            self.assertIs(entered, endpoint)
+            role = await self.future_result("BipEndpoint", "client", endpoint.client())
+            self.assertIsInstance(role, rb.EndpointClient)
+            owner_role = await self.future_result("BipEndpoint", "server", endpoint.server())
+            self.assertIsInstance(owner_role, rb.EndpointServer)
+            oid = rb.ObjectIdentifier(rb.ObjectType.DEVICE, 858)
+            value = await self.future_result("EndpointClient", "read_property",
+                                            role.read_property(address, oid, rb.PropertyIdentifier.OBJECT_NAME))
+            self.assertIsInstance(value, rb.PropertyValue)
+            with self.assertRaises(ValueError):
+                role.read_property_multiple("invalid-address", [])
+            await self.future_result("BipEndpoint", "__aexit__", endpoint.__aexit__(None, None, None))
+        finally:
+            await endpoint.close()
+            await server.stop()
+            await hub.stop()
+
+    async def test_context_and_future_resolving_to_async_iterator(self):
+        server = rb.BACnetServer(860, interface="127.0.0.1", port=0)
+        server.add_analog_input(1, "future-sensor", present_value=1.0)
+        client = rb.BACnetClient(interface="127.0.0.1", port=0)
+        try:
+            await server.start()
+            entered = await self.future_result("BACnetClient", "__aenter__", client.__aenter__())
+            self.assertIs(entered, client)
+            iterator = await self.future_result("BACnetClient", "cov_notifications", client.cov_notifications())
+            self.assertIsInstance(iterator, rb.CovNotificationIterator)
+            self.assertIs(iterator.__aiter__(), iterator)
+            oid = rb.ObjectIdentifier(rb.ObjectType.ANALOG_INPUT, 1)
+            address = await server.local_address()
+            # Subscribe produces an initial notification without changing object state.
+            await client.subscribe_cov(address, 1, oid, confirmed=False, lifetime=30)
+            notification = await self.future_result("CovNotificationIterator", "__anext__", iterator.__anext__())
+            self.assertIsInstance(notification, rb.CovNotification)
+            await client.subscribe_cov(address, 1, oid, confirmed=False, lifetime=30)
+
+            async def read_one():
+                async for item in iterator:
+                    return item
+                self.fail("iterator closed before the renewal notification")
+
+            self.assertIsInstance(await asyncio.wait_for(read_one(), 5), rb.CovNotification)
+            with self.assertRaises(ValueError):
+                client.write_property("invalid-address", oid, rb.PropertyIdentifier.PRESENT_VALUE,
+                                      rb.PropertyValue.real(2.0), priority=0)
+            await self.future_result("BACnetClient", "__aexit__", client.__aexit__(None, None, None))
+            with self.assertRaises(StopAsyncIteration):
+                await asyncio.wait_for(iterator.__anext__(), 5)
+        finally:
+            await client.stop()
+            await server.stop()
+
+
+class NativeFutureInventoryTests(unittest.TestCase):
+    def test_installed_awaitables_match_native_bridge_exports(self):
+        """Cross-check the native exporting method set, including special protocols.
+
+        Scope is the eight native classes using the existing Tokio Future bridge;
+        this is not a Rust parser or a claim that every method ran dynamically.
+        """
+        import re
+        source = Path(__file__).resolve().parents[1] / "src"
+        groups = {
+            "BACnetClient": sorted((source / "client/client_methods").glob("*.rs")),
+            "BACnetServer": sorted((source / "server/server_methods").glob("*.rs")),
+            "ScHub": [source / "hub.rs"],
+            "EndpointClient": [source / "endpoint/roles.rs"],
+            "CovNotificationIterator": [source / "types/cov.rs"],
+            **{name: [source / f"endpoint/{stem}.rs"] for name, stem in (
+                ("BipEndpoint", "bip"), ("ScEndpoint", "sc"), ("MstpEndpoint", "mstp"))},
+        }
+        classes = installed_classes()
+        for name, paths in groups.items():
+            with self.subTest(class_name=name):
+                self.assertTrue(paths)
+                native = set()
+                for path in paths:
+                    # Native methods are rustfmt-indented ordinary fn definitions.
+                    for method in re.finditer(r"^    fn (\w+).*?^    }", path.read_text(), re.M | re.S):
+                        if "pyo3_async_runtimes::tokio::future_into_py" in method.group():
+                            native.add(method.group(1))
+                self.assertTrue(native)
+                cls = classes[name]
+                self.assertFalse(any(isinstance(n, ast.AsyncFunctionDef) for n in cls.body))
+                declared = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)
+                            and isinstance(n.returns, ast.Subscript)
+                            and ast.unparse(n.returns.value) == "Awaitable"}
+                self.assertEqual(declared, native)

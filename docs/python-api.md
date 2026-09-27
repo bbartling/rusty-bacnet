@@ -4,6 +4,25 @@
 
 **Requirements:** Python >= 3.11
 
+Native asynchronous methods return an `asyncio.Future` immediately when called
+inside a running event loop. Their installed signatures use ordinary `def` with
+`Awaitable[T]`, where `T` is the value produced by `await`. Argument validation
+that occurs before Future creation still raises synchronously; I/O and operation
+failures are delivered by awaiting the Future.
+
+Use `await native_call()` or `asyncio.ensure_future(native_call())`.
+`asyncio.create_task` requires a coroutine object and does not accept these native
+Futures directly. It remains appropriate for user-written `async def` functions,
+including listener tasks in the examples below. Await or
+cancel and drain every Future you create; cancelling does not retract work
+already sent or replace a resource owner's documented `stop`/`close` lifecycle.
+
+Native async context methods remain usable with `async with`. For COV,
+`iterator = await client.cov_notifications()` first resolves the Future to a
+`CovNotificationIterator`; then use `async for notification in iterator`.
+Its synchronous `__aiter__` returns the iterator, and `__anext__` returns a Future
+that yields a notification or raises `StopAsyncIteration` when the channel closes.
+
 ## Installation
 
 ```bash
