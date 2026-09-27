@@ -42,7 +42,9 @@ impl<W: WebSocketPort> ScTransport<W> {
         // Direct discovery state is dropped with the transport; pending
         // Address-Resolution waiters observe closure via their hub send or
         // timeout and fall back to the hub path.
-        self.direct = None;
+        if let Some(shared) = self.direct.take() {
+            shared.disable();
+        }
         (task, restore_task)
     }
 }

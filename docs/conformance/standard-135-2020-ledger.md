@@ -1004,3 +1004,31 @@ intentional. See [Rust](../rust-api.md#hub-certificate-bindings) and
 [Python](../python-api.md#hub-certificate-bindings) for the exact contract.
 This neither authenticates relayed operations end to end nor closes the full SC
 security profile; #518/#524/#803 remain separate.
+
+## Direct peer membership
+
+`BACNET-AB-SC-DIRECT-MEMBERSHIP` records the bounded #851 outcome against
+135-2020 AB.4.2/AB.4.2.1, AB.6.2.1/AB.6.2.3 and AB.2.4.1. Accepted and outbound
+direct peers share UUID/VMAC ownership; same-UUID replacement publishes after
+successful Accept and fences stale receive/cleanup generations. Real TLS tests
+cover duplicate VMAC, changed-VMAC replacement, cross-role conflicts/races,
+M=1 capacity and pending/physical saturation, expiry/eviction and discovery
+teardown. Deterministic write seams test failed/cancelled/timed-out Accept
+against a real TLS incumbent; queued complete work survives replacement.
+
+The accepted M/pending M/physical 2M bounds, compound collision precedence and
+capacity RESOURCES/OTHER signal are local policy. Public migration is described
+in [the Rust API](../rust-api.md#direct-peer-membership-and-limits). Different
+CA-valid certificates may claim the same UUID under this membership policy.
+This row does not promote the broader connection-state audit or claim #803
+request-principal isolation, #524 response confinement, BTL certification,
+external interoperability or hardware qualification. Idle outbound workers observe
+remote EOF/Close and handle Disconnect control with generation-specific cleanup.
+Ordinary bidirectional application NPDU routing remains a pre-existing gap in
+[GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
+
+The direct-membership race evidence distinguishes a locally unique winner while
+peer sockets remain open from deterministic crossed replacement at two endpoints.
+Crossed replacement can close both sockets; the tests require generation-specific
+cleanup, recovered physical capacity, and successful fresh demand after normal
+URI backoff. Local write success alone does not establish remote NPDU delivery.

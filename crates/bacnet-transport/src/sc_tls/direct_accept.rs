@@ -21,8 +21,9 @@
 //! exchange. Response messages are never answered, per the response rule.
 //!
 //! Owner-local bounds (not wire conformance): at most
-//! [`DIRECT_ACCEPT_MAX_CONNECTIONS`] concurrent accepted connections;
-//! further TCP accepts are dropped while at cap. Each connection must
+//! [`DIRECT_ACCEPT_MAX_ESTABLISHED_PEERS`] established accepted peers, the
+//! same number of pending handshakes and twice that many physical sockets.
+//! TCP accepts beyond pending/physical capacity are dropped. Each connection must
 //! complete its Connect handshake within the configured connect timeout and
 //! is closed after [`DIRECT_ACCEPT_IDLE_TIMEOUT`] without an inbound frame
 //! by default. No hub, failover, discovery, or dial-out behavior changes.
@@ -34,9 +35,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use crate::sc::direct_membership::{DirectMembership, DirectRole, Membership, Refusal};
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -52,11 +54,10 @@ use crate::sc_frame::{
 
 use super::ScNodeTlsConfig;
 
-/// Maximum concurrent accepted direct connections (owner-local bound).
-///
-/// Further TCP accepts are dropped while at cap; the peer observes a
-/// refused connection and may retry later under its own local timing.
-pub const DIRECT_ACCEPT_MAX_CONNECTIONS: usize = 16;
+/// Default maximum established accepted direct peers (owner-local bound).
+/// Pending handshakes are separately capped at this limit, and physical
+/// accepted sockets (including retiring generations) at twice this limit.
+pub const DIRECT_ACCEPT_MAX_ESTABLISHED_PEERS: usize = 16;
 
 /// Idle timeout for an accepted direct connection (owner-local policy).
 ///
@@ -88,7 +89,7 @@ pub struct DirectAcceptConfig {
     tls: ScNodeTlsConfig,
     connect_timeout: Duration,
     idle_timeout: Duration,
-    max_connections: usize,
+    max_established_peers: usize,
     npdu_admission_policy: ScNpduAdmissionPolicy,
     max_bvlc_length: u16,
     max_apdu_length: u16,
@@ -120,7 +121,7 @@ impl DirectAcceptConfig {
             tls,
             connect_timeout: Duration::from_millis(DIRECT_ACCEPT_DEFAULT_CONNECT_TIMEOUT_MS),
             idle_timeout: DIRECT_ACCEPT_IDLE_TIMEOUT,
-            max_connections: DIRECT_ACCEPT_MAX_CONNECTIONS,
+            max_established_peers: DIRECT_ACCEPT_MAX_ESTABLISHED_PEERS,
             npdu_admission_policy: ScNpduAdmissionPolicy::default(),
             max_bvlc_length: crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH,
             max_apdu_length: 1476,
@@ -139,12 +140,15 @@ impl DirectAcceptConfig {
         self
     }
 
-    /// Set the concurrent-connection cap (builder-style).
+    /// Set the established accepted-peer limit M (builder-style).
+    ///
+    /// Pending handshakes are bounded by M; physical sockets, including
+    /// retiring replacements, by 2M. Startup rejects overflow before binding.
     ///
     /// Values above zero are honored; zero is replaced with one so the
     /// listener can always make progress for its first peer.
-    pub fn with_max_connections(mut self, max: usize) -> Self {
-        self.max_connections = max.max(1);
+    pub fn with_max_established_peers(mut self, max: usize) -> Self {
+        self.max_established_peers = max.max(1);
         self
     }
 
@@ -176,6 +180,10 @@ pub struct DirectListener {
     accept_task: Option<JoinHandle<()>>,
     shutdown: watch::Sender<bool>,
     active: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pending: Arc<AtomicUsize>,
+    #[cfg(test)]
+    membership: Arc<DirectMembership>,
     npdu_admission: Arc<ScNpduAdmission>,
 }
 
@@ -204,6 +212,16 @@ impl DirectListener {
     pub async fn start(
         config: DirectAcceptConfig,
     ) -> Result<(Self, mpsc::Receiver<ReceivedNpdu>), Error> {
+        Self::start_shared(config, Arc::new(DirectMembership::default())).await
+    }
+
+    pub(crate) async fn start_shared(
+        config: DirectAcceptConfig,
+        membership: Arc<DirectMembership>,
+    ) -> Result<(Self, mpsc::Receiver<ReceivedNpdu>), Error> {
+        config.max_established_peers.checked_mul(2).ok_or_else(|| {
+            Error::Encoding("direct accepted-peer limit overflows physical socket capacity".into())
+        })?;
         if config.device_uuid == [0; 16] {
             return Err(Error::Encoding(
                 "direct accept device UUID is all-zero".into(),
@@ -225,6 +243,7 @@ impl DirectListener {
         let (npdu_tx, npdu_rx) = mpsc::channel(DIRECT_ACCEPT_NPDU_CHANNEL_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let active = Arc::new(AtomicUsize::new(0));
+        let pending = Arc::new(AtomicUsize::new(0));
         let task = tokio::spawn(accept_loop(
             listener,
             config,
@@ -233,6 +252,8 @@ impl DirectListener {
             Arc::clone(&active),
             ListenerStopped(shutdown.clone()),
             Arc::clone(&npdu_admission),
+            Arc::clone(&pending),
+            Arc::clone(&membership),
         ));
         debug!("BACnet/SC direct listener on {local_addr}");
         Ok((
@@ -241,6 +262,10 @@ impl DirectListener {
                 accept_task: Some(task),
                 shutdown,
                 active,
+                #[cfg(test)]
+                pending,
+                #[cfg(test)]
+                membership,
                 npdu_admission,
             },
             npdu_rx,
@@ -252,7 +277,8 @@ impl DirectListener {
         self.local_addr
     }
 
-    /// Number of currently active accepted connections (for tests).
+    /// Physical accepted sockets, including pending and retiring generations.
+    /// May reach twice the configured established accepted-peer limit.
     pub fn active_connections(&self) -> usize {
         self.active.load(Ordering::Relaxed)
     }
@@ -274,7 +300,6 @@ impl DirectListener {
     pub async fn stop(&mut self) {
         self.shutdown.send_replace(true);
         if let Some(task) = self.accept_task.take() {
-            task.abort();
             let _ = task.await;
         }
     }
@@ -357,6 +382,7 @@ fn direct_subprotocol_response(
     Ok(response)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn accept_loop(
     listener: TcpListener,
     config: DirectAcceptConfig,
@@ -365,11 +391,15 @@ async fn accept_loop(
     active: Arc<AtomicUsize>,
     _stopped: ListenerStopped,
     npdu_admission: Arc<ScNpduAdmission>,
+    pending: Arc<AtomicUsize>,
+    membership: Arc<DirectMembership>,
 ) {
+    let mut peers = tokio::task::JoinSet::new();
     loop {
         let accepted = tokio::select! {
             biased;
             _ = shutdown.changed() => break,
+            Some(_) = peers.join_next(), if !peers.is_empty() => continue,
             accepted = listener.accept() => accepted,
         };
         let (tcp, peer_addr) = match accepted {
@@ -379,8 +409,13 @@ async fn accept_loop(
                 continue;
             }
         };
-        let Some(_guard) = AcceptGuard::acquire(&active, config.max_connections) else {
+        let Some(_guard) = AcceptGuard::acquire(&active, config.max_established_peers * 2) else {
             warn!("direct accept at cap, refusing {peer_addr}");
+            drop(tcp);
+            continue;
+        };
+        let Some(pending_guard) = AcceptGuard::acquire(&pending, config.max_established_peers)
+        else {
             drop(tcp);
             continue;
         };
@@ -390,16 +425,18 @@ async fn accept_loop(
         let mut peer_shutdown = shutdown.clone();
         let peer_active = Arc::clone(&active);
         let peer_admission = Arc::clone(&npdu_admission);
-        tokio::spawn(async move {
+        let peer_membership = Arc::clone(&membership);
+        peers.spawn(async move {
             let _guard = guard;
             let _active = peer_active;
             tokio::select! {
                 _ = peer_shutdown.changed() => {},
-                _ = serve_connection(tcp, peer_addr, peer_config, peer_tx, peer_admission) => {},
+                _ = serve_connection(tcp, peer_addr, peer_config, peer_tx, peer_admission, peer_membership, pending_guard) => {},
             }
         });
     }
     drop(listener);
+    peers.shutdown().await;
 }
 
 async fn serve_connection(
@@ -408,6 +445,8 @@ async fn serve_connection(
     config: DirectAcceptConfig,
     npdu_tx: mpsc::Sender<ReceivedNpdu>,
     npdu_admission: Arc<ScNpduAdmission>,
+    membership: Arc<DirectMembership>,
+    pending: AcceptGuard,
 ) {
     let tls_stream =
         match tokio::time::timeout(config.connect_timeout, config.tls.acceptor().accept(tcp)).await
@@ -443,16 +482,22 @@ async fn serve_connection(
         }
     };
     let (mut write, mut read) = ws_stream.split();
-    let peer_vmac = match serve_handshake(&mut write, &mut read, &config, peer_addr).await {
-        Some(vmac) => vmac,
-        None => return,
+    let member = match tokio::time::timeout(
+        config.connect_timeout,
+        serve_handshake(&mut write, &mut read, &config, peer_addr, &membership),
+    )
+    .await
+    {
+        Ok(Some(member)) => member,
+        _ => return,
     };
+    drop(pending);
     serve_npdu_loop(
         &mut write,
         &mut read,
         &config,
         peer_addr,
-        peer_vmac,
+        &member,
         &npdu_tx,
         &npdu_admission,
     )
@@ -464,7 +509,8 @@ async fn serve_handshake<W>(
     read: &mut W::Read,
     config: &DirectAcceptConfig,
     peer_addr: SocketAddr,
-) -> Option<Vmac>
+    membership: &Arc<DirectMembership>,
+) -> Option<Arc<Membership>>
 where
     W: DirectWs,
 {
@@ -505,13 +551,25 @@ where
     }
     let mut peer_vmac = [0u8; 6];
     peer_vmac.copy_from_slice(&msg.payload[0..6]);
-    if peer_vmac == config.local_vmac {
-        let nak = duplicate_vmac_nak(msg.message_id);
-        let mut buf = BytesMut::new();
-        encode_sc_message(&mut buf, &nak);
-        let _ = write.send_data(&buf).await;
-        return None;
-    }
+    let mut peer_uuid = [0; 16];
+    peer_uuid.copy_from_slice(&msg.payload[6..22]);
+    let reservation = match membership.reserve(
+        peer_uuid,
+        peer_vmac,
+        config.device_uuid,
+        config.local_vmac,
+        DirectRole::Accepted,
+        config.max_established_peers,
+    ) {
+        Ok(reservation) => reservation,
+        Err(refusal) => {
+            let nak = admission_nak(msg.message_id, refusal);
+            let mut buf = BytesMut::new();
+            encode_sc_message(&mut buf, &nak);
+            let _ = write.send_data(&buf).await;
+            return None;
+        }
+    };
     let accept = build_connect_accept(msg.message_id, config);
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &accept);
@@ -519,7 +577,9 @@ where
         return None;
     }
     debug!("direct handshake accepted {peer_addr} vmac={peer_vmac:02x?}");
-    Some(peer_vmac)
+    // No await between successful Accept and publication: cancellation cannot
+    // expose a successful but unregistered contender at this boundary.
+    Some(reservation.commit())
 }
 
 fn build_connect_accept(message_id: u16, config: &DirectAcceptConfig) -> ScMessage {
@@ -539,10 +599,14 @@ fn build_connect_accept(message_id: u16, config: &DirectAcceptConfig) -> ScMessa
     }
 }
 
-fn duplicate_vmac_nak(message_id: u16) -> ScMessage {
+fn admission_nak(message_id: u16, refusal: Refusal) -> ScMessage {
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    let class = ErrorClass::COMMUNICATION.to_raw().to_be_bytes();
-    let code = ErrorCode::NODE_DUPLICATE_VMAC.to_raw().to_be_bytes();
+    let (class, code) = match refusal {
+        Refusal::DuplicateVmac => (ErrorClass::COMMUNICATION, ErrorCode::NODE_DUPLICATE_VMAC),
+        Refusal::Resources | Refusal::Busy => (ErrorClass::RESOURCES, ErrorCode::OTHER),
+    };
+    let class = class.to_raw().to_be_bytes();
+    let code = code.to_raw().to_be_bytes();
     ScMessage {
         function: ScFunction::Result,
         message_id,
@@ -567,14 +631,27 @@ async fn serve_npdu_loop<W>(
     read: &mut W::Read,
     config: &DirectAcceptConfig,
     peer_addr: SocketAddr,
-    peer_vmac: Vmac,
+    member: &Membership,
     npdu_tx: &mpsc::Sender<ReceivedNpdu>,
     npdu_admission: &Arc<ScNpduAdmission>,
 ) where
     W: DirectWs,
 {
+    let mut retired = member.retirement();
     loop {
-        let next = tokio::time::timeout(config.idle_timeout, read.next_data()).await;
+        let next = tokio::select! {
+            biased;
+            _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &crate::sc::direct_membership::disconnect_request());
+                let _ = tokio::time::timeout(config.connect_timeout, async {
+                    let _ = write.send_data(&buf).await;
+                    let _ = write.send_close().await;
+                }).await;
+                return;
+            }
+            next = tokio::time::timeout(config.idle_timeout, read.next_data()) => next,
+        };
         let data = match next {
             Ok(Some(Ok(data))) => data,
             Ok(Some(Err(e))) => {
@@ -584,7 +661,7 @@ async fn serve_npdu_loop<W>(
             Ok(None) => return,
             Err(_) => {
                 debug!("direct idle timeout, closing {peer_addr}");
-                let _ = write.send_close().await;
+                let _ = tokio::time::timeout(config.connect_timeout, write.send_close()).await;
                 return;
             }
         };
@@ -607,7 +684,11 @@ async fn serve_npdu_loop<W>(
                     DirectMuDecision::Nak(nak) => {
                         let mut buf = BytesMut::new();
                         encode_sc_message(&mut buf, &nak);
-                        if write.send_data(&buf).await.is_err() {
+                        if !matches!(
+                            tokio::time::timeout(config.connect_timeout, write.send_data(&buf))
+                                .await,
+                            Ok(Ok(()))
+                        ) {
                             warn!("direct destination-option NAK send error for {peer_addr}");
                         }
                         continue;
@@ -618,7 +699,15 @@ async fn serve_npdu_loop<W>(
                     // verified + Connect-Request/Accept completed on this
                     // connection; source_mac is that peer's VMAC. Post-handshake
                     // only; direct connections carry unicast only.
-                    npdu_admission.admit_direct_peer(npdu_tx, &msg, npdu, peer_vmac, peer_addr);
+                    member.with_current(|| {
+                        npdu_admission.admit_direct_peer(
+                            npdu_tx,
+                            &msg,
+                            npdu,
+                            member.vmac,
+                            peer_addr,
+                        )
+                    });
                 }
             }
             ScFunction::DisconnectRequest => {
@@ -633,7 +722,7 @@ async fn serve_npdu_loop<W>(
                 };
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &ack);
-                let _ = write.send_data(&buf).await;
+                let _ = tokio::time::timeout(config.connect_timeout, write.send_data(&buf)).await;
                 return;
             }
             ScFunction::DisconnectAck => return,
@@ -740,61 +829,13 @@ fn direct_npdu(msg: &ScMessage, config: &DirectAcceptConfig) -> Option<Bytes> {
     Some(msg.payload.clone())
 }
 
-/// Minimal WebSocket surface used by the acceptor handshake and NPDU loop.
-trait DirectWs {
-    type Read: DirectWsRead;
-    async fn send_data(&mut self, data: &[u8]) -> Result<(), ()>;
-    async fn send_close(&mut self) -> Result<(), ()>;
-}
-
-trait DirectWsRead {
-    async fn next_data(&mut self) -> Option<Result<Vec<u8>, String>>;
-}
-
-type TlsWsStream =
-    tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
-
-impl DirectWs
-    for futures_util::stream::SplitSink<TlsWsStream, tokio_tungstenite::tungstenite::Message>
-{
-    type Read = futures_util::stream::SplitStream<TlsWsStream>;
-    async fn send_data(&mut self, data: &[u8]) -> Result<(), ()> {
-        self.send(tokio_tungstenite::tungstenite::Message::Binary(
-            data.to_vec().into(),
-        ))
-        .await
-        .map_err(|_| ())
-    }
-    async fn send_close(&mut self) -> Result<(), ()> {
-        self.send(tokio_tungstenite::tungstenite::Message::Close(None))
-            .await
-            .map_err(|_| ())
-    }
-}
-
-impl DirectWsRead for futures_util::stream::SplitStream<TlsWsStream> {
-    async fn next_data(&mut self) -> Option<Result<Vec<u8>, String>> {
-        loop {
-            match self.next().await {
-                Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(data))) => {
-                    return Some(Ok(data.to_vec()));
-                }
-                Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) => return None,
-                Some(Ok(
-                    tokio_tungstenite::tungstenite::Message::Ping(_)
-                    | tokio_tungstenite::tungstenite::Message::Pong(_),
-                )) => continue,
-                Some(Ok(_)) => return Some(Err("non-binary".into())),
-                Some(Err(e)) => return Some(Err(e.to_string())),
-                None => return None,
-            }
-        }
-    }
-}
+#[path = "direct_socket.rs"]
+mod socket;
+use socket::{DirectWs, DirectWsRead};
 
 #[cfg(test)]
 #[path = "direct_accept_tests.rs"]
-mod direct_accept_tests;
+pub(crate) mod direct_accept_tests;
 
 #[cfg(test)]
 #[path = "rb08_direct_accept_provenance_tests.rs"]

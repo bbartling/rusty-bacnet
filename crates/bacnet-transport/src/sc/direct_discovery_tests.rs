@@ -65,7 +65,7 @@ fn fake_dialer(
                 };
                 if req.function == ScFunction::ConnectRequest {
                     let mut payload = Vec::with_capacity(26);
-                    payload.extend_from_slice(&[0x33; 6]);
+                    payload.extend_from_slice(&TARGET);
                     payload.extend_from_slice(&[0x44; 16]);
                     payload.extend_from_slice(&1476u16.to_be_bytes());
                     payload.extend_from_slice(&1476u16.to_be_bytes());

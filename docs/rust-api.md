@@ -514,6 +514,55 @@ existing rejection deadline and retirement behavior. See the
 [scoped conformance evidence](conformance/standard-135-2020-ledger.md#node-address-resolution-accepting-capability).
 
 
+### Direct peer membership and limits
+
+`DirectListener::start(config)` creates a standalone direct listener.
+`ScTransport::with_direct_listener(config)` registers its intake and shares one
+UUID/VMAC owner with opt-in `with_direct_discovery` / `with_direct_dialer`.
+Changing discovery does not erase accepted membership. Accepted and outbound
+peers share identity uniqueness while retaining separate numeric quotas.
+
+`DirectAcceptConfig::with_max_established_peers(M)` sets the established accepted
+peer limit; its default is `DIRECT_ACCEPT_MAX_ESTABLISHED_PEERS` (16). Zero
+normalizes to one. At most M handshakes may be pending and at most 2M accepted
+physical sockets may exist, including retiring replacements. Values above
+`usize::MAX / 2` fail before binding. `active_connections()` counts physical
+sockets and can therefore reach 2M. Pending/physical saturation drops TCP;
+otherwise a distinct valid Connect at accepted capacity receives the local
+`RESOURCES/OTHER` NAK. Saturation does not guarantee reconnect admission.
+
+**Pre-1.0 API break:** `with_max_connections` becomes
+`with_max_established_peers`; the former physical-cap semantics and name are
+removed, without aliases. The default constant now describes established
+peers. Callers that use `active_connections()` must allow pending and retiring
+sockets in addition to established peers.
+
+A known UUID can replace its direct connection with the same or a free changed
+VMAC. Successful Connect-Accept transmission precedes incumbent retirement;
+failed or cancelled admission preserves the incumbent. A contender claiming a
+third peer's VMAC receives `COMMUNICATION/NODE_DUPLICATE_VMAC`, preserving both
+incumbents. This compound-conflict precedence and the capacity error pair are
+local policy. Replacing an outbound peer still needs an accepted slot.
+Outbound sends verify the peer's Connect VMAC against the requested destination.
+The outbound pool retains at most 16 peers, with 16 pending dials and 32 physical
+sockets per enabled discovery owner; expiry, eviction and disable retire only
+their own generation. An idle worker observes remote EOF/Close and answers a valid Disconnect request
+before closing. Malformed Disconnect requests use the existing control validator.
+Disable/stop forcefully cancels its owned socket workers.
+
+Simultaneous replacements can select opposite sockets at the two endpoints and
+leave no live direct connection. Membership guarantees at most one current
+connection per peer; normal Hub fallback and bounded URI backoff/retry apply.
+A successful local WebSocket write does not confirm remote NPDU delivery.
+
+Private process-wide generations fence new work from old sockets and stale
+cleanup. Already queued complete NPDUs retain their original values; no reply
+routing or certificate principal is attached by this change. UUID claims are
+not certificate bindings. Direct request principal/reassembly authorization
+(#803) and confirmed-response confinement (#524) remain separate. Ordinary
+bidirectional application NPDU routing over established direct sockets remains
+a pre-existing gap tracked in [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
+
 ### Hub certificate bindings
 
 `ScHubCertificateBinding::new(uuid, allowed_vmacs, leaf_sha256)` creates one

@@ -30,6 +30,8 @@ mod control_admission;
 mod data_attributes;
 pub(crate) mod diagnostic_throttle;
 pub(crate) mod direct_discovery;
+pub(crate) mod direct_membership;
+mod direct_pool;
 mod empty_npdu;
 mod errors;
 mod failover;
@@ -66,16 +68,8 @@ const SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN: u16 = 10;
 // WebSocket abstraction
 // ---------------------------------------------------------------------------
 
-/// Abstraction over a WebSocket connection for BACnet/SC.
-///
-/// Implementations wrap the platform WebSocket driver (e.g. `tokio-tungstenite`).
-/// A loopback implementation is provided for testing.
-pub trait WebSocketPort: Send + Sync + 'static {
-    /// Send a binary WebSocket message.
-    fn send(&self, data: &[u8]) -> impl std::future::Future<Output = Result<(), Error>> + Send;
-    /// Receive a binary WebSocket message. Blocks until a message is available.
-    fn recv(&self) -> impl std::future::Future<Output = Result<Vec<u8>, Error>> + Send;
-}
+mod websocket;
+pub use websocket::WebSocketPort;
 
 // ---------------------------------------------------------------------------
 // BACnet/SC Transport
@@ -114,6 +108,7 @@ pub struct ScTransport<W: WebSocketPort> {
     npdu_admission_policy: ScNpduAdmissionPolicy,
     npdu_admission: Option<Arc<npdu_admission::ScNpduAdmission>>,
     restore_disconnect_task: Arc<StdMutex<Option<JoinHandle<()>>>>,
+    direct_membership: Arc<direct_membership::DirectMembership>,
     pub(super) direct: Option<Arc<direct_discovery::DirectShared<W>>>,
     #[cfg(test)]
     allow_test_heartbeat_timing: bool,
@@ -146,6 +141,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             npdu_admission_policy: ScNpduAdmissionPolicy::default(),
             npdu_admission: None,
             restore_disconnect_task: Arc::new(StdMutex::new(None)),
+            direct_membership: Arc::new(direct_membership::DirectMembership::default()),
             direct: None,
             #[cfg(test)]
             allow_test_heartbeat_timing: false,
@@ -229,14 +225,6 @@ impl<W: WebSocketPort> ScTransport<W> {
     pub fn with_reconnect(mut self, config: ScReconnectConfig) -> Self {
         self.reconnect_config = Some(config);
         self
-    }
-
-    /// Get the connection state (for testing/inspection).
-    ///
-    /// This exposes mutable connection fields, including identity. Startup
-    /// validation does not protect against later application mutation here.
-    pub fn connection(&self) -> Option<&Arc<Mutex<ScConnection>>> {
-        self.connection.as_ref()
     }
 
     /// Subscribe to BACnet/SC connection state changes.

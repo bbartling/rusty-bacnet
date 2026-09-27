@@ -19,14 +19,14 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
-struct TestCa {
+pub(crate) struct TestCa {
     params: rcgen::CertificateParams,
     key: rcgen::KeyPair,
     ca: CertificateDer<'static>,
 }
 
 impl TestCa {
-    fn generate() -> Self {
+    pub(crate) fn generate() -> Self {
         let mut params =
             rcgen::CertificateParams::new(Vec::<String>::new()).expect("empty SANs are valid");
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -51,7 +51,7 @@ impl TestCa {
         (chain, key)
     }
 
-    fn node_config(&self, sans: Vec<String>) -> ScNodeTlsConfig {
+    pub(crate) fn node_config(&self, sans: Vec<String>) -> ScNodeTlsConfig {
         let (chain, key) = self.issue(sans);
         ScNodeTlsConfig::from_der(
             vec![self.ca.clone()],
@@ -682,4 +682,13 @@ async fn accept_registration_rejects_identity_mismatch_before_binding() {
     assert!(
         matches!(result, Err(ref error) if error.to_string().contains("identity does not match"))
     );
+}
+
+#[path = "direct_membership_tests.rs"]
+mod direct_membership_tests;
+
+impl TestCa {
+    pub(crate) fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
+        self.node_config(vec!["localhost".into()]).acceptor()
+    }
 }

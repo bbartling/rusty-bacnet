@@ -147,7 +147,7 @@ async fn direct_handshake_valid_accept_enables_direct_send() {
         assert_direct_request(&req);
         peer.send(&direct_accept(
             req.message_id,
-            [0x33; 6],
+            TARGET,
             [0x44; 16],
             1476,
             1476,
@@ -245,15 +245,9 @@ async fn direct_handshake_zero_limits_falls_back_to_hub() {
         assert_direct_request(&req);
         // Zero Max-BVLC-Length is rejected by the shared validation.
         // Either a wait timeout or a dropped socket both mean no direct NPDU.
-        peer.send(&direct_accept(
-            req.message_id,
-            [0x33; 6],
-            [0x44; 16],
-            0,
-            1476,
-        ))
-        .await
-        .unwrap();
+        peer.send(&direct_accept(req.message_id, TARGET, [0x44; 16], 0, 1476))
+            .await
+            .unwrap();
         if let Ok(Ok(bytes)) = timeout(Duration::from_millis(300), peer.recv()).await {
             panic!("zero limits must not enable direct NPDU: {bytes:?}");
         }
@@ -299,5 +293,39 @@ async fn direct_handshake_timeout_falls_back_to_hub() {
     assert_eq!(hub_msg.function, ScFunction::EncapsulatedNpdu);
     assert_eq!(hub_msg.destination_vmac, Some(TARGET));
     assert_eq!(hub_msg.payload.as_ref(), NPDU);
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_handshake_wrong_peer_vmac_never_receives_destination_npdu() {
+    let (mut transport, hub, _, mut peers) = start_sender(800).await;
+    let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
+        let request = decode_sc_message(&hub_recv(&hub).await).unwrap();
+        hub.send(&ack_for(request.message_id, b"wss://peer.example/sc"))
+            .await
+            .unwrap();
+        let peer = timeout(Duration::from_secs(2), peers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
+        peer.send(&direct_accept(
+            request.message_id,
+            [0x33; 6],
+            [0x44; 16],
+            1476,
+            1476,
+        ))
+        .await
+        .unwrap();
+        assert!(timeout(Duration::from_secs(2), peer.recv())
+            .await
+            .unwrap()
+            .is_err());
+    });
+    send_res.unwrap();
+    let fallback = decode_sc_message(&hub_recv(&hub).await).unwrap();
+    assert_eq!(fallback.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(fallback.destination_vmac, Some(TARGET));
     transport.stop().await.unwrap();
 }
