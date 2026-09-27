@@ -5,7 +5,7 @@ Use it to build BACnet clients, model devices and serve their properties, or
 explore protocol behavior in a local lab. The project targets ASHRAE Standard
 135-2020 and tracks implementation evidence at the clause level.
 
-[![CI](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml/badge.svg)](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml)
+[GitLab CI (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/pipelines)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **[Documentation](https://jscott3201.github.io/rusty-bacnet/)** ·
@@ -326,8 +326,11 @@ flag list to the whole workspace.
 Annex J NAT traversal and IPv4 BACnet/IP multicast (B/IP-M) are **not claimed** by
 the current BACnet/IP transport. Loopback or protocol tests do not establish
 serial hardware timing, deployed-network behavior, or cross-OS support.
-Routine CI tests run on Linux; cross-OS and MSRV checks run on selected
-main/release paths, not every feature PR. See the [CI configuration](.github/workflows/ci.yml).
+The [GitLab CI configuration](.gitlab-ci.yml) runs Linux checks for merge requests
+to `dev`/`main` and pushes to `main`, with MSRV and dependency-policy checks on
+main-target paths. Conditional website validation is included. Cross-OS tests
+and release/publication workflows remain outside this GitLab pipeline; see the
+[CI migration scope](docs/gitlab-ci.md).
 
 ## BACnet/SC: current development checkout
 
@@ -483,9 +486,9 @@ non-published Rust `cdylib`, and integration tests are internal test infrastruct
   [support scope](https://jscott3201.github.io/rusty-bacnet/project/support/).
 - Checkout references: [Rust](docs/rust-api.md), [Python](docs/python-api.md),
   [CLI](docs/CLI.md), [architecture](docs/architecture.md), and [changelog](CHANGELOG.md).
-- [Issues](https://github.com/jscott3201/rusty-bacnet/issues) — include the package
+- [GitLab issues (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues) — include the package
   version/source revision, OS, transport, and a sanitized minimal reproduction.
-  Issues are public: do not post private keys, credentials, sensitive deployment
+  Do not post private keys, credentials, sensitive deployment
   details, or captures from real networks. Prefer synthetic/local-lab fixtures.
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — companion MCP gateway.
 - [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — companion test harness;
