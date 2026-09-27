@@ -123,6 +123,23 @@ impl ObjectDatabase {
             .map(|port| port.oid)
     }
 
+    /// Read or learn through the explicitly published receiving owner only.
+    /// Callers hold the database write lock, so RP/RPM observe coherent pairs.
+    #[doc(hidden)]
+    pub fn network_number_internal(
+        &mut self,
+        oid: ObjectIdentifier,
+        announcement: Option<(u16, u8)>,
+    ) -> Option<crate::network_port::NetworkNumber> {
+        if self.registered_bip_port_internal() != Some(oid) {
+            return None;
+        }
+        Some(
+            self.builtin_network_port_mut(&oid)?
+                .network_number_internal(announcement),
+        )
+    }
+
     pub(super) fn check_network_port_membership(
         &self,
         oid: &ObjectIdentifier,

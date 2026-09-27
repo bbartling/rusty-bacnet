@@ -3,6 +3,16 @@ use super::*;
 use std::sync::Arc;
 
 impl NetworkPortObject {
+    pub(crate) fn network_number_internal(
+        &mut self,
+        announcement: Option<(u16, u8)>,
+    ) -> NetworkNumber {
+        if let Some((number, flag)) = announcement {
+            self.network_number.observe(number, flag);
+        }
+        self.network_number
+    }
+
     /// Borrow the complete configured B/IP snapshot.
     pub(crate) fn configuration_internal(&self) -> Option<&BipPortConfig> {
         self.bip.as_ref()
@@ -15,6 +25,8 @@ impl NetworkPortObject {
                 "Network Port is unavailable for NORMAL B/IP registration".into(),
             ));
         }
+        self.network_number =
+            NetworkNumber::configured(self.bip.as_ref().expect("validated B/IP").network_number);
         self.binding = Arc::downgrade(lease);
         Ok(())
     }
@@ -44,7 +56,7 @@ impl NetworkPortObject {
         config.udp_port = udp;
         config.apdu_length = capacity;
         config.validate(self.oid.instance_number())?;
-        self.network_number = config.network_number;
+        self.network_number = NetworkNumber::configured(config.network_number);
         self.apdu_length = capacity;
         self.mac_address = MacAddr::from_slice(&ip);
         self.mac_address.extend_from_slice(&udp.to_be_bytes());

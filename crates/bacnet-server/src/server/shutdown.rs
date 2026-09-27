@@ -36,6 +36,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.broadcaster.seal();
         self.request_tasks.close();
+        stop_producer(&mut self.network_number_task).await;
         if let Some(runtime) = &self.target_audit {
             // Only the target drain retains ingress for ACK/control progress.
             self.notification_transactions
@@ -161,6 +162,7 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
         self.notification_transactions.close();
         for task in [
             &self.dispatch_task,
+            &self.network_number_task,
             &self.cov_purge_task,
             &self.fault_detection_task,
             &self.event_enrollment_task,

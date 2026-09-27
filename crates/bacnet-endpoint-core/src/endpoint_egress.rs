@@ -1,8 +1,13 @@
 //! Bounded endpoint send admission and explicit completion ownership.
 use super::*;
 
+pub(super) enum NetworkServicePayload {
+    Apdu(Vec<u8>),
+    LocalControl(Vec<u8>),
+}
+
 pub(super) struct NetworkServiceCommand {
-    pub(super) apdu: Vec<u8>,
+    pub(super) payload: NetworkServicePayload,
     pub(super) destination: EndpointApduDestination,
     pub(super) expecting_reply: bool,
     pub(super) priority: NetworkPriority,
@@ -158,7 +163,7 @@ impl EndpointEgress {
         }
         let (completion, result) = oneshot::channel();
         let command = NetworkServiceCommand {
-            apdu,
+            payload: NetworkServicePayload::Apdu(apdu),
             destination,
             expecting_reply,
             priority,
@@ -172,6 +177,45 @@ impl EndpointEgress {
             Err(mpsc::error::TrySendError::Closed(_)) => Err(EndpointEgressAdmissionError::Closed),
             Err(mpsc::error::TrySendError::Full(_)) => Err(EndpointEgressAdmissionError::QueueFull),
         }
+    }
+
+    /// Queue a local Network-Number-Is NPDU, with caller-owned cancellation.
+    /// Dropping the waiter retracts queued work; a started send may have hit wire.
+    #[doc(hidden)]
+    pub async fn send_network_number_is(&self, npdu: Vec<u8>) -> Result<(), Error> {
+        if npdu.len() != 6
+            || npdu[..3] != [1, 0x80, 0x13]
+            || npdu[5] > 1
+            || matches!(u16::from_be_bytes([npdu[3], npdu[4]]), 0 | 65535)
+        {
+            return Err(Error::Encoding(
+                "invalid local Network-Number-Is NPDU".into(),
+            ));
+        }
+        if !self.is_open() {
+            return Err(shutdown_error());
+        }
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .try_send(NetworkServiceCommand {
+                payload: NetworkServicePayload::LocalControl(npdu),
+                destination: EndpointApduDestination::LocalBroadcast,
+                expecting_reply: false,
+                priority: NetworkPriority::NORMAL,
+                data_attributes: Vec::new(),
+                completion,
+                deadline: None,
+                cancel_on_drop: true,
+            })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Closed(_) => {
+                    Error::from(EndpointEgressAdmissionError::Closed)
+                }
+                mpsc::error::TrySendError::Full(_) => {
+                    Error::from(EndpointEgressAdmissionError::QueueFull)
+                }
+            })?;
+        EndpointSend(result).complete().await.result
     }
 
     /// Wait for queue capacity without retaining an ordinary notification.

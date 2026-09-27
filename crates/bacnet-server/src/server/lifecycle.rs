@@ -23,15 +23,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             DeviceBindingTable::from_configured(configured_device_bindings, is_broadcast)?;
         let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
-        let transport_max = transport.max_apdu_length() as u32;
-        config.max_apdu_length = config.max_apdu_length.min(transport_max);
-        let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {
-            Error::Encoding(format!(
-                "invalid max_apdu_length {}; expected one of 50, 128, 206, 480, 1024, 1476",
-                config.max_apdu_length
-            ))
-        })?;
-        validate_max_apdu_length(max_apdu)?;
+        super::network_port::validate_apdu_capacity(&mut config, &transport)?;
         let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.vendor_id == 0 {
@@ -40,7 +32,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let (clock, monotonic_origin) = period::install_database_clocks(&mut db, clock_config);
 
-        let (network, mut apdu_rx, audit_routes) =
+        let (network, mut apdu_rx, audit_routes, network_controls) =
             super::network_port::start(&mut db, &config, transport, audit_routes).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
@@ -90,6 +82,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return Err(error);
             }
         };
+        let network_number_task = network_controls.map(|controls| {
+            super::network_port::spawn_number_worker(
+                &network,
+                &db,
+                config.registered_network_port,
+                controls,
+            )
+        });
         let network_dispatch = Arc::clone(&network);
         let db_dispatch = Arc::clone(&db);
         let cov_dispatch = Arc::clone(&cov_table);
@@ -797,6 +797,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             broadcaster,
             transport_cleanup: None,
             transport_cleanup_error: None,
+            network_number_task,
             db,
             cov_table,
             cov_counters,

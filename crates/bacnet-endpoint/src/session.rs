@@ -227,6 +227,7 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     client_handle: Option<ClientRoleHandle>,
     server_handle: Option<ServerRoleHandle>,
     dispatch_task: Option<JoinHandle<SessionExit>>,
+    network_number_task: Option<JoinHandle<()>>,
     cancel_tx: Option<oneshot::Sender<()>>,
     lifecycle: AtomicU8,
     role: SessionRole,
@@ -316,6 +317,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             client_handle: None,
             server_handle: None,
             dispatch_task: None,
+            network_number_task: None,
             cancel_tx: None,
             lifecycle: AtomicU8::new(Lifecycle::Ready as u8),
             role,
@@ -515,6 +517,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.lifecycle
             .store(Lifecycle::Stopping as u8, Ordering::Release);
         self.shared.token.shutdown();
+        if let Some(task) = self.network_number_task.as_mut() {
+            task.abort();
+            let _ = task.await;
+        }
+        self.network_number_task = None;
         if let Some(source) = &self.source_audit {
             source.close();
         }
@@ -717,6 +724,9 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         // Synchronous abort path: never orphan dispatch/ingress/role work.
         // `stop()` remains the graceful path; Drop only seals + aborts.
         self.shared.token.shutdown();
+        if let Some(task) = &self.network_number_task {
+            task.abort();
+        }
         if let Some(source) = self.source_audit.take() {
             source.close();
         }
@@ -924,3 +934,7 @@ mod registered_port_lifetime_tests;
 #[cfg(test)]
 #[path = "registered_port_wire_tests.rs"]
 mod registered_port_wire_tests;
+
+#[cfg(test)]
+#[path = "network_number_tests.rs"]
+mod network_number_tests;

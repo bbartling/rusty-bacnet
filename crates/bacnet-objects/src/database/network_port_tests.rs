@@ -173,3 +173,51 @@ fn registered_port_rejects_actual_identifier_different_from_selected_key() {
         .unwrap();
     assert!(db.remove(&oid(1)).unwrap().is_some());
 }
+
+#[test]
+fn network_number_new_reservation_resets_learned_state_from_configured_provenance() {
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        NetworkPortObject::new_bip(
+            2,
+            "selected",
+            BipPortConfig {
+                ip_address: [127, 0, 0, 1],
+                udp_port: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    let (_, lease) = db
+        .reserve_bip_port_internal(oid(2), [127, 0, 0, 1], 0)
+        .unwrap();
+    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 40000, 1476)
+        .unwrap();
+    assert_eq!(
+        db.network_number_internal(oid(2), Some((19, 1)))
+            .unwrap()
+            .snapshot(),
+        (19, 2)
+    );
+    assert_eq!(
+        db.configured_bip_port_internal(&oid(2))
+            .unwrap()
+            .network_number,
+        0
+    );
+    assert!(db.network_number_internal(oid(1), Some((99, 1))).is_none());
+    drop(lease);
+    assert!(db.network_number_internal(oid(2), Some((99, 1))).is_none());
+    let (_, lease) = db
+        .reserve_bip_port_internal(oid(2), [127, 0, 0, 1], 40000)
+        .unwrap();
+    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 40000, 1476)
+        .unwrap();
+    assert_eq!(
+        db.network_number_internal(oid(2), None).unwrap().snapshot(),
+        (0, 0)
+    );
+    drop(lease);
+}

@@ -87,6 +87,33 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 (None, None)
             };
 
+        self.network_number_task = receivers.network_controls.map(|mut controls| {
+            let egress = egress.clone();
+            let registration_lease = self.registered_port_lease.upgrade();
+            let mut owner = bacnet_server::network_number::NetworkNumberOwner::new(
+                self.registered_network_port.map(|oid| {
+                    (
+                        Arc::clone(
+                            self.database
+                                .as_ref()
+                                .expect("validated registered database"),
+                        ),
+                        oid,
+                    )
+                }),
+            );
+            tokio::spawn(async move {
+                let _registration_lease = registration_lease;
+                while let Some(control) = controls.recv().await {
+                    if let Some(npdu) = owner.handle(control).await {
+                        if let Err(error) = egress.send_network_number_is(npdu).await {
+                            tracing::debug!(%error, "Network-Number-Is broadcast failed");
+                        }
+                    }
+                }
+            })
+        });
+
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let dispatch = DispatchParts {
             inbound: receivers.inbound_requests,

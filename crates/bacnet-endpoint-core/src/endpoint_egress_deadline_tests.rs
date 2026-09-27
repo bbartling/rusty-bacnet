@@ -20,8 +20,10 @@ impl TransportPort for GateTransport {
         self.gate.acquire().await.unwrap().forget();
         Ok(())
     }
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        unreachable!()
+    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+        self.sent.send(npdu.to_vec()).await.unwrap();
+        self.gate.acquire().await.unwrap().forget();
+        Ok(())
     }
     fn local_mac(&self) -> &[u8] {
         &[1]
@@ -80,4 +82,74 @@ async fn endpoint_egress_discards_expired_and_canceled_commands_before_transport
     assert!(outcome.attempted);
     assert!(outcome.result.is_err());
     ingress.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn network_number_egress_cancellation_retracts_queued_and_in_progress_commands() {
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
+    let (_input, receiver) = mpsc::channel(8);
+    let (sent, mut emissions) = mpsc::channel(8);
+    let gate = Arc::new(Semaphore::new(0));
+    let mut ingress = EndpointIngress::new(
+        GateTransport {
+            receiver: Some(receiver),
+            sent,
+            gate: gate.clone(),
+        },
+        8,
+    );
+    let receivers = ingress.start().await.unwrap();
+    let enqueue = |mac| {
+        receivers
+            .egress
+            .admit_apdu(
+                vec![0x10, 8],
+                EndpointApduDestination::Direct {
+                    destination_mac: MacAddr::from_slice(&[mac]),
+                },
+                false,
+                NetworkPriority::NORMAL,
+                vec![],
+                None,
+            )
+            .unwrap()
+    };
+    let first = enqueue(2);
+    assert_eq!(emissions.recv().await.unwrap(), vec![2]);
+    let npdu = vec![1, 0x80, 0x13, 0, 17, 1];
+    let mut control = Box::pin(receivers.egress.send_network_number_is(npdu.clone()));
+    poll_fn(|cx| {
+        assert!(control.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(control); // closes completion while the command is queued behind first
+    let last = enqueue(3);
+    gate.add_permits(2);
+    assert!(first.complete().await.result.is_ok());
+    assert!(last.complete().await.result.is_ok());
+    assert_eq!(emissions.recv().await.unwrap(), vec![3]);
+    assert!(emissions.try_recv().is_err());
+    let mut control = Box::pin(receivers.egress.send_network_number_is(npdu.clone()));
+    tokio::select! { biased; result = &mut control => panic!("send unexpectedly completed: {result:?}"), sent = emissions.recv() => assert_eq!(sent.unwrap(), npdu) }
+    drop(control); // in-progress transport future is now canceled
+    let last = enqueue(4);
+    gate.add_permits(1);
+    assert!(timeout(Duration::from_secs(1), last.complete())
+        .await
+        .unwrap()
+        .result
+        .is_ok());
+    assert_eq!(emissions.recv().await.unwrap(), vec![4]);
+    assert!(emissions.try_recv().is_err());
+    assert!(receivers
+        .egress
+        .send_network_number_is(vec![1, 0, 0x10, 8])
+        .await
+        .is_err());
+    ingress.stop().await.unwrap();
+    assert!(receivers.egress.send_network_number_is(npdu).await.is_err());
 }

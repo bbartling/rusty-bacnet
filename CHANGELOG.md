@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- NORMAL B/IP full servers and endpoints now own local Network Number discovery/learning, using only explicit registration for configured provenance. Selected Number/Quality readback follows configured-source precedence; unregistered owners start unknown. Control workers preserve APDU/Audit progress and join shutdown with socket/registration ownership. Other links, BBMD/foreign mode and multiport routing remain separate (#875).
+
 - Explicit registered NORMAL B/IP Network Port selection now reconciles the chosen
   object/identity with its actual bind, protects it through admitted work and final
   cleanup, and resolves receiving-port wildcard RP/RPM with concrete Audit targets.
