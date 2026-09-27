@@ -326,11 +326,12 @@ flag list to the whole workspace.
 Annex J NAT traversal and IPv4 BACnet/IP multicast (B/IP-M) are **not claimed** by
 the current BACnet/IP transport. Loopback or protocol tests do not establish
 serial hardware timing, deployed-network behavior, or cross-OS support.
-The [GitLab CI configuration](.gitlab-ci.yml) runs Linux checks for merge requests
-to `dev`/`main` and pushes to `main`, with MSRV and dependency-policy checks on
-main-target paths. Conditional website validation is included. Cross-OS tests
-and release/publication workflows remain outside this GitLab pipeline; see the
-[CI migration scope](docs/gitlab-ci.md).
+The [GitLab CI configuration](.gitlab-ci.yml) runs the full-feature Linux tests
+for merge requests to `dev`/`main`. Formatting, Clippy, repository hygiene,
+applicable website checks, and main-target MSRV/dependency-policy checks require
+recorded local passing results before merge. See the
+[merge-evidence requirements and qualification scope](docs/gitlab-ci.md);
+cross-OS tests and release/publication workflows remain separate.
 
 ## BACnet/SC: current development checkout
 

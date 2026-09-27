@@ -9,6 +9,7 @@ Use local Codebase Memory as the first structural code-intelligence layer. The c
 - [GitLab](https://gitlab.com/justinscott-group/rusty-bacnet) is the primary repository for branches, merge requests, issues, and CI. `origin` points to `git@gitlab.com:justinscott-group/rusty-bacnet.git`; direct branch pushes go to GitLab.
 - [GitHub](https://github.com/jscott3201/rusty-bacnet) is the downstream push-mirror target, retained locally as `github`. Do not push branches directly to GitHub. The root owns Git/GitLab mutations and mirror coordination under the existing delivery and merge authority rules.
 - Verify GitLab source refs and GitHub mirrored refs separately after an authorized mirror update. Ref mirroring does not migrate issues, merge requests, pull requests, review discussions, or CI results; verify that metadata separately before relying on it. Historical GitHub issue and PR links remain evidence, not proof of corresponding GitLab state.
+- Hosted GitLab CI runs only the full-feature Linux tests on MRs targeting `dev`/`main`. Keep both targets protected against direct pushes. Before merge, require hosted Linux success for the exact reviewed head plus the applicable passing local checks and provenance in [the merge-evidence policy](docs/gitlab-ci.md). Reuse successful local evidence for unchanged inputs with an explicit revision/input comparison; do not treat a green hosted job as proof of local checks. Existing review and merge-authorization rules still apply.
 
 Default behavior:
 
