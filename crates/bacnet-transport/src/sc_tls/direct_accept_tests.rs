@@ -68,6 +68,9 @@ const DIAL_VMAC: [u8; 6] = [0x22; 6];
 const DIAL_UUID: [u8; 16] = [7; 16];
 const NPDU: &[u8] = &[0x01, 0x00, 0x30];
 
+#[path = "direct_principal_tests.rs"]
+mod direct_principal_tests;
+
 fn loopback_addr() -> SocketAddr {
     "127.0.0.1:0".parse().unwrap()
 }

@@ -94,10 +94,13 @@ async fn audit_reporter_query_dcc_duplicate_and_overload_are_silent() {
         let (reads, _) = add_log(&fixture, 1, "real").await;
         let req = request(encode(&query(None, 1)));
         let pending = if case == "duplicate" {
-            let ConfirmedRequestAdmission::New(pending) = fixture
-                .server
-                .confirmed_request_tracker
-                .begin(SOURCE, None, req.clone())
+            let ConfirmedRequestAdmission::New(pending) =
+                fixture.server.confirmed_request_tracker.begin(
+                    SOURCE,
+                    None,
+                    bacnet_transport::port::TransportProvenance::unverified(),
+                    req.clone(),
+                )
             else {
                 panic!("first admission")
             };

@@ -267,6 +267,7 @@ async fn pending_in_flight_duplicate_discards_without_replay() {
     let in_flight = match tracker.lso.begin(
         &source,
         None,
+        bacnet_transport::port::TransportProvenance::unverified(),
         bacnet_encoding::apdu::ConfirmedRequest {
             segmented: false,
             more_follows: false,

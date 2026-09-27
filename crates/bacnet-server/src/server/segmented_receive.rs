@@ -149,31 +149,47 @@ pub(super) fn segmented_request_admission_error(
 
 /// Fail-closed conflict for segmented request reassembly (RB-07).
 /// Returns the conflicting key when the same (peer, invoke) exists under a
-/// different provenance snapshot; the caller aborts that session rather than
-/// merging. Snapshots compare by value; the assertion expires with its
-/// session.
+/// different non-direct scope; the caller aborts that session rather than
+/// merging. Direct identities always own independent exact keys, including
+/// when a non-direct frame claims their address.
 pub(super) fn find_receive_provenance_conflict(
     receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
     key: &SegRecvKey,
 ) -> Option<SegRecvKey> {
+    if key.3.is_direct_peer() {
+        return None;
+    }
     receivers
         .keys()
         .find(|existing| {
-            existing.0 == key.0 && existing.1 == key.1 && existing.2 == key.2 && existing.3 != key.3
+            !existing.3.is_direct_peer()
+                && existing.0 == key.0
+                && existing.1 == key.1
+                && existing.2 == key.2
+                && existing.3 != key.3
         })
         .cloned()
 }
 
-/// Remove every reassembly session for this (peer, invoke), any provenance.
-/// Clause 5.4.5.2 AbortPDU_Received ends the session regardless of which
-/// trust context opened it (fail-closed).
+/// A direct Abort cancels only its exact principal/incarnation key. Legacy
+/// address-scoped cancellation may sweep non-direct contexts only. Whole-server
+/// shutdown and timeouts retain their independent global cleanup semantics.
 pub(super) fn remove_matching_reassemblies(
     receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
     key: &SegRecvKey,
 ) {
+    if key.3.is_direct_peer() {
+        receivers.remove(key);
+        return;
+    }
     let doomed: Vec<SegRecvKey> = receivers
         .keys()
-        .filter(|existing| existing.0 == key.0 && existing.1 == key.1 && existing.2 == key.2)
+        .filter(|existing| {
+            !existing.3.is_direct_peer()
+                && existing.0 == key.0
+                && existing.1 == key.1
+                && existing.2 == key.2
+        })
         .cloned()
         .collect();
     for doomed in doomed {

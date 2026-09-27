@@ -111,17 +111,20 @@
 //! # }
 //! ```
 //!
-//! # Trust: verified-origin getters (no new API)
+//! # Trust: verified-origin getters
 //!
 //! Provenance stays on [`bacnet_transport::port::TransportProvenance`];
 //! the endpoint preserves it structurally. Configured authorizers decide whether
 //! that provenance permits an operation. Read it with the existing getters:
 //!
 //! - `is_unverified()` — legacy origin, no assertion (B/IP, MS/TP, loopback).
-//! - `is_direct_peer()` — authenticated immediate SC-TLS peer.
+//! - `is_direct_peer()` — accepted direct SC-TLS ingress.
+//! - `direct_sc_identity()` — its sealed verified leaf/incarnation snapshot;
+//!   claimed VMAC and routed addresses remain separate claims.
+//! - `is_hub_channel()` — scope-only channel used by Hub admission callbacks.
 //! - `is_relayed_origin()` — hub-validated relayed origin (post
 //!   source-admission; the hub peer is never substituted for the leaf).
-//! - `is_verified()` — either verified variant.
+//! - `is_verified()` — any verified scope; it need not carry a direct identity.
 //!
 //! Only trusted SC validation code constructs verified values; every other
 //! transport (including caller-supplied doubles) reports unverified.

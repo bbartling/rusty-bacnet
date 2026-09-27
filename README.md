@@ -380,6 +380,14 @@ established accepted peers separately from pending handshakes and physical
 sockets. See [direct peer limits and migration](docs/rust-api.md#direct-peer-membership-and-limits)
 and the [scoped evidence](docs/conformance/standard-135-2020-ledger.md#direct-peer-membership).
 
+Current source also carries the verified accepted-direct TLS leaf fingerprint
+and connection incarnation into native server authorization and receive
+reassembly. Queued work retains its admitting identity across replacement;
+different incarnations cannot share duplicate/replay or partial request state.
+See the [Rust identity API and limits](docs/rust-api.md#accepted-direct-tls-identity).
+These APIs postdate published 0.11.0; response socket affinity and Hub-relayed
+end-to-end identity remain separate.
+
 CA membership alone is not BACnet-operation authorization and does not bind a
 certificate to a VMAC or Device UUID. These checks are not a claim of the entire
 Annex AB security profile or qualification of your credential provisioning.

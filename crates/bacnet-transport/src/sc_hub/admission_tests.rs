@@ -154,7 +154,9 @@ async fn allow_policy_registers_with_claimed_values_and_reports_input() {
         (1200, 480)
     );
     assert!(seen[0].tls_client_verified);
-    assert!(seen[0].provenance.is_direct_peer());
+    assert!(seen[0].provenance.is_hub_channel());
+    assert!(!seen[0].provenance.is_direct_peer());
+    assert!(seen[0].provenance.direct_sc_identity().is_none());
     peer.close().await;
     assert!(clients.lock().await.is_empty());
 }

@@ -25,8 +25,12 @@ Each decision receives a `mutation::MutationAuthorizationContext`:
 - `trust` — `mutation::MutationTrust` derived from the snapshot, mirroring
   RB-09 `ControlTrust`: `Unverified`, `VerifiedChannel` (direct SC-TLS peer),
   or `VerifiedRelay` (SC-hub relayed origin). Channel/relay scope only, never
-  leaf identity: a verified ingress asserts the channel/relay validation, not
+  leaf identity: a verified scope asserts the channel/relay validation, not
   that a claimed SNET/SADR leaf is the authenticated peer.
+- `direct_sc_identity()` — the sealed accepted-direct TLS leaf-DER SHA-256 and
+  process-lifetime connection incarnation, when present. Same-leaf reconnects
+  get new incarnations; queued complete work retains its original snapshot
+  after replacement. Hub-relayed and unverified ingress have no direct identity.
 - `invoke_id`, `service_choice`, `target` — the confirmed identity and the
   decoded mutation (current element for WPM).
 
@@ -36,8 +40,8 @@ values, file payloads, or other decoded inputs.
 
 ## Baseline-only profile
 
-There is no verified-leaf authentication beyond the baseline (that is the
-approved-relay follow-up; Refs #524 stays open):
+Direct TLS identity is separate from claimed addresses and authorization.
+Hub-relayed end-to-end identity and response confinement (#524) remain separate:
 
 - An unknown origin — including a hub-mediated unknown leaf, which arrives
   `Unverified` — never satisfies a baseline-only allow rule. The gate delivers
@@ -45,9 +49,10 @@ approved-relay follow-up; Refs #524 stays open):
 - Receive-permission is not write-permission: allowing one covered service
   (for example a COV subscription) never implies allowing another (for
   example a property write). Each covered decision needs its own allow.
-- No cert-bound leaf identity exists at this layer: the SC VMAC is
-  payload-claimed inside the TLS channel, not bound to the operational
-  certificate.
+- The SC VMAC is payload-claimed inside the TLS channel, not bound to the
+  operational certificate. The direct leaf fingerprint does not establish a
+  certificate-to-VMAC/UUID/SNET/SADR mapping. See the
+  [identity API and limits](rust-api.md#accepted-direct-tls-identity).
 
 ## Timing and side effects
 

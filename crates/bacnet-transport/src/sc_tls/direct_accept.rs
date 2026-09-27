@@ -439,6 +439,19 @@ async fn accept_loop(
     peers.shutdown().await;
 }
 
+// The chain comes only from rustls after a successful verifying handshake.
+fn verified_leaf_sha256(
+    chain: Option<&[rustls::pki_types::CertificateDer<'_>]>,
+) -> Option<[u8; 32]> {
+    let leaf = chain?.first()?;
+    Some(
+        aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, leaf.as_ref())
+            .as_ref()
+            .try_into()
+            .expect("SHA-256 output length"),
+    )
+}
+
 async fn serve_connection(
     tcp: tokio::net::TcpStream,
     peer_addr: SocketAddr,
@@ -461,6 +474,10 @@ async fn serve_connection(
                 return;
             }
         };
+    let Some(leaf_sha256) = verified_leaf_sha256(tls_stream.get_ref().1.peer_certificates()) else {
+        warn!("direct TLS peer has no verified leaf certificate");
+        return;
+    };
     let ws_stream = match tokio::time::timeout(
         config.connect_timeout,
         tokio_tungstenite::accept_hdr_async_with_config(
@@ -496,8 +513,11 @@ async fn serve_connection(
         &mut write,
         &mut read,
         &config,
-        peer_addr,
-        &member,
+        AdmittedDirectPeer {
+            address: peer_addr,
+            member: &member,
+            identity: crate::port::DirectScIdentity::verified(leaf_sha256, member.generation),
+        },
         &npdu_tx,
         &npdu_admission,
     )
@@ -626,17 +646,28 @@ fn admission_nak(message_id: u16, refusal: Refusal) -> ScMessage {
     }
 }
 
+/// Immutable context for this task, never looked up again by claimed VMAC.
+struct AdmittedDirectPeer<'a> {
+    address: SocketAddr,
+    member: &'a Membership,
+    identity: crate::port::DirectScIdentity,
+}
+
 async fn serve_npdu_loop<W>(
     write: &mut W,
     read: &mut W::Read,
     config: &DirectAcceptConfig,
-    peer_addr: SocketAddr,
-    member: &Membership,
+    peer: AdmittedDirectPeer<'_>,
     npdu_tx: &mpsc::Sender<ReceivedNpdu>,
     npdu_admission: &Arc<ScNpduAdmission>,
 ) where
     W: DirectWs,
 {
+    let AdmittedDirectPeer {
+        address: peer_addr,
+        member,
+        identity,
+    } = peer;
     let mut retired = member.retirement();
     loop {
         let next = tokio::select! {
@@ -706,6 +737,7 @@ async fn serve_npdu_loop<W>(
                             npdu,
                             member.vmac,
                             peer_addr,
+                            identity,
                         )
                     });
                 }
