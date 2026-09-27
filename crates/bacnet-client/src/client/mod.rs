@@ -308,6 +308,8 @@ impl BipClientBuilder {
 /// Default concurrency limit for multi-device batch operations.
 const DEFAULT_BATCH_CONCURRENCY: usize = 32;
 
+mod batch_debug;
+
 /// A request to read a single property from a discovered device.
 #[derive(Debug, Clone)]
 pub struct DeviceReadRequest {
@@ -322,8 +324,9 @@ pub struct DeviceReadRequest {
 }
 
 /// Result of a single-property read from a device within a batch.
-#[derive(Debug)]
 pub struct DeviceReadResult {
+    /// Zero-based position of this occurrence in the original request vector.
+    pub request_index: usize,
     /// The device instance this result corresponds to.
     pub device_instance: u32,
     /// The read result (Ok = decoded ACK, Err = protocol/timeout error).
@@ -340,8 +343,9 @@ pub struct DeviceRpmRequest {
 }
 
 /// Result of an RPM to a single device within a batch.
-#[derive(Debug)]
 pub struct DeviceRpmResult {
+    /// Zero-based position of this occurrence in the original request vector.
+    pub request_index: usize,
     /// The device instance this result corresponds to.
     pub device_instance: u32,
     /// The RPM result.
@@ -349,7 +353,7 @@ pub struct DeviceRpmResult {
 }
 
 /// A request to write a single property on a discovered device.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeviceWriteRequest {
     /// Device instance number (must be in the device table).
     pub device_instance: u32,
@@ -368,6 +372,8 @@ pub struct DeviceWriteRequest {
 /// Result of a single-property write to a device within a batch.
 #[derive(Debug)]
 pub struct DeviceWriteResult {
+    /// Zero-based position of this occurrence in the original request vector.
+    pub request_index: usize,
     /// The device instance this result corresponds to.
     pub device_instance: u32,
     /// The write result (Ok = success, Err = protocol/timeout error).

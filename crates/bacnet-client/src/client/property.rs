@@ -168,7 +168,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// All reads are dispatched concurrently (up to `max_concurrent`,
     /// default 32). The nonzero limit prevents a stalled batch. Results are
-    /// returned in completion order; dropping the future cancels pending requests.
+    /// returned in completion order; `request_index` identifies the original input
+    /// occurrence, including duplicates. Dropping the future cancels pending requests
+    /// and returns no partial vector.
     pub async fn read_property_from_devices(
         &self,
         requests: Vec<DeviceReadRequest>,
@@ -178,8 +180,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
-        stream::iter(requests)
-            .map(|req| async move {
+        stream::iter(requests.into_iter().enumerate())
+            .map(|(request_index, req)| async move {
                 let result = self
                     .read_property_from_device(
                         req.device_instance,
@@ -189,6 +191,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 DeviceReadResult {
+                    request_index,
                     device_instance: req.device_instance,
                     result,
                 }
@@ -203,8 +206,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Sends an RPM to each device concurrently. This is the most efficient
     /// way to poll many properties across many devices — RPM batches within
     /// a single device, and this method batches across devices. A nonzero limit
-    /// bounds concurrency (None uses 32). Results use completion order; dropping
-    /// the future cancels pending requests.
+    /// bounds concurrency (None uses 32). Results use completion order and carry the
+    /// original input occurrence in `request_index`. Dropping the future cancels
+    /// pending requests and returns no partial vector.
     pub async fn read_property_multiple_from_devices(
         &self,
         requests: Vec<DeviceRpmRequest>,
@@ -214,12 +218,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
-        stream::iter(requests)
-            .map(|req| async move {
+        stream::iter(requests.into_iter().enumerate())
+            .map(|(request_index, req)| async move {
                 let result = self
                     .read_property_multiple_from_device(req.device_instance, req.specs)
                     .await;
                 DeviceRpmResult {
+                    request_index,
                     device_instance: req.device_instance,
                     result,
                 }
@@ -373,7 +378,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// All writes are dispatched concurrently (up to `max_concurrent`,
     /// default 32). The nonzero limit prevents a stalled batch. Results are
-    /// returned in completion order; dropping the future cancels pending requests.
+    /// returned in completion order; `request_index` identifies the original input
+    /// occurrence, including duplicates. Dropping the future cancels pending requests
+    /// and returns no partial vector.
     pub async fn write_property_to_devices(
         &self,
         requests: Vec<DeviceWriteRequest>,
@@ -383,8 +390,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
-        stream::iter(requests)
-            .map(|req| async move {
+        stream::iter(requests.into_iter().enumerate())
+            .map(|(request_index, req)| async move {
                 let result = self
                     .write_property_to_device(
                         req.device_instance,
@@ -396,6 +403,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 DeviceWriteResult {
+                    request_index,
                     device_instance: req.device_instance,
                     result,
                 }

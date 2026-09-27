@@ -2542,5 +2542,16 @@ the narrower role, route and service boundaries described above.
 write_property_to_devices}` take `Option<std::num::NonZeroUsize>` for their
 concurrency limit. `None` uses 32; `Some(NonZeroUsize::new(1).unwrap())` serializes
 the requests. Zero is unrepresentable at this boundary. All three retain their
-`Vec` results in completion order, complete empty batches, and cancel pending
-requests when the batch future is dropped.
+`Vec` results in completion order and complete empty batches. Each
+`DeviceReadResult`, `DeviceRpmResult` and `DeviceWriteResult` now includes
+`request_index: usize`, the zero-based occurrence in the original input vector,
+including duplicate identical requests to one Device. The existing `device_instance`
+and typed `Result` outcomes remain; requests are consumed without cloning a full
+request or encoded write value into the result. Use the index to correlate with
+caller-owned input metadata. This is a pre-1.0 result-shape change without aliases.
+
+Dropping the batch future cancels pending requests and stops queued work without
+returning a partial vector; already-sent remote writes cannot be retracted.
+`DeviceWriteRequest` Debug shows the encoded value length instead of its bytes;
+RP/RPM result Debug omits successful ACK payloads. Values remain accessible through
+the public outcomes, and other error/debug formatting is not a secrecy boundary.

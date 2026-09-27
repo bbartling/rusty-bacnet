@@ -227,8 +227,11 @@ impl BACnetClient {
     ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
     ///         ValueError synchronously; integers outside usize raise OverflowError.
     ///
-    /// Returns: List of dicts with 'device_instance', 'value' (PropertyValue or None),
-    ///          'error' (str or None)
+    /// Returns: An asyncio Future yielding a list of dicts with 'request_index' (original zero-based occurrence),
+    ///          'device_instance', 'value' (PropertyValue or None),
+    ///          'error' (BacnetError instance or None). Results use completion order.
+    /// Python result-construction failures raise from the whole call; cancellation
+    /// returns no partial result list.
     #[pyo3(signature = (requests, max_concurrent=None))]
     fn read_property_from_devices<'py>(
         &self,
@@ -262,32 +265,31 @@ impl BACnetClient {
                 .await;
 
             Python::attach(|py| {
-                let py_results: Vec<_> = results
+                results
                     .into_iter()
                     .map(|r| {
                         let dict = PyDict::new(py);
-                        dict.set_item("device_instance", r.device_instance).unwrap();
+                        dict.set_item("request_index", r.request_index)?;
+                        dict.set_item("device_instance", r.device_instance)?;
                         match r.result {
                             Ok(ack) => match decode_application_value(&ack.property_value, 0) {
                                 Ok((value, _)) => {
-                                    dict.set_item("value", PyPropertyValue::from_rust(value))
-                                        .unwrap();
-                                    dict.set_item("error", py.None()).unwrap();
+                                    dict.set_item("value", PyPropertyValue::from_rust(value))?;
+                                    dict.set_item("error", py.None())?;
                                 }
                                 Err(e) => {
-                                    dict.set_item("value", py.None()).unwrap();
-                                    dict.set_item("error", e.to_string()).unwrap();
+                                    dict.set_item("value", py.None())?;
+                                    dict.set_item("error", to_py_err(e).value(py))?;
                                 }
                             },
                             Err(e) => {
-                                dict.set_item("value", py.None()).unwrap();
-                                dict.set_item("error", e.to_string()).unwrap();
+                                dict.set_item("value", py.None())?;
+                                dict.set_item("error", to_py_err(e).value(py))?;
                             }
                         }
-                        dict.into_any().unbind()
+                        Ok(dict.into_any().unbind())
                     })
-                    .collect();
-                Ok(py_results)
+                    .collect::<PyResult<Vec<_>>>()
             })
         })
     }
@@ -299,7 +301,10 @@ impl BACnetClient {
     ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
     ///         ValueError synchronously; integers outside usize raise OverflowError.
     ///
-    /// Returns: List of dicts with 'device_instance', 'results' (list or None), 'error' (str or None)
+    /// Returns: An asyncio Future yielding a list of dicts with 'request_index' (original zero-based occurrence),
+    ///          'device_instance', 'results' (list or None), 'error' (BacnetError instance or None). Results use completion order.
+    /// Python result-construction failures raise from the whole call; cancellation
+    /// returns no partial result list.
     #[pyo3(signature = (requests, max_concurrent=None))]
     #[allow(clippy::type_complexity)]
     fn read_property_multiple_from_devices<'py>(
@@ -352,31 +357,27 @@ impl BACnetClient {
                 .await;
 
             Python::attach(|py| {
-                let py_results: Vec<_> = results
+                results
                     .into_iter()
                     .map(|r| {
                         let dict = PyDict::new(py);
-                        dict.set_item("device_instance", r.device_instance).unwrap();
+                        dict.set_item("request_index", r.request_index)?;
+                        dict.set_item("device_instance", r.device_instance)?;
                         match r.result {
-                            Ok(ack) => match rpm_ack_to_py(py, ack) {
-                                Ok(rpm_result) => {
-                                    dict.set_item("results", rpm_result).unwrap();
-                                    dict.set_item("error", py.None()).unwrap();
-                                }
-                                Err(e) => {
-                                    dict.set_item("results", py.None()).unwrap();
-                                    dict.set_item("error", e.to_string()).unwrap();
-                                }
-                            },
+                            Ok(ack) => {
+                                // Python construction failures remain call-level exceptions;
+                                // nested BACnet property errors/raw bytes remain RPM data.
+                                dict.set_item("results", rpm_ack_to_py(py, ack)?)?;
+                                dict.set_item("error", py.None())?;
+                            }
                             Err(e) => {
-                                dict.set_item("results", py.None()).unwrap();
-                                dict.set_item("error", e.to_string()).unwrap();
+                                dict.set_item("results", py.None())?;
+                                dict.set_item("error", to_py_err(e).value(py))?;
                             }
                         }
-                        dict.into_any().unbind()
+                        Ok(dict.into_any().unbind())
                     })
-                    .collect();
-                Ok(py_results)
+                    .collect::<PyResult<Vec<_>>>()
             })
         })
     }
@@ -390,7 +391,10 @@ impl BACnetClient {
     ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
     ///         ValueError synchronously; integers outside usize raise OverflowError.
     ///
-    /// Returns: List of dicts with 'device_instance', 'error' (str or None)
+    /// Returns: An asyncio Future yielding a list of dicts with 'request_index' (original zero-based occurrence),
+    ///          'device_instance', 'error' (BacnetError instance or None). Results use completion order.
+    /// Python result-construction failures raise from the whole call; cancellation
+    /// returns no partial result list.
     #[pyo3(signature = (requests, max_concurrent=None))]
     #[allow(clippy::type_complexity)]
     fn write_property_to_devices<'py>(
@@ -440,23 +444,23 @@ impl BACnetClient {
                 .await;
 
             Python::attach(|py| {
-                let py_results: Vec<_> = results
+                results
                     .into_iter()
                     .map(|r| {
                         let dict = PyDict::new(py);
-                        dict.set_item("device_instance", r.device_instance).unwrap();
+                        dict.set_item("request_index", r.request_index)?;
+                        dict.set_item("device_instance", r.device_instance)?;
                         match r.result {
                             Ok(()) => {
-                                dict.set_item("error", py.None()).unwrap();
+                                dict.set_item("error", py.None())?;
                             }
                             Err(e) => {
-                                dict.set_item("error", e.to_string()).unwrap();
+                                dict.set_item("error", to_py_err(e).value(py))?;
                             }
                         }
-                        dict.into_any().unbind()
+                        Ok(dict.into_any().unbind())
                     })
-                    .collect();
-                Ok(py_results)
+                    .collect::<PyResult<Vec<_>>>()
             })
         })
     }

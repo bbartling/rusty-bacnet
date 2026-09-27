@@ -68,6 +68,7 @@ class WritePriorityTests(unittest.IsolatedAsyncioTestCase):
                     await client.write_property_to_device(9123, OID, PID, PropertyValue.null(), priority=priority)
                     result = await client.write_property_to_devices([(9123, OID, PID, PropertyValue.null(), priority, None)])
                     self.assertIsNone(result[0]["error"])
+                    self.assertEqual(result[0]["request_index"], 0)
                     self.assertEqual(await client.read_property(address, OID, PID), VALUE)
         finally:
             await server.stop()
