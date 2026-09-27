@@ -351,6 +351,7 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                 expected.target_value = Some(value);
                 expected.current_value = match (&selection, index) {
                     (Some(values), Some(0)) => Some(vec![0x21, values.len() as u8]),
+                    (Some(values), None) if values.is_empty() => Some(vec![]),
                     (Some(values), None | Some(1)) if !values.is_empty() => Some(vec![0x00]),
                     _ => None,
                 };

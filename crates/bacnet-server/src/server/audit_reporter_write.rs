@@ -128,8 +128,7 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                     property_array_index: write.array_index.map(u64::from),
                 }),
                 target_priority: command_priority,
-                target_value: (!write.value.is_empty() && write.value.len() <= 32)
-                    .then(|| write.value.to_vec()),
+                target_value: (write.value.len() <= 32).then(|| write.value.to_vec()),
                 current_value,
                 result: None,
             },

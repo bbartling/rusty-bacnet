@@ -467,8 +467,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                     property_array_index: request.property_array_index.map(u64::from),
                 }),
                 target_priority: None,
-                target_value: (!request.list_of_elements.is_empty()
-                    && request.list_of_elements.len() <= 32
+                target_value: (request.list_of_elements.len() <= 32
                     && bacnet_encoding::constructed::validate_tlv_sequence(
                         &request.list_of_elements,
                         "list delta",
@@ -731,7 +730,7 @@ pub(super) fn small_value(value: &PropertyValue) -> Option<Vec<u8>> {
     }
     let mut bytes = BytesMut::new();
     append(value, &mut bytes, &mut 64)?;
-    (!bytes.is_empty()).then(|| bytes.to_vec())
+    Some(bytes.to_vec())
 }
 
 #[path = "audit_reporter_failure.rs"]

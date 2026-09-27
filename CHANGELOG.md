@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Preserve present empty Audit Target_Value and Current_Value fields (#853),
+  including target Recipient_List writes and list-operation observations.
+  Rust `Some(empty)` and Python `b""` remain distinct from absent values and
+  encoded NULL; Reporter inclusion retains complete values through 32 octets.
+
 - Correct the remaining 104 Python native Future-returning declarations to
   ordinary `def -> Awaitable[T]` (#858), preserving arguments and awaited values.
   Type checkers now reject coroutine-only consumers such as `create_task` for
