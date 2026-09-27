@@ -44,9 +44,9 @@ class AdmissionSignatureTests(unittest.TestCase):
             self.assertEqual(ast.literal_eval(default), value)
         fields = {n.target.id for n in classes["RequestAdmissionCounters"].body if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
         self.assertEqual(fields, FIELDS)
-        method = next(n for n in server.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "request_admission_counters")
+        method = next(n for n in server.body if isinstance(n, ast.FunctionDef) and n.name == "request_admission_counters")
         assert method.returns is not None
-        self.assertEqual(ast.unparse(method.returns), "RequestAdmissionCounters")
+        self.assertEqual(ast.unparse(method.returns), "Awaitable[RequestAdmissionCounters]")
 
     def test_invalid_limits_rejected_at_constructor_for_all_transports(self):
         for transport in ["bip", "ipv6", "sc", "mstp"]:

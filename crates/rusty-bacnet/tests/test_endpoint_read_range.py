@@ -80,8 +80,8 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
         tree = ast.parse(stub)
         for name in ("EndpointClient", "BACnetClient"):
             cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
-            method = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "read_range")
-            self.assertEqual(ast.unparse(method.returns), "ReadRangeResult")
+            method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "read_range")
+            self.assertEqual(ast.unparse(method.returns), "Awaitable[ReadRangeResult]")
         shape = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ReadRangeResult")
         annotations = {n.target.id: ast.unparse(n.annotation) for n in shape.body if isinstance(n, ast.AnnAssign)}
         self.assertEqual(annotations["result_flags"], "tuple[bool, bool, bool]")

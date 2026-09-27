@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Correct the remaining 104 Python native Future-returning declarations to
+  ordinary `def -> Awaitable[T]` (#858), preserving arguments and awaited values.
+  Type checkers now reject coroutine-only consumers such as `create_task` for
+  these calls while retaining `await`, `ensure_future`, async context managers
+  and COV iteration. The three batch result contracts remain unchanged; native
+  execution, eager validation, cancellation and cleanup behavior are unchanged.
+
 - Make RP/RPM/WP batch outcomes attributable to duplicate input occurrences
   with zero-based `request_index` while retaining completion order (#788).
   Python item errors are existing typed `BacnetError` instances, replacing strings;

@@ -96,7 +96,7 @@ class EndpointStubParityTests(unittest.TestCase):
     def test_role_and_owner_methods_match_stub(self):
         tree = installed_stub()
         classes = stub_classes(tree)
-        # Async owner methods.
+        # Native Future-returning owner methods.
         for cls, methods in (
             (BipEndpoint, ["start", "close", "client", "server", "local_address",
                            "status", "broadcast_i_am"]),
@@ -108,14 +108,10 @@ class EndpointStubParityTests(unittest.TestCase):
             for name in methods:
                 with self.subTest(cls=cls.__name__, method=name):
                     self.assertTrue(callable(getattr(cls, name)))
-                    stub_method(classes[cls.__name__], name)
-                    self.assertTrue(
-                        isinstance(
-                            stub_method(classes[cls.__name__], name),
-                            ast.AsyncFunctionDef,
-                        ),
-                        f"{cls.__name__}.{name} must be async in stub",
-                    )
+                    method = stub_method(classes[cls.__name__], name)
+                    self.assertIsInstance(method, ast.FunctionDef)
+                    self.assertIsInstance(method.returns, ast.Subscript)
+                    self.assertEqual(ast.unparse(method.returns.value), "Awaitable")
         # Sync pending seam.
         for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
             for name in (

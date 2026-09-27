@@ -76,7 +76,7 @@ class HubIdentityTests(unittest.TestCase):
         self.assertIsNone(params["device_uuid"].default)
         self.assertEqual(params["admission_policy"].default, "allow_all")
         # Lifecycle methods exist in both the stub and the runtime.
-        # (async def parses as AsyncFunctionDef, not FunctionDef.)
+        # The shared Future contract test checks their Awaitable semantics.
         funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
         stub_methods = {node.name for node in cls.body if isinstance(node, funcs)}
         for name in ("start", "stop", "shutdown_gracefully", "status",
