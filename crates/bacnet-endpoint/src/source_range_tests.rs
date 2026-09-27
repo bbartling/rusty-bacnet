@@ -324,7 +324,11 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
         .is_err());
     assert_eq!(session.active_leases(), 0);
     assert_eq!(
-        session.source_read.as_ref().unwrap().available_operations(),
+        session
+            .source_audit
+            .as_ref()
+            .unwrap()
+            .available_operations(),
         64
     );
     assert!(requests.try_recv().is_err());

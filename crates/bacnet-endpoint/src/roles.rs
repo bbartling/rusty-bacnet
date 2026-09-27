@@ -1,6 +1,6 @@
 //! Session-bound role handles above the sibling client/server roles.
 //!
-//! [`ClientRoleHandle`] exposes unsegmented ReadProperty and ReadRange initiation;
+//! [`ClientRoleHandle`] exposes unsegmented reads and direct B/IP WriteProperty initiation;
 //! [`ServerRoleHandle`] exposes inbound handling, session liveness, the
 //! one-shot deferred-reply arm, and notification admit-complete. Neither
 //! handle exposes lifecycle: `start`/`stop` exist only on
@@ -99,7 +99,17 @@ impl SessionToken {
     }
 }
 
-/// Client role: ReadProperty and ReadRange over shared egress/coordinator.
+/// Caller assertion about the remote target property's command semantics.
+/// No local object lookup, priority argument, or remote discovery supplies this fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Commandability {
+    /// The property accepts prioritized commands; omitted priority is effective 16.
+    Commandable,
+    /// The property is not commandable; Audit ignores any supplied wire priority.
+    Noncommandable,
+}
+
+/// Client role: reads and direct B/IP WriteProperty over shared egress/coordinator.
 ///
 /// Borrowed from a running [`EndpointSession`](crate::session::EndpointSession)
 /// via `client()` / `cloned_client_handle()`. No lifecycle methods: after the
@@ -108,8 +118,8 @@ impl SessionToken {
 /// shutdown"`). `Send + Sync`, so clones may outlive the session borrow and
 /// move across tasks.
 ///
-/// Service scope is deliberately narrow: unsegmented ReadProperty and ReadRange.
-/// Explicit destinations preserve data attributes and ingress provenance. When source READ
+/// Service scope is unsegmented RP/RR/RPM and direct B/IP WriteProperty.
+/// Explicit destinations preserve data attributes and ingress provenance. When source Audit
 /// reporting is selected, only direct B/IP IPv4 unicast targets are admitted.
 /// Audited calls are session-owned before egress: dropping their caller does not
 /// cancel an admitted request or its terminal observation. Other calls retain
@@ -118,7 +128,8 @@ impl SessionToken {
 pub struct ClientRoleHandle {
     token: Weak<SessionToken>,
     requester: EndpointRequester,
-    source_read: Option<Weak<crate::source_read::SourceRead>>,
+    bip_broadcast: Option<std::net::Ipv4Addr>,
+    source_audit: Option<Weak<crate::source_audit::SourceAudit>>,
 }
 
 impl ClientRoleHandle {
@@ -127,12 +138,93 @@ impl ClientRoleHandle {
         Self {
             token: Arc::downgrade(token),
             requester,
-            source_read: None,
+            bip_broadcast: None,
+            source_audit: None,
         }
     }
 
-    pub(crate) fn with_source_read(mut self, source: &Arc<crate::source_read::SourceRead>) -> Self {
-        self.source_read = Some(Arc::downgrade(source));
+    pub(crate) fn with_bip_broadcast(mut self, broadcast: Option<std::net::Ipv4Addr>) -> Self {
+        self.bip_broadcast = broadcast;
+        self
+    }
+
+    /// Binding preflight for encoded WriteProperty input, without a lease or traffic.
+    #[doc(hidden)]
+    pub fn validate_write_property(
+        &self,
+        request: &bacnet_services::write_property::WritePropertyRequest,
+    ) -> Result<(), Error> {
+        self.requester
+            .validate_operation(&bacnet_client::EndpointOperationRequest::Write(
+                request.clone(),
+            ))
+    }
+
+    /// Write one property to a direct B/IP IPv4 unicast peer through the shared requester.
+    ///
+    /// `commandability` is required even without a source Reporter. It controls Audit
+    /// filtering only: the supplied wire priority and complete encoded value are preserved.
+    /// Empty lists are allowed; malformed TLVs and oversized unsegmented requests fail
+    /// before traffic. An eligible admitted write remains session-owned after caller
+    /// cancellation. Retries share one Invoke ID and produce at most one source record.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn write_property(
+        &self,
+        destination_mac: &[u8],
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+        property_value: Vec<u8>,
+        priority: Option<u8>,
+        commandability: Commandability,
+    ) -> Result<(), Error> {
+        self.check_open()?;
+        let broadcast = self
+            .bip_broadcast
+            .ok_or_else(|| Error::Encoding("endpoint WriteProperty requires IPv4 B/IP".into()))?;
+        let (ip, port) = bacnet_transport::bvll::decode_bip_mac(destination_mac)?;
+        let ip = std::net::Ipv4Addr::from(ip);
+        if ip.is_unspecified()
+            || ip.is_multicast()
+            || ip.is_broadcast()
+            || ip == broadcast
+            || port == 0
+        {
+            return Err(Error::Encoding(
+                "endpoint WriteProperty requires direct B/IP IPv4 unicast".into(),
+            ));
+        }
+        let destination = EndpointApduDestination::Direct {
+            destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+        };
+        let request = bacnet_services::write_property::WritePropertyRequest {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+            property_value,
+            priority,
+        };
+        if let Some(source) = &self.source_audit {
+            source
+                .upgrade()
+                .ok_or_else(shutdown_error)?
+                .write(&self.requester, destination, request, commandability)
+                .await
+        } else {
+            self.requester
+                .prepare_write(destination, Vec::new(), request)?
+                .execute()
+                .await
+                .result?
+                .into_write()
+        }
+    }
+
+    pub(crate) fn with_source_audit(
+        mut self,
+        source: &Arc<crate::source_audit::SourceAudit>,
+    ) -> Self {
+        self.source_audit = Some(Arc::downgrade(source));
         self
     }
 
@@ -220,7 +312,7 @@ impl ClientRoleHandle {
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
         self.check_open()?;
-        if let Some(source) = &self.source_read {
+        if let Some(source) = &self.source_audit {
             let source = source.upgrade().ok_or_else(shutdown_error)?;
             return source
                 .read(
@@ -285,7 +377,7 @@ impl ClientRoleHandle {
                 list_of_read_access_specs: specs,
             },
         );
-        if let Some(source) = &self.source_read {
+        if let Some(source) = &self.source_audit {
             source
                 .upgrade()
                 .ok_or_else(shutdown_error)?
@@ -341,7 +433,7 @@ impl ClientRoleHandle {
         range: Option<bacnet_services::read_range::RangeSpec>,
     ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
         self.check_open()?;
-        if let Some(source) = &self.source_read {
+        if let Some(source) = &self.source_audit {
             let source = source.upgrade().ok_or_else(shutdown_error)?;
             return source
                 .read(

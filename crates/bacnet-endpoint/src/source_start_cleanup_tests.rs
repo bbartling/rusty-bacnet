@@ -158,7 +158,7 @@ async fn post_profile_requester_failure_uninstalls_source_owner_and_releases_dat
         session.lifecycle.load(Ordering::Acquire),
         Lifecycle::Stopped as u8
     );
-    assert!(session.source_recipient.is_none() && session.source_read.is_none());
+    assert!(session.source_recipient.is_none() && session.source_audit.is_none());
     assert!(session.notifications.is_none());
     let mut db = session.database.as_ref().unwrap().write().await;
     assert!(!source(&db, selected()));

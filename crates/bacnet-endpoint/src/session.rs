@@ -233,9 +233,9 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     client_config: ClientConfig,
     database: Option<Arc<RwLock<ObjectDatabase>>>,
     source_audit_reporter: Option<ObjectIdentifier>,
-    source_read: Option<Arc<crate::source_read::SourceRead>>,
+    source_audit: Option<Arc<crate::source_audit::SourceAudit>>,
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
-    source_recipient: Option<Arc<crate::source_read::recipient::SourceRecipient>>,
+    source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
     identity: Option<crate::identity::DeviceIdentity>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
@@ -317,7 +317,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             client_config,
             database: None,
             source_audit_reporter: None,
-            source_read: None,
+            source_audit: None,
             source_audit_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
@@ -489,7 +489,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.lifecycle
             .store(Lifecycle::Stopping as u8, Ordering::Release);
         self.shared.token.shutdown();
-        if let Some(source) = &self.source_read {
+        if let Some(source) = &self.source_audit {
             source.close();
         }
         if let Some(requester) = &self.requester {
@@ -535,7 +535,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             );
         }
         self.source_recipient.take();
-        self.source_read.take();
+        self.source_audit.take();
         self.notifications.take();
         self.requester.take();
         self.responder.take();
@@ -676,7 +676,7 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         // Synchronous abort path: never orphan dispatch/ingress/role work.
         // `stop()` remains the graceful path; Drop only seals + aborts.
         self.shared.token.shutdown();
-        if let Some(source) = self.source_read.take() {
+        if let Some(source) = self.source_audit.take() {
             source.close();
         }
         if let Some(requester) = self.requester.take() {

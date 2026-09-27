@@ -123,7 +123,7 @@ async fn congestion(mode: u8) {
     timeout(
         WAIT,
         session
-            .source_read
+            .source_audit
             .as_ref()
             .unwrap()
             .summary_queue_full

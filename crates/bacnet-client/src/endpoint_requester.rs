@@ -23,9 +23,12 @@ use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 use crate::client::{confirmed_response_result, new_coordinated_tsm, ClientConfig};
-#[path = "endpoint_read_operation.rs"]
+#[path = "endpoint_operation.rs"]
 mod operation;
-pub use operation::{EndpointReadOutcome, PreparedEndpointRead};
+#[path = "endpoint_operation_request.rs"]
+mod operation_request;
+pub use operation::{EndpointOperationOutcome, PreparedEndpointOperation};
+pub use operation_request::{EndpointOperationAck, EndpointOperationRequest};
 #[path = "endpoint_read_request.rs"]
 mod read_request;
 pub use read_request::{EndpointReadAck, EndpointReadRequest};
@@ -149,7 +152,7 @@ impl Drop for EndpointRequesterInner {
     }
 }
 
-/// Unsegmented ReadProperty/ReadRange requester attached to a shared endpoint.
+/// Unsegmented RP/RR/RPM/WP requester attached to a shared endpoint.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct EndpointRequester {
@@ -242,7 +245,7 @@ impl EndpointRequester {
         object_identifier: ObjectIdentifier,
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
-    ) -> Result<PreparedEndpointRead, Error> {
+    ) -> Result<PreparedEndpointOperation, Error> {
         self.prepare_read(
             destination,
             data_attributes,
@@ -261,7 +264,37 @@ impl EndpointRequester {
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
         request: EndpointReadRequest,
-    ) -> Result<PreparedEndpointRead, Error> {
+    ) -> Result<PreparedEndpointOperation, Error> {
+        self.prepare_operation(
+            destination,
+            data_attributes,
+            EndpointOperationRequest::Read(request),
+        )
+    }
+
+    /// Prepare one WriteProperty on the same requester and lease pool.
+    #[doc(hidden)]
+    pub fn prepare_write(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: bacnet_services::write_property::WritePropertyRequest,
+    ) -> Result<PreparedEndpointOperation, Error> {
+        self.prepare_operation(
+            destination,
+            data_attributes,
+            EndpointOperationRequest::Write(request),
+        )
+    }
+
+    /// Validate the complete request before reserving any transaction resources.
+    #[doc(hidden)]
+    pub fn prepare_operation(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: EndpointOperationRequest,
+    ) -> Result<PreparedEndpointOperation, Error> {
         if !self.inner.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
@@ -279,14 +312,8 @@ impl EndpointRequester {
             ));
         }
 
-        let mut service_data = BytesMut::new();
-        request.encode(&mut service_data)?;
+        let service_data = self.encode_operation(&request)?;
         let service = request.service();
-        if 4 + service_data.len() > usize::from(self.inner.max_apdu_length) {
-            return Err(Error::Segmentation(
-                "endpoint requester supports only unsegmented read requests".into(),
-            ));
-        }
 
         let (tsm_mac, peer) = outbound_tsm_peer(&destination);
         let (invoke_id, registration) = {
@@ -303,7 +330,7 @@ impl EndpointRequester {
                 peer,
                 service,
                 false,
-                TerminalPolicy::ComplexAck,
+                request.terminal_policy(),
             )
             .map_err(|error| Error::Encoding(error.to_string()))?
         };
@@ -331,7 +358,7 @@ impl EndpointRequester {
         let mut encoded = BytesMut::new();
         encode_apdu(&mut encoded, &pdu)?;
         let encoded = encoded.to_vec();
-        Ok(PreparedEndpointRead {
+        Ok(PreparedEndpointOperation {
             guard,
             destination,
             data_attributes,
@@ -339,6 +366,23 @@ impl EndpointRequester {
             encoded,
             response: registration.response,
         })
+    }
+
+    /// Preflight without reserving a lease or submitting traffic.
+    #[doc(hidden)]
+    pub fn validate_operation(&self, request: &EndpointOperationRequest) -> Result<(), Error> {
+        self.encode_operation(request).map(|_| ())
+    }
+
+    fn encode_operation(&self, request: &EndpointOperationRequest) -> Result<BytesMut, Error> {
+        let mut service_data = BytesMut::new();
+        request.encode(&mut service_data)?;
+        if 4 + service_data.len() > usize::from(self.inner.max_apdu_length) {
+            return Err(Error::Segmentation(
+                "endpoint requester supports only unsegmented requests".into(),
+            ));
+        }
+        Ok(service_data)
     }
 
     /// Perform an unsegmented ReadRange to an explicit destination.

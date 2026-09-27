@@ -24,7 +24,12 @@ fn start_alias(
 async fn released(session: &EndpointSession<BipTransport>) {
     timeout(WAIT, async {
         while session.active_leases() != 0
-            || session.source_read.as_ref().unwrap().available_operations() != 64
+            || session
+                .source_audit
+                .as_ref()
+                .unwrap()
+                .available_operations()
+                != 64
         {
             tokio::task::yield_now().await;
         }

@@ -291,7 +291,7 @@ impl BipEndpointBuilder {
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
         let device_write_authorizer = self.device_write_authorizer.take();
         let bindings = std::mem::take(&mut self.source_audit_bindings);
-        crate::source_read::recipient::SourceRoutes::new(
+        crate::source_audit::recipient::SourceRoutes::new(
             &bindings,
             SocketAddrV4::new(self.broadcast_address, self.port),
         )?;

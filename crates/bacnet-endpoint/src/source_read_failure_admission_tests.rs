@@ -20,7 +20,7 @@ fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()
 }
 struct Fixture {
-    source: Arc<SourceRead>,
+    source: Arc<SourceAudit>,
     _runtime: Arc<recipient::SourceRecipient>,
     owner: Arc<NotificationTransactions>,
     coordinator: Arc<OutboundTransactionCoordinator>,
@@ -68,7 +68,7 @@ impl Fixture {
             .unwrap()
             .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
             .unwrap();
-        let (source, runtime) = SourceRead::new(
+        let (source, runtime) = SourceAudit::new(
             Arc::new(RwLock::new(db)),
             oid(ObjectType::AUDIT_REPORTER, 1),
             SourceRoutes::new(
