@@ -60,7 +60,7 @@ fn wpm(
 }
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     vec![
-        Box::new(NetworkPortObject::new(1, "NP", 5).unwrap()),
+        Box::new(NetworkPortObject::new_bip(1, "NP", Default::default()).unwrap()),
         Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
         Box::new(ScheduleObject::new(1, "Schedule", PropertyValue::Real(0.0)).unwrap()),
     ]
@@ -143,7 +143,13 @@ fn scalar_null_wp_preserves_property_state_and_error_precedence() {
             assert_error(
                 wp(&mut db, oid, property, None, PropertyValue::Null, None).unwrap_err(),
                 ErrorClass::PROPERTY,
-                ErrorCode::WRITE_ACCESS_DENIED,
+                if oid.object_type() == ObjectType::NETWORK_PORT
+                    && property == PropertyIdentifier::from_raw(5555)
+                {
+                    ErrorCode::UNKNOWN_PROPERTY
+                } else {
+                    ErrorCode::WRITE_ACCESS_DENIED
+                },
             );
             assert_eq!(snapshot(&db, oid), before);
         }

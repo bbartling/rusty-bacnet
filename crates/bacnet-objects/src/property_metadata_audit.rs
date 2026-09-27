@@ -201,7 +201,17 @@ fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
         // 53 CHANNEL: unsupported by design — excluded.
         Box::new(LightingOutputObject::new(1, "LO-1").unwrap()),
         Box::new(BinaryLightingOutputObject::new(1, "BLO-1").unwrap()),
-        Box::new(NetworkPortObject::new(1, "NP-1", 0).unwrap()),
+        Box::new(
+            NetworkPortObject::new_non_bip(
+                1,
+                "NP-1",
+                bacnet_types::enums::NetworkType::from_raw(0),
+                0,
+                Default::default(),
+                1476,
+            )
+            .unwrap(),
+        ),
         Box::new(ElevatorGroupObject::new(1, "EG-1").unwrap()),
         Box::new(EscalatorObject::new(1, "ESC-1").unwrap()),
         Box::new(LiftObject::new(1, "LIFT-1", 3).unwrap()),

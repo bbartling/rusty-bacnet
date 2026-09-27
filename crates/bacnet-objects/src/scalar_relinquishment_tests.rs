@@ -52,7 +52,8 @@ fn intrinsic_objects() -> Vec<Box<dyn BACnetObject>> {
 fn scalar_null_relinquishment_preserves_common_description_and_oos_state() {
     let mut objects = intrinsic_objects();
     objects.extend([
-        Box::new(NetworkPortObject::new(1, "NP", 5).unwrap()) as Box<dyn BACnetObject>,
+        Box::new(NetworkPortObject::new_bip(1, "NP", Default::default()).unwrap())
+            as Box<dyn BACnetObject>,
         Box::new(ElevatorGroupObject::new(1, "Group").unwrap()),
         Box::new(EscalatorObject::new(1, "Escalator").unwrap()),
         Box::new(LiftObject::new(1, "Lift", 3).unwrap()),

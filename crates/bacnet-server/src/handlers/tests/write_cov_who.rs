@@ -719,7 +719,15 @@ fn delete_network_port_object_fails() {
     // runtime, mirroring `NetworkPortObject::is_deleteable` so PICS and the
     // runtime DeleteObject handler share one truth source.
     let mut db = ObjectDatabase::new();
-    let np = bacnet_objects::network_port::NetworkPortObject::new(1, "NP-1", 0).unwrap();
+    let np = bacnet_objects::network_port::NetworkPortObject::new_non_bip(
+        1,
+        "NP-1",
+        bacnet_types::enums::NetworkType::from_raw(0),
+        0,
+        Default::default(),
+        1476,
+    )
+    .unwrap();
     db.add(Box::new(np)).unwrap();
 
     let oid = ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap();

@@ -4,35 +4,23 @@ use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
 fn network_port_object(configured: bool) -> NetworkPortObject {
-    let mut object = NetworkPortObject::new(7, "NP-7", 0).unwrap();
+    let mut object = NetworkPortObject::new_bip(
+        7,
+        "NP-7",
+        bacnet_objects::network_port::BipPortConfig {
+            ip_address: if configured {
+                [192, 168, 1, 100]
+            } else {
+                [0; 4]
+            },
+            udp_port: if configured { 47809 } else { 47808 },
+            network_number: if configured { 5 } else { 0 },
+            ..Default::default()
+        },
+    )
+    .unwrap();
     if configured {
-        object
-            .write_property(
-                P::DESCRIPTION,
-                None,
-                PropertyValue::CharacterString("long network port label".repeat(100)),
-                None,
-            )
-            .unwrap();
-        object
-            .write_property(
-                P::IP_ADDRESS,
-                None,
-                PropertyValue::OctetString(vec![192, 168, 1, 100]),
-                None,
-            )
-            .unwrap();
-        object
-            .write_property(
-                P::BACNET_IP_UDP_PORT,
-                None,
-                PropertyValue::Unsigned(47809),
-                None,
-            )
-            .unwrap();
-        object
-            .write_property(P::NETWORK_NUMBER, None, PropertyValue::Unsigned(5), None)
-            .unwrap();
+        object.set_description("long network port label".repeat(100));
     }
     // Exercise the unconditional write routes so large encodings persist.
     object
@@ -57,16 +45,19 @@ fn rpm_network_port_metadata_selectors_preserve_bytes_and_budgets() {
         P::OUT_OF_SERVICE,
         P::RELIABILITY,
         P::NETWORK_TYPE,
+        P::PROTOCOL_LEVEL,
         P::NETWORK_NUMBER,
+        P::NETWORK_NUMBER_QUALITY,
         P::MAC_ADDRESS,
-        P::MAX_APDU_LENGTH_ACCEPTED,
+        P::APDU_LENGTH,
         P::LINK_SPEED,
         P::CHANGES_PENDING,
-        P::COMMAND_NP,
+        P::BACNET_IP_MODE,
         P::IP_ADDRESS,
         P::IP_DEFAULT_GATEWAY,
         P::IP_SUBNET_MASK,
         P::BACNET_IP_UDP_PORT,
+        P::IP_DNS_SERVER,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -76,20 +67,20 @@ fn rpm_network_port_metadata_selectors_preserve_bytes_and_budgets() {
         P::OUT_OF_SERVICE,
         P::RELIABILITY,
         P::NETWORK_TYPE,
-        P::LINK_SPEED,
-        P::CHANGES_PENDING,
-    ];
-    let optional = [
-        P::DESCRIPTION,
+        P::PROTOCOL_LEVEL,
         P::NETWORK_NUMBER,
+        P::NETWORK_NUMBER_QUALITY,
         P::MAC_ADDRESS,
-        P::MAX_APDU_LENGTH_ACCEPTED,
-        P::COMMAND_NP,
+        P::APDU_LENGTH,
+        P::CHANGES_PENDING,
+        P::BACNET_IP_MODE,
         P::IP_ADDRESS,
         P::IP_DEFAULT_GATEWAY,
         P::IP_SUBNET_MASK,
         P::BACNET_IP_UDP_PORT,
+        P::IP_DNS_SERVER,
     ];
+    let optional = [P::DESCRIPTION, P::LINK_SPEED];
     for configured in [false, true] {
         let object = network_port_object(configured);
         let oid = object.object_identifier();
@@ -141,8 +132,10 @@ fn network_port_delete_object_is_denied() {
     // runtime DeleteObject handler share one truth source (differs from
     // LoadControl delete-allowed).
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(NetworkPortObject::new(7, "NP-7", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        NetworkPortObject::new_bip(7, "NP-7", Default::default()).unwrap(),
+    ))
+    .unwrap();
     let oid = ObjectIdentifier::new(ObjectType::NETWORK_PORT, 7).unwrap();
     let mut request = BytesMut::new();
     DeleteObjectRequest {
