@@ -424,14 +424,15 @@ impl PyMstpEndpoint {
     /// Broadcast one I-Am (MS/TP local broadcast).
     fn broadcast_i_am<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let guard = inner.lock().await;
             let session = guard.as_ref().ok_or_else(|| {
                 PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
             })?;
             session.broadcast_i_am().await.map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Device instance from the single identity (no I/O).

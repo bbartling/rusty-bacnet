@@ -62,10 +62,12 @@ class WritePriorityTests(unittest.IsolatedAsyncioTestCase):
                             result = await asyncio.wait_for(call(), 3)
                             if index == 2:
                                 self.assertTrue(all(item["error"] is None for item in result), result)
+                            else:
+                                self.assertIsNone(result)
                             self.assertEqual(await client.read_property(address, OID, PID), VALUE)
                     # Noncommandable NULL is a successful no-op, even with supplied priority.
-                    await client.write_property(address, OID, PID, PropertyValue.null(), priority=priority)
-                    await client.write_property_to_device(9123, OID, PID, PropertyValue.null(), priority=priority)
+                    self.assertIsNone(await client.write_property(address, OID, PID, PropertyValue.null(), priority=priority))
+                    self.assertIsNone(await client.write_property_to_device(9123, OID, PID, PropertyValue.null(), priority=priority))
                     result = await client.write_property_to_devices([(9123, OID, PID, PropertyValue.null(), priority, None)])
                     self.assertIsNone(result[0]["error"])
                     self.assertEqual(result[0]["request_index"], 0)

@@ -192,7 +192,7 @@ impl BACnetClient {
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let arc = {
                 let mut guard = inner.lock().await;
                 guard.take()
@@ -212,12 +212,13 @@ impl BACnetClient {
                 }
             }
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
     /// Explicitly stop the client.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let arc = {
                 let mut guard = inner.lock().await;
                 guard.take()
@@ -234,6 +235,7 @@ impl BACnetClient {
                 }
             }
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 }

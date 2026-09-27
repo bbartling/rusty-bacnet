@@ -96,6 +96,7 @@ async def exercise():
     assert 'endpoint already started' in str(next(result for result in results if result is not None))
     assert await endpoint.__aenter__() is endpoint
     assert (await endpoint.status())['is_running']
+    assert await endpoint.broadcast_i_am() is None
     assert await endpoint.__aexit__(None, None, None) is None
     assert await endpoint.close() is None
     endpoint.add_analog_input(instance=1, name='Restart')

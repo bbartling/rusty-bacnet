@@ -76,7 +76,7 @@ impl BACnetClient {
         let pid = property_id.to_rust();
         let prop_value = value.inner;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -95,7 +95,8 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
 
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send a WhoIs broadcast to discover devices.
@@ -107,7 +108,7 @@ impl BACnetClient {
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -117,7 +118,8 @@ impl BACnetClient {
             // Mutex released here — concurrent calls can proceed
             c.who_is(low_limit, high_limit).await.map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Convenience: send WhoIs, wait for `timeout_ms` (default 3000), return discovered devices.
@@ -201,7 +203,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let rust_specs = py_to_wpm_specs(specs)?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -213,7 +215,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------

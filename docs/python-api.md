@@ -8,7 +8,10 @@ Native asynchronous methods return an `asyncio.Future` immediately when called
 inside a running event loop. Their installed signatures use ordinary `def` with
 `Awaitable[T]`, where `T` is the value produced by `await`. Argument validation
 that occurs before Future creation still raises synchronously; I/O and operation
-failures are delivered by awaiting the Future.
+failures are delivered by awaiting the Future. Successful `Awaitable[None]`
+operations resolve to Python `None`, including client commands, server local
+writes and lifecycle, hub lifecycle, and endpoint broadcasts. Meaningful data,
+tuple, string and context-entry results retain their declared types.
 
 Use `await native_call()` or `asyncio.ensure_future(native_call())`.
 `asyncio.create_task` requires a coroutine object and does not accept these native

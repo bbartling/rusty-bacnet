@@ -44,7 +44,7 @@ class CommandSourceTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(TypeError):
                     server.write_property_local(oid, P.PRESENT_VALUE, value)
                 self.assertEqual(await server.read_property(oid, P.PRESENT_VALUE), before)
-                await server.write_property_local(oid, P.PRESENT_VALUE, value, priority=8, source_object=oid)
+                self.assertIsNone(await server.write_property_local(oid, P.PRESENT_VALUE, value, priority=8, source_object=oid))
                 expected = b"\x1e\x1c" + ((kind.to_raw() << 22) | index).to_bytes(4, "big") + b"\x1f"
                 source = await server.read_property(oid, P.VALUE_SOURCE)
                 self.assertEqual(source.tag, "application_data")

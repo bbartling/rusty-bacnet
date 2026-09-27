@@ -21,7 +21,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let oid = monitored_object_identifier.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -39,7 +39,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Unsubscribe from COV notifications for an object.
@@ -54,7 +55,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let oid = monitored_object_identifier.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -66,7 +67,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get an async iterator yielding incoming COV notifications.
@@ -98,7 +100,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -109,7 +111,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send a WhoHas broadcast to find an object by name.
@@ -123,7 +126,7 @@ impl BACnetClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -134,7 +137,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get a list of all discovered devices.
@@ -177,7 +181,7 @@ impl BACnetClient {
     fn clear_devices<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -186,6 +190,7 @@ impl BACnetClient {
             };
             c.clear_devices().await;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 }

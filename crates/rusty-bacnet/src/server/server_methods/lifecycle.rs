@@ -105,7 +105,7 @@ impl BACnetServer {
             .store(true, Ordering::Release);
         drop(pending);
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mut db = ObjectDatabase::new();
 
             // Create device object
@@ -238,21 +238,23 @@ impl BACnetServer {
             *inner.lock().await = Some(srv);
             started.store(true, Ordering::Release);
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Stop the server.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let started = self.started.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mut guard = inner.lock().await;
             if let Some(mut srv) = guard.take() {
                 srv.stop().await.map_err(to_py_err)?;
             }
             started.store(false, Ordering::Release);
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get the server's local address as a string.
@@ -391,7 +393,7 @@ impl BACnetServer {
                 bacnet_server::LocalCommandSource::Object(object.to_rust())
             });
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             // Hold the server guard for the duration of the call: `write_local`
             // borrows `srv` and runs the post-write COV/event trigger path,
             // so the server must stay alive across the await.
@@ -402,7 +404,8 @@ impl BACnetServer {
             srv.write_local(&oid, pid, array_index, prop_value, priority, source)
                 .await
                 .map_err(to_py_err)
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Update Present_Value for an application-owned Input object.
@@ -422,7 +425,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let prop_value = value.inner;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let guard = inner.lock().await;
             let srv = guard
                 .as_ref()
@@ -430,7 +433,8 @@ impl BACnetServer {
             srv.set_present_value_local(&oid, prop_value)
                 .await
                 .map_err(to_py_err)
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get the server's current communication state.

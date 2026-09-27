@@ -137,7 +137,7 @@ impl BACnetClient {
             .validate()
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -155,7 +155,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Remove elements from a list property.
@@ -181,7 +182,7 @@ impl BACnetClient {
             .validate()
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -199,7 +200,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -271,7 +273,7 @@ impl BACnetClient {
         service_parameters: Option<Vec<u8>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -294,7 +296,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -322,7 +325,7 @@ impl BACnetClient {
         let priority = message_priority.to_rust();
         let mc = build_message_class(message_class_type, message_class_value)?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -342,7 +345,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send an UnconfirmedTextMessage request.
@@ -363,7 +367,7 @@ impl BACnetClient {
         let priority = message_priority.to_rust();
         let mc = build_message_class(message_class_type, message_class_value)?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -387,7 +391,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -410,7 +415,7 @@ impl BACnetClient {
         let op = operation.to_rust();
         let oid = object_identifier.map(|o| o.to_rust());
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -430,6 +435,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 }

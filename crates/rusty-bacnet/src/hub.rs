@@ -345,14 +345,15 @@ impl PyScHub {
         let config = self.config.clone();
         let address = self.address.clone();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let (hub, addr) = config.start().await?;
 
             *address.lock().await = Some(addr);
             *inner.lock().await = Some(hub);
 
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Stop the hub.
@@ -362,12 +363,13 @@ impl PyScHub {
     /// started hub is a safe no-op.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             if let Some(mut hub) = inner.lock().await.take() {
                 hub.stop().await;
             }
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// Shut the hub down gracefully, returning `"graceful"` or `"forced"`.
@@ -508,12 +510,13 @@ impl PyScHub {
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             if let Some(mut hub) = inner.lock().await.take() {
                 hub.stop().await;
             }
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     /// The address the hub is listening on (e.g. ``"127.0.0.1:47900"``).
