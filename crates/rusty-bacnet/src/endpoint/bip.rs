@@ -1,18 +1,14 @@
 //! B/IP Python endpoint owner: one UDP socket above both roles.
 //!
-//! `BipEndpoint` holds `Mutex<Option<EndpointSession<BipTransport>>>` with
-//! take-under-lock lifecycle. Role handles (`EndpointClient` /
-//! `EndpointServer`) hold cloned role values with no lifecycle.
+//! A private lifecycle owner orders preparation, session startup and joined
+//! teardown. Role handles hold cloned role values with no lifecycle.
 //!
 //! Builder-time config only: the constructor validates the single
 //! `DeviceIdentity` (instance/vendor/APDU/segmentation/services/ports/UUID)
-//! plus transport addressing. No post-start mutation exists. The old
-//! `BACnetServer` hardcoded `vendor_id` 555 now flows through this one
-//! identity (default 555 preserves compat without a second identity).
+//! plus transport addressing. No post-start configuration mutation exists.
+//! The default vendor identifier is 555 and flows through this single identity.
 
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::DeviceIdentity;
@@ -21,13 +17,13 @@ use bacnet_transport::bip::BipTransport;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tokio::sync::Mutex;
 
 use crate::endpoint::common::{
-    build_database, build_identity, build_pending_boxes, make_analog_input, make_analog_value,
-    make_binary_input, make_binary_value, parse_device_uuid, parse_ipv4, parse_segmentation,
-    parse_services, with_bip_port, PendingObject, PendingRestoreGuard,
+    build_database, build_identity, build_pending_boxes, lifecycle_error, make_analog_input,
+    make_analog_value, make_binary_input, make_binary_value, parse_device_uuid, parse_ipv4,
+    parse_segmentation, parse_services, with_bip_port, PendingObject,
 };
+use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
 use crate::types::PySegmentation;
@@ -48,6 +44,40 @@ struct BipEndpointConfig {
 }
 
 type BipSession = EndpointSession<BipTransport>;
+
+impl BipEndpointConfig {
+    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<BipSession> {
+        let config = self;
+        // Fail fast before building objects: mirror the transport
+        // bind (INADDR_ANY:port) + interface-locality probe, so conflicts
+        // preserve pending for retry. The real bind stays authoritative
+        // (TOCTOU residual: a race loser still restores via the owner).
+        if let Err(e) = std::net::UdpSocket::bind(std::net::SocketAddrV4::new(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            config.port,
+        )) {
+            return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
+        }
+        if !config.interface.is_unspecified() {
+            if let Err(e) =
+                std::net::UdpSocket::bind(std::net::SocketAddrV4::new(config.interface, 0))
+            {
+                return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
+            }
+        }
+        let boxes = build_pending_boxes(&objects)?;
+        let db = build_database(&config.identity, boxes)?;
+        let session = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
+            .role(SessionRole::Both)
+            .queue_capacity(config.queue_capacity)
+            .client_timers(config.apdu_timeout_ms, config.apdu_retries)
+            .database(db)
+            .identity(config.identity.clone())
+            .build_session()
+            .map_err(to_py_err)?;
+        Ok(session)
+    }
+}
 
 /// B/IP endpoint: one device that both initiates and executes.
 ///
@@ -74,28 +104,17 @@ type BipSession = EndpointSession<BipTransport>;
 /// `BACnetClient`/`BACnetServer` path there.
 #[pyclass(name = "BipEndpoint")]
 pub struct PyBipEndpoint {
-    inner: Arc<Mutex<Option<BipSession>>>,
+    lifecycle: Lifecycle<BipSession, PendingObject>,
     config: BipEndpointConfig,
-    pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
-    started: Arc<AtomicBool>,
 }
 
 impl PyBipEndpoint {
-    fn lock_pending(&self) -> PyResult<std::sync::MutexGuard<'_, Vec<PendingObject>>> {
-        self.pending
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))
-    }
-
     fn push_pending(&self, obj: PendingObject) -> PyResult<()> {
-        let mut guard = self.lock_pending()?;
-        if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
-                "cannot add objects after start() — endpoint is already running",
-            ));
-        }
-        guard.push(obj);
-        Ok(())
+        self.lifecycle.push(obj).map_err(|()| {
+            PyRuntimeError::new_err(
+                "cannot add objects while endpoint is starting, running, or stopping",
+            )
+        })
     }
 
     fn local_address_string(&self) -> String {
@@ -190,7 +209,7 @@ impl PyBipEndpoint {
             port,
         )?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(None)),
+            lifecycle: Lifecycle::new(),
             config: BipEndpointConfig {
                 interface: interface_ip,
                 port,
@@ -200,8 +219,6 @@ impl PyBipEndpoint {
                 apdu_timeout_ms,
                 apdu_retries,
             },
-            pending: Arc::new(std::sync::Mutex::new(Vec::new())),
-            started: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -209,7 +226,7 @@ impl PyBipEndpoint {
     /// restored on failed/cancelled start).
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
-        Ok(self.lock_pending()?.len())
+        Ok(self.lifecycle.pending_count())
     }
 
     /// Add an Analog Input object (before start).
@@ -289,141 +306,45 @@ impl PyBipEndpoint {
         })
     }
 
-    /// Start the endpoint: one socket, both roles. Start-once.
-    ///
-    /// Builds the identity database from pending registrations, composes
-    /// one `BipTransport`, and starts the session. A second start raises
-    /// `BacnetError` without rebinding. Failed/cancelled starts restore
-    /// pending registrations for retry (RUN-1): nothing is drained until the
-    /// bind pre-check passes, and the restore guard covers every later Err.
+    /// Start after lifecycle admission. A second explicit start fails.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let pending = self.pending.clone();
-        let inner = self.inner.clone();
-        let started = self.started.clone();
+        let lifecycle = self.lifecycle.clone();
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            {
-                let guard = inner.lock().await;
-                if guard.is_some() {
-                    return Err(to_py_err(bacnet_types::error::Error::Encoding(
-                        "endpoint already started".into(),
-                    )));
-                }
-            }
-            // Fail fast before consuming registrations: mirror the transport
-            // bind (INADDR_ANY:port) + interface-locality probe, so conflicts
-            // preserve pending for retry. The real bind stays authoritative
-            // (TOCTOU residual: a race loser still restores via the guard).
-            if let Err(e) = std::net::UdpSocket::bind(std::net::SocketAddrV4::new(
-                std::net::Ipv4Addr::UNSPECIFIED,
-                config.port,
-            )) {
-                return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-            }
-            if !config.interface.is_unspecified() {
-                if let Err(e) =
-                    std::net::UdpSocket::bind(std::net::SocketAddrV4::new(config.interface, 0))
-                {
-                    return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-                }
-            }
-            let mut restore = PendingRestoreGuard::new(pending.clone(), {
-                let mut guard = pending
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
-                guard.drain(..).collect()
-            });
-            let boxes = build_pending_boxes(restore.objects())?;
-            let db = build_database(&config.identity, boxes)?;
-            let mut session =
-                BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
-                    .role(SessionRole::Both)
-                    .queue_capacity(config.queue_capacity)
-                    .client_timers(config.apdu_timeout_ms, config.apdu_retries)
-                    .database(db)
-                    .identity(config.identity.clone())
-                    .build_session()
-                    .map_err(to_py_err)?;
-            session.start().await.map_err(to_py_err)?;
-            *inner.lock().await = Some(session);
-            restore.take();
-            started.store(true, Ordering::Release);
-            Ok(())
+            lifecycle
+                .start(false, |objects| config.prepare(objects))
+                .await
+                .map_err(lifecycle_error)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
-    /// Close the endpoint (idempotent; safe before start and twice).
+    /// Join earlier admitted startup and teardown; safe before start and twice.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let started = self.started.clone();
+        let lifecycle = self.lifecycle.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut session = { inner.lock().await.take() };
-            if let Some(session) = session.as_mut() {
-                let _ = session.stop().await;
-            }
-            started.store(false, Ordering::Release);
-            Ok(())
+            lifecycle.close().await.map_err(lifecycle_error)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
-    /// Start on context entry (idempotent when already running).
+    /// Start on context entry, or reuse the already running session.
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let self_ref = slf.clone().unbind();
-        let (pending, inner, started, config) = {
+        let (lifecycle, config) = {
             let borrowed = slf.borrow();
-            (
-                borrowed.pending.clone(),
-                borrowed.inner.clone(),
-                borrowed.started.clone(),
-                borrowed.config.clone(),
-            )
+            (borrowed.lifecycle.clone(), borrowed.config.clone())
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            {
-                let guard = inner.lock().await;
-                if guard.is_some() {
-                    return Ok(self_ref);
-                }
-            }
-            if let Err(e) = std::net::UdpSocket::bind(std::net::SocketAddrV4::new(
-                std::net::Ipv4Addr::UNSPECIFIED,
-                config.port,
-            )) {
-                return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-            }
-            if !config.interface.is_unspecified() {
-                if let Err(e) =
-                    std::net::UdpSocket::bind(std::net::SocketAddrV4::new(config.interface, 0))
-                {
-                    return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-                }
-            }
-            let mut restore = PendingRestoreGuard::new(pending.clone(), {
-                let mut guard = pending
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
-                guard.drain(..).collect()
-            });
-            let boxes = build_pending_boxes(restore.objects())?;
-            let db = build_database(&config.identity, boxes)?;
-            let mut session =
-                BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
-                    .role(SessionRole::Both)
-                    .queue_capacity(config.queue_capacity)
-                    .client_timers(config.apdu_timeout_ms, config.apdu_retries)
-                    .database(db)
-                    .identity(config.identity.clone())
-                    .build_session()
-                    .map_err(to_py_err)?;
-            session.start().await.map_err(to_py_err)?;
-            *inner.lock().await = Some(session);
-            restore.take();
-            started.store(true, Ordering::Release);
+            lifecycle
+                .start(true, |objects| config.prepare(objects))
+                .await
+                .map_err(lifecycle_error)?;
             Ok(self_ref)
         })
     }
 
-    /// Forcefully close on context exit (idempotent; never suppresses body).
+    /// Await joined cleanup without suppressing the context body exception.
     #[pyo3(signature = (_exc_type=None, _exc_val=None, _exc_tb=None))]
     fn __aexit__<'py>(
         &self,
@@ -432,21 +353,12 @@ impl PyBipEndpoint {
         _exc_val: Option<Bound<'py, PyAny>>,
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let started = self.started.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut session = { inner.lock().await.take() };
-            if let Some(session) = session.as_mut() {
-                let _ = session.stop().await;
-            }
-            started.store(false, Ordering::Release);
-            Ok(())
-        })
+        self.close(py)
     }
 
     /// Clone the client role (fails with RuntimeError before start/after close).
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -467,7 +379,7 @@ impl PyBipEndpoint {
 
     /// Clone the server role (fails with RuntimeError before start/after close).
     fn server<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -501,7 +413,7 @@ impl PyBipEndpoint {
     /// Counts and kind labels only — no keys, certs, or payloads. Raises
     /// RuntimeError before start and after close, like the hub status.
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let snapshot = {
@@ -542,7 +454,7 @@ impl PyBipEndpoint {
     /// Fails with BacnetError when not running or without an identity
     /// (identity is always composed here).
     fn broadcast_i_am<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let guard = inner.lock().await;
             let session = guard.as_ref().ok_or_else(|| {

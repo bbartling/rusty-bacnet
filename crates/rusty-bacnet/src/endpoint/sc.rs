@@ -1,11 +1,8 @@
 //! SC Python endpoint owner: one hub connection above both roles.
 //!
-//! `ScEndpoint` holds `Mutex<Option<EndpointSession<ScTransport<TlsWebSocket>>>>`.
+//! A private lifecycle owner orders connection preparation and session teardown.
 //! The single `device_uuid` parameter feeds both the transport dial and the
 //! composed `DeviceIdentity` — no split identities.
-
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::sc::ScEndpointBuilder;
@@ -13,13 +10,13 @@ use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tokio::sync::Mutex;
 
 use crate::endpoint::common::{
-    build_database, build_identity, build_pending_boxes, make_analog_input, make_analog_value,
-    make_binary_input, make_binary_value, parse_device_uuid, parse_segmentation, parse_services,
-    with_sc_port, PendingObject, PendingRestoreGuard,
+    build_database, build_identity, build_pending_boxes, lifecycle_error, make_analog_input,
+    make_analog_value, make_binary_input, make_binary_value, parse_device_uuid, parse_segmentation,
+    parse_services, with_sc_port, PendingObject,
 };
+use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
 use crate::types::PySegmentation;
@@ -42,38 +39,53 @@ struct ScEndpointConfig {
     queue_capacity: usize,
 }
 
+impl ScEndpointConfig {
+    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<ScSession> {
+        let config = self;
+        let tls_config = crate::tls::build_client_tls_config(
+            Some(config.ca_cert.as_str()),
+            Some(config.client_cert.as_str()),
+            Some(config.client_key.as_str()),
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
+        let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&config.hub_url, tls_config)
+            .await
+            .map_err(to_py_err)?;
+        let boxes = build_pending_boxes(&objects)?;
+        let db = build_database(&config.identity, boxes)?;
+        let session = ScEndpointBuilder::new(config.vmac, config.device_uuid)
+            .role(SessionRole::Both)
+            .queue_capacity(config.queue_capacity)
+            .heartbeat(config.heartbeat_interval_ms, config.heartbeat_timeout_ms)
+            .database(db)
+            .identity(config.identity.clone())
+            .build_hub_session(ws)
+            .map_err(to_py_err)?;
+        Ok(session)
+    }
+}
+
 /// SC endpoint: one hub connection that both initiates and executes.
 ///
 /// The `device_uuid` is the single durable lifetime identity (Annex AB.1.5.3):
 /// it dials the hub AND syncs into DEVICE_UUID. Provision once, reuse for the
 /// device lifetime. No generation or persistence is provided.
 ///
-/// Lifecycle mirrors `BipEndpoint` (start-once, idempotent close, context
+/// Lifecycle mirrors `BipEndpoint` (one running session, joined close, context
 /// manager). BIPv6/Ethernet have no endpoint owner.
 #[pyclass(name = "ScEndpoint")]
 pub struct PyScEndpoint {
-    inner: Arc<Mutex<Option<ScSession>>>,
+    lifecycle: Lifecycle<ScSession, PendingObject>,
     config: ScEndpointConfig,
-    pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
-    started: Arc<AtomicBool>,
 }
 
 impl PyScEndpoint {
-    fn lock_pending(&self) -> PyResult<std::sync::MutexGuard<'_, Vec<PendingObject>>> {
-        self.pending
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))
-    }
-
     fn push_pending(&self, obj: PendingObject) -> PyResult<()> {
-        let mut guard = self.lock_pending()?;
-        if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
-                "cannot add objects after start() — endpoint is already running",
-            ));
-        }
-        guard.push(obj);
-        Ok(())
+        self.lifecycle.push(obj).map_err(|()| {
+            PyRuntimeError::new_err(
+                "cannot add objects while endpoint is starting, running, or stopping",
+            )
+        })
     }
 
     fn vmac_hex(&self) -> String {
@@ -197,7 +209,7 @@ impl PyScEndpoint {
         )?;
         let identity = with_sc_port(identity, network_port_instance, network_number, vmac)?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(None)),
+            lifecycle: Lifecycle::new(),
             config: ScEndpointConfig {
                 hub_url: sc_hub.to_string(),
                 vmac,
@@ -210,8 +222,6 @@ impl PyScEndpoint {
                 identity,
                 queue_capacity,
             },
-            pending: Arc::new(std::sync::Mutex::new(Vec::new())),
-            started: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -219,7 +229,7 @@ impl PyScEndpoint {
     /// restored on failed/cancelled start).
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
-        Ok(self.lock_pending()?.len())
+        Ok(self.lifecycle.pending_count())
     }
 
     /// Add an Analog Input object (before start).
@@ -298,126 +308,45 @@ impl PyScEndpoint {
         })
     }
 
-    /// Start the endpoint: dial hub, compose one SC session. Start-once.
+    /// Start after lifecycle admission. A second explicit start fails.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        // Local TLS file errors precede pending drain so repaired files can
-        // retry with registrations intact (server parity).
-        let tls_config = crate::tls::build_client_tls_config(
-            Some(self.config.ca_cert.as_str()),
-            Some(self.config.client_cert.as_str()),
-            Some(self.config.client_key.as_str()),
-        )
-        .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
-        // Dial before draining (RUN-1): dial failures and cancellation while
-        // dialing leave pending untouched, so retry needs no re-registration.
-        let pending = self.pending.clone();
-        let inner = self.inner.clone();
-        let started = self.started.clone();
+        let lifecycle = self.lifecycle.clone();
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            {
-                let guard = inner.lock().await;
-                if guard.is_some() {
-                    return Err(to_py_err(bacnet_types::error::Error::Encoding(
-                        "endpoint already started".into(),
-                    )));
-                }
-            }
-            let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&config.hub_url, tls_config)
+            lifecycle
+                .start(false, |objects| config.prepare(objects))
                 .await
-                .map_err(to_py_err)?;
-            let mut restore = PendingRestoreGuard::new(pending.clone(), {
-                let mut guard = pending
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
-                guard.drain(..).collect()
-            });
-            let boxes = build_pending_boxes(restore.objects())?;
-            let db = build_database(&config.identity, boxes)?;
-            let mut session = ScEndpointBuilder::new(config.vmac, config.device_uuid)
-                .role(SessionRole::Both)
-                .queue_capacity(config.queue_capacity)
-                .heartbeat(config.heartbeat_interval_ms, config.heartbeat_timeout_ms)
-                .database(db)
-                .identity(config.identity.clone())
-                .build_hub_session(ws)
-                .map_err(to_py_err)?;
-            session.start().await.map_err(to_py_err)?;
-            *inner.lock().await = Some(session);
-            restore.take();
-            started.store(true, Ordering::Release);
-            Ok(())
+                .map_err(lifecycle_error)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
-    /// Close the endpoint (idempotent).
+    /// Join earlier admitted startup and teardown; safe before start and twice.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let started = self.started.clone();
+        let lifecycle = self.lifecycle.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut session = { inner.lock().await.take() };
-            if let Some(session) = session.as_mut() {
-                let _ = session.stop().await;
-            }
-            started.store(false, Ordering::Release);
-            Ok(())
+            lifecycle.close().await.map_err(lifecycle_error)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
-    /// Start on context entry (idempotent when already running).
+    /// Start on context entry, or reuse the already running session.
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let self_ref = slf.clone().unbind();
-        let (tls_config, pending, inner, started, config) = {
+        let (lifecycle, config) = {
             let borrowed = slf.borrow();
-            let tls_config = crate::tls::build_client_tls_config(
-                Some(borrowed.config.ca_cert.as_str()),
-                Some(borrowed.config.client_cert.as_str()),
-                Some(borrowed.config.client_key.as_str()),
-            )
-            .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
-            (
-                tls_config,
-                borrowed.pending.clone(),
-                borrowed.inner.clone(),
-                borrowed.started.clone(),
-                borrowed.config.clone(),
-            )
+            (borrowed.lifecycle.clone(), borrowed.config.clone())
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            {
-                let guard = inner.lock().await;
-                if guard.is_some() {
-                    return Ok(self_ref);
-                }
-            }
-            let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&config.hub_url, tls_config)
+            lifecycle
+                .start(true, |objects| config.prepare(objects))
                 .await
-                .map_err(to_py_err)?;
-            let mut restore = PendingRestoreGuard::new(pending.clone(), {
-                let mut guard = pending
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
-                guard.drain(..).collect()
-            });
-            let boxes = build_pending_boxes(restore.objects())?;
-            let db = build_database(&config.identity, boxes)?;
-            let mut session = ScEndpointBuilder::new(config.vmac, config.device_uuid)
-                .role(SessionRole::Both)
-                .queue_capacity(config.queue_capacity)
-                .heartbeat(config.heartbeat_interval_ms, config.heartbeat_timeout_ms)
-                .database(db)
-                .identity(config.identity.clone())
-                .build_hub_session(ws)
-                .map_err(to_py_err)?;
-            session.start().await.map_err(to_py_err)?;
-            *inner.lock().await = Some(session);
-            restore.take();
-            started.store(true, Ordering::Release);
+                .map_err(lifecycle_error)?;
             Ok(self_ref)
         })
     }
 
-    /// Forcefully close on context exit (idempotent).
+    /// Await joined cleanup without suppressing the context body exception.
     #[pyo3(signature = (_exc_type=None, _exc_val=None, _exc_tb=None))]
     fn __aexit__<'py>(
         &self,
@@ -426,21 +355,12 @@ impl PyScEndpoint {
         _exc_val: Option<Bound<'py, PyAny>>,
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let started = self.started.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut session = { inner.lock().await.take() };
-            if let Some(session) = session.as_mut() {
-                let _ = session.stop().await;
-            }
-            started.store(false, Ordering::Release);
-            Ok(())
-        })
+        self.close(py)
     }
 
     /// Clone the client role.
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -461,7 +381,7 @@ impl PyScEndpoint {
 
     /// Clone the server role.
     fn server<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -488,7 +408,7 @@ impl PyScEndpoint {
 
     /// Bounded snapshot (same keys as BIP; transport "sc").
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let snapshot = {
@@ -530,7 +450,7 @@ impl PyScEndpoint {
 
     /// Broadcast one I-Am via the hub relay.
     fn broadcast_i_am<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let guard = inner.lock().await;
             let session = guard.as_ref().ok_or_else(|| {

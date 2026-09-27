@@ -221,6 +221,32 @@ class ScConstructorTests(unittest.TestCase):
 
 
 class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_start_context_and_none_cleanup(self):
+        port = free_port()
+        endpoint = BipEndpoint(**bip_kwargs(port=port))
+        results = await asyncio.gather(endpoint.start(), endpoint.start(), return_exceptions=True)
+        self.assertEqual(sum(result is None for result in results), 1)
+        self.assertEqual(sum(isinstance(result, BacnetError) for result in results), 1)
+        try:
+            self.assertIs(await endpoint.__aenter__(), endpoint)
+            self.assertTrue((await endpoint.status())["is_running"])
+        finally:
+            self.assertIsNone(await endpoint.__aexit__(None, None, None))
+        self.assertIsNone(await endpoint.close())
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind(("0.0.0.0", port))
+        endpoint.add_analog_input(instance=9, name="Restart")
+        self.assertIsNone(await endpoint.start())
+        self.assertIsNone(await endpoint.close())
+
+    async def test_context_exit_preserves_body_exception(self):
+        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        with self.assertRaisesRegex(ValueError, "body failure"):
+            async with endpoint:
+                raise ValueError("body failure")
+        with self.assertRaisesRegex(RuntimeError, "not started"):
+            await endpoint.status()
+
     async def test_pre_start_accessors_fail_and_close_idempotent(self):
         endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
         with self.assertRaisesRegex(RuntimeError, "not started"):
@@ -250,7 +276,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(endpoint.start(), 10)
         try:
             self.assertEqual(pending(), 0)
-            with self.assertRaisesRegex(RuntimeError, "after start"):
+            with self.assertRaisesRegex(RuntimeError, "starting, running, or stopping"):
                 endpoint.add_analog_input(instance=2, name="Late")
         finally:
             await asyncio.wait_for(endpoint.close(), 5)
@@ -395,7 +421,8 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 if second is not None:
                     await asyncio.wait_for(second.close(), 5)
             finally:
-                await asyncio.wait_for(first.close(), 5)
+                self.assertIsNone(await asyncio.wait_for(first.__aexit__(None, None, None), 5))
+                self.assertIsNone(await first.close())
 
     async def test_identity_agreement_iam_device(self):
         port_a, port_b = free_port(), free_port()
@@ -656,6 +683,8 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
                 self.fail("held-port start must fail or cancel")
             except (asyncio.CancelledError, BacnetError):
                 pass
+            # Cancellation alone is not a cleanup barrier for admitted work.
+            await asyncio.wait_for(endpoint.close(), 5)
             self.assertEqual(pending(), 1)
             await asyncio.wait_for(holder.close(), 5)
             await asyncio.wait_for(endpoint.start(), 10)
@@ -694,9 +723,13 @@ class MstpStartupTests(unittest.IsolatedAsyncioTestCase):
         )
         # Native-dependency/setup failure: RuntimeError from serial open,
         # distinct from BacnetError protocol failures. Pending preserved.
+        endpoint.add_analog_input(instance=1, name="Pending serial")
+        startup = endpoint.start()
+        self.assertTrue(asyncio.isfuture(startup))
         with self.assertRaises(RuntimeError):
-            await asyncio.wait_for(endpoint.start(), 10)
-        await asyncio.wait_for(endpoint.close(), 5)
+            await asyncio.wait_for(startup, 10)
+        self.assertEqual(endpoint._pending_registration_count(), 1)
+        self.assertIsNone(await asyncio.wait_for(endpoint.close(), 5))
 
 
 HUB_UUID = bytes.fromhex("9a21f1641a15454d9ed7e3a2710d7001")
@@ -774,6 +807,94 @@ class ScEndpointHubTests(unittest.IsolatedAsyncioTestCase):
         args.update(overrides)
         return ScEndpoint(**args)
 
+    async def test_tls_setup_error_is_awaited_and_preserves_pending(self):
+        self.hub_url = "wss://127.0.0.1:9"
+        endpoint = self.make_endpoint(SC_A_VMAC, SC_A_UUID, 9050, cert="missing.pem")
+        endpoint.add_analog_input(instance=1, name="Pending TLS")
+        startup = endpoint.start()
+        self.assertTrue(asyncio.isfuture(startup))
+        with self.assertRaisesRegex(RuntimeError, "TLS config error"):
+            await startup
+        self.assertEqual(endpoint._pending_registration_count(), 1)
+        self.assertIsNone(await endpoint.close())
+
+    async def test_close_joins_start_waiting_for_tls(self):
+        await self.held_tls_start(cancel_waiter=False)
+
+    async def test_cancelled_tls_start_then_close_restores_registrations(self):
+        await self.held_tls_start(cancel_waiter=True)
+
+    async def held_tls_start(self, cancel_waiter):
+        """Hold the real TLS handshake after TCP admission, then overlap close."""
+        from urllib.parse import urlsplit
+
+        hub = ScHub(
+            listen="127.0.0.1:0", cert=self.path("hub.pem"),
+            key=self.path("hub.key"), vmac=HUB_VMAC,
+            ca_cert=self.path("site.pem"), device_uuid=HUB_UUID,
+        )
+        await asyncio.wait_for(hub.start(), 10)
+        target = urlsplit(await hub.url())
+        admitted, release = asyncio.Event(), asyncio.Event()
+        connections = set()
+
+        async def proxy(reader, writer):
+            connections.add(asyncio.current_task())
+            upstream = None
+            try:
+                admitted.set()
+                await release.wait()
+                other, upstream = await asyncio.open_connection(target.hostname, target.port)
+
+                async def copy(source, destination):
+                    while data := await source.read(65536):
+                        destination.write(data)
+                        await destination.drain()
+                    destination.close()
+
+                await asyncio.gather(copy(reader, upstream), copy(other, writer))
+            finally:
+                writer.close()
+                if upstream is not None:
+                    upstream.close()
+                connections.discard(asyncio.current_task())
+
+        server = await asyncio.start_server(proxy, "127.0.0.1", 0)
+        self.hub_url = f"wss://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        endpoint = self.make_endpoint(SC_A_VMAC, SC_A_UUID, 9051)
+        endpoint.add_analog_input(instance=1, name="Held TLS")
+        starting = asyncio.ensure_future(endpoint.start())
+        closing = None
+        try:
+            await asyncio.wait_for(admitted.wait(), 5)
+            with self.assertRaisesRegex(RuntimeError, "starting, running, or stopping"):
+                endpoint.add_analog_input(instance=2, name="Too late")
+            if cancel_waiter:
+                starting.cancel()
+            closing = asyncio.ensure_future(endpoint.close())
+            # Close cancels and joins preparation, without waiting for a peer
+            # to finish TLS. It cannot retract a later session-start completion.
+            self.assertIsNone(await asyncio.wait_for(closing, 5))
+            if cancel_waiter:
+                with self.assertRaises(asyncio.CancelledError):
+                    await starting
+            else:
+                with self.assertRaisesRegex(RuntimeError, "startup cancelled by close"):
+                    await asyncio.wait_for(starting, 5)
+            self.assertEqual(endpoint._pending_registration_count(), 1)
+            with self.assertRaisesRegex(RuntimeError, "not started"):
+                await endpoint.status()
+        finally:
+            release.set()
+            await asyncio.gather(starting, *([closing] if closing else []), return_exceptions=True)
+            await endpoint.close()
+            server.close()
+            await server.wait_closed()
+            for task in list(connections):
+                task.cancel()
+            await asyncio.gather(*connections, return_exceptions=True)
+            await hub.stop()
+
     async def test_sc_endpoints_exchange_both_directions(self):
         hub = ScHub(
             listen="127.0.0.1:0",
@@ -794,7 +915,10 @@ class ScEndpointHubTests(unittest.IsolatedAsyncioTestCase):
                 SC_B_VMAC, SC_B_UUID, 9002, cert="b.pem", key="b.key"
             )
             second.add_analog_input(instance=1, name="SC-B", present_value=22.0)
-            await asyncio.wait_for(first.start(), 15)
+            results = await asyncio.gather(first.start(), first.start(), return_exceptions=True)
+            self.assertEqual(sum(result is None for result in results), 1, results)
+            self.assertEqual(sum(isinstance(result, BacnetError) for result in results), 1, results)
+            self.assertIs(await first.__aenter__(), first)
             await asyncio.wait_for(second.start(), 15)
             try:
                 first_client = await first.client()
@@ -830,7 +954,8 @@ class ScEndpointHubTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(uuid_value.tag, "octet_string")
                 self.assertEqual(bytes(uuid_value.value), SC_B_UUID)
             finally:
-                await asyncio.wait_for(first.close(), 5)
+                self.assertIsNone(await asyncio.wait_for(first.__aexit__(None, None, None), 5))
+                self.assertIsNone(await first.close())
                 await asyncio.wait_for(second.close(), 5)
         finally:
             await asyncio.wait_for(hub.stop(), 5)

@@ -1,10 +1,10 @@
 //! Shared validated config + identity/database helpers for Python endpoints.
 //!
-//! HubConfig-style: constructors validate everything before bind/dial; the
-//! async start path only reuses owned values. No post-start owner mutation.
+//! Constructors validate configuration values without I/O. Admitted async
+//! preparation performs TLS/file/serial setup and reports setup errors through
+//! the startup Future. No post-start configuration mutation is exposed.
 
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
@@ -14,7 +14,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, Segmentation, ServiceSupported};
 use pyo3::exceptions::PyValueError;
-use pyo3::PyResult;
+use pyo3::{PyErr, PyResult};
 
 use crate::errors::to_py_err;
 use crate::types::PySegmentation;
@@ -153,12 +153,11 @@ pub(crate) fn build_database(
 }
 
 // ---------------------------------------------------------------------------
-// Pending-registration seam (mirrors BACnetServer: std Mutex + started flag)
+// Rebuildable pending registrations, owned by the private lifecycle gate
 // ---------------------------------------------------------------------------
-// RUN-1: registrations are stored as rebuildable params (not built boxes) so
-// a failed/cancelled start can restore them and retry. Boxes are built fresh
-// from these params on every start attempt; the params survive any drop of
-// the start future, while built boxes are dropped with it.
+// Registrations stay in the admitted worker until startup publishes or cleanup
+// settles. Boxes are built fresh; failed/cancelled attempts restore the params
+// only after releasing the corresponding resources.
 
 /// Pending object parameters: one entry per pre-start `add_*` call.
 ///
@@ -222,53 +221,41 @@ pub(crate) fn build_pending_boxes(
     params.iter().map(PendingObject::build).collect()
 }
 
-/// Drop-guard restoring drained params on every Err/cancel path.
-///
-/// Moved into the start future; callers borrow until success, then disarm
-/// via `take()`. Any Err return — and future cancellation (drop) — puts the
-/// drained vector back at the front, ahead of concurrent adds.
-pub(crate) struct PendingRestoreGuard {
-    pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
-    objects: Option<Vec<PendingObject>>,
-}
+/// Session cleanup is awaited by the private lifecycle worker, never its waiter.
+impl<T: bacnet_transport::port::TransportPort + 'static> super::lifecycle::Session
+    for bacnet_endpoint::session::EndpointSession<T>
+{
+    type Error = PyErr;
 
-impl PendingRestoreGuard {
-    pub(crate) fn new(
-        pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
-        objects: Vec<PendingObject>,
-    ) -> Self {
-        Self {
-            pending,
-            objects: Some(objects),
-        }
-    }
-
-    /// Borrows the drained params (retained on error).
-    pub(crate) fn objects(&self) -> &[PendingObject] {
-        self.objects.as_deref().unwrap_or(&[])
-    }
-
-    /// Disarms after success (params consumed into the running session).
-    pub(crate) fn take(&mut self) -> Option<Vec<PendingObject>> {
-        self.objects.take()
-    }
-}
-
-impl Drop for PendingRestoreGuard {
-    fn drop(&mut self) {
-        if let Some(objs) = self.objects.take() {
-            if objs.is_empty() {
-                return;
+    async fn start(&mut self) -> PyResult<()> {
+        if let Err(error) = self.start().await {
+            // Start errors before role setup leave no spawned transport workers;
+            // role-setup errors already clean up. Settle Running before dropping.
+            if self.is_running() {
+                let _ = self.stop().await;
             }
-            let mut guard = match self.pending.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            // Drained registrations predate concurrent adds: front-insert.
-            let mut restored = objs;
-            restored.extend(guard.drain(..));
-            *guard = restored;
+            return Err(to_py_err(error));
         }
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> PyResult<()> {
+        self.stop().await.map(|_| ()).map_err(to_py_err)
+    }
+}
+
+pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
+    match error {
+        super::lifecycle::LifecycleError::AlreadyStarted => to_py_err(
+            bacnet_types::error::Error::Encoding("endpoint already started".into()),
+        ),
+        super::lifecycle::LifecycleError::StartupCancelled => {
+            pyo3::exceptions::PyRuntimeError::new_err("endpoint startup cancelled by close")
+        }
+        super::lifecycle::LifecycleError::Operation(error) => error,
+        super::lifecycle::LifecycleError::WorkerEnded => pyo3::exceptions::PyRuntimeError::new_err(
+            "endpoint lifecycle worker ended unexpectedly",
+        ),
     }
 }
 
