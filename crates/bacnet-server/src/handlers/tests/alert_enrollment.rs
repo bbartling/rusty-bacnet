@@ -106,7 +106,7 @@ fn alert_present_value_and_removed_properties_have_exact_wire_access() {
         );
         assert_property_error(
             write_wire(&mut db, oid, property, PropertyValue::Boolean(true)),
-            ErrorCode::WRITE_ACCESS_DENIED,
+            ErrorCode::UNKNOWN_PROPERTY,
             &format!("{property:?} write"),
         );
     }

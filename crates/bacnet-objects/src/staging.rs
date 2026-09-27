@@ -292,7 +292,11 @@ impl StagingObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         let Some(names) = &self.stage_names else {
-            return Err(common::write_access_denied_error());
+            return Err(if array_index.is_none() {
+                common::unknown_property_error()
+            } else {
+                common::write_access_denied_error()
+            });
         };
         let mut candidate = names.clone();
         match array_index {
@@ -512,7 +516,11 @@ impl BACnetObject for StagingObject {
                 }
                 Ok(())
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                array_index,
+            )),
         }
     }
 

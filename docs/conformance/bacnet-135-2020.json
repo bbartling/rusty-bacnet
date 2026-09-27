@@ -4062,6 +4062,35 @@
     "docs/python-api.md Local Network Number controls"
    ],
    "notes": "Refs #875. Explicit registration alone provides configured provenance; unregistered owners start unknown and do not borrow declared rows. Registered runtime state lives in the built-in under the database lock, retains last observed values after stop, and resets from immutable configured input at new reservation. Unknown/unregistered state is not persisted. Exact configured-flag precedence includes equal-value quality upgrades and replacement by later conflicting configured announcements; configured local values never learn. Learned-configured replies still use flag zero. Number0/65535 and flag>1 refusal is selected validation policy, not a quoted mandatory ignore clause. Raw inbound BVLL controls run through real BIP and both owners; outgoing NPDUs are observed at TransportPort after successful real inner broadcast send. This fixture does not capture outgoing BVLL; unchanged independent framing tests supply lower-layer evidence. Forwarded-NPDU unicast UDP hops preserve logical broadcast semantics; original-unicast/routed/malformed controls are ignored. Bounded serial control workers do not block APDU/Audit ACK dispatch, cancel owned queued/in-progress endpoint sends, and retain socket/admitted-work leases until final cleanup. Started sends may already have reached wire. No proactive nonrouter startup announcement, persistence, BBMD/foreign-device owner, other-link control support, complete Network Port profile or router/multiport claim (#863)."
+  },
+  {
+   "id": "BACNET-15-BUILT-IN-WRITE-PROPERTY-PRESENCE",
+   "standard_anchor": "135-2020 Clause15.9 printed752-753/PDF754-755 and15.10 printed754/PDF756; local licensed source inspected",
+   "priority": "P1",
+   "requirement_summary": "Unhandled unindexed built-in writes distinguish absent properties from present read-only properties, including NULL, and WPM retains its successful prefix and exact first failure.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/common.rs::unhandled_write_error",
+    "crates/bacnet-objects/src/staging.rs::replace_stage_names",
+    "crates/bacnet-objects/src/file.rs::write_property"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs",
+    "crates/bacnet-server/src/handlers/tests/scalar_null_writes.rs::scalar_null_wp_preserves_property_state_and_error_precedence",
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::unknown_writes_wpm_reports_coordinate_and_retains_successful_prefix",
+    "crates/rusty-bacnet/tests/test_unknown_property_writes.py"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs::unknown_writes_optional_staging_names_use_current_presence",
+    "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "README.md Property access and objects",
+    "docs/rust-api.md built-in unindexed write errors",
+    "CHANGELOG.md #870"
+   ],
+   "notes": "Refs #870. Fifty syntactic terminal branches use current concrete property_metadata; the shared value-type branch expands across12types. The existing62-object fixture includes the already-correct Network Port control. Optional absent Staging STAGE_NAMES and absent stream File RECORD_COUNT (Table 12-16 footnote 2, printed 240/PDF 242) are corrected only for unindexed writes. Present read-only record File counts and other File resize guards retain their existing errors. PROPERTY_LIST must not be inferred absent from its own projection. Earlier successful writes, state/source/authorization and array/index guards remain in place. No server-wide presence precheck or custom-object policy change. Direct matrix covers NULL/ordinary inputs and present read-only controls; Rust observed WPM proves exact coordinate and retained DESCRIPTION prefix. Installed Python exposes class/code and prefix through real localhost WP/WPM, not a new failed-coordinate API. This narrow evidence does not claim full object or service conformance."
   }
  ]
 }

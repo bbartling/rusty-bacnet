@@ -1,6 +1,7 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::constructed::LogDatum;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
 
@@ -238,7 +239,7 @@ fn write_log_interval() {
 }
 
 #[test]
-fn write_unknown_property_denied() {
+fn write_absent_property_is_unknown() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
     let result = el.write_property(
         PropertyIdentifier::PRESENT_VALUE,
@@ -246,7 +247,9 @@ fn write_unknown_property_denied() {
         PropertyValue::Real(1.0),
         None,
     );
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+    );
 }
 
 #[test]

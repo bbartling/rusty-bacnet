@@ -31,7 +31,7 @@ fn assert_unchanged(result: Result<ReliabilityEvaluation, Error>) {
     assert_eq!(result.unwrap(), ReliabilityEvaluation::Unchanged);
 }
 
-fn assert_unknown_property(result: Result<PropertyValue, Error>) {
+fn assert_unknown_property<T>(result: Result<T, Error>) {
     assert!(matches!(
         result,
         Err(Error::Protocol { class, code })
@@ -527,7 +527,7 @@ fn analog_output_has_no_fault_out_of_range_surface_or_evaluator() {
         assert_unknown_property(ao.read_property(property, None));
         assert!(!ao.property_list().contains(&property));
         assert!(!ao.is_writable_property(property));
-        assert_write_denied(ao.write_property_from(
+        assert_unknown_property(ao.write_property_from(
             property,
             None,
             PropertyValue::Real(1.0),

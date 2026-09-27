@@ -286,7 +286,10 @@ fn resize_eligibility_precedes_type_validation_and_every_denial_is_atomic() {
             protocol_pair(
                 write_resize(&mut stream, PropertyIdentifier::RECORD_COUNT, value).unwrap_err()
             ),
-            write_denied_pair()
+            (
+                ErrorClass::PROPERTY.to_raw() as u32,
+                ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            )
         );
         assert_eq!(state(&stream), expected);
     }
@@ -302,7 +305,14 @@ fn resize_eligibility_precedes_type_validation_and_every_denial_is_atomic() {
             protocol_pair(
                 write_resize(&mut unknown, property, PropertyValue::Boolean(false)).unwrap_err()
             ),
-            write_denied_pair()
+            if property == PropertyIdentifier::RECORD_COUNT {
+                (
+                    ErrorClass::PROPERTY.to_raw() as u32,
+                    ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                )
+            } else {
+                write_denied_pair()
+            }
         );
         assert_eq!(state(&unknown), expected);
     }

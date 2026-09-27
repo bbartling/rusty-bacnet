@@ -960,6 +960,17 @@ first failure, and leaves the remaining suffix unprocessed; it does not restore
 previous values. Built-in persistence and File resize candidates retain their
 existing commit boundaries. No replacement token API is needed.
 
+For unindexed writes that reach a built-in object's final property dispatch,
+absent properties return `PROPERTY/UNKNOWN_PROPERTY`, including NULL writes.
+Present read-only properties return `PROPERTY/WRITE_ACCESS_DENIED`. Presence is
+based on that instance's effective metadata, including optional properties and
+`PROPERTY_LIST`. Unprovisioned Staging names and stream File `RECORD_COUNT`
+also report absence; present read-only record File counts remain denied. Earlier
+state, command-source, authorization and indexed-write
+guards retain their precedence; custom object implementations retain their own
+write dispatch. WPM reports the failed coordinate and retains its successful
+prefix. See [bounded error evidence](conformance/support-summary.md#ledger-rows).
+
 Intrinsic reporting uses one proposal/commit contract. The
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,

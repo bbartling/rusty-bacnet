@@ -361,7 +361,11 @@ impl BACnetObject for LifeSafetyPointObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
@@ -584,7 +588,11 @@ impl BACnetObject for LifeSafetyZoneObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

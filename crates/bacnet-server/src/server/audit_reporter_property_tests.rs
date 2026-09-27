@@ -239,6 +239,11 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
     for selection in [None, Some(vec![]), Some(vec![Selector::None])] {
         for multiple in [false, true] {
             for index in [None, Some(0), Some(1)] {
+                let expected_code = if selection.is_none() && index.is_none() {
+                    ErrorCode::UNKNOWN_PROPERTY
+                } else {
+                    ErrorCode::WRITE_ACCESS_DENIED
+                };
                 let mut reporter = reporter();
                 reporter.set_monitored_objects(selection.clone()).unwrap();
                 let mut fixture = server(reporter).await;
@@ -295,7 +300,7 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                 };
                 assert_eq!(
                     (error.error_class, error.error_code),
-                    (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+                    (ErrorClass::PROPERTY, expected_code)
                 );
                 if multiple {
                     let error =
@@ -340,7 +345,7 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                     1,
                     0,
                     0,
-                    Some((ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)),
+                    Some((ErrorClass::PROPERTY, expected_code)),
                 );
                 expected.target_object = Some(target);
                 expected.target_property = Some(AuditPropertyReference {

@@ -214,7 +214,7 @@ fn alert_enrollment_removed_common_properties_are_unknown_and_nonmutating() {
         );
         assert_property_error(
             ae.write_property(property, None, PropertyValue::Boolean(true), None),
-            ErrorCode::WRITE_ACCESS_DENIED,
+            ErrorCode::UNKNOWN_PROPERTY,
             &format!("{property:?} write"),
         );
     }

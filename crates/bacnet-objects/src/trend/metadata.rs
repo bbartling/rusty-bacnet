@@ -301,7 +301,7 @@ mod tests {
                                 .write_property(p, None, PropertyValue::Null, None)
                                 .unwrap_err(),
                             ErrorClass::PROPERTY,
-                            ErrorCode::WRITE_ACCESS_DENIED,
+                            ErrorCode::UNKNOWN_PROPERTY,
                         );
                     }
                     assert_eq!(object.property_metadata().as_ref(), metadata);
