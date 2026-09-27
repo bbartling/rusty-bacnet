@@ -168,6 +168,7 @@ impl CovSubscriptionTable {
             key,
             generation,
             owner: Arc::clone(&self.owner),
+            last_successful_ticket: 0,
             route_owner,
             subscription: sub.clone(),
             max_notification_delay,

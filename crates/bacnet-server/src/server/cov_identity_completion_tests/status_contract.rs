@@ -251,10 +251,7 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
     s.lock().unwrap().flags = flags(3);
     let sample = crate::cov::CovSample::new(&PropertyValue::Real(1.0)).unwrap();
     let o = crate::cov::CovObservation::new(sample, Some(&flags(3))).unwrap();
-    f.table
-        .write()
-        .await
-        .set_last_notified_observation(&first, o.clone());
+    f.table.write().await.complete_for_test(&first, o.clone());
     f.table.write().await.unsubscribe(second.key());
     f.table.write().await.unsubscribe(third.key());
     let mut sibling = proposal(

@@ -168,7 +168,7 @@ async fn cov_recipient_route_admitted_confirmed_ack_cannot_overwrite_new_generat
             .table
             .write()
             .await
-            .set_last_notified_observation(&current, observation(99.0)));
+            .complete_for_test(&current, observation(99.0)));
         assert_eq!(
             fixture.routes.lock().unwrap().as_slice(),
             std::slice::from_ref(&old.subscriber_mac)

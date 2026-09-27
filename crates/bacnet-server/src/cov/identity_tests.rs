@@ -42,7 +42,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     let sub = proposal(None, false);
     let first = table.admit_for_test(sub.clone(), 0).unwrap();
     let second = table.admit_for_test(sub.clone(), 0).unwrap();
-    assert!(!table.set_last_notified_observation(
+    assert!(!table.complete_for_test(
         &first,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(7.0))
@@ -51,7 +51,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
         )
         .unwrap()
     ));
-    assert!(table.set_last_notified_observation(
+    assert!(table.complete_for_test(
         &second,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(8.0))
@@ -61,7 +61,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
         .unwrap()
     ));
     assert!(table.unsubscribe(second.key()));
-    assert!(!table.set_last_notified_observation(
+    assert!(!table.complete_for_test(
         &second,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
@@ -71,7 +71,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
         .unwrap()
     ));
     let third = table.admit_for_test(sub.clone(), 0).unwrap();
-    assert!(!table.set_last_notified_observation(
+    assert!(!table.complete_for_test(
         &second,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
@@ -95,7 +95,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
         )
     );
     let foreign = CovSubscriptionTable::new().admit_for_test(sub, 0).unwrap();
-    assert!(!table.set_last_notified_observation(
+    assert!(!table.complete_for_test(
         &foreign,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
@@ -178,7 +178,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].generation, u64::MAX);
     assert_eq!(accepted[0].cov_increment, Some(3.0));
-    assert!(!table.set_last_notified_observation(
+    assert!(!table.complete_for_test(
         &before,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(100.0))

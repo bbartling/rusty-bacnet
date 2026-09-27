@@ -923,3 +923,17 @@ BACnetLIST, which the service decoder delivers as an empty `PropertyValue::List`
 ## Follow-Up Backlog
 
 Rows not marked `supported-with-clause-evidence` are follow-up work. The next Annex J tranche should continue BBMD/BDT/FDT lifecycle evidence, including remaining forwarding-loop prevention negative cases and management/table edge cases. NAT traversal and B/IP-M multicast are now explicitly tracked as deferred owner-decision rows.
+
+### COV successful preparation ordering (#826)
+
+The existing `BACNET-13-COV-SUBSCRIPTIONS` row now records a local concurrency
+policy: complete eligible unconfirmed observations reserve a checked table-owned
+ticket before later waits, and successful sends commit the entire baseline only
+when newer than that live reference's last successful ticket. Failed or cancelled
+newer work cannot prevent older success. Confirmed admission timing, lifecycle
+fences and per-reference qualification remain unchanged. This is not a claimed
+Standard tie-break or an original-write, event-time, byte-order or remote-receipt
+guarantee. A supplied Binary Lighting terminal snapshot prepared later can win
+even when its object state is older. Regression anchors in the machine ledger
+cover held completions, capture-before-await, per-reference overlap, failure,
+exhaustion and the supplied-snapshot limit; row status is unchanged.

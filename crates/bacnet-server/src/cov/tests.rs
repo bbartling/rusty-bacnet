@@ -180,10 +180,10 @@ fn should_notify_zero_increment_always_fires() {
 }
 
 #[test]
-fn set_last_notified_observation_updates() {
+fn complete_for_test_updates() {
     let mut table = CovSubscriptionTable::new();
     let snapshot = table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
-    table.set_last_notified_observation(
+    table.complete_for_test(
         &snapshot,
         crate::cov::CovObservation::new(
             crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))

@@ -405,102 +405,123 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         priority: None,
                     });
                 }
-                Some((values, flags.observation(sample), object.cov_increment()))
+                let observation = flags.observation(sample);
+                let increment = object.cov_increment();
+                // Reserve every ordinary reference while the shared observation
+                // is still guarded, before a preceding property send can await.
+                let completions = subs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, sub)| {
+                        if sub.monitored_property.is_some()
+                            || (!force
+                                && !CovSubscriptionTable::should_notify(
+                                    sub,
+                                    Some(observation.sample()),
+                                    sub.cov_increment.or(increment),
+                                )
+                                && !observation
+                                    .flags_changed(sub.last_notified_observation.as_ref()))
+                        {
+                            return None;
+                        }
+                        sub.prepare_completion()
+                            .map(|completion| (index, completion))
+                    })
+                    .collect::<HashMap<_, _>>();
+                Some((values, observation, completions))
             })();
             prepared
         } else {
             None
         };
 
-        for sub in subs {
-            let (notification_values, current_observation) =
-                if let Some(property) = sub.monitored_property {
-                    let db = if snapshot.is_none() {
-                        Some(db.read().await)
-                    } else {
-                        None
-                    };
-                    let Some(object) = snapshot.or_else(|| db.as_deref()?.get(oid)) else {
-                        continue;
-                    };
-                    let Ok(flags) = crate::cov::flags::PreparedFlags::read(object) else {
-                        continue;
-                    };
-                    if crate::cov::value_source::applies(object, property) {
-                        if sub.monitored_property_array_index.is_some() {
-                            continue;
-                        }
-                        let Ok(prepared) =
-                            crate::cov::value_source::PreparedValueSource::read(object, &flags)
-                        else {
-                            continue;
-                        };
-                        if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
-                            continue;
-                        }
-                        (prepared.values(), prepared.observation)
-                    } else {
-                        let prepared = if property == PropertyIdentifier::STATUS_FLAGS {
-                            flags.selected(object, sub.monitored_property_array_index)
-                        } else {
-                            object
-                                .read_property(property, sub.monitored_property_array_index)
-                                .and_then(|value| {
-                                    crate::cov::prepare::prepare_value(
-                                        object,
-                                        property,
-                                        sub.monitored_property_array_index,
-                                        sub.cov_increment,
-                                        &value,
-                                    )
-                                })
-                        };
-                        let Ok(prepared) = prepared else {
-                            continue;
-                        };
-                        let observation = flags.observation(prepared.sample.clone());
-                        if !force
-                            && !prepared
-                                .reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
-                            && !observation.flags_changed(sub.last_notified_observation.as_ref())
-                        {
-                            continue;
-                        }
-                        let mut values = vec![BACnetPropertyValue {
-                            property_identifier: property,
-                            property_array_index: sub.monitored_property_array_index,
-                            value: prepared.encoded,
-                            priority: None,
-                        }];
-                        if property != PropertyIdentifier::STATUS_FLAGS {
-                            if let Some(encoded) = flags.encoded {
-                                values.push(BACnetPropertyValue {
-                                    property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                                    property_array_index: None,
-                                    value: encoded,
-                                    priority: None,
-                                });
-                            }
-                        }
-                        (values, observation)
-                    }
+        for (index, sub) in subs.iter().enumerate() {
+            let (notification_values, current_observation, completion) = if let Some(property) =
+                sub.monitored_property
+            {
+                let db = if snapshot.is_none() {
+                    Some(db.read().await)
                 } else {
-                    let Some((values, observation, increment)) = &ordinary else {
+                    None
+                };
+                let Some(object) = snapshot.or_else(|| db.as_deref()?.get(oid)) else {
+                    continue;
+                };
+                let Ok(flags) = crate::cov::flags::PreparedFlags::read(object) else {
+                    continue;
+                };
+                let (values, observation) = if crate::cov::value_source::applies(object, property) {
+                    if sub.monitored_property_array_index.is_some() {
+                        continue;
+                    }
+                    let Ok(prepared) =
+                        crate::cov::value_source::PreparedValueSource::read(object, &flags)
+                    else {
                         continue;
                     };
-                    if values.is_empty()
-                        || (!force
-                            && !CovSubscriptionTable::should_notify(
-                                sub,
-                                Some(observation.sample()),
-                                sub.cov_increment.or(*increment),
-                            )
-                            && !observation.flags_changed(sub.last_notified_observation.as_ref()))
+                    if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
+                        continue;
+                    }
+                    (prepared.values(), prepared.observation)
+                } else {
+                    let prepared = if property == PropertyIdentifier::STATUS_FLAGS {
+                        flags.selected(object, sub.monitored_property_array_index)
+                    } else {
+                        object
+                            .read_property(property, sub.monitored_property_array_index)
+                            .and_then(|value| {
+                                crate::cov::prepare::prepare_value(
+                                    object,
+                                    property,
+                                    sub.monitored_property_array_index,
+                                    sub.cov_increment,
+                                    &value,
+                                )
+                            })
+                    };
+                    let Ok(prepared) = prepared else {
+                        continue;
+                    };
+                    let observation = flags.observation(prepared.sample.clone());
+                    if !force
+                        && !prepared
+                            .reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
+                        && !observation.flags_changed(sub.last_notified_observation.as_ref())
                     {
                         continue;
                     }
-                    (values.clone(), observation.clone())
+                    let mut values = vec![BACnetPropertyValue {
+                        property_identifier: property,
+                        property_array_index: sub.monitored_property_array_index,
+                        value: prepared.encoded,
+                        priority: None,
+                    }];
+                    if property != PropertyIdentifier::STATUS_FLAGS {
+                        if let Some(encoded) = flags.encoded {
+                            values.push(BACnetPropertyValue {
+                                property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                                property_array_index: None,
+                                value: encoded,
+                                priority: None,
+                            });
+                        }
+                    }
+                    (values, observation)
                 };
+                let Some(completion) = sub.prepare_completion() else {
+                    continue;
+                };
+                (values, observation, completion)
+            } else {
+                let Some((values, observation, completions)) = &ordinary else {
+                    continue;
+                };
+                let Some(completion) = completions.get(&index) else {
+                    continue;
+                };
+                (values.clone(), observation.clone(), *completion)
+            };
 
             // Resolve after every awaited read/callback and before fresh admission.
             let time_remaining = {
@@ -601,7 +622,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 {
                     let mut table = cov_table.write().await;
-                    table.set_last_notified_observation(sub, current_observation);
+                    table.complete_observation(sub, completion, current_observation);
                 }
 
                 let network = Arc::clone(network);
@@ -678,7 +699,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     warn!(error = %e, "Failed to send COV notification");
                 } else {
                     let mut table = cov_table.write().await;
-                    table.set_last_notified_observation(sub, current_observation);
+                    table.complete_observation(sub, completion, current_observation);
                 }
             }
         }

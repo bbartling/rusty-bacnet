@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Prevent late successful unconfirmed COV sends from replacing a newer successful
+  prepared observation (#826). One checked table counter and per-reference marker
+  commit the whole baseline together; failed or cancelled newer sends do not
+  block older successes. Existing lifecycle fences and confirmed admission-time
+  completion remain. The pre-1.0 public baseline setter is removed; completion
+  is internal to the notification executor. This is preparation ordering, not
+  original-write, transport-byte or remote-receipt ordering.
+
 - Implement specialized commandable Value_Source COV for AO/AV/BO/BV/MSO/MSV
   (#823). Single and Multiple reports capture PV, Status_Flags, Value_Source,
   Last_Command_Time and Current_Command_Priority together. Object PV criteria,

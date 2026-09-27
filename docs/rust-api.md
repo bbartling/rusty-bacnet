@@ -1491,7 +1491,8 @@ accounting does not grant cleanup authority to an obsolete route.
 Property subscriptions now prepare one selected-coordinate `CovSample` for comparison,
 wire payload and fenced baseline completion; a failed selected read or encoding
 never substitutes Present_Value. The pre-1.0 table API uses `last_notified_observation: Option<CovObservation>`
-and `set_last_notified_observation(snapshot, observation)`. Each observation pairs
+with completion owned internally by the notification executor. The former public
+`set_last_notified_observation` bypass is removed. Each observation pairs
 a required `CovSample` with compact absent/present flags.
 `CovObservation::new(sample, flags)` validates present flags; private immutable
 fields expose `sample()` and `status_flags()` (the four used bits).
@@ -1504,6 +1505,23 @@ they do not constrain allocations inside a custom object's read callback.
 Admission-time overflow returns RESOURCES/NO_SPACE_TO_ADD_LIST_ELEMENT before
 replacement/context refresh. A later unavailable or oversized value is skipped
 without advancing its baseline. Independent notification traffic budgets remain.
+
+Unconfirmed notification preparation reserves a checked, nonwrapping ticket only
+for a complete eligible observation, before later waits. Each live reference
+retains one last-successful marker: successful sends atomically advance that
+marker and the entire observation only when their ticket is newer. A failed,
+cancelled or refused newer send does not block an older successful send. This
+local policy covers ordinary, Single and Multiple reports, including specialized
+Value_Source tuples; overlapping companions never complete unqualified references.
+Existing owner, generation, route and lifetime fences still apply. Same-route
+Multiple expiry refresh retains progress; reference replacement resets it.
+Ticket exhaustion suppresses further unconfirmed candidates for that table.
+Confirmed reports retain their admission-time baseline and consume no tickets.
+
+This orders prepared observations, not original object mutations, transport byte
+order or remote receipt. In particular, a retained Binary Lighting terminal
+snapshot prepared after a newer live report may become the baseline even though
+its object state is older. There is no event-time history or replay guarantee.
 
 The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
 Set or relinquish a priority slot by writing a value or NULL to `Present_Value`
