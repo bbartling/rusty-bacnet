@@ -2,7 +2,10 @@
 use super::direct_discovery::{DIRECT_POOL_IDLE_TTL, DIRECT_POOL_MAX_ENTRIES};
 use super::direct_membership::{disconnect_request, Membership};
 use super::WebSocketPort;
-use crate::sc_frame::{encode_sc_message, Vmac};
+use crate::sc_frame::{
+    decode_sc_message, encode_sc_message, validate_control, ControlRecipient, ScFunction,
+    ScMessage, Vmac,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,14 +42,67 @@ impl PooledDirect {
         // hold bounded channel handles, so a replaced socket can really close.
         let task = tokio::spawn(async move {
             let _physical = physical;
-            loop {
-                let request = tokio::select! {
+            let mut prefer_send = true;
+            let locally_retired = loop {
+                let event = tokio::select! {
                     biased;
-                    _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => break,
-                    request = recv.recv() => match request { Some(r) => r, None => break },
+                    _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => break true,
+                    event = next_event(&ws, &mut recv, prefer_send) => event,
+                };
+                let request = match event {
+                    WorkerEvent::Received(received) => {
+                        prefer_send = true;
+                        let Ok(wire) = received else {
+                            break false;
+                        };
+                        let Ok(message) = decode_sc_message(&wire) else {
+                            continue;
+                        };
+                        // This is lifecycle control only. Application NPDUs and
+                        // unsolicited responses do not enter the transport intake.
+                        if message.function != ScFunction::DisconnectRequest {
+                            continue;
+                        }
+                        match validate_control(&message, &wire, ControlRecipient::HubConnector) {
+                            Err(Some(nak)) => {
+                                if !matches!(
+                                    tokio::time::timeout(wait, ws.send(&nak)).await,
+                                    Ok(Ok(()))
+                                ) {
+                                    break false;
+                                }
+                                continue;
+                            }
+                            Err(None) => continue,
+                            Ok(()) => {}
+                        }
+                        // Seal new local sends before the bounded ACK write.
+                        // Already admitted work is never redirected to a successor.
+                        owner.retire();
+                        let ack = ScMessage {
+                            function: ScFunction::DisconnectAck,
+                            message_id: message.message_id,
+                            originating_vmac: None,
+                            destination_vmac: None,
+                            dest_options: Vec::new(),
+                            data_options: Vec::new(),
+                            payload: bytes::Bytes::new(),
+                        };
+                        let mut bytes = bytes::BytesMut::new();
+                        encode_sc_message(&mut bytes, &ack);
+                        let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
+                        break false;
+                    }
+                    WorkerEvent::Send(request) => {
+                        prefer_send = false;
+                        match request {
+                            Some(r) => r,
+                            None => break true,
+                        }
+                    }
                 };
                 if !owner.is_current() {
-                    break;
+                    break true;
                 }
                 let result = tokio::select! {
                     biased;
@@ -57,13 +113,15 @@ impl PooledDirect {
                 let failed = result.is_err();
                 let _ = request.done.send(result);
                 if failed {
-                    break;
+                    break true;
                 }
-            }
+            };
             owner.retire();
-            let mut bytes = bytes::BytesMut::new();
-            encode_sc_message(&mut bytes, &disconnect_request());
-            let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
+            if locally_retired {
+                let mut bytes = bytes::BytesMut::new();
+                encode_sc_message(&mut bytes, &disconnect_request());
+                let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
+            }
             // Dropping ws closes the physical socket; retirement is bounded.
         });
         (
@@ -92,6 +150,35 @@ impl PooledDirect {
             })
             .ok_or(())??;
         receiver.await.map_err(|_| ())?
+    }
+}
+
+enum WorkerEvent {
+    Received(Result<Vec<u8>, bacnet_types::error::Error>),
+    Send(Option<SendRequest>),
+}
+
+// Alternate priority after each selected event. A continuously ready receive
+// stream can precede a queued send by at most one frame, and a continuously
+// filled send queue can precede remote control by at most one bounded write.
+// The outer select always gives retirement first priority.
+async fn next_event<W: WebSocketPort>(
+    ws: &W,
+    recv: &mut mpsc::Receiver<SendRequest>,
+    prefer_send: bool,
+) -> WorkerEvent {
+    if prefer_send {
+        tokio::select! {
+            biased;
+            request = recv.recv() => WorkerEvent::Send(request),
+            received = ws.recv() => WorkerEvent::Received(received),
+        }
+    } else {
+        tokio::select! {
+            biased;
+            received = ws.recv() => WorkerEvent::Received(received),
+            request = recv.recv() => WorkerEvent::Send(request),
+        }
     }
 }
 
@@ -209,3 +296,7 @@ impl Drop for DirectPool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "direct_worker_tests.rs"]
+mod direct_worker_tests;

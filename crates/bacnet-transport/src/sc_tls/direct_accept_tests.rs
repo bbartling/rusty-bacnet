@@ -686,3 +686,9 @@ async fn accept_registration_rejects_identity_mismatch_before_binding() {
 
 #[path = "direct_membership_tests.rs"]
 mod direct_membership_tests;
+
+impl TestCa {
+    pub(crate) fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
+        self.node_config(vec!["localhost".into()]).acceptor()
+    }
+}

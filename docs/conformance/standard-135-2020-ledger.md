@@ -1022,4 +1022,7 @@ in [the Rust API](../rust-api.md#direct-peer-membership-and-limits). Different
 CA-valid certificates may claim the same UUID under this membership policy.
 This row does not promote the broader connection-state audit or claim #803
 request-principal isolation, #524 response confinement, BTL certification,
-external interoperability or hardware qualification.
+external interoperability or hardware qualification. Idle outbound workers observe
+remote EOF/Close and handle Disconnect control with generation-specific cleanup.
+Ordinary bidirectional application NPDU routing remains a pre-existing gap in
+[GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).

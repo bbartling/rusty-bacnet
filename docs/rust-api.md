@@ -546,13 +546,17 @@ local policy. Replacing an outbound peer still needs an accepted slot.
 Outbound sends verify the peer's Connect VMAC against the requested destination.
 The outbound pool retains at most 16 peers, with 16 pending dials and 32 physical
 sockets per enabled discovery owner; expiry, eviction and disable retire only
-their own generation. Disable/stop forcefully cancels its owned socket workers.
+their own generation. An idle worker observes remote EOF/Close and answers a valid Disconnect request
+before closing. Malformed Disconnect requests use the existing control validator.
+Disable/stop forcefully cancels its owned socket workers.
 
 Private process-wide generations fence new work from old sockets and stale
 cleanup. Already queued complete NPDUs retain their original values; no reply
 routing or certificate principal is attached by this change. UUID claims are
 not certificate bindings. Direct request principal/reassembly authorization
-(#803) and confirmed-response confinement (#524) remain separate.
+(#803) and confirmed-response confinement (#524) remain separate. Ordinary
+bidirectional application NPDU routing over established direct sockets remains
+a pre-existing gap tracked in [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
 
 ### Hub certificate bindings
 

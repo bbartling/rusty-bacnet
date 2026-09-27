@@ -289,3 +289,31 @@ async fn expiry_eviction_disable_release_membership_and_close_workers() {
     assert!(!current.member.is_current());
     f.stop().await;
 }
+
+#[tokio::test]
+async fn idle_outbound_remote_eof_releases_identity_and_physical_slot() {
+    let mut f = Fixture::new(1).await;
+    f.send().await.unwrap();
+    receive(&mut f.remote_rx, LOCAL).await;
+    let old = f.direct.pooled_get(&REMOTE, Instant::now()).unwrap();
+    f.remote.stop().await;
+    // No pooled_get, expiry, outgoing NPDU or local disable drives cleanup.
+    tokio::time::timeout(WAIT, async {
+        while old.member.is_current()
+            || f.direct.physical.available_permits() != DIRECT_POOL_MAX_ENTRIES * 2
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("remote EOF must autonomously retire idle outbound membership");
+    let (replacement, accept) = claim(&f.local, &f.ca, REMOTE, [4; 16]).await;
+    assert_eq!(accept.function, ScFunction::ConnectAccept);
+    old.member.retire(); // Late old owner cleanup still cannot erase the new UUID.
+    send_accepted(&replacement, REMOTE).await;
+    receive(&mut f.local_rx, REMOTE).await;
+    f.stop().await;
+}
+
+#[path = "direct_remote_control_tests.rs"]
+mod direct_remote_control_tests;
