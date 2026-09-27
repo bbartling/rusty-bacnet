@@ -1831,6 +1831,29 @@ represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 
 Async BACnet server that hosts objects and dispatches incoming requests.
 
+### Server shutdown and local sends
+
+`BACnetServer::stop()` seals new local broadcasts and mutations, joins admitted
+server work, then stops the owned network and transport before returning success.
+The target-Audit drain retains the ingress needed for acknowledgments until its
+existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
+call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
+a cleanup-task panic remains an error on later calls.
+
+`broadcast_i_am()` and cloned `IAmBroadcaster` handles share a fail-fast limit of
+32 local sends in flight, independent of inbound peer quotas. An admitted send is
+server-owned even if its caller stops waiting. Shutdown cancels and joins it;
+retained handles reject new sends and do not prolong the transport lifetime.
+Local mutation methods reject before changing objects once shutdown starts.
+`read_local()`, PICS, counters and database inspection remain available after
+Rust server stop. `local_mac()` retains the last bound address snapshot; it does
+not assert that the transport remains active.
+
+Drop seals admission and aborts owned application work. It does not synchronously
+join task destruction. If transport cleanup has already begun, that owned task
+continues while the runtime runs. Use awaited `stop()` for the joined resource
+release guarantee. This is a local lifecycle contract, not a BACnet wire change.
+
 ### Building a Server
 
 ```rust

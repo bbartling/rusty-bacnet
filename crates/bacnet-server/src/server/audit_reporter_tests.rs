@@ -117,7 +117,7 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
     let mut fixture = server(reporter()).await;
     let mut audit = audit_reporter::WriteAudit::new(
         &fixture.server.config,
-        &fixture.server.network,
+        fixture.server.test_network(),
         &fixture.server.notification_transactions,
         &fixture.server.device_bindings,
         &fixture.server.comm_state,

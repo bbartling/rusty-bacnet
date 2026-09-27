@@ -312,7 +312,7 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
 
         BACnetServer::<RecordingTransport>::fire_cov_notifications_from_snapshot(
             &server.db,
-            &server.network,
+            server.test_network(),
             &server.cov_table,
             &server.cov_in_flight,
             &server.notification_transactions,

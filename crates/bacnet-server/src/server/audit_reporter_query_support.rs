@@ -221,7 +221,7 @@ pub(super) async fn ingress(
 ) {
     BACnetServer::dispatch(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.seg_ack_senders,
         &server.seg_send_permits,

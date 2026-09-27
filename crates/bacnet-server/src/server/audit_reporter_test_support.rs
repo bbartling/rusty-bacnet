@@ -364,14 +364,14 @@ pub(super) async fn dispatch_from(
     let (tx, rx) = oneshot::channel();
     let invoke_id = 77u8.wrapping_add(
         server
-            .network
+            .test_network()
             .transport()
             .requests
             .fetch_add(1, Ordering::AcqRel),
     );
     BACnetServer::handle_confirmed_request(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.seg_ack_senders,
         &server.seg_send_permits,

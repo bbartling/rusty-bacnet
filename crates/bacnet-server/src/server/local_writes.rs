@@ -39,6 +39,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {
+        self.active_network()?;
         let changes = {
             let mut db = self.db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
@@ -52,7 +53,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         for change in changes {
             Self::fire_life_safety_cov_notifications(
                 &self.db,
-                &self.network,
+                self.network
+                    .as_ref()
+                    .expect("running local mutation owns network"),
                 &self.cov_table,
                 &self.cov_in_flight,
                 &self.notification_transactions,
@@ -139,6 +142,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
+        self.active_network()?;
         // Only a property write can carry OBJECT_NAME, so only it needs the name
         // index kept in step.
         let renaming = matches!(
@@ -178,7 +182,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     } else {
                         let mut audit = audit_reporter::WriteAudit::local(
                             &self.config,
-                            &self.network,
+                            self.network
+                                .as_ref()
+                                .expect("running local mutation owns network"),
                             &self.notification_transactions,
                             &self.comm_state,
                             &db,
@@ -270,7 +276,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         Self::fire_event_notifications_with_bindings(
             &self.db,
-            &self.network,
+            self.network
+                .as_ref()
+                .expect("running local mutation owns network"),
             &self.comm_state,
             &self.server_tsm,
             &self.notification_transactions,
@@ -283,7 +291,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             for change in exact_changes {
                 Self::fire_life_safety_cov_notifications(
                     &self.db,
-                    &self.network,
+                    self.network
+                        .as_ref()
+                        .expect("running local mutation owns network"),
                     &self.cov_table,
                     &self.cov_in_flight,
                     &self.notification_transactions,
@@ -297,7 +307,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         } else {
             Self::fire_cov_notifications(
                 &self.db,
-                &self.network,
+                self.network
+                    .as_ref()
+                    .expect("running local mutation owns network"),
                 &self.cov_table,
                 &self.cov_in_flight,
                 &self.notification_transactions,
@@ -309,7 +321,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         Self::execute_staging_plans(
             &self.db,
-            &self.network,
+            self.network
+                .as_ref()
+                .expect("running local mutation owns network"),
             &self.cov_table,
             &self.cov_in_flight,
             &self.server_tsm,
@@ -334,7 +348,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
         Self::execute_staging_plans(
             &self.db,
-            &self.network,
+            self.network
+                .as_ref()
+                .expect("running local mutation owns network"),
             &self.cov_table,
             &self.cov_in_flight,
             &self.server_tsm,

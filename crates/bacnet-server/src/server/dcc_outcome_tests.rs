@@ -41,7 +41,7 @@ async fn handle_source(
 ) {
     BACnetServer::handle_admitted_confirmed_request(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.seg_ack_senders,
         &server.seg_send_permits,
@@ -233,11 +233,11 @@ async fn dcc_outcomes_exact_precedence_before_response_and_secret_redaction() {
             }
             // Fail transport after the commit; never revise or double count it.
             server
-                .network
+                .test_network()
                 .transport()
                 .fail_next
                 .store(true, Ordering::Release);
-            server.network.transport().release.notify_one();
+            server.test_network().transport().release.notify_one();
             future.await;
             completion.await.unwrap();
             assert_eq!(server.dcc_outcome_counters(), counts);

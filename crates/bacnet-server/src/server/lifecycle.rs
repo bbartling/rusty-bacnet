@@ -783,13 +783,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ),
         );
 
+        let broadcaster =
+            super::broadcaster::BroadcasterState::new(&network, &request_tasks, &config, &db);
         let server = Self {
             target_audit,
             config,
             discovery_limiter,
             time_sync_limiter,
             _clock: clock,
-            network,
+            network: Some(network),
+            broadcaster,
+            transport_cleanup: None,
+            transport_cleanup_error: None,
             db,
             cov_table,
             cov_counters,

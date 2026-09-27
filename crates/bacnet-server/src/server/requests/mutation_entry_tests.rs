@@ -205,7 +205,7 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
     let (tx, rx) = oneshot::channel();
     BACnetServer::dispatch(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.seg_ack_senders,
         &server.seg_send_permits,
@@ -259,7 +259,13 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
     assert_eq!(before, after);
-    assert!(server.network.transport().sent.lock().unwrap().is_empty());
+    assert!(server
+        .test_network()
+        .transport()
+        .sent
+        .lock()
+        .unwrap()
+        .is_empty());
     server.stop().await.unwrap();
 }
 

@@ -23,7 +23,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use tokio::sync::RwLock;
 
-use super::{BACnetServer, IAmBroadcaster, ServerConfig};
+use super::{BACnetServer, ServerConfig};
 
 /// Configuration policy for discovery rate limiting and duplicate suppression.
 #[derive(Debug, Clone)]
@@ -787,21 +787,11 @@ pub fn iam_request_for(device_oid: ObjectIdentifier, config: &ServerConfig) -> I
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
+    /// Broadcast I-Am through this server's bounded local-send owner.
+    /// Cancelling the waiter leaves admitted work owned until completion or stop.
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        broadcast_i_am_from(
-            &self.config,
-            &self.db,
-            &self.network,
-            Some(&self.discovery_limiter),
-        )
-        .await
-    }
-}
-
-impl<T: TransportPort + 'static> IAmBroadcaster<T> {
-    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
-    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        broadcast_i_am_from(&self.config, &self.db, &self.network, None).await
+        self.broadcaster
+            .send(Some(Arc::clone(&self.discovery_limiter)))
+            .await
     }
 }

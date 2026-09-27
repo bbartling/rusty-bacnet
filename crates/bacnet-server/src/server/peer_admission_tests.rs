@@ -268,7 +268,7 @@ async fn peer_admission_duplicates_denied_retry_and_shared_eight_abort_workers()
     );
     assert_eq!(server.request_tasks.peer_entries(), [1, 0, 0]);
     assert!(started.try_recv().is_err());
-    server.network.transport().release.notify_waiters();
+    server.test_network().transport().release.notify_waiters();
     wait_reaped(&server).await;
     assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
     dispatch(&server, request(10), None, None).await;
@@ -321,7 +321,7 @@ async fn peer_admission_direct_routed_reply_abort_fields_unchanged() {
                 observed(&mut started).await;
                 assert_eq!(
                     server
-                        .network
+                        .test_network()
                         .transport()
                         .routes
                         .lock()
@@ -331,7 +331,7 @@ async fn peer_admission_direct_routed_reply_abort_fields_unchanged() {
                     &(source.clone(), MacAddr::from_slice(&[1]))
                 );
                 server
-                    .network
+                    .test_network()
                     .transport()
                     .frames
                     .lock()

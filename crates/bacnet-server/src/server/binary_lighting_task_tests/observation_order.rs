@@ -64,7 +64,7 @@ async fn cov_order_supplied_terminal_snapshot_orders_preparation_not_object_age(
     // its new ticket may replace the newer object's previously sent baseline.
     BACnetServer::<RecordingTransport>::fire_cov_notifications_from_snapshot(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.cov_in_flight,
         &server.notification_transactions,

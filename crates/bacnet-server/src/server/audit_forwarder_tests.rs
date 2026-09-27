@@ -160,7 +160,7 @@ impl Fixture {
         let (tx, rx) = oneshot::channel();
         BACnetServer::handle_confirmed_request(
             &s.db,
-            &s.network,
+            s.test_network(),
             &s.cov_table,
             &s.seg_ack_senders,
             &s.seg_send_permits,
@@ -188,7 +188,7 @@ impl Fixture {
         let s = &self.server;
         BACnetServer::handle_unconfirmed_request(
             &s.db,
-            &s.network,
+            s.test_network(),
             &s.config,
             s._clock.as_ref(),
             &s.comm_state,

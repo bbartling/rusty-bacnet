@@ -13,7 +13,7 @@ async fn reap_after_ingress_closure(hold_request: bool) {
     // Keep the server and its outbound producers alive.
     drop(ingress);
     server
-        .network
+        .test_network()
         .transport()
         .pass_cov
         .store(true, Ordering::Release);
@@ -43,7 +43,7 @@ async fn reap_after_ingress_closure(hold_request: bool) {
                 .expect("outbound COV admission stopped with ingress");
             released.await.unwrap();
             assert!(
-                matches!(server.network.transport().frames.lock().unwrap().last(),
+                matches!(server.test_network().transport().frames.lock().unwrap().last(),
                 Some(Apdu::ConfirmedRequest(request))
                     if request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION)
             );
@@ -82,7 +82,7 @@ async fn reap_after_ingress_closure(hold_request: bool) {
         }
     }
     if let Some(released) = request_released {
-        server.network.transport().release.notify_one();
+        server.test_network().transport().release.notify_one();
         released.await.unwrap();
         wait_reaped(&server).await;
     }
@@ -117,7 +117,7 @@ async fn fire_event(server: &BACnetServer<HeldTransport>) {
         .unwrap();
     BACnetServer::<HeldTransport>::build_and_send_event_notification_with_bindings(
         &Arc::new(RwLock::new(db)),
-        &server.network,
+        server.test_network(),
         &server.comm_state,
         &server.server_tsm,
         &server.notification_transactions,
@@ -169,7 +169,7 @@ async fn fire_cov(server: &BACnetServer<HeldTransport>, kind: CovNotificationKin
         .unwrap();
     BACnetServer::<HeldTransport>::fire_cov_notifications(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.cov_in_flight,
         &server.notification_transactions,
@@ -188,7 +188,7 @@ async fn stop_cov(kind: CovNotificationKind, service: ConfirmedServiceChoice) {
         .unwrap()
         .unwrap();
     assert!(
-        matches!(server.network.transport().frames.lock().unwrap().last(),
+        matches!(server.test_network().transport().frames.lock().unwrap().last(),
         Some(Apdu::ConfirmedRequest(request)) if request.service_choice == service)
     );
     assert_eq!(server.notification_transactions.active_count(), 1);
@@ -249,7 +249,7 @@ async fn notification_worker_stop_event() {
         .unwrap()
         .unwrap();
     assert!(
-        matches!(server.network.transport().frames.lock().unwrap().last(),
+        matches!(server.test_network().transport().frames.lock().unwrap().last(),
         Some(Apdu::ConfirmedRequest(request)) if request.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION)
     );
     assert_eq!(server.notification_transactions.active_count(), 1);
@@ -296,7 +296,7 @@ async fn notification_worker_reaps_all_families_success_panic_idle_active() {
                 }
                 let released = started.recv().await.unwrap();
                 let request = match server
-                    .network
+                    .test_network()
                     .transport()
                     .frames
                     .lock()
@@ -316,11 +316,11 @@ async fn notification_worker_reaps_all_families_success_panic_idle_active() {
                             .unwrap();
                 }
                 server
-                    .network
+                    .test_network()
                     .transport()
                     .panic_next
                     .store(panic, Ordering::Release);
-                server.network.transport().release.notify_one();
+                server.test_network().transport().release.notify_one();
                 released.await.unwrap();
                 if !panic {
                     inject(

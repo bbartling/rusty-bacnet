@@ -9,6 +9,19 @@ mod dcc_outcome_admission_tests;
 #[path = "recovery_admission_tests.rs"]
 mod recovery_admission_tests;
 
+// Exercise sealed admission before final transport retirement; after successful
+// stop there is deliberately no network owner left for direct private dispatch.
+async fn begin_stop(server: &mut BACnetServer<HeldTransport>) {
+    use std::future::Future;
+    let stop = server.stop();
+    tokio::pin!(stop);
+    std::future::poll_fn(|cx| {
+        assert!(stop.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
 async fn small_fixture() -> (
     BACnetServer<HeldTransport>,
     mpsc::Sender<ReceivedNpdu>,
@@ -39,7 +52,7 @@ async fn dispatch(
 ) {
     BACnetServer::dispatch(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.seg_ack_senders,
         &server.seg_send_permits,
@@ -120,7 +133,7 @@ async fn admission_default_confirmed_limit_rejects_before_handler() {
             .unwrap();
     }
     {
-        let frames = server.network.transport().frames.lock().unwrap();
+        let frames = server.test_network().transport().frames.lock().unwrap();
         assert_eq!(frames.len(), 65);
         assert!(
             matches!(&frames[64], Apdu::Abort(abort)
@@ -208,13 +221,31 @@ async fn admission_independent_handlers_and_eight_owned_abort_workers_never_queu
     }
     assert_eq!(server.request_admission_counters(), counters);
     assert!(started.try_recv().is_err());
-    assert_eq!(server.network.transport().frames.lock().unwrap().len(), 10);
-    server.network.transport().release.notify_waiters();
+    assert_eq!(
+        server
+            .test_network()
+            .transport()
+            .frames
+            .lock()
+            .unwrap()
+            .len(),
+        10
+    );
+    server.test_network().transport().release.notify_waiters();
     original.await.unwrap();
     unconfirmed.await.unwrap();
     wait_reaped(&server).await;
     // Denied work never starts after release. All ten prior frames are final.
-    assert_eq!(server.network.transport().frames.lock().unwrap().len(), 10);
+    assert_eq!(
+        server
+            .test_network()
+            .transport()
+            .frames
+            .lock()
+            .unwrap()
+            .len(),
+        10
+    );
     assert_eq!(server.request_admission_counters().confirmed_active, 0);
     assert_eq!(server.request_admission_counters().unconfirmed_active, 0);
     assert_eq!(server.request_admission_counters().abort_active, 0);
@@ -241,7 +272,7 @@ async fn admission_pending_and_completed_duplicates_at_capacity_have_no_abort() 
             .confirmed_overloaded_total,
         0
     );
-    server.network.transport().release.notify_one();
+    server.test_network().transport().release.notify_one();
     original.await.unwrap();
     wait_reaped(&server).await;
     dispatch(&server, request(2), None, None).await;
@@ -259,7 +290,16 @@ async fn admission_pending_and_completed_duplicates_at_capacity_have_no_abort() 
         0
     );
     assert_eq!(server.request_admission_counters().abort_admitted_total, 0);
-    assert_eq!(server.network.transport().frames.lock().unwrap().len(), 2);
+    assert_eq!(
+        server
+            .test_network()
+            .transport()
+            .frames
+            .lock()
+            .unwrap()
+            .len(),
+        2
+    );
     server.stop().await.unwrap();
 }
 
@@ -289,7 +329,16 @@ async fn admission_abort_reply_channel_preserves_routed_npdu_and_wire_fields() {
             if a.sent_by_server && a.invoke_id == 2 && a.abort_reason == AbortReason::OUT_OF_RESOURCES)
         );
     }
-    assert_eq!(server.network.transport().frames.lock().unwrap().len(), 1);
+    assert_eq!(
+        server
+            .test_network()
+            .transport()
+            .frames
+            .lock()
+            .unwrap()
+            .len(),
+        1
+    );
     server.stop().await.unwrap();
     assert_eq!(server.request_admission_counters().abort_active, 0);
 }
@@ -298,12 +347,12 @@ async fn admission_abort_reply_channel_preserves_routed_npdu_and_wire_fields() {
 async fn admission_stop_seals_classes_without_overload_and_joins_abort_workers() {
     let (mut server, _tx, mut started) = small_fixture().await;
     dispatch(&server, request(1), None, None).await;
-    let mut original = observed(&mut started).await;
+    let original = observed(&mut started).await;
     dispatch(&server, request(2), None, None).await;
-    let mut abort = observed(&mut started).await;
-    server.stop().await.unwrap();
-    assert_eq!(original.try_recv(), Ok(()));
-    assert_eq!(abort.try_recv(), Ok(()));
+    let abort = observed(&mut started).await;
+    begin_stop(&mut server).await;
+    original.await.unwrap();
+    abort.await.unwrap();
     dispatch(&server, request(3), None, None).await;
     dispatch(&server, who_is(), None, None).await;
     let c = server.request_admission_counters();
@@ -315,6 +364,7 @@ async fn admission_stop_seals_classes_without_overload_and_joins_abort_workers()
     assert_eq!(c.unconfirmed_overloaded_total, 0);
     assert_eq!(c.confirmed_shutdown_rejected_total, 1);
     assert_eq!(c.unconfirmed_shutdown_rejected_total, 1);
+    server.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -324,11 +374,11 @@ async fn admission_panic_releases_real_handler_and_abort_and_allows_retry() {
         inject(&tx, request(id)).await;
         let released = observed(&mut started).await;
         server
-            .network
+            .test_network()
             .transport()
             .panic_next
             .store(true, Ordering::Release);
-        server.network.transport().release.notify_one();
+        server.test_network().transport().release.notify_one();
         released.await.unwrap();
         wait_reaped(&server).await;
         assert_eq!(server.request_admission_counters().confirmed_active, 0);
@@ -449,7 +499,7 @@ async fn admission_direct_and_routed_abort_send_release_on_error_and_panic() {
         let released = observed(&mut started).await;
         assert_eq!(
             server
-                .network
+                .test_network()
                 .transport()
                 .routes
                 .lock()
@@ -459,16 +509,16 @@ async fn admission_direct_and_routed_abort_send_release_on_error_and_panic() {
             &(route, MacAddr::from_slice(&[1]))
         );
         server
-            .network
+            .test_network()
             .transport()
             .panic_next
             .store(panic, Ordering::Release);
         server
-            .network
+            .test_network()
             .transport()
             .fail_next
             .store(!panic, Ordering::Release);
-        server.network.transport().release.notify_one();
+        server.test_network().transport().release.notify_one();
         released.await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             while server.request_admission_counters().abort_active != 0 {

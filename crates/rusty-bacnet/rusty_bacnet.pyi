@@ -2531,11 +2531,20 @@ class BACnetServer:
         ...
 
     def stop(self) -> Awaitable[None]:
-        """Stop the server and release resources."""
+        """Join admitted work and release the owned transport.
+
+        Cancelling the returned Future retains shutdown ownership. Call stop()
+        again to join it; a cleanup error also retains the owner for retry.
+        Local mutation is rejected once shutdown starts.
+        """
         ...
 
     def local_address(self) -> Awaitable[str]:
-        """Get the local address the server is listening on."""
+        """Get the retained server instance's last bound address snapshot.
+
+        Available during interrupted shutdown; successful stop clears the
+        instance and subsequent address queries raise RuntimeError.
+        """
         ...
 
     # --- Server-side property access ---

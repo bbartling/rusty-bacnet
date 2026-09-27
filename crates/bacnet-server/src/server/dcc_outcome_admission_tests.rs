@@ -104,7 +104,7 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
     );
     assert_eq!(server.dcc_outcome_counters().policy_denied_total, 1);
     assert_eq!(capture.0.lock().unwrap().len(), 1);
-    server.stop().await.unwrap();
+    begin_stop(&mut server).await;
     ordinary.await.unwrap();
     recovery.await.unwrap();
     abort.await.unwrap();
@@ -117,4 +117,5 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
     );
     assert_eq!(server.dcc_outcome_counters().policy_denied_total, 1);
     assert_eq!(capture.0.lock().unwrap().len(), 1);
+    server.stop().await.unwrap();
 }
