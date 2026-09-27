@@ -207,15 +207,9 @@ pub(super) async fn serve_connection(
             return;
         }
     };
-    // Boolean channel only: the acceptor already required a CA-verified
-    // client certificate for this handshake to succeed. Presence is
-    // rechecked here (no subject/fingerprint extraction) so the admission
-    // input stays honest if verifier policy ever changes.
-    let tls_client_verified = tls_stream
-        .get_ref()
-        .1
-        .peer_certificates()
-        .is_some_and(|certs| !certs.is_empty());
+    let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+        tls_stream.get_ref().1.peer_certificates(),
+    );
 
     // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
     let upgrade_deadline = tokio::time::Instant::now() + timeouts.websocket_upgrade();
@@ -270,7 +264,7 @@ pub(super) async fn serve_connection(
         clients,
         connect_deadline,
         runtime,
-        tls_client_verified,
+        verified_leaf,
         graceful,
         timing,
     )

@@ -513,6 +513,43 @@ availability policy is shared with Advertisement. Capability NAKs use the
 existing rejection deadline and retirement behavior. See the
 [scoped conformance evidence](conformance/standard-135-2020-ledger.md#node-address-resolution-accepting-capability).
 
+
+### Hub certificate bindings
+
+`ScHubCertificateBinding::new(uuid, allowed_vmacs, leaf_sha256)` creates one
+immutable installation group. The UUID is a nonzero 16-byte value; VMACs are
+distinct nonreserved six-byte values, and fingerprints are distinct 32-byte
+SHA-256 digests of the **exact leaf certificate DER**. Both lists must be nonempty.
+`ScHubCertificateBindings::new(Vec<ScHubCertificateBinding>)` rejects empty maps
+and any UUID, VMAC or digest shared by groups. Multiple digests in one group
+authorize explicit certificate rotation; multiple VMACs authorize only those ports.
+All inputs are owned. Debug and errors omit certificate and policy contents.
+
+Install the map with `ScHubTlsConfig::with_certificate_bindings(bindings)`.
+An absent map retains CA-valid admission. A configured map admits only listed
+verified leaves with the group's exact UUID and one allowed VMAC; even unreserved
+claims from an unmapped leaf are denied. UUID/VMAC reservations exist while the
+node is offline. Local Hub VMAC overlap fails before binding; there is no extra
+restriction on a group's UUID matching the hosting device UUID.
+
+The Hub hashes the verified leaf after TLS acceptance. Under the registry lock,
+it checks the map before the existing admin callback, deadline commit, insertion
+or incumbent replacement. Callback Allow cannot override a binding denial; Deny
+or panic still refuses a matching leaf. Existing collision, capacity, deadline
+and same-UUID replacement rules then apply, including to listed renewals.
+Denied attempts leave incumbent membership/relay intact and increment the existing
+redacted `admin_denied` counter. Cloned configurations share immutable policy,
+with independent live registries and counters.
+
+This is opt-in installation policy allowed by 135-2020 Annex AB.7.4, not its
+default authentication requirement. Configure every Hub feeding a trusted router
+ingress consistently. It does not convey a certificate principal in relayed BVLC
+frames, authorize BACnet operations, bind direct-peer requests, or complete the
+Annex AB security profile (#518/#524/#803 remain separate). Runtime tests use
+distinct real same-CA leaves, native registration/relay and joined shutdown;
+[the ledger](conformance/standard-135-2020-ledger.md#hub-certificate-bindings)
+records the bounded evidence.
+
 ### BACnet/SC Hub
 
 ```rust
@@ -627,8 +664,8 @@ No UUID version/variant or general VMAC bit-shape policy is added. Provision the
 hosting device UUID before deployment and durably reuse it for its lifetime
 (AB.1.5.3). Connect-Accept carries that device UUID and the hosting port's VMAC
 unchanged (AB.2.11, AB.6), not an identity generated per connection. Persistence,
-generation, detecting changed stored values and certificate binding belong outside
-this API. Default or explicitly validated handshake budgets and lifecycle
+generation and detecting changed stored values belong outside this identity
+argument. Peer registration bindings are configured separately on `ScHubTlsConfig`. Default or explicitly validated handshake budgets and lifecycle
 are preserved. `start_with_tls_config` remains a compatible full-control alias for
 `start_with_uuid_and_timeouts`. Built-in node APIs separately require
 `ScNodeTlsConfig`, as described below; generic custom transports remain available.
@@ -641,7 +678,7 @@ relationships: peers verify certificates at handshake time using rustls trust
 anchors. Base Standard 135-2020 AB.7.4/AB.7.4.1.1 provides the mutual operational
 authentication and installation-credential context; TLS 1.3-*only* is local policy,
 not the Standard's TLS 1.3-*support* requirement. This does not add direct-issuer,
-revocation, SAN or certificate-to-VMAC/UUID policy, or close the full security
+revocation or SAN policy, or close the full security
 profile gap (#513 remains open for final acceptance assessment and the remaining
 policy limits, not for a public raw hub startup path).
 
@@ -2150,8 +2187,9 @@ absolute connect wait. A later valid Accept can complete the same handshake;
 nil-only traffic times out. Invalid-plus-wrong-ID Accepts are discarded, while
 otherwise-valid wrong-ID Accepts retain the terminal mismatch error. Failed
 restoration probes do not replace the active failover or reseed the local VMAC.
-No UUID version/variant, generation, storage or
-certificate-binding policy is added. See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
+This receive-shape policy adds no UUID version/variant, generation or storage
+requirements; optional [Hub certificate bindings](#hub-certificate-bindings) are
+configured separately. See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 **Current-dev zero-limit receive policy (Refs #519):** the shared Connect validator
 rejects zero Max-BVLC or Max-NPDU in either received Connect message, after the

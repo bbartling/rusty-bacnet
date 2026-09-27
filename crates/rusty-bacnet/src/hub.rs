@@ -112,6 +112,7 @@ struct HubConfig {
     probe_policy: ScHubProbePolicy,
     broadcast_rate: ScHubBroadcastRatePolicy,
     relay_send_budget: Duration,
+    certificate_bindings: Option<bacnet_transport::sc_hub::ScHubCertificateBindings>,
 }
 
 impl HubConfig {
@@ -128,6 +129,9 @@ impl HubConfig {
                 .with_broadcast_rate_policy(self.broadcast_rate)
                 .with_relay_send_budget(self.relay_send_budget)
                 .map_err(to_py_err)?;
+        if let Some(bindings) = &self.certificate_bindings {
+            server_tls = server_tls.with_certificate_bindings(bindings.clone());
+        }
         // One native policy consumes the locked classification; no registry
         // copies, Python callbacks or certificate-principal inference.
         let policy = self.admission_policy;
@@ -161,7 +165,7 @@ impl PyScHub {
     /// before bind, in this order: `ca_cert` presence, VMAC length (the
     /// existing `RuntimeError`), reserved VMACs, `device_uuid`, admission
     /// limits, admission policy, graceful and handshake timeouts, probe policy,
-    /// transit relay send budget, then broadcast rates.
+    /// transit relay send budget, broadcast rates, then certificate bindings.
     ///
     /// Args:
     ///     listen: Bind address, e.g. ``"127.0.0.1:0"`` for a random port.
@@ -218,13 +222,17 @@ impl PyScHub {
     ///     broadcast_global_per_second: Aggregate refill rate (default 512).
     ///         Rate fields must be in 1..=u64::MAX/1_000_000_000. Exhaustion
     ///         silently drops and increments the existing redacted counters.
+    ///     certificate_bindings: Optional nonempty sequence of frozen
+    ///         ScHubCertificateBinding groups. Mapped-only admission with offline
+    ///         UUID/VMAC reservations; shape, ownership and local VMAC overlap
+    ///         are checked synchronously. None retains CA-valid admission.
     ///     relay_send_budget_ms: Transit relay acquisition-plus-send
     ///         budget (default 5000), positive representable whole milliseconds.
     ///         Covers NPDU/opaque unicast, each concurrent broadcast recipient
     ///         and forwarded BVLC-Result; probe/control/cleanup/shutdown stay separate.
     ///         Timeout does not retire, retry, or send a fabricated Result.
     #[new]
-    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, relay_send_budget_ms=5000))]
+    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, relay_send_budget_ms=5000, certificate_bindings=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         listen: &str,
@@ -251,6 +259,9 @@ impl PyScHub {
         broadcast_global_burst: u64,
         broadcast_global_per_second: u64,
         relay_send_budget_ms: u64,
+        certificate_bindings: Option<
+            Vec<PyRef<'_, crate::hub_bindings::PyScHubCertificateBinding>>,
+        >,
     ) -> PyResult<Self> {
         let ca_cert = ca_cert.filter(|path| !path.is_empty()).ok_or_else(|| {
             PyValueError::new_err("ca_cert must be a nonempty CA certificate path for mutual TLS")
@@ -313,6 +324,7 @@ impl PyScHub {
             broadcast_global_per_second,
         )
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let certificate_bindings = crate::hub_bindings::bindings(certificate_bindings, vmac_arr)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             config: HubConfig {
@@ -329,6 +341,7 @@ impl PyScHub {
                 probe_policy,
                 broadcast_rate,
                 relay_send_budget,
+                certificate_bindings,
             },
             address: Arc::new(Mutex::new(None)),
         })

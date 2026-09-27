@@ -358,11 +358,21 @@ the [Python SC migration](docs/python-api.md#bacnetsc-secure-connect),
   missing/all-zero UUIDs and all-zero/all-ff local VMACs before **transport-owned
   I/O**, not creation or dialing of the caller's `ws`.
 - UUID bytes are not validated for version/variant bits. There is no
-  certificate-to-UUID binding, durable identity-change detection, or enforced
-  lifetime immutability. Post-start mutation through Rust's public `connection()`
+  automatic certificate-to-UUID binding, durable identity-change detection, or
+  enforced lifetime immutability. Post-start mutation through Rust's public `connection()`
   is outside this startup guard. See the [identity validation scope](docs/conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout).
 
-CA membership is not BACnet-operation authorization and does not bind a
+Optional Hub `certificate_bindings` restrict registration to configured leaf
+SHA-256 digests, UUIDs and VMACs, including offline reservations and listed
+renewal certificates. Python uses frozen `ScHubCertificateBinding` groups; Rust
+uses `ScHubCertificateBindings` on `ScHubTlsConfig`. Absent bindings retain
+CA-valid admission. See [Rust configuration](docs/rust-api.md#hub-certificate-bindings),
+[Python configuration](docs/python-api.md#hub-certificate-bindings), and
+[scoped evidence](docs/conformance/standard-135-2020-ledger.md#hub-certificate-bindings).
+Every Hub feeding a trusted router ingress must enforce its installation policy;
+this does not authenticate relayed operations end to end or direct SC peers.
+
+CA membership alone is not BACnet-operation authorization and does not bind a
 certificate to a VMAC or Device UUID. These checks are not a claim of the entire
 Annex AB security profile or qualification of your credential provisioning.
 

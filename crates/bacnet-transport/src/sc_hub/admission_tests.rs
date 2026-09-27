@@ -28,6 +28,10 @@ impl Peer {
         verified: bool,
     ) -> Self {
         let (server, ws, address, accepted) = tls.pair().await;
+        let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+            server.get_ref().get_ref().1.peer_certificates(),
+        );
+        let verified_leaf = if verified { verified_leaf } else { None };
         let (write, read) = server.split();
         let deadline = Arc::new(super::deadlines::ConnectDeadline::new(
             accepted + Duration::from_secs(5),
@@ -43,7 +47,7 @@ impl Peer {
             deadline.clone(),
             || {},
             runtime,
-            verified,
+            verified_leaf,
             super::tasks::Tasks::new().graceful_ctx(),
             super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
         );
@@ -496,3 +500,49 @@ async fn unverified_channel_reaches_policy_as_unverified() {
 
 #[path = "conflict_admission_tests.rs"]
 mod conflict;
+
+#[tokio::test]
+async fn certificate_bindings_missing_leaf_never_commits_or_calls_policy() {
+    let tls = TestTls::new();
+    let clients = clients();
+    let called = Arc::new(AtomicUsize::new(0));
+    let observed = called.clone();
+    let mut runtime = AdmissionRuntime::new(
+        ScHubAdmissionLimits::default(),
+        Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            ScHubAdmissionDecision::Allow
+        })),
+    );
+    runtime.bindings = Some(
+        ScHubCertificateBindings::new(vec![ScHubCertificateBinding::new(
+            [0x42; 16],
+            vec![[0x42; 6]],
+            vec![[1; 32]],
+        )
+        .unwrap()])
+        .unwrap(),
+    );
+    let runtime = Arc::new(runtime);
+    // The exceptional missing-chain seam carries no verified leaf. Binding
+    // denial must occur before a permissive callback or registry commit.
+    let mut peer = Peer::open(&tls, clients.clone(), runtime.clone(), false).await;
+    peer.ws
+        .send(connect_message([0x42; 6], [0x42; 16]))
+        .await
+        .unwrap();
+    assert_eq!(
+        peer.nak().await,
+        ScBvlcResult::Nak {
+            result_for: ScFunction::ConnectRequest,
+            error_header_marker: 0,
+            error_class: bacnet_types::enums::ErrorClass::RESOURCES.to_raw(),
+            error_code: bacnet_types::enums::ErrorCode::OTHER.to_raw(),
+            error_details: String::new(),
+        }
+    );
+    peer.rejected().await;
+    assert!(clients.lock().await.is_empty());
+    assert_eq!(called.load(Ordering::Relaxed), 0);
+    assert_eq!(runtime.denied(), 1);
+}

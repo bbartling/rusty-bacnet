@@ -6,6 +6,7 @@ mod client;
 mod endpoint;
 mod errors;
 mod hub;
+mod hub_bindings;
 mod mstp_py;
 mod object_audit_policy;
 mod read_range;
@@ -37,6 +38,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<client::BACnetClient>()?;
     m.add_class::<server::BACnetServer>()?;
     m.add_class::<hub::PyScHub>()?;
+    m.add_class::<hub_bindings::PyScHubCertificateBinding>()?;
     endpoint::register(m)?;
 
     Ok(())

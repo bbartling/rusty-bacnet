@@ -7,11 +7,11 @@ from test_sc_hub_mtls import MtlsFixture, SERVER_UUID
 
 
 class PeerUuidTests(MtlsFixture):
-    async def open_peer(self, address):
+    async def open_peer(self, address, certificate="client"):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
         context.load_verify_locations(self.path("site.pem"))
-        context.load_cert_chain(self.path("client.pem"), self.path("client.key"))
+        context.load_cert_chain(self.path(f"{certificate}.pem"), self.path(f"{certificate}.key"))
         reader, writer = await asyncio.wait_for(asyncio.open_connection(
             "127.0.0.1", int(address.rsplit(":", 1)[1]), ssl=context,
             server_hostname="localhost"), 3)

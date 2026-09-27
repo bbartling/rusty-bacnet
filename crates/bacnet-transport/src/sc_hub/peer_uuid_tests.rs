@@ -19,6 +19,9 @@ struct Peer {
 impl Peer {
     async fn open(tls: &TestTls, clients: Clients) -> Self {
         let (server, ws, address, accepted) = tls.pair().await;
+        let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+            server.get_ref().get_ref().1.peer_certificates(),
+        );
         let (write, read) = server.split();
         let deadline = Arc::new(super::deadlines::ConnectDeadline::new(
             accepted + Duration::from_secs(5),
@@ -38,7 +41,7 @@ impl Peer {
             deadline.clone(),
             || {},
             runtime,
-            true,
+            verified_leaf,
             super::tasks::Tasks::new().graceful_ctx(),
             super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
         );

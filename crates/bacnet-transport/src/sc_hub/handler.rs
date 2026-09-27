@@ -16,10 +16,11 @@ pub(super) async fn run(
     deadline: &super::deadlines::ConnectDeadline,
     on_heartbeat_ack: impl Fn() + Send,
     admission: Arc<super::admission::AdmissionRuntime>,
-    tls_client_verified: bool,
+    verified_leaf: Option<certificate_bindings::VerifiedLeaf>,
     graceful: super::graceful::GracefulCtx,
     timing: super::timing::HubTiming,
 ) {
+    let tls_client_verified = verified_leaf.is_some();
     let (hub_vmac, hub_uuid) = hub;
     let (clients, lease) = clients;
     let close_requested = lease.closed.clone();
@@ -429,7 +430,10 @@ pub(super) async fn run(
                         tls_client_verified,
                         provenance: channel_provenance(tls_client_verified),
                     };
-                    if admission.evaluate(&input) == ScHubAdmissionDecision::Deny {
+                    if admission.bindings.as_ref().is_some_and(|bindings| {
+                        !bindings.permits(verified_leaf.as_ref(), client_uuid, vmac)
+                    }) || admission.evaluate(&input) == ScHubAdmissionDecision::Deny
+                    {
                         admission.note_denied();
                         warn!("Hub: admin admission denied ConnectRequest from {peer_addr}");
                         drop(map); // release lock before sending
