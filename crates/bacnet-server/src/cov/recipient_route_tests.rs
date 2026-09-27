@@ -41,8 +41,7 @@ fn cov_recipient_renewal_retargets_terms_and_uses_existing_generation_fence() {
         assert_eq!(current.cov_increment, Some(2.5));
         assert_eq!(current.last_notified_observation, None);
         assert!(!table.is_current(&old));
-        assert!(!table
-            .set_last_notified_observation(&old, old.last_notified_observation.clone().unwrap()));
+        assert!(!table.complete_for_test(&old, old.last_notified_observation.clone().unwrap()));
         assert_eq!(
             table.remove_peer_subscriptions(&[1], sub.subscriber_network.as_ref()),
             0

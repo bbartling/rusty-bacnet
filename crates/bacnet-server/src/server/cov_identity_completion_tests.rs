@@ -5,7 +5,10 @@ use bytes::Bytes;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::Notify;
 
+type SendGates = Arc<StdMutex<std::collections::VecDeque<Arc<completion_order::CallGate>>>>;
+
 struct HeldTransport {
+    gates: SendGates,
     sent: Arc<StdMutex<Vec<Bytes>>>,
     routes: Arc<StdMutex<Vec<MacAddr>>>,
     entered: Arc<Notify>,
@@ -23,9 +26,16 @@ impl TransportPort for HeldTransport {
         Ok(())
     }
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        let gate = self.gates.lock().unwrap().pop_front();
+        if let Some(gate) = gate.as_ref().filter(|gate| !gate.record_before) {
+            gate.wait().await?;
+        }
         self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
         self.routes.lock().unwrap().push(MacAddr::from_slice(mac));
         self.entered.notify_one();
+        if let Some(gate) = gate.as_ref().filter(|gate| gate.record_before) {
+            gate.wait().await?;
+        }
         if self.hold {
             self.release.acquire().await.unwrap().forget();
         }
@@ -76,6 +86,7 @@ fn proposal(
 }
 
 struct Fixture {
+    gates: SendGates,
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<HeldTransport>>,
     table: Arc<RwLock<CovSubscriptionTable>>,
@@ -100,9 +111,12 @@ impl Fixture {
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gates = SendGates::default();
         Self {
+            gates: gates.clone(),
             db: Arc::new(RwLock::new(db)),
             network: Arc::new(NetworkLayer::new(HeldTransport {
+                gates,
                 sent: sent.clone(),
                 routes: routes.clone(),
                 entered: entered.clone(),
@@ -354,3 +368,5 @@ mod recipient_route;
 mod value_source;
 
 mod value_source_contract;
+
+mod completion_order;

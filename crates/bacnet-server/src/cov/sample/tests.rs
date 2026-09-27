@@ -158,10 +158,7 @@ fn cov_sample_normalizes_capacity_and_shares_accepted_storage() {
                 .0
         ));
     }
-    assert!(table.set_last_notified_observation(
-        &accepted,
-        crate::cov::CovObservation::new(b, None).unwrap()
-    ));
+    assert!(table.complete_for_test(&accepted, crate::cov::CovObservation::new(b, None).unwrap()));
     assert!(Arc::ptr_eq(
         &a.0,
         &table

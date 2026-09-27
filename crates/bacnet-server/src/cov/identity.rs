@@ -150,7 +150,9 @@ impl CovSubscription {
 pub struct CovSubscriptionSnapshot {
     pub(super) key: CovSubscriptionKey,
     pub(super) generation: u64,
-    pub(super) owner: Arc<()>,
+    pub(super) owner: Arc<ObservationOwner>,
+    // Zero is the initial marker; issued tickets start at one and never wrap.
+    pub(super) last_successful_ticket: u64,
     // Shared by one live Multiple route incarnation; unchanged on same-route
     // refresh. Private so callers cannot forge completion authority.
     pub(super) route_owner: Option<Arc<()>>,

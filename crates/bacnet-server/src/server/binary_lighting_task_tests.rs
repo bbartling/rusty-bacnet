@@ -364,3 +364,5 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
         server.stop().await.unwrap();
     }
 }
+
+mod observation_order;

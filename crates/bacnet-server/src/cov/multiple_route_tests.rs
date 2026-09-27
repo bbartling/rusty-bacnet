@@ -38,7 +38,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
     assert_eq!(table.generation, u64::MAX);
     for snapshot in &old {
         assert!(!table.is_current(snapshot));
-        assert!(!table.set_last_notified_observation(
+        assert!(!table.complete_for_test(
             snapshot,
             snapshot.last_notified_observation.clone().unwrap()
         ));

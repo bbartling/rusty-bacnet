@@ -156,7 +156,7 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
         .table
         .write()
         .await
-        .set_last_notified_observation(&current, observation(99.0)));
+        .complete_for_test(&current, observation(99.0)));
     assert_eq!(
         fixture.routes.lock().unwrap().as_slice(),
         std::slice::from_ref(&old.subscriber_mac)

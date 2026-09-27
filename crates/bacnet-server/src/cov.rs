@@ -18,7 +18,9 @@ mod admission;
 mod sample;
 pub use sample::CovSample;
 mod observation;
+mod observation_order;
 pub use observation::CovObservation;
+use observation_order::ObservationOwner;
 pub(crate) mod flags;
 mod lifetime;
 pub(crate) mod prepare;
@@ -86,7 +88,7 @@ pub enum CovNotificationKind {
 pub struct CovSubscriptionTable {
     subs: HashMap<CovSubscriptionKey, CovSubscriptionSnapshot>,
     generation: u64,
-    owner: Arc<()>,
+    owner: Arc<ObservationOwner>,
     peer_counts: HashMap<CovRecipient, usize>,
     peer_indefinite_counts: HashMap<CovRecipient, usize>,
     policy: CovPolicy,
@@ -112,7 +114,7 @@ impl CovSubscriptionTable {
         Self {
             subs: HashMap::new(),
             generation: 0,
-            owner: Arc::new(()),
+            owner: Arc::new(ObservationOwner::default()),
             peer_counts: HashMap::new(),
             peer_indefinite_counts: HashMap::new(),
             policy: policy.sanitized(),
@@ -285,23 +287,6 @@ impl CovSubscriptionTable {
         self.remaining_lifetime(snapshot, Instant::now())
             .and_then(CovTimeRemaining::wire_seconds)
             .is_some()
-    }
-
-    /// Complete only the captured generation, never a renewal or recreated entry.
-    pub fn set_last_notified_observation(
-        &mut self,
-        snapshot: &CovSubscriptionSnapshot,
-        value: CovObservation,
-    ) -> bool {
-        if !self.is_current(snapshot) {
-            return false;
-        }
-        self.subs
-            .get_mut(snapshot.key())
-            .unwrap()
-            .subscription
-            .last_notified_observation = Some(value);
-        true
     }
 
     /// Ordinary whole-object trigger policy: preserve its Real PV increment gate.

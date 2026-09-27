@@ -198,6 +198,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
                         continue;
                     }
+                    let Some(completion) = sub.prepare_completion() else {
+                        continue;
+                    };
                     candidates.push((
                         sub,
                         prepared
@@ -211,6 +214,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             })
                             .collect::<Vec<_>>(),
                         prepared.observation.clone(),
+                        completion,
                     ));
                     continue;
                 }
@@ -251,6 +255,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 {
                     continue;
                 }
+                let Some(completion) = sub.prepare_completion() else {
+                    continue;
+                };
                 candidates.push((
                     sub,
                     vec![COVNotificationValue {
@@ -260,6 +267,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         time_of_change: None,
                     }],
                     observation,
+                    completion,
                 ));
             }
 
@@ -271,20 +279,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let now = Instant::now();
                 candidates
                     .into_iter()
-                    .filter_map(|(sub, value, baseline)| {
+                    .filter_map(|(sub, value, baseline, completion)| {
                         table
                             .remaining_lifetime(sub, now)
                             .and_then(crate::cov::CovTimeRemaining::wire_seconds)
-                            .map(|remaining| (sub, value, baseline, remaining))
+                            .map(|remaining| (sub, value, baseline, completion, remaining))
                     })
                     .collect()
             };
-            let Some((representative, _, _, time_remaining)) = retained.first() else {
+            let Some((representative, _, _, _, time_remaining)) = retained.first() else {
                 return;
             };
             let representative = *representative;
             let time_remaining = *time_remaining;
-            let timestamp = if retained.iter().any(|(sub, _, _, _)| sub.timestamped) {
+            let timestamp = if retained.iter().any(|(sub, _, _, _, _)| sub.timestamped) {
                 match clock_frame {
                     Some(frame) if frame.is_valid_actual_datetime() => {
                         Some(cov_multiple_datetime(frame))
@@ -300,14 +308,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut items: Vec<COVNotificationItem> = Vec::new();
             let mut last_notified = Vec::new();
             let mut retained_subscriptions = Vec::new();
-            for (sub, mut values, baseline, _) in retained {
+            for (sub, mut values, baseline, completion, _) in retained {
                 for value in &mut values {
                     value.time_of_change = sub
                         .timestamped
                         .then(|| timestamp.map(|(_, time)| time))
                         .flatten();
                 }
-                last_notified.push((sub.clone(), baseline));
+                last_notified.push((sub.clone(), baseline, completion));
                 retained_subscriptions.push(sub.clone());
                 let item_index = items
                     .iter()
@@ -471,8 +479,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             {
                 let mut table = cov_table.write().await;
-                for (snapshot, pv) in &last_notified {
-                    table.set_last_notified_observation(snapshot, pv.clone());
+                for (snapshot, pv, completion) in &last_notified {
+                    table.complete_observation(snapshot, *completion, pv.clone());
                 }
             }
 
@@ -551,8 +559,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 warn!(error = %e, "Failed to send COVNotificationMultiple");
             } else {
                 let mut table = cov_table.write().await;
-                for (snapshot, pv) in &last_notified {
-                    table.set_last_notified_observation(snapshot, pv.clone());
+                for (snapshot, pv, completion) in &last_notified {
+                    table.complete_observation(snapshot, *completion, pv.clone());
                 }
             }
         }
