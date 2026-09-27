@@ -238,34 +238,6 @@ async fn accepted_publication_while_outbound_dial_waits_then_outbound_replaces()
 }
 
 #[tokio::test]
-async fn concurrent_outbound_real_tls_dials_publish_one_generation() {
-    let mut f = Fixture::new(1).await;
-    let barrier = Arc::new(tokio::sync::Barrier::new(2));
-    let tls = f.ca.node_config(vec!["node".into()]);
-    *f.direct.dialer.lock().await = Some(Arc::new(move |uri| {
-        let tls = tls.clone();
-        let barrier = barrier.clone();
-        Box::pin(async move {
-            let ws = TlsWebSocket::connect_direct(&uri, tls).await?;
-            barrier.wait().await;
-            Ok(ws)
-        })
-    }));
-    let (a, b) = tokio::join!(f.send(), f.send());
-    assert!(a.is_ok() || b.is_ok());
-    let pool = f.direct.pooled_get(&REMOTE, Instant::now()).unwrap();
-    assert!(pool.member.is_current());
-    assert_eq!(f.direct.pool.lock().unwrap().len(), 1);
-    assert_eq!(
-        f.direct.pending_dials.available_permits(),
-        DIRECT_POOL_MAX_ENTRIES
-    );
-    // Neither completion can remove the winning generation by VMAC alone.
-    assert_eq!(f.direct.membership.counts(), (0, 0));
-    f.stop().await;
-}
-
-#[tokio::test]
 async fn expiry_eviction_disable_release_membership_and_close_workers() {
     let mut f = Fixture::new(1).await;
     f.send().await.unwrap();
@@ -317,3 +289,6 @@ async fn idle_outbound_remote_eof_releases_identity_and_physical_slot() {
 
 #[path = "direct_remote_control_tests.rs"]
 mod direct_remote_control_tests;
+
+#[path = "direct_outbound_race_tests.rs"]
+mod direct_outbound_race_tests;

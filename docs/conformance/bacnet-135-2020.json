@@ -4139,7 +4139,7 @@
       "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::repeated_replacement_bounds_fence_old_npdu_and_preserve_queued_work",
       "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::accepted_replaces_outbound_and_old_pool_cleanup_cannot_erase_successor",
       "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::accepted_publication_while_outbound_dial_waits_then_outbound_replaces",
-      "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::concurrent_outbound_real_tls_dials_publish_one_generation",
+      "crates/bacnet-transport/src/sc/direct_outbound_race_tests.rs::concurrent_outbound_held_tls_peers_publish_exactly_one_local_generation",
       "crates/bacnet-transport/src/sc_tls/direct_membership_tests.rs::registered_listener_membership_survives_discovery_toggles"
     ],
     "negative_tests": [
@@ -4155,14 +4155,15 @@
       "crates/bacnet-transport/src/sc/direct_handshake_tests.rs::direct_handshake_wrong_peer_vmac_never_receives_destination_npdu",
       "crates/bacnet-transport/src/sc/direct_membership_tls_tests.rs::idle_outbound_remote_eof_releases_identity_and_physical_slot",
       "crates/bacnet-transport/src/sc/direct_remote_control_tests.rs::idle_outbound_close_and_disconnect_release_identity_with_exact_ack",
-      "crates/bacnet-transport/src/sc/direct_worker_tests.rs::direct_worker_ready_receive_stream_cannot_starve_queued_sends"
+      "crates/bacnet-transport/src/sc/direct_worker_tests.rs::direct_worker_ready_receive_stream_cannot_starve_queued_sends",
+      "crates/bacnet-transport/src/sc/direct_outbound_race_tests.rs::concurrent_outbound_crossed_accept_order_releases_both_and_redials"
     ],
     "benchmarks": [],
     "public_claims": [
       "README.md",
       "docs/rust-api.md#direct-peer-membership-and-limits"
     ],
-    "notes": "Refs #851. Real TLS loopback and deterministic write/cancellation evidence; no broader connection-state promotion. Accepted M, pending M, physical2M including retirement, default16 and zero-to-one are local bounds; checked overflow before bind. Known UUID claiming a third peer VMAC rejects with duplicate-VMAC; capacity uses local RESOURCES/OTHER. Outbound and accepted numeric quotas remain separate. Private process-wide generations are never reused; failed Accept preserves incumbent and new old-socket NPDUs are fenced without purging queued complete work. No direct certificate binding, #803 principal/reassembly/authorization propagation, #524 confirmed-response confinement or certification is claimed. Idle outbound workers observe remote EOF/Close and validate/respond to Disconnect control with generation-specific cleanup; no application NPDU receive admission is added. Ordinary bidirectional direct application NPDU routing remains the pre-existing [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886) follow-up, separate from #524 response affinity."
+    "notes": "Refs #851. Real TLS loopback and deterministic write/cancellation evidence; no broader connection-state promotion. Accepted M, pending M, physical2M including retirement, default16 and zero-to-one are local bounds; checked overflow before bind. Known UUID claiming a third peer VMAC rejects with duplicate-VMAC; capacity uses local RESOURCES/OTHER. Outbound and accepted numeric quotas remain separate. Simultaneous crossed replacement may retire both sockets; at-most-one membership and normal bounded fallback/retry apply, without remote-delivery guarantees from local writes. Private process-wide generations are never reused; failed Accept preserves incumbent and new old-socket NPDUs are fenced without purging queued complete work. No direct certificate binding, #803 principal/reassembly/authorization propagation, #524 confirmed-response confinement or certification is claimed. Idle outbound workers observe remote EOF/Close and validate/respond to Disconnect control with generation-specific cleanup; no application NPDU receive admission is added. Ordinary bidirectional direct application NPDU routing remains the pre-existing [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886) follow-up, separate from #524 response affinity."
   }
  ]
 }

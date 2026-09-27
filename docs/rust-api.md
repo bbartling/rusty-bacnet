@@ -550,6 +550,11 @@ their own generation. An idle worker observes remote EOF/Close and answers a val
 before closing. Malformed Disconnect requests use the existing control validator.
 Disable/stop forcefully cancels its owned socket workers.
 
+Simultaneous replacements can select opposite sockets at the two endpoints and
+leave no live direct connection. Membership guarantees at most one current
+connection per peer; normal Hub fallback and bounded URI backoff/retry apply.
+A successful local WebSocket write does not confirm remote NPDU delivery.
+
 Private process-wide generations fence new work from old sockets and stale
 cleanup. Already queued complete NPDUs retain their original values; no reply
 routing or certificate principal is attached by this change. UUID claims are

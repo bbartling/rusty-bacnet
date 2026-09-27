@@ -1026,3 +1026,9 @@ external interoperability or hardware qualification. Idle outbound workers obser
 remote EOF/Close and handle Disconnect control with generation-specific cleanup.
 Ordinary bidirectional application NPDU routing remains a pre-existing gap in
 [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
+
+The direct-membership race evidence distinguishes a locally unique winner while
+peer sockets remain open from deterministic crossed replacement at two endpoints.
+Crossed replacement can close both sockets; the tests require generation-specific
+cleanup, recovered physical capacity, and successful fresh demand after normal
+URI backoff. Local write success alone does not establish remote NPDU delivery.

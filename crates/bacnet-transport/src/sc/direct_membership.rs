@@ -111,6 +111,17 @@ impl DirectMembership {
     }
 
     #[cfg(test)]
+    pub(crate) fn current_generations(&self) -> Vec<u64> {
+        self.state
+            .lock()
+            .unwrap()
+            .established
+            .keys()
+            .copied()
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn counts(&self) -> (usize, usize) {
         let state = self.state.lock().unwrap();
         (
