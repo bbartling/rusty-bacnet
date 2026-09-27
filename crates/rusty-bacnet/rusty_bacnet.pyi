@@ -2916,10 +2916,14 @@ class BipEndpoint:
     are two connections (two sockets/ports). The endpoint is the
     one-transport path: one socket serves both roles.
 
-    Lifecycle: ``start()`` builds one transport; ``close()`` is idempotent;
-    async context entry starts (idempotent when running) and exit closes.
-    Dropping without awaiting close only seals forcefully and cannot
-    guarantee awaited close. BIPv6/Ethernet have no endpoint owner.
+    Admission is lifecycle-lock acquisition, not Future creation. Explicit
+    second start raises BacnetError; context reentry returns this endpoint.
+    Close cancels pending connection preparation, then joins earlier admitted
+    startup and teardown. A later start may restart without old registrations.
+    Cancelled waiters do not abandon admitted session startup or cleanup;
+    cancellation can race publication, so always await close for cleanup.
+    Setup errors are delivered by awaiting start/context entry. BIPv6/Ethernet
+    have no endpoint owner.
     """
 
     def __init__(
@@ -2951,11 +2955,11 @@ class BipEndpoint:
         ...
 
     def start(self) -> Awaitable[None]:
-        """Start the endpoint (start-once; second start raises BacnetError)."""
+        """Admit one startup; second start while running raises BacnetError."""
         ...
 
     def close(self) -> Awaitable[None]:
-        """Close the endpoint (idempotent)."""
+        """Join earlier startup and cleanup; idempotent and safe after cancellation."""
         ...
 
     def __aenter__(self) -> Awaitable[BipEndpoint]: ...
@@ -3030,11 +3034,11 @@ class ScEndpoint:
         ...
 
     def start(self) -> Awaitable[None]:
-        """Dial the hub and start (start-once)."""
+        """Admit one hub connection; second start while running raises BacnetError."""
         ...
 
     def close(self) -> Awaitable[None]:
-        """Close the endpoint (idempotent)."""
+        """Join earlier startup and cleanup; idempotent and safe after cancellation."""
         ...
 
     def __aenter__(self) -> Awaitable[ScEndpoint]: ...
@@ -3106,11 +3110,11 @@ class MstpEndpoint:
         ...
 
     def start(self) -> Awaitable[None]:
-        """Open serial once and start (start-once)."""
+        """Admit one serial owner; second start while running raises BacnetError."""
         ...
 
     def close(self) -> Awaitable[None]:
-        """Close the endpoint (idempotent)."""
+        """Join earlier startup and cleanup; idempotent and safe after cancellation."""
         ...
 
     def __aenter__(self) -> Awaitable[MstpEndpoint]: ...

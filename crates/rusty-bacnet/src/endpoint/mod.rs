@@ -12,6 +12,7 @@ use pyo3::types::PyModuleMethods;
 
 mod bip;
 mod common;
+mod lifecycle;
 mod mstp;
 mod roles;
 mod sc;

@@ -13,6 +13,30 @@ def installed_classes():
     return {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
 
 
+def native_future_exports(sources):
+    """Bounded rustfmt inventory: direct bridge calls or direct self forwarding.
+
+    This is not a Rust parser. A forwarding target must independently resolve
+    to a known bridge method; unrelated calls, extra work and cycles add nothing.
+    """
+    import re
+
+    methods = {}
+    for source in sources:
+        for method in re.finditer(r"^    fn (\w+).*?^    }", source, re.M | re.S):
+            methods[method.group(1)] = method.group()
+    native = {name for name, body in methods.items()
+              if "pyo3_async_runtimes::tokio::future_into_py" in body}
+    forwards = {}
+    for name, body in methods.items():
+        target = re.search(r"\n        self\.(\w+)\(py\)\n    }$", body)
+        if target:
+            forwards[name] = target.group(1)
+    while resolved := {name for name, target in forwards.items() if target in native} - native:
+        native.update(resolved)
+    return native
+
+
 class NativeFutureTests(unittest.IsolatedAsyncioTestCase):
     async def future_result(self, owner, name, future):
         try:
@@ -110,7 +134,6 @@ class NativeFutureInventoryTests(unittest.TestCase):
         Scope is the eight native classes using the existing Tokio Future bridge;
         this is not a Rust parser or a claim that every method ran dynamically.
         """
-        import re
         source = Path(__file__).resolve().parents[1] / "src"
         groups = {
             "BACnetClient": sorted((source / "client/client_methods").glob("*.rs")),
@@ -125,12 +148,7 @@ class NativeFutureInventoryTests(unittest.TestCase):
         for name, paths in groups.items():
             with self.subTest(class_name=name):
                 self.assertTrue(paths)
-                native = set()
-                for path in paths:
-                    # Native methods are rustfmt-indented ordinary fn definitions.
-                    for method in re.finditer(r"^    fn (\w+).*?^    }", path.read_text(), re.M | re.S):
-                        if "pyo3_async_runtimes::tokio::future_into_py" in method.group():
-                            native.add(method.group(1))
+                native = native_future_exports(path.read_text() for path in paths)
                 self.assertTrue(native)
                 cls = classes[name]
                 self.assertFalse(any(isinstance(n, ast.AsyncFunctionDef) for n in cls.body))
@@ -138,3 +156,41 @@ class NativeFutureInventoryTests(unittest.TestCase):
                             and isinstance(n.returns, ast.Subscript)
                             and ast.unparse(n.returns.value) == "Awaitable"}
                 self.assertEqual(declared, native)
+
+
+class NativeFutureForwardingInventoryTests(unittest.TestCase):
+    def test_only_forwarding_to_a_proven_bridge_counts(self):
+        source = """
+    fn close(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(py, async { Ok(()) })
+    }
+    fn exit(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.close(py)
+    }
+    fn forwarded_exit(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.exit(py)
+    }
+    fn ordinary(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        Ok(py.None())
+    }
+    fn ordinary_forward(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.ordinary(py)
+    }
+    fn discarded_future(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.close(py);
+        Ok(py.None())
+    }
+    fn another_owner(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        other.close(py)
+    }
+    fn missing_target(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.missing(py)
+    }
+    fn cycle_a(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.cycle_b(py)
+    }
+    fn cycle_b(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        self.cycle_a(py)
+    }
+"""
+        self.assertEqual(native_future_exports([source]), {"close", "exit", "forwarded_exit"})

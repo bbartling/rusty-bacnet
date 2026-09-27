@@ -1,11 +1,7 @@
 //! MS/TP Python endpoint owner: one serial owner above both roles.
 //!
-//! `MstpEndpoint` holds `Mutex<Option<EndpointSession<MstpTransport<PySerial>>>>`
-//! with take-under-lock lifecycle. The serial port is taken once at build;
-//! no second serial owner exists.
-
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+//! A private lifecycle owner admits serial acquisition exactly once per session
+//! and retains startup/teardown across cancelled Python waiters.
 
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
@@ -15,13 +11,13 @@ use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tokio::sync::Mutex;
 
 use crate::endpoint::common::{
-    build_database, build_identity, build_pending_boxes, make_analog_input, make_analog_value,
-    make_binary_input, make_binary_value, parse_device_uuid, parse_segmentation, parse_services,
-    PendingObject, PendingRestoreGuard,
+    build_database, build_identity, build_pending_boxes, lifecycle_error, make_analog_input,
+    make_analog_value, make_binary_input, make_binary_value, parse_device_uuid, parse_segmentation,
+    parse_services, PendingObject,
 };
+use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
 use crate::types::PySegmentation;
@@ -33,6 +29,8 @@ const MSTP_MAX_APDU: u16 = 480;
 #[derive(Clone)]
 struct MstpEndpointConfig {
     serial_port: String,
+    #[cfg(test)]
+    serial_opener: Option<lifecycle_tests::SerialOpener>,
     baud: u32,
     mac: u8,
     max_master: u8,
@@ -43,7 +41,49 @@ struct MstpEndpointConfig {
     apdu_retries: u8,
 }
 
-type MstpSession = EndpointSession<MstpTransport<TokioSerialPort>>;
+#[cfg(test)]
+#[path = "mstp_lifecycle_tests.rs"]
+mod lifecycle_tests;
+#[cfg(test)]
+type EndpointSerial = lifecycle_tests::TestSerial;
+#[cfg(not(test))]
+type EndpointSerial = TokioSerialPort;
+type MstpSession = EndpointSession<MstpTransport<EndpointSerial>>;
+
+impl MstpEndpointConfig {
+    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<MstpSession> {
+        let config = self;
+        let serial_config = SerialConfig {
+            port_name: config.serial_port.clone(),
+            baud_rate: config.baud,
+        };
+        #[cfg(not(test))]
+        let serial = TokioSerialPort::open(&serial_config)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        #[cfg(test)]
+        let serial = match &config.serial_opener {
+            Some(open) => open(&serial_config)?,
+            None => lifecycle_tests::TestSerial::Real(
+                TokioSerialPort::open(&serial_config)
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+            ),
+        };
+        let boxes = build_pending_boxes(&objects)?;
+        let db = build_database(&config.identity, boxes)?;
+        let session = MstpEndpointBuilder::new(serial, config.mac)
+            .max_master(config.max_master)
+            .max_info_frames(config.max_info_frames)
+            .baud_rate(config.baud)
+            .role(SessionRole::Both)
+            .queue_capacity(config.queue_capacity)
+            .client_timers(config.apdu_timeout_ms, config.apdu_retries)
+            .database(db)
+            .identity(config.identity.clone())
+            .build_session()
+            .map_err(to_py_err)?;
+        Ok(session)
+    }
+}
 
 /// MS/TP endpoint: one serial owner that both initiates and executes.
 ///
@@ -54,28 +94,17 @@ type MstpSession = EndpointSession<MstpTransport<TokioSerialPort>>;
 /// Lifecycle mirrors `BipEndpoint`. BIPv6/Ethernet have no endpoint owner.
 #[pyclass(name = "MstpEndpoint")]
 pub struct PyMstpEndpoint {
-    inner: Arc<Mutex<Option<MstpSession>>>,
+    lifecycle: Lifecycle<MstpSession, PendingObject>,
     config: MstpEndpointConfig,
-    pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
-    started: Arc<AtomicBool>,
 }
 
 impl PyMstpEndpoint {
-    fn lock_pending(&self) -> PyResult<std::sync::MutexGuard<'_, Vec<PendingObject>>> {
-        self.pending
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))
-    }
-
     fn push_pending(&self, obj: PendingObject) -> PyResult<()> {
-        let mut guard = self.lock_pending()?;
-        if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
-                "cannot add objects after start() — endpoint is already running",
-            ));
-        }
-        guard.push(obj);
-        Ok(())
+        self.lifecycle.push(obj).map_err(|()| {
+            PyRuntimeError::new_err(
+                "cannot add objects while endpoint is starting, running, or stopping",
+            )
+        })
     }
 }
 
@@ -160,9 +189,11 @@ impl PyMstpEndpoint {
             uuid,
         )?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(None)),
+            lifecycle: Lifecycle::new(),
             config: MstpEndpointConfig {
                 serial_port: serial_port.to_string(),
+                #[cfg(test)]
+                serial_opener: None,
                 baud: mstp_baud,
                 mac: mstp_mac,
                 max_master: mstp_max_master,
@@ -172,8 +203,6 @@ impl PyMstpEndpoint {
                 apdu_timeout_ms,
                 apdu_retries,
             },
-            pending: Arc::new(std::sync::Mutex::new(Vec::new())),
-            started: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -181,7 +210,7 @@ impl PyMstpEndpoint {
     /// restored on failed/cancelled start).
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
-        Ok(self.lock_pending()?.len())
+        Ok(self.lifecycle.pending_count())
     }
 
     /// Add an Analog Input object (before start).
@@ -260,122 +289,45 @@ impl PyMstpEndpoint {
         })
     }
 
-    /// Start the endpoint: open serial once, compose one MS/TP session.
+    /// Start after lifecycle admission. A second explicit start fails.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        // Synchronous serial open before draining pending (server parity:
-        // open failures preserve registrations for retry).
-        let serial = TokioSerialPort::open(&SerialConfig {
-            port_name: self.config.serial_port.clone(),
-            baud_rate: self.config.baud,
-        })
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        let pending = self.pending.clone();
-        let inner = self.inner.clone();
-        let started = self.started.clone();
+        let lifecycle = self.lifecycle.clone();
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            {
-                let guard = inner.lock().await;
-                if guard.is_some() {
-                    return Err(to_py_err(bacnet_types::error::Error::Encoding(
-                        "endpoint already started".into(),
-                    )));
-                }
-            }
-            let mut restore = PendingRestoreGuard::new(pending.clone(), {
-                let mut guard = pending
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
-                guard.drain(..).collect()
-            });
-            let boxes = build_pending_boxes(restore.objects())?;
-            let db = build_database(&config.identity, boxes)?;
-            let mut session = MstpEndpointBuilder::new(serial, config.mac)
-                .max_master(config.max_master)
-                .max_info_frames(config.max_info_frames)
-                .baud_rate(config.baud)
-                .role(SessionRole::Both)
-                .queue_capacity(config.queue_capacity)
-                .client_timers(config.apdu_timeout_ms, config.apdu_retries)
-                .database(db)
-                .identity(config.identity.clone())
-                .build_session()
-                .map_err(to_py_err)?;
-            session.start().await.map_err(to_py_err)?;
-            *inner.lock().await = Some(session);
-            restore.take();
-            started.store(true, Ordering::Release);
-            Ok(())
+            lifecycle
+                .start(false, |objects| config.prepare(objects))
+                .await
+                .map_err(lifecycle_error)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
-    /// Close the endpoint (idempotent).
+    /// Join earlier admitted startup and teardown; safe before start and twice.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let started = self.started.clone();
+        let lifecycle = self.lifecycle.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut session = { inner.lock().await.take() };
-            if let Some(session) = session.as_mut() {
-                let _ = session.stop().await;
-            }
-            started.store(false, Ordering::Release);
-            Ok(())
+            lifecycle.close().await.map_err(lifecycle_error)?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 
-    /// Start on context entry (idempotent when already running).
+    /// Start on context entry, or reuse the already running session.
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let self_ref = slf.clone().unbind();
-        let (serial, pending, inner, started, config) = {
+        let (lifecycle, config) = {
             let borrowed = slf.borrow();
-            let serial = TokioSerialPort::open(&SerialConfig {
-                port_name: borrowed.config.serial_port.clone(),
-                baud_rate: borrowed.config.baud,
-            })
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            (
-                serial,
-                borrowed.pending.clone(),
-                borrowed.inner.clone(),
-                borrowed.started.clone(),
-                borrowed.config.clone(),
-            )
+            (borrowed.lifecycle.clone(), borrowed.config.clone())
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            {
-                let guard = inner.lock().await;
-                if guard.is_some() {
-                    return Ok(self_ref);
-                }
-            }
-            let mut restore = PendingRestoreGuard::new(pending.clone(), {
-                let mut guard = pending
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
-                guard.drain(..).collect()
-            });
-            let boxes = build_pending_boxes(restore.objects())?;
-            let db = build_database(&config.identity, boxes)?;
-            let mut session = MstpEndpointBuilder::new(serial, config.mac)
-                .max_master(config.max_master)
-                .max_info_frames(config.max_info_frames)
-                .baud_rate(config.baud)
-                .role(SessionRole::Both)
-                .queue_capacity(config.queue_capacity)
-                .client_timers(config.apdu_timeout_ms, config.apdu_retries)
-                .database(db)
-                .identity(config.identity.clone())
-                .build_session()
-                .map_err(to_py_err)?;
-            session.start().await.map_err(to_py_err)?;
-            *inner.lock().await = Some(session);
-            restore.take();
-            started.store(true, Ordering::Release);
+            lifecycle
+                .start(true, |objects| config.prepare(objects))
+                .await
+                .map_err(lifecycle_error)?;
             Ok(self_ref)
         })
     }
 
-    /// Forcefully close on context exit (idempotent).
+    /// Await joined cleanup without suppressing the context body exception.
     #[pyo3(signature = (_exc_type=None, _exc_val=None, _exc_tb=None))]
     fn __aexit__<'py>(
         &self,
@@ -384,21 +336,12 @@ impl PyMstpEndpoint {
         _exc_val: Option<Bound<'py, PyAny>>,
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let started = self.started.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut session = { inner.lock().await.take() };
-            if let Some(session) = session.as_mut() {
-                let _ = session.stop().await;
-            }
-            started.store(false, Ordering::Release);
-            Ok(())
-        })
+        self.close(py)
     }
 
     /// Clone the client role.
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -419,7 +362,7 @@ impl PyMstpEndpoint {
 
     /// Clone the server role.
     fn server<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -446,7 +389,7 @@ impl PyMstpEndpoint {
 
     /// Bounded snapshot (same keys as BIP; transport "mstp").
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let snapshot = {
@@ -480,7 +423,7 @@ impl PyMstpEndpoint {
 
     /// Broadcast one I-Am (MS/TP local broadcast).
     fn broadcast_i_am<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.lifecycle.session.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let guard = inner.lock().await;
             let session = guard.as_ref().ok_or_else(|| {

@@ -2085,6 +2085,46 @@ must include RP and cannot claim unsupported execution; incompatible server-role
 profiles fail startup before ingress, including when Device writes are disabled.
 ClientOnly has no responder and keeps its service list as a local declaration.
 
+### Endpoint lifecycle and cancellation
+
+For B/IP, SC and MS/TP, `start()`, `close()` and context exit return native
+`Awaitable[None]` Futures whose successful awaited value is Python `None`.
+An explicit second start while running raises `BacnetError`; context reentry
+returns the same endpoint. After awaited close, a new start can create a new
+session. Registrations consumed by a successful start are not replayed on restart.
+
+Admission occurs when the Rust operation acquires the endpoint lifecycle lock,
+not when Python creates its Future. Competing start/context-entry calls cannot
+replace a live session or acquire a second transport. TLS file loading, dialing
+and serial open now occur after admission; their setup errors arrive when the
+Future is awaited, rather than synchronously from the method call. Constructor
+validation remains synchronous.
+
+When polled, close requests cancellation of connection preparation ahead of its
+lifecycle admission and then waits for ownership. That request remains visible
+until admission or cancellation of the close waiter; it cannot cancel a later
+restart after close finishes. A start interrupted there
+raises `RuntimeError("endpoint startup cancelled by close")`. After transport
+session startup begins, the owner lets it settle, then joins teardown before
+close returns. This avoids abandoning partially started ingress. Close therefore
+waits for that startup/teardown work, including the transport's existing handshake
+limits; there is no new universal close timeout. Later admitted startup is a new
+operation and may run after close.
+
+Cancelling a Python startup waiter cancels safe connection preparation. If session
+startup has begun, its worker retains ownership and finishes startup and cleanup.
+Cancellation can race successful publication, so cancelling alone does not prove
+that no resource was acquired or that the endpoint is stopped. Always await
+`close()` (or context exit) when cleanup matters. If a close waiter is cancelled
+after admission, cleanup continues under the owner; another awaited close joins
+that work. Context exit does not suppress exceptions from the context body.
+
+Synchronous `add_*` registrations are rejected while starting, running or stopping.
+Failed startup, or cancellation observed before successful publication, restores
+the exact pending registrations after owned resources have been released. The
+registration gate reopens after terminal cleanup. Role access and status share the
+lifecycle lock, so they cannot observe a half-published session.
+
 ### Endpoint ReadPropertyMultiple
 
 `await client.read_property_multiple(address, specs)` shares standalone RPM's
