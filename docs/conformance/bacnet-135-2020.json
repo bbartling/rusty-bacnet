@@ -44,6 +44,7 @@
     "crates/rusty-bacnet/tests/test_configured_bip_port.py"
    ],
    "negative_tests": [
+    "crates/bacnet-endpoint/tests/rb16_identity.rs::configured_bip_entry_admission_rejects_divergent_mac_and_preserves_both_builders",
     "crates/bacnet-objects/src/network_port/tests.rs::configured_bip_numeric_boundaries_and_quality",
     "crates/bacnet-objects/src/network_port/tests.rs::configured_snapshot_refuses_activation_writes_without_state_change",
     "crates/bacnet-objects/src/network_port/tests.rs::non_bip_application_rows_do_not_claim_ipv4_fields",

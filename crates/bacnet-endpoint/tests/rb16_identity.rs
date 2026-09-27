@@ -443,11 +443,9 @@ async fn capability_matrix_services_and_segmentation_refuse() {
 }
 
 #[test]
-fn network_port_entry_rule_documents_bound_transport() {
-    // One entry per bound transport with actual bound IP/port + network
-    // number; instance numbering caller-stable (B/IP=1 here). MAC spells the
-    // bound socket (IP octets + port BE) so a second hidden socket would
-    // show as a second MAC/port.
+fn network_port_entry_rule_documents_configured_address() {
+    // A configured entry derives MAC from its declared IP/UDP. This is a
+    // configuration assertion, not evidence of a bound socket.
     let entry = NetworkPortEntry::bip(1, 77, Ipv4Addr::new(127, 0, 0, 1), 47808);
     assert_eq!(entry.network_type, NetworkType::IPV4.to_raw());
     assert_eq!(entry.mac.as_slice(), &[127, 0, 0, 1, 0xBA, 0xC0]);
@@ -551,5 +549,63 @@ fn configured_port_identity_admission_checks_profile_bounds() {
             .unwrap()
             .with_bip_port(1, number, Ipv4Addr::LOCALHOST, 0)
             .is_err());
+    }
+}
+
+#[test]
+fn configured_bip_entry_admission_rejects_divergent_mac_and_preserves_both_builders() {
+    let entry = NetworkPortEntry::bip(1, 42, Ipv4Addr::new(192, 0, 2, 10), 47808);
+    for mac in [vec![], vec![192, 0, 2, 10], vec![9; 6], vec![9; 7]] {
+        let mut inconsistent = entry.clone();
+        inconsistent.mac = bacnet_types::MacAddr::from_slice(&mac);
+        assert!(
+            DeviceIdentity::new(2867, 42)
+                .unwrap()
+                .with_network_port(inconsistent)
+                .is_err(),
+            "admitted MAC inconsistent with configured IP/UDP: {mac:?}"
+        );
+    }
+    // Mutating the other public tuple members is equally subject to admission.
+    let mut changed_ip = entry.clone();
+    changed_ip.ip = [192, 0, 2, 11];
+    let mut changed_udp = entry.clone();
+    changed_udp.udp_port = 47809;
+    for inconsistent in [changed_ip, changed_udp] {
+        assert!(DeviceIdentity::new(2867, 42)
+            .unwrap()
+            .with_network_port(inconsistent)
+            .is_err());
+    }
+    // A consistent generic admission retains exactly the view exposed by both
+    // builders; no hidden canonicalization or second identity is introduced.
+    let identity = DeviceIdentity::new(2867, 42)
+        .unwrap()
+        .with_network_port(entry.clone())
+        .unwrap();
+    assert_eq!(identity.network_ports(), &[entry]);
+    for db in [
+        identity.build_database().unwrap(),
+        build_database_with_extra(&identity, vec![analog(12, 3.0)]).unwrap(),
+    ] {
+        let object = db.get(&object_id(ObjectType::NETWORK_PORT, 1)).unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::MAC_ADDRESS, None)
+                .unwrap(),
+            PropertyValue::OctetString(identity.network_ports()[0].mac.to_vec())
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::IP_ADDRESS, None)
+                .unwrap(),
+            PropertyValue::OctetString(identity.network_ports()[0].ip.to_vec())
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(identity.network_ports()[0].udp_port.into())
+        );
     }
 }

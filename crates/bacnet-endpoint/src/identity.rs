@@ -114,6 +114,7 @@ pub struct NetworkPortEntry {
     /// BACnet network number for this port.
     pub network_number: u32,
     /// Port MAC (B/IP 6-byte IP+port, SC VMAC, loopback MAC).
+    /// B/IP admission rejects a MAC inconsistent with the configured IP/UDP.
     pub mac: MacAddr,
     /// IPv4 octets for B/IP; zeros for SC/loopback.
     pub ip: [u8; 4],
@@ -160,6 +161,16 @@ impl NetworkPortEntry {
         // Live transport association and capability validation are separate.
         let apdu_length = 1476;
         if self.network_type == NetworkType::IPV4.to_raw() {
+            // Public entry fields must describe one configured address. Reject
+            // divergent input instead of storing one MAC while deriving another
+            // in either database builder.
+            let [a, b, c, d] = self.ip;
+            let [hi, lo] = self.udp_port.to_be_bytes();
+            if self.mac.as_slice() != [a, b, c, d, hi, lo] {
+                return Err(Error::Encoding(
+                    "B/IP MAC must match configured IPv4 address and UDP port".into(),
+                ));
+            }
             NetworkPortObject::new_bip(
                 self.instance,
                 name,
@@ -402,7 +413,7 @@ impl DeviceIdentity {
         &self.services
     }
 
-    /// Network-Port entries (one per bound transport).
+    /// Configured Network-Port entries, independent of live transport binding.
     pub fn network_ports(&self) -> &[NetworkPortEntry] {
         &self.network_ports
     }
