@@ -48,6 +48,9 @@ pub(super) struct DeadlinePeer {
 impl DeadlinePeer {
     pub async fn new(clients: Clients, duration: Duration) -> Self {
         let (server, ws, address, accepted) = TestTls::new().pair().await;
+        let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+            server.get_ref().get_ref().1.peer_certificates(),
+        );
         let (write, read) = server.split();
         let sink = Arc::new(Mutex::new(write));
         let deadline = Arc::new(super::deadlines::ConnectDeadline::new(accepted + duration));
@@ -65,7 +68,7 @@ impl DeadlinePeer {
             deadline.clone(),
             || {},
             runtime,
-            true,
+            verified_leaf,
             super::tasks::Tasks::new().graceful_ctx(),
             super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
         );

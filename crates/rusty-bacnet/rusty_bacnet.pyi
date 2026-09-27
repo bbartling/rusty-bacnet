@@ -2645,6 +2645,22 @@ class ScHubStatus(TypedDict):
     broadcast_global_exhausted: int
     outcomes: ScHubOutcomeCounts
 
+class ScHubCertificateBinding:
+    """Frozen installation group; exact leaf DER SHA-256, with redacted repr.
+
+    Inputs are copied. UUID must be nonzero; VMAC and digest lists must be
+    nonempty and distinct; reserved VMACs are invalid. Raises ValueError.
+    """
+    def __init__(
+        self, *, uuid: bytes, allowed_vmacs: Sequence[bytes], leaf_sha256: Sequence[bytes],
+    ) -> None: ...
+    @property
+    def uuid(self) -> bytes: ...
+    @property
+    def allowed_vmacs(self) -> tuple[bytes, ...]: ...
+    @property
+    def leaf_sha256(self) -> tuple[bytes, ...]: ...
+
 class ScHub:
     """BACnet/SC Hub for relaying messages between SC nodes.
 
@@ -2705,6 +2721,12 @@ class ScHub:
     token buckets: bounds 1..=(2**64-1)//1_000_000_000, silent drops, existing counters.
     All are constructor-validated before I/O. Negative/over-u64 integers raise
     OverflowError, nonintegers TypeError, other invalid bounds ValueError.
+    ``certificate_bindings=None`` retains CA-valid admission. A nonempty group
+    sequence enables mapped-only UUID/VMAC reservations, including offline nodes;
+    existing admission_policy can further deny. Shared native validation rejects
+    overlapping ownership and local Hub VMAC conflicts before PEM I/O/bind.
+    Inputs are copied; status/repr/errors do not expose certificate contents.
+    This is installation policy, not end-to-end relayed authentication.
     ``stop()`` is forceful and idempotent; ``shutdown_gracefully()`` runs the
     Disconnect/Ack/close exchange and consumes the hub; dropping the hub
     without awaiting close only seals admission and cannot guarantee cleanup.
@@ -2737,6 +2759,7 @@ class ScHub:
         broadcast_global_burst: int = 4096,
         broadcast_global_per_second: int = 512,
         relay_send_budget_ms: int = 5000,
+        certificate_bindings: Sequence[ScHubCertificateBinding] | None = None,
     ) -> None: ...
 
     def start(self) -> Awaitable[None]:

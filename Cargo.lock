@@ -415,6 +415,7 @@ dependencies = [
 name = "bacnet-transport"
 version = "0.11.0"
 dependencies = [
+ "aws-lc-rs",
  "bacnet-encoding",
  "bacnet-types",
  "bytes",

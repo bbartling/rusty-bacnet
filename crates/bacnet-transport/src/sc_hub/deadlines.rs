@@ -73,7 +73,7 @@ pub(super) async fn serve(
     deadline: Arc<ConnectDeadline>,
     on_heartbeat_ack: impl Fn() + Send,
     admission: Arc<super::admission::AdmissionRuntime>,
-    tls_client_verified: bool,
+    verified_leaf: Option<certificate_bindings::VerifiedLeaf>,
     graceful: super::graceful::GracefulCtx,
     timing: super::timing::HubTiming,
 ) {
@@ -90,7 +90,7 @@ pub(super) async fn serve(
             &deadline,
             on_heartbeat_ack,
             admission,
-            tls_client_verified,
+            verified_leaf,
             graceful,
             timing,
         );

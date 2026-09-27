@@ -4091,6 +4091,36 @@
     "CHANGELOG.md #870"
    ],
    "notes": "Refs #870. Fifty syntactic terminal branches use current concrete property_metadata; the shared value-type branch expands across12types. The existing62-object fixture includes the already-correct Network Port control. Optional absent Staging STAGE_NAMES and absent stream File RECORD_COUNT (Table 12-16 footnote 2, printed 240/PDF 242) are corrected only for unindexed writes. Present read-only record File counts and other File resize guards retain their existing errors. PROPERTY_LIST must not be inferred absent from its own projection. Earlier successful writes, state/source/authorization and array/index guards remain in place. No server-wide presence precheck or custom-object policy change. Direct matrix covers NULL/ordinary inputs and present read-only controls; Rust observed WPM proves exact coordinate and retained DESCRIPTION prefix. Installed Python exposes class/code and prefix through real localhost WP/WPM, not a new failed-coordinate API. This narrow evidence does not claim full object or service conformance."
+  },
+  {
+    "id": "BACNET-AB-HUB-CERTIFICATE-BINDINGS",
+    "standard_anchor": "135-2020 Annex AB.7.4 printed1406/PDF1408: additional checks only when installation-enabled",
+    "priority": "P1",
+    "requirement_summary": "Optional Hub certificate-to-UUID/VMAC policy is validated before bind and enforced before registration or incumbent replacement.",
+    "status": "supported-with-clause-evidence",
+    "code_anchors": [
+      "crates/bacnet-transport/src/sc_hub/certificate_bindings.rs",
+      "crates/bacnet-transport/src/sc_hub/connection.rs",
+      "crates/bacnet-transport/src/sc_hub/handler.rs",
+      "crates/rusty-bacnet/src/hub_bindings.rs"
+    ],
+    "positive_tests": [
+      "crates/bacnet-transport/tests/sc_hub_certificate_bindings.rs",
+      "crates/rusty-bacnet/tests/test_sc_hub_certificate_bindings.py"
+    ],
+    "negative_tests": [
+      "crates/bacnet-transport/src/sc_hub/admission_tests.rs::certificate_bindings_missing_leaf_never_commits_or_calls_policy",
+      "crates/bacnet-transport/src/sc_hub/certificate_bindings.rs::tests::certificate_bindings_missing_identity_fails_closed_and_hashes_exact_leaf",
+      "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs",
+      "crates/bacnet-transport/src/sc_hub/conflict_admission_tests.rs"
+    ],
+    "benchmarks": [],
+    "public_claims": [
+      "README.md Credentials and device identity",
+      "docs/rust-api.md#hub-certificate-bindings",
+      "docs/python-api.md#hub-certificate-bindings"
+    ],
+    "notes": "Refs #800. This is opt-in installation policy, not an Annex AB default requirement or complete SC security-profile claim. Exact verified leaf DER SHA-256 maps to one nonzero UUID and allowed VMACs, with nonempty distinct rotation digests. Configured maps reserve identities offline and deny unmapped leaves even on unreserved claims; no-map retains CA-valid admission. Existing callbacks can further deny but cannot override binding failure. Same-CA distinct-leaf real-TLS cases cover offline/live reservations, denied replacement with surviving incumbent relay, rotation/reconnect, no-map controls and joined shutdown. Python named frozen groups use the same native validation before PEM I/O, preserve copied inputs, and exercise real TLS parity. No raw leaf/digest map is logged or exposed in status. Every Hub feeding a trusted router ingress needs installation policy; #518/#524/#803 retain router integration, relayed operation-principal and direct-peer work."
   }
  ]
 }

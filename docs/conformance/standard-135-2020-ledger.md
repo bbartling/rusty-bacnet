@@ -990,3 +990,17 @@ guarantee. A supplied Binary Lighting terminal snapshot prepared later can win
 even when its object state is older. Regression anchors in the machine ledger
 cover held completions, capture-before-await, per-reference overlap, failure,
 exhaustion and the supplied-snapshot limit; row status is unchanged.
+
+## Hub certificate bindings
+
+The `BACNET-AB-HUB-CERTIFICATE-BINDINGS` row records #800's opt-in installation
+policy under Annex AB.7.4. A verified exact leaf DER SHA-256 fingerprint must
+match one configured UUID/allowed-VMAC group before locked registration commit.
+Offline reservations, same-CA unauthorized leaves, listed rotation, callback
+conjunction, incumbent relay, missing identity, prebind conflicts and joined
+shutdown have native fixtures; installed Python exercises the same validator and
+real TLS paths through frozen named groups. No-map CA-valid admission remains
+intentional. See [Rust](../rust-api.md#hub-certificate-bindings) and
+[Python](../python-api.md#hub-certificate-bindings) for the exact contract.
+This neither authenticates relayed operations end to end nor closes the full SC
+security profile; #518/#524/#803 remain separate.

@@ -32,6 +32,7 @@ use tracing::{debug, warn};
 pub(super) mod admission;
 mod advertisement_transit;
 mod broadcast_rate;
+mod certificate_bindings;
 mod client;
 mod connection;
 mod deadlines;
@@ -58,6 +59,7 @@ pub use admission::{
     ScHubRegistrationKind, ScHubStatus, DEFAULT_MAX_CLIENTS, DEFAULT_MAX_HANDSHAKES,
 };
 pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
+pub use certificate_bindings::{ScHubCertificateBinding, ScHubCertificateBindings};
 pub use graceful::{ScHubGracefulTimeouts, ScHubShutdownOutcome};
 pub use outcomes::ScHubOutcomeCounts;
 pub use timeouts::ScHubHandshakeTimeouts;
@@ -270,10 +272,14 @@ impl ScHub {
         probe_policy.validate()?;
         let graceful_timeouts = tls_config.graceful_timeouts();
         graceful_timeouts.validate()?;
-        let admission = Arc::new(admission::AdmissionRuntime::new(
-            admission_limits,
-            tls_config.admission_policy(),
-        ));
+        let bindings = tls_config.certificate_bindings().cloned();
+        if let Some(bindings) = &bindings {
+            bindings.validate_hub_vmac(hub_vmac)?;
+        }
+        let mut admission =
+            admission::AdmissionRuntime::new(admission_limits, tls_config.admission_policy());
+        admission.bindings = bindings;
+        let admission = Arc::new(admission);
         let broadcast = Arc::new(broadcast_rate::HubBudget::new(
             tls_config.broadcast_rate_policy(),
         )?);
@@ -463,7 +469,7 @@ async fn handle_client(
     clients: Clients,
     expires: tokio::time::Instant,
     admission: Arc<admission::AdmissionRuntime>,
-    tls_client_verified: bool,
+    verified_leaf: Option<certificate_bindings::VerifiedLeaf>,
     graceful: graceful::GracefulCtx,
     timing: timing::HubTiming,
 ) {
@@ -477,7 +483,7 @@ async fn handle_client(
         deadline,
         || {},
         admission,
-        tls_client_verified,
+        verified_leaf,
         graceful,
         timing,
     )
@@ -514,7 +520,7 @@ async fn handle_client_observed(
         deadline,
         on_heartbeat_ack,
         admission,
-        false,
+        None,
         graceful,
         timing,
     )

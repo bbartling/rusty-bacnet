@@ -173,7 +173,8 @@ impl super::HubClientRegistrationDecision {
 /// - `tls_client_verified` reports only whether the TLS handshake presented
 ///   a client certificate chain the acceptor verified against the
 ///   configured CA. No subject, fingerprint, or other certificate field is
-///   extracted or exposed (that surface stays excluded).
+///   exposed to the callback. Optional certificate bindings are checked
+///   independently before this callback and cannot be overridden by it.
 /// - `provenance` is the RB-07 peer context for this channel: the verified
 ///   direct-peer variant when `tls_client_verified` holds, else unverified.
 ///   Its scope is the TLS channel before Connect-Accept; the claimed VMAC
@@ -250,7 +251,7 @@ pub struct ScHubStatus {
     pub client_count: usize,
     /// Accepted but unregistered connections (approximate; see above).
     pub handshake_count: usize,
-    /// Lifetime admin-policy denials (saturating).
+    /// Lifetime certificate-binding or admin-policy denials (saturating).
     pub admin_denied: u64,
     /// Lifetime broadcast-relay drop counters (saturating).
     pub broadcast_drops: super::ScHubBroadcastDropCounts,
@@ -266,6 +267,7 @@ pub struct ScHubStatus {
 /// share denial counts.
 pub(super) struct AdmissionRuntime {
     pub(super) limits: ScHubAdmissionLimits,
+    pub(super) bindings: Option<super::ScHubCertificateBindings>,
     pub(super) policy: Option<ScHubAdmissionPolicy>,
     pub(super) denied: AtomicU64,
 }
@@ -274,6 +276,7 @@ impl AdmissionRuntime {
     pub(super) fn new(limits: ScHubAdmissionLimits, policy: Option<ScHubAdmissionPolicy>) -> Self {
         Self {
             limits,
+            bindings: None,
             policy,
             denied: AtomicU64::new(0),
         }

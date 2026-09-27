@@ -2232,6 +2232,51 @@ receive + initiate flow through one endpoint.
 
 ---
 
+
+## Hub certificate bindings
+
+```python
+from rusty_bacnet import ScHub, ScHubCertificateBinding
+
+node = ScHubCertificateBinding(
+    uuid=node_uuid,
+    allowed_vmacs=(port_vmac,),
+    leaf_sha256=(current_leaf_sha256, renewal_leaf_sha256),
+)
+hub = ScHub(
+    "127.0.0.1:0", "hub.pem", "hub.key", hub_vmac,
+    ca_cert="site-ca.pem", device_uuid=hub_uuid,
+    certificate_bindings=(node,),
+)
+```
+
+Each frozen group's constructor is keyword-only. UUID, VMAC and leaf digest
+lengths are 16, 6 and 32 bytes respectively. UUID must be nonzero; VMACs must not
+be all zero/all ff. Both lists are nonempty and distinct. Read-only getters return
+bytes or tuples of bytes; input sequences are copied and `repr` is redacted.
+Compute fingerprints as `hashlib.sha256(leaf_der).digest()`, not from PEM text or
+the public key. Multiple leaf digests explicitly permit certificate rotation.
+
+`certificate_bindings=None` retains CA-valid admission. A configured sequence
+must be nonempty, with no UUID, VMAC or fingerprint overlap between groups and
+no allowed VMAC equal to the Hub's own VMAC. Shape/ownership failures raise
+`ValueError` synchronously before PEM I/O or bind, using the native validator.
+Tuple triples/dictionaries are not alternate group representations. The Hub
+copies the validated policy; later edits to input lists cannot change it.
+
+Bound mode rejects unmapped leaves, wrong UUIDs and unlisted VMACs, including
+claims on offline or otherwise unreserved identities. Existing `admission_policy`
+remains conjunctive: `allow_all` cannot override binding refusal, while
+`deny_uuid_replacement` can refuse even a listed renewal. Rejection leaves an
+incumbent intact. `admin_denied` includes binding denials without certificate
+contents in status/errors.
+
+This is explicit installation policy under Annex AB.7.4. It does not authenticate
+relayed operations end to end, authorize operations, or secure direct SC ingress.
+Every Hub feeding a trusted router ingress must enforce the selected policy;
+#518/#524/#803 remain separate. See the [native contract](rust-api.md#hub-certificate-bindings)
+and [scoped evidence](conformance/standard-135-2020-ledger.md#hub-certificate-bindings).
+
 ## ScHub
 
 BACnet/SC Hub — a TLS WebSocket relay for BACnet Secure Connect. Both `BACnetClient` and `BACnetServer` with `transport="sc"` connect to a hub as clients. The hub relays messages between connected nodes using VMAC addresses.
@@ -2308,7 +2353,7 @@ local security policy before protocol acceptance. Default mode retains Annex AB
 known-UUID acceptance/replacement; different-UUID VMAC conflicts still receive
 the standard duplicate-VMAC NAK. No certificate-to-UUID identity is inferred.
 Both denial modes use the existing `RESOURCES`/`OTHER` NAK family and increment
-`admin_denied` only when policy denies. Unknown mode strings raise `ValueError`
+`admin_denied` when either the certificate binding or admin policy denies. Unknown mode strings raise `ValueError`
 at construction, before credential I/O or binding. Non-string values — including Python callables — raise
 `TypeError`: the native policy runs synchronously under the registry lock,
 where attaching the GIL could deadlock, so no Python callback can be
@@ -2346,7 +2391,7 @@ The UUID identifies the hosting **device**, while VMAC identifies its hosting
 AB.6). The caller must provision the UUID before deployment and durably reuse it
 for the device's entire lifetime (AB.1.5.3), including same-object stop/start and
 fresh objects. No per-connection generation, storage backend, lifetime-history
-check, or certificate binding is provided. See [UUID provisioning](#sc-device-uuid-migration).
+check, or automatic certificate binding is provided. See [UUID provisioning](#sc-device-uuid-migration).
 
 `start()` validates the CA store and server certificate/key before binding;
 unreadable, empty, or malformed credentials and mismatched server keys raise
@@ -2354,7 +2399,8 @@ unreadable, empty, or malformed credentials and mismatched server keys raise
 Missing, untrusted, expired, or not-yet-valid peer certificates are rejected.
 This addresses the Python hub admission boundary of Annex AB.7.4, not full
 security-profile conformance. CA membership does not authorize BACnet operations
-or bind a certificate to a claimed VMAC/Device UUID. Python startup loads/parses
+or by itself bind a certificate to a claimed VMAC/Device UUID; the optional
+`certificate_bindings` policy provides the separate registration check. Python startup loads/parses
 files and delegates policy construction to native `ScHubTlsConfig::from_der`, then
 uses `ScHub::start_with_tls_config` with the retained explicit UUID and default phase
 timeouts. The identity migration is not another certificate-less-access fix;

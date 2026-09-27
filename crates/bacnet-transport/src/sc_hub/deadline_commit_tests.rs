@@ -77,6 +77,9 @@ async fn connect_deadline_exact_expiry_beats_ready_registry_and_request() {
 async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up() {
     let clients = clients();
     let (server, mut ws, address, _) = TestTls::new().pair().await;
+    let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+        server.get_ref().get_ref().1.peer_certificates(),
+    );
     let (write, read) = server.split();
     let sink = Arc::new(Mutex::new(write));
     let held = sink.clone().lock_owned().await;
@@ -93,7 +96,7 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
         deadline.clone(),
         || {},
         Arc::new(super::admission::AdmissionRuntime::default()),
-        true,
+        verified_leaf,
         super::tasks::Tasks::new().graceful_ctx(),
         super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
     ));

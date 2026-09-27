@@ -15,6 +15,9 @@ pub(super) struct ControlledPeer {
 impl ControlledPeer {
     pub async fn open(tls: &TestTls, hub: &CountedHub) -> Self {
         let (server, ws, address, accepted) = tls.pair().await;
+        let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+            server.get_ref().get_ref().1.peer_certificates(),
+        );
         let (write, read) = server.split();
         let sink = Arc::new(Mutex::new(write));
         let deadline = Arc::new(deadlines::ConnectDeadline::new(
@@ -31,7 +34,7 @@ impl ControlledPeer {
             deadline.clone(),
             || {},
             hub.admission.clone(),
-            true,
+            verified_leaf,
             hub.hub.tasks.graceful_ctx(),
             hub.hub.tasks.timing,
         );

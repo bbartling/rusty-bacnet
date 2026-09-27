@@ -89,6 +89,7 @@ use tokio_rustls::TlsAcceptor;
 #[derive(Clone)]
 pub struct ScHubTlsConfig {
     inner: Arc<rustls::ServerConfig>,
+    certificate_bindings: Option<super::ScHubCertificateBindings>,
     broadcast_rate: super::ScHubBroadcastRatePolicy,
     admission_limits: super::ScHubAdmissionLimits,
     admission_policy: Option<super::ScHubAdmissionPolicy>,
@@ -142,6 +143,7 @@ impl ScHubTlsConfig {
             .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?;
         Ok(Self {
             inner: Arc::new(config),
+            certificate_bindings: None,
             broadcast_rate: super::ScHubBroadcastRatePolicy::default(),
             admission_limits: super::ScHubAdmissionLimits::default(),
             admission_policy: None,
@@ -149,6 +151,19 @@ impl ScHubTlsConfig {
             probe_policy: super::ScHubProbePolicy::default(),
             relay_send_budget: std::time::Duration::from_secs(5),
         })
+    }
+
+    /// Enable mapped-only certificate-to-claim admission, including offline
+    /// reservations. An absent map retains CA-valid admission. Existing admin
+    /// policy remains conjunctive and can further deny a matched leaf.
+    pub fn with_certificate_bindings(mut self, bindings: super::ScHubCertificateBindings) -> Self {
+        self.certificate_bindings = Some(bindings);
+        self
+    }
+
+    /// Immutable configured installation policy, if enabled.
+    pub fn certificate_bindings(&self) -> Option<&super::ScHubCertificateBindings> {
+        self.certificate_bindings.as_ref()
     }
 
     /// Tune the always-on hub broadcast relay budgets without changing TLS policy.
@@ -201,7 +216,8 @@ impl ScHubTlsConfig {
     /// allow-all; configured limits still apply either way. Clones share
     /// the policy but never the deny counters. Device UUID shape and
     /// equality are registry keys, not certificate authentication: no
-    /// certificate subject or fingerprint is extracted or exposed.
+    /// certificate subject or fingerprint is exposed to the callback. Optional
+    /// certificate bindings independently constrain these claims.
     ///
     /// Refusing replacement is an explicit local security policy before
     /// protocol acceptance; the default retains Annex AB known-UUID replacement.
