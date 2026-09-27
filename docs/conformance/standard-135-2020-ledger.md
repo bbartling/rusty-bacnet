@@ -66,11 +66,16 @@ checks explicit selection and active-only actual address reporting.
 
 The instance range 1–255 is local policy. The transport must remain NORMAL B/IP,
 with a concrete configured unicast interface; activation configuration is read-only
-and bound Out_Of_Service/structural changes are refused. This is not complete active
-Network Port profile conformance: [#875](https://github.com/jscott3201/rusty-bacnet/issues/875)
-tracks single-link nonrouter Network Number control/learning, and #863 tracks
-same-device multiport/router generation. Pending configuration, rebind, BBMD,
-foreign-device and DHCP support are not claimed. See the [Rust contract](../rust-api.md#registered-bip-network-port).
+and bound Out_Of_Service/structural changes are refused.
+[#875](https://github.com/jscott3201/rusty-bacnet/issues/875) delivered bounded
+single-link nonrouter Network Number controls for the full server and endpoint
+on NORMAL B/IP: answers when the number is known and valid local-broadcast
+learning with configured-source precedence. See `BACNET-06-NONROUTER-NETWORK-NUMBER`
+in the [evidence rows](support-summary.md#ledger-rows) and the
+[control contract](../rust-api.md#local-network-number-controls).
+This is not complete active Network Port profile conformance; #863 remains the
+same-device multiport/router residual. Pending configuration, rebind, BBMD,
+foreign-device, DHCP and other-link support are not claimed. See the [Rust contract](../rust-api.md#registered-bip-network-port).
 Global evidence pins remain unchanged.
 
 ## Endpoint WriteProperty source WRITE

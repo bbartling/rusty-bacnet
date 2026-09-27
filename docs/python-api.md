@@ -2,6 +2,12 @@
 
 `rusty_bacnet` provides Python bindings for the Rust BACnet protocol stack via PyO3. All I/O operations are async (`asyncio`-based).
 
+This reference describes current development-source APIs, including unreleased
+changes. The [published package](https://pypi.org/project/rusty-bacnet/0.11.0/)
+and hosted guides target **0.11.0**; see the [installation guidance](../README.md#installation)
+for that release. To use the checkout APIs described here, follow
+[Build from source](../README.md#build-from-source).
+
 **Requirements:** Python >= 3.11
 
 Native asynchronous methods return an `asyncio.Future` immediately when called
@@ -28,8 +34,10 @@ that yields a notification or raises `StopAsyncIteration` when the channel close
 
 ## Installation
 
+Install the published 0.11.0 package with:
+
 ```bash
-pip install rusty-bacnet
+pip install "rusty-bacnet==0.11.0"
 ```
 
 The package includes a `.pyi` type stub file for IDE autocompletion and type checking. Most editors (VS Code, PyCharm) will pick it up automatically from the installed package.
@@ -258,7 +266,8 @@ Each item in `.values` is a dict:
 Async iterator yielding `CovNotification` objects from the client's broadcast channel.
 
 ```python
-async for notification in client.cov_notifications():
+notifications = await client.cov_notifications()
+async for notification in notifications:
     print(notification.monitored_object_identifier)
     for v in notification.values:
         print(f"  {v['property_id']}: {v['value']}")
@@ -501,12 +510,14 @@ await client.unsubscribe_cov(
 )
 ```
 
-#### `cov_notifications() -> CovNotificationIterator`
+#### `cov_notifications() -> Awaitable[CovNotificationIterator]`
 
-Returns an async iterator. Can be called multiple times for independent consumers.
+Returns an awaitable that yields an async iterator. Await the factory before
+iterating; it can be called multiple times for independent consumers.
 
 ```python
-async for notif in client.cov_notifications():
+notifications = await client.cov_notifications()
+async for notif in notifications:
     print(f"Object {notif.monitored_object_identifier} changed:")
     for v in notif.values:
         print(f"  {v['property_id']}: {v['value']}")
@@ -1891,7 +1902,7 @@ Routed controls, malformed payloads and Original-Unicast Network-Number-Is are i
 
 Control work has its own bounded receiver and serial worker, so a blocked learning operation does not stop APDU/Audit acknowledgment dispatch. Stop seals, aborts and joins that worker before transport cleanup; cancellation retains cleanup ownership. Queued endpoint control sends are caller-owned and canceled with the worker, while a send already started may have reached the wire. The registered-object lease remains with the final socket and admitted work.
 
-The [conformance evidence](conformance/support-summary.md#bacnet-06-nonrouter-network-number) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The new owner fixture does not capture outgoing BVLL frames. These controls do not establish a complete Network Port or router profile.
+The `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [conformance evidence](conformance/support-summary.md#ledger-rows) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The new owner fixture does not capture outgoing BVLL frames. These controls do not establish a complete Network Port or router profile.
 
 
 `BipEndpoint(..., network_port_instance=2, registered_network_port=2)` explicitly
@@ -2107,7 +2118,8 @@ async def client_example():
 
         # Listen for changes (in a separate task)
         async def listen():
-            async for notif in client.cov_notifications():
+            notifications = await client.cov_notifications()
+            async for notif in notifications:
                 for v in notif.values:
                     print(f"COV: {v['property_id']} = {v['value']}")
 
