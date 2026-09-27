@@ -161,7 +161,7 @@ class InputPresentValueArtifactTests(unittest.TestCase):
                     (msi, PropertyValue.unsigned(3)),
                 )
                 for oid, value in successful_updates:
-                    await server.set_present_value_local(oid, value)
+                    self.assertIsNone(await server.set_present_value_local(oid, value))
                     self.assertEqual(await self._read_present_value(server, oid), value)
                     notification = await asyncio.wait_for(
                         notifications.get(), timeout=NOTIFICATION_TIMEOUT

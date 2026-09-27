@@ -14,6 +14,16 @@ mod server;
 mod tls;
 mod types;
 
+/// Project a unit-only async success to Python None, after the operation future
+/// (and its Rust guards) has finished. PyO3's IntoPyObject maps Rust () to tuple(),
+/// unlike synchronous pymethod unit returns. Preserve the original PyErr on failure.
+async fn unit_result(
+    future: impl std::future::Future<Output = PyResult<()>>,
+) -> PyResult<Py<PyAny>> {
+    future.await?;
+    Ok(Python::attach(|py| py.None()))
+}
+
 /// The `rusty_bacnet` Python module.
 #[pymodule]
 fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -305,9 +305,10 @@ class HubLifecycleTests(HubTlsFixture):
 
     async def test_repeated_forceful_close_is_idempotent(self):
         hub = self.make_hub()
-        await asyncio.wait_for(hub.start(), 10)
-        await asyncio.wait_for(hub.stop(), 5)
-        await asyncio.wait_for(hub.stop(), 5)
+        self.assertIsNone(await asyncio.wait_for(hub.start(), 10))
+        self.assertIsNone(await asyncio.wait_for(hub.__aexit__(None, None, None), 5))
+        self.assertIsNone(await asyncio.wait_for(hub.stop(), 5))
+        self.assertIsNone(await asyncio.wait_for(hub.stop(), 5))
         with self.assertRaisesRegex(RuntimeError, "not started"):
             await hub.status()
 

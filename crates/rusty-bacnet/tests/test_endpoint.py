@@ -255,6 +255,8 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await endpoint.client()
         with self.assertRaisesRegex(RuntimeError, "not started"):
             await endpoint.server()
+        with self.assertRaisesRegex(RuntimeError, "not started"):
+            await endpoint.broadcast_i_am()
         # Close before start is a safe no-op.
         await asyncio.wait_for(endpoint.close(), 5)
         await asyncio.wait_for(endpoint.close(), 5)
@@ -348,6 +350,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 addr_b = await second.local_address()
                 self.assertIn(str(port_a), addr_a)
                 self.assertIn(str(port_b), addr_b)
+                self.assertIsNone(await first.broadcast_i_am())
                 first_client = await first.client()
                 second_client = await second.client()
                 oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
@@ -480,6 +483,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
         second.add_analog_input(instance=1, name="B", present_value=6.0)
         async with first:
             async with second:
+                self.assertIsNone(await first.broadcast_i_am())
                 first_client = await first.client()
                 second_client = await second.client()
                 first_server = await first.server()
@@ -921,6 +925,7 @@ class ScEndpointHubTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(await first.__aenter__(), first)
             await asyncio.wait_for(second.start(), 15)
             try:
+                self.assertIsNone(await first.broadcast_i_am())
                 first_client = await first.client()
                 second_client = await second.client()
                 oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)

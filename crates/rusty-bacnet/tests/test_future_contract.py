@@ -58,6 +58,18 @@ class NativeFutureTests(unittest.IsolatedAsyncioTestCase):
                 future.cancel()
             await asyncio.gather(future, return_exceptions=True)
 
+    async def test_unit_only_stop_results_are_none_without_starting(self):
+        owners = (
+            ("BACnetClient", rb.BACnetClient(interface="127.0.0.1", port=0)),
+            ("BACnetServer", rb.BACnetServer(865, interface="127.0.0.1", port=0)),
+            ("ScHub", rb.ScHub("127.0.0.1:0", "unused-cert", "unused-key",
+                               b"\x02\x00\x00\x00\x00\x01", ca_cert="unused-ca",
+                               device_uuid=b"\x01" * 16)),
+        )
+        for name, owner in owners:
+            with self.subTest(owner=name):
+                self.assertIsNone(await self.future_result(name, "stop", owner.stop()))
+
     async def test_client_native_future_and_installed_signature(self):
         async with rb.BACnetClient(interface="127.0.0.1", port=0) as client:
             result = await self.future_result("BACnetClient", "discovered_devices", client.discovered_devices())
@@ -71,7 +83,7 @@ class NativeFutureTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertIsNone(await self.future_result("ScHub", "address", hub.address()))
             await self.future_result("ScHub", "stop", hub.stop())
-            await self.future_result("BACnetServer", "start", server.start())
+            self.assertIsNone(await self.future_result("BACnetServer", "start", server.start()))
             address = await self.future_result("BACnetServer", "local_address", server.local_address())
             entered = await self.future_result("BipEndpoint", "__aenter__", endpoint.__aenter__())
             self.assertIs(entered, endpoint)
@@ -119,7 +131,7 @@ class NativeFutureTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 client.write_property("invalid-address", oid, rb.PropertyIdentifier.PRESENT_VALUE,
                                       rb.PropertyValue.real(2.0), priority=0)
-            await self.future_result("BACnetClient", "__aexit__", client.__aexit__(None, None, None))
+            self.assertIsNone(await self.future_result("BACnetClient", "__aexit__", client.__aexit__(None, None, None)))
             with self.assertRaises(StopAsyncIteration):
                 await asyncio.wait_for(iterator.__anext__(), 5)
         finally:

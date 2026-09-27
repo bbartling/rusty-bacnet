@@ -194,7 +194,7 @@ impl BACnetClient {
         req.encode(&mut buf)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -210,7 +210,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -220,7 +221,7 @@ impl BACnetClient {
     /// Broadcast a Who-Am-I request.
     fn who_am_i<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -234,7 +235,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -270,7 +272,7 @@ impl BACnetClient {
             })
             .collect();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -290,6 +292,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 }
