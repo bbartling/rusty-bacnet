@@ -51,21 +51,18 @@
 //!
 //! # Network-Port population rule
 //!
-//! One port entry per bound transport, with the actual bound IP/port +
-//! network number observed at bind:
+//! Entries declare configured, unbound application-port snapshots. They do not
+//! discover or prove an active socket/NIC association:
 //!
-//! - B/IP: `Network_Type = IPV4 (5)`, `MAC` = 6-byte B/IP MAC
-//!   (bound IP octets + bound UDP port big-endian), `IP_Address` = bound IP,
-//!   `BACnet_IP_UDP_Port` = bound port, `Network_Number` = caller-configured.
-//! - SC: `Network_Type = VIRTUAL (7)`, `MAC` = 6-byte VMAC, IP fields stay
-//!   zero (SC has no B/IP socket), `Network_Number` = caller-configured.
-//! - Loopback/determinism: `Network_Type = VIRTUAL (7)` with the loopback MAC.
+//! - B/IP: IPV4 (5), six-octet MAC derived from configured IP/UDP, and caller
+//!   network number. UDP zero is allowed; the local instance/Port ID is 1..255.
+//! - SC/loopback: VIRTUAL (7), caller VMAC and number; the object exposes only
+//!   common application rows, with no IPv4 properties or complete SC claim.
+//! - Port APDU_Length399 is declared1476 independently of Device62/role limits.
 //!
-//! Instance numbering is caller-chosen but must be stable per device; the
-//! convention used in proofs is B/IP = 1, SC = 2, loopback = 1 when solo.
-//! [`DeviceIdentity::with_bip_port`] / [`with_sc_port`](DeviceIdentity::with_sc_port)
-//! encode this rule; [`DeviceIdentity::sync_bip_bind`] refreshes the B/IP
-//! entry with the actual bound socket address after `start()`.
+//! Instance numbering is stable per device (proofs use B/IP1, SC2). Updating
+//! an entry with [`DeviceIdentity::sync_bip_bind`] changes future database
+//! construction only; it does not synchronize an already built object database.
 //!
 //! # SC UUID rule (durable-caller-owned)
 //!
@@ -93,7 +90,7 @@
 use bacnet_encoding::apdu::{encode_apdu, validate_max_apdu_length, Apdu, UnconfirmedRequest};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_objects::network_port::NetworkPortObject;
+use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::who_is::IAmRequest;
 use bacnet_types::enums::{NetworkType, ObjectType, Segmentation, ServiceSupported};
@@ -103,7 +100,7 @@ use bacnet_types::MacAddr;
 use bytes::BytesMut;
 use std::net::Ipv4Addr;
 
-/// One Network-Port entry per bound transport (see module docs for the rule).
+/// One configured Network-Port entry (see module docs for the profile boundary).
 ///
 /// Provenance: population-rule coverage is Loopback-only except the B/IP +
 /// SC entries exercised in the RB-16 real-transport proofs. Field layout
@@ -125,10 +122,10 @@ pub struct NetworkPortEntry {
 }
 
 impl NetworkPortEntry {
-    /// B/IP entry with the actual bound IP/port.
+    /// B/IP entry with the configured IP/UDP port (possibly unbound).
     ///
     /// Derives the 6-byte B/IP MAC (IP octets + big-endian UDP port) from the
-    /// bound socket address. Ephemeral-port tests refresh via
+    /// configured socket address. Ephemeral-port callers can refresh the entry via
     /// [`DeviceIdentity::sync_bip_bind`] after `start()`.
     ///
     /// ```
@@ -151,6 +148,38 @@ impl NetworkPortEntry {
             mac,
             ip: o,
             udp_port,
+        }
+    }
+
+    /// Build the declared configuration; this does not inspect an active port.
+    fn build_object(&self) -> Result<NetworkPortObject, Error> {
+        let network_number = u16::try_from(self.network_number)
+            .map_err(|_| Error::Encoding("network number must be 0..65534".into()))?;
+        let name = format!("port-{}", self.instance);
+        // Configured B/IP/SC capacity, independently of Device62/role limits.
+        // Live transport association and capability validation are separate.
+        let apdu_length = 1476;
+        if self.network_type == NetworkType::IPV4.to_raw() {
+            NetworkPortObject::new_bip(
+                self.instance,
+                name,
+                BipPortConfig {
+                    network_number,
+                    apdu_length,
+                    ip_address: self.ip,
+                    udp_port: self.udp_port,
+                    ..Default::default()
+                },
+            )
+        } else {
+            NetworkPortObject::new_non_bip(
+                self.instance,
+                name,
+                NetworkType::from_raw(self.network_type),
+                network_number,
+                self.mac.clone(),
+                apdu_length,
+            )
         }
     }
 
@@ -272,14 +301,14 @@ impl DeviceIdentity {
         self
     }
 
-    /// Adds one Network-Port entry (one per bound transport).
+    /// Adds one validated configured Network-Port entry.
     ///
     /// Rejects duplicate instances and out-of-range Network-Port instances
-    /// with [`Error::Encoding`](bacnet_types::error::Error::Encoding).
+    /// and invalid profile configuration.
     /// Prefer [`with_bip_port`](Self::with_bip_port) /
     /// [`with_sc_port`](Self::with_sc_port), which encode the population rule.
     pub fn with_network_port(mut self, entry: NetworkPortEntry) -> Result<Self, Error> {
-        ObjectIdentifier::new(ObjectType::NETWORK_PORT, entry.instance)?;
+        entry.build_object()?;
         if self
             .network_ports
             .iter()
@@ -294,7 +323,7 @@ impl DeviceIdentity {
         Ok(self)
     }
 
-    /// Adds a B/IP port entry with the actual bound IP/port.
+    /// Adds a B/IP port entry with configured IP/UDP values, including UDP zero.
     pub fn with_bip_port(
         self,
         instance: u32,
@@ -445,18 +474,7 @@ impl DeviceIdentity {
         let mut oids = vec![device_oid];
         let mut ports = Vec::new();
         for entry in &self.network_ports {
-            let mut port = NetworkPortObject::new(
-                entry.instance,
-                format!("port-{}", entry.instance),
-                entry.network_type,
-            )?;
-            port.set_network_number(entry.network_number);
-            port.set_mac_address(entry.mac.clone());
-            port.set_max_apdu_length_accepted(u32::from(self.max_apdu_length));
-            if entry.network_type == NetworkType::IPV4.to_raw() {
-                port.set_ip_address(entry.ip.to_vec());
-                port.set_udp_port(entry.udp_port);
-            }
+            let port = entry.build_object()?;
             oids.push(port.object_identifier());
             ports.push(port);
         }
@@ -528,8 +546,6 @@ pub fn build_database_with_extra(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn bacnet_objects::traits::BACnetObject>>,
 ) -> Result<ObjectDatabase, Error> {
-    use bacnet_types::enums::NetworkType;
-
     let mut device = DeviceObject::new(DeviceConfig {
         instance: identity.instance,
         name: identity.name.clone(),
@@ -550,18 +566,7 @@ pub fn build_database_with_extra(
     let mut oids = vec![device_oid];
     let mut ports = Vec::new();
     for entry in &identity.network_ports {
-        let mut port = NetworkPortObject::new(
-            entry.instance,
-            format!("port-{}", entry.instance),
-            entry.network_type,
-        )?;
-        port.set_network_number(entry.network_number);
-        port.set_mac_address(entry.mac.clone());
-        port.set_max_apdu_length_accepted(u32::from(identity.max_apdu_length));
-        if entry.network_type == NetworkType::IPV4.to_raw() {
-            port.set_ip_address(entry.ip.to_vec());
-            port.set_udp_port(entry.udp_port);
-        }
+        let port = entry.build_object()?;
         oids.push(port.object_identifier());
         ports.push(port);
     }

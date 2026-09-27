@@ -98,7 +98,7 @@ fn wpm_file_resize_and_network_configuration_keep_committed_state() {
         PropertyValue::Boolean(false)
     );
 
-    let mut port = NetworkPortObject::new(1, "Port", 0).unwrap();
+    let mut port = NetworkPortObject::new_bip(1, "Port", Default::default()).unwrap();
     let port_oid = port.object_identifier();
     let before = port
         .read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
@@ -122,27 +122,56 @@ fn wpm_file_resize_and_network_configuration_keep_committed_state() {
         PropertyValue::Boolean(false)
     );
     db.add(Box::new(port)).unwrap();
-    prefix_failure(
+    let outcome = detailed(
         &mut db,
-        port_oid,
-        vec![write(
-            PropertyIdentifier::IP_ADDRESS,
-            PropertyValue::OctetString(vec![10, 0, 0, 1]),
-            None,
-        )],
-        write(
-            PropertyIdentifier::IP_ADDRESS,
-            PropertyValue::OctetString(vec![10, 0, 0, 2]),
-            None,
+        &encode_request(
+            port_oid,
+            vec![
+                write(
+                    PropertyIdentifier::DESCRIPTION,
+                    PropertyValue::CharacterString("committed".into()),
+                    None,
+                ),
+                write(
+                    PropertyIdentifier::IP_ADDRESS,
+                    PropertyValue::OctetString(vec![10, 0, 0, 1]),
+                    None,
+                ),
+                write(
+                    PropertyIdentifier::DESCRIPTION,
+                    PropertyValue::CharacterString("suffix".into()),
+                    None,
+                ),
+            ],
         ),
+    );
+    let WritePropertyMultipleOutcome::Error {
+        error,
+        first_failed_write_attempt,
+        committed_oids,
+    } = outcome
+    else {
+        panic!("expected readonly config failure")
+    };
+    assert_protocol(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
+    assert_reference(
+        &first_failed_write_attempt,
+        port_oid,
+        PropertyIdentifier::IP_ADDRESS,
+        None,
+    );
+    assert_eq!(committed_oids, vec![port_oid]);
+    assert_eq!(
+        read(&db, port_oid, PropertyIdentifier::DESCRIPTION, None),
+        PropertyValue::CharacterString("committed".into())
     );
     assert_eq!(
         read(&db, port_oid, PropertyIdentifier::IP_ADDRESS, None),
-        PropertyValue::OctetString(vec![10, 0, 0, 1])
+        PropertyValue::OctetString(vec![0; 4])
     );
     assert_eq!(
         read(&db, port_oid, PropertyIdentifier::CHANGES_PENDING, None),
-        PropertyValue::Boolean(true)
+        PropertyValue::Boolean(false)
     );
 }
 

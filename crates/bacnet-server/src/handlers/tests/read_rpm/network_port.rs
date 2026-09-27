@@ -5,140 +5,50 @@ use bacnet_services::rpm::ReadAccessSpecification;
 use PropertyIdentifier as P;
 
 #[test]
-fn rpm_network_port_indexed_reads_and_bytes_are_unchanged() {
+fn rpm_network_port_configured_profile_wire_bytes_and_dns_indices() {
     for configured in [false, true] {
-        let mut object = NetworkPortObject::new(7, "NP-7", 0).unwrap();
-        if configured {
-            object
-                .write_property(
-                    P::DESCRIPTION,
-                    None,
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        "long network port label".repeat(100),
-                    ),
-                    None,
-                )
-                .unwrap();
-            object
-                .write_property(
-                    P::IP_ADDRESS,
-                    None,
-                    bacnet_types::primitives::PropertyValue::OctetString(vec![192, 168, 1, 100]),
-                    None,
-                )
-                .unwrap();
-            object
-                .write_property(
-                    P::BACNET_IP_UDP_PORT,
-                    None,
-                    bacnet_types::primitives::PropertyValue::Unsigned(47809),
-                    None,
-                )
-                .unwrap();
-            object
-                .write_property(
-                    P::NETWORK_NUMBER,
-                    None,
-                    bacnet_types::primitives::PropertyValue::Unsigned(5),
-                    None,
-                )
-                .unwrap();
-            object
-                .write_property(
-                    P::MAC_ADDRESS,
-                    None,
-                    bacnet_types::primitives::PropertyValue::OctetString(vec![
-                        0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01,
-                    ]),
-                    None,
-                )
-                .unwrap();
-            object
-                .write_property(
-                    P::COMMAND_NP,
-                    None,
-                    bacnet_types::primitives::PropertyValue::Enumerated(1),
-                    None,
-                )
-                .unwrap();
-        }
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                bacnet_types::primitives::PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
+        let object = NetworkPortObject::new_bip(
+            7,
+            "NP-7",
+            bacnet_objects::network_port::BipPortConfig {
+                ip_address: if configured {
+                    [192, 168, 1, 100]
+                } else {
+                    [0; 4]
+                },
+                udp_port: if configured { 47809 } else { 47808 },
+                network_number: if configured { 5 } else { 0 },
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
+        // Independently specified application bytes, including property399 and DNS.
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
-            (
-                P::STATUS_FLAGS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
-            (
-                P::RELIABILITY,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::NETWORK_TYPE, None, Ok(&[0x91, 0])),
+            (P::NETWORK_TYPE, None, Ok(&[0x91, 5])),
             (
                 P::NETWORK_TYPE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::PROTOCOL_LEVEL, None, Ok(&[0x91, 2])),
             (
-                P::NETWORK_NUMBER,
-                None,
-                Ok(if configured { &[0x21, 5] } else { &[0x21, 0] }),
-            ),
-            (
-                P::NETWORK_NUMBER,
+                P::PROTOCOL_LEVEL,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::BACNET_IP_MODE, None, Ok(&[0x91, 0])),
             (
-                P::MAC_ADDRESS,
-                None,
-                Ok(if configured {
-                    &[0x65, 0x06, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]
-                } else {
-                    &[0x60]
-                }),
-            ),
-            (
-                P::MAC_ADDRESS,
+                P::BACNET_IP_MODE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::MAX_APDU_LENGTH_ACCEPTED, None, Ok(&[0x22, 0x05, 0xC4])),
+            (P::APDU_LENGTH, None, Ok(&[0x22, 5, 0xc4])),
             (
-                P::MAX_APDU_LENGTH_ACCEPTED,
+                P::APDU_LENGTH,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
@@ -148,37 +58,15 @@ fn rpm_network_port_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::CHANGES_PENDING,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
+            (P::CHANGES_PENDING, None, Ok(&[0x10])),
             (
                 P::CHANGES_PENDING,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::IP_SUBNET_MASK, None, Ok(&[0x64, 0, 0, 0, 0])),
             (
-                P::COMMAND_NP,
-                None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
-            ),
-            (
-                P::COMMAND_NP,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::IP_ADDRESS,
-                None,
-                Ok(if configured {
-                    &[0x64, 0xC0, 0xA8, 0x01, 0x64]
-                } else {
-                    &[0x64, 0, 0, 0, 0]
-                }),
-            ),
-            (
-                P::IP_ADDRESS,
+                P::IP_SUBNET_MASK,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
@@ -188,82 +76,95 @@ fn rpm_network_port_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::IP_SUBNET_MASK, None, Ok(&[0x64, 0xFF, 0xFF, 0xFF, 0x00])),
             (
-                P::IP_SUBNET_MASK,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                P::NETWORK_NUMBER,
+                None,
+                Ok(if configured { &[0x21, 5] } else { &[0x21, 0] }),
+            ),
+            (
+                P::NETWORK_NUMBER_QUALITY,
+                None,
+                Ok(if configured { &[0x91, 3] } else { &[0x91, 0] }),
+            ),
+            (
+                P::MAC_ADDRESS,
+                None,
+                Ok(if configured {
+                    &[0x65, 6, 192, 168, 1, 100, 0xba, 0xc1]
+                } else {
+                    &[0x65, 6, 0, 0, 0, 0, 0xba, 0xc0]
+                }),
+            ),
+            (
+                P::IP_ADDRESS,
+                None,
+                Ok(if configured {
+                    &[0x64, 192, 168, 1, 100]
+                } else {
+                    &[0x64, 0, 0, 0, 0]
+                }),
             ),
             (
                 P::BACNET_IP_UDP_PORT,
                 None,
                 Ok(if configured {
-                    &[0x22, 0xBA, 0xC1]
+                    &[0x22, 0xba, 0xc1]
                 } else {
-                    &[0x22, 0xBA, 0xC0]
+                    &[0x22, 0xba, 0xc0]
                 }),
             ),
+            (P::IP_DNS_SERVER, None, Ok(&[0x64, 0, 0, 0, 0])),
+            (P::IP_DNS_SERVER, Some(0), Ok(&[0x21, 1])),
+            (P::IP_DNS_SERVER, Some(1), Ok(&[0x64, 0, 0, 0, 0])),
             (
-                P::BACNET_IP_UDP_PORT,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                P::IP_DNS_SERVER,
+                Some(2),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
+            (
+                P::IP_DNS_SERVER,
+                Some(u32::MAX),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
+            ),
+            (
+                P::MAX_APDU_LENGTH_ACCEPTED,
+                None,
+                Err(ErrorCode::UNKNOWN_PROPERTY),
+            ),
+            (P::COMMAND_NP, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0xAB, 0x92, 0x01, 0xA9,
-                    0x92, 0x01, 0xA7, 0x91, 62, 0x92, 0x01, 0xA4, 0x92, 0x01, 0xA0, 0x92, 0x01,
-                    0xA1, 0x92, 0x01, 0x90, 0x92, 0x01, 0x91, 0x92, 0x01, 0x9B, 0x92, 0x01, 0x9C,
+                    145, 28, 145, 111, 145, 81, 145, 103, 146, 1, 171, 146, 1, 226, 146, 1, 169,
+                    146, 1, 170, 146, 1, 167, 146, 1, 143, 146, 1, 164, 146, 1, 160, 146, 1, 152,
+                    146, 1, 144, 146, 1, 145, 146, 1, 155, 146, 1, 156, 146, 1, 150,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 15])),
-            (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 103])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0xAB])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0xA9])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0xA7])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 62])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x92, 0x01, 0xA4])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x92, 0x01, 0xA0])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x92, 0x01, 0xA1])),
-            (P::PROPERTY_LIST, Some(12), Ok(&[0x92, 0x01, 0x90])),
-            (P::PROPERTY_LIST, Some(13), Ok(&[0x92, 0x01, 0x91])),
-            (P::PROPERTY_LIST, Some(14), Ok(&[0x92, 0x01, 0x9B])),
-            (P::PROPERTY_LIST, Some(15), Ok(&[0x92, 0x01, 0x9C])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 18])),
+            (P::PROPERTY_LIST, Some(1), Ok(&[145, 28])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[145, 111])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[145, 81])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[145, 103])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[146, 1, 171])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[146, 1, 226])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[146, 1, 169])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[146, 1, 170])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[146, 1, 167])),
+            (P::PROPERTY_LIST, Some(10), Ok(&[146, 1, 143])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[146, 1, 164])),
+            (P::PROPERTY_LIST, Some(12), Ok(&[146, 1, 160])),
+            (P::PROPERTY_LIST, Some(13), Ok(&[146, 1, 152])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[146, 1, 144])),
+            (P::PROPERTY_LIST, Some(15), Ok(&[146, 1, 145])),
+            (P::PROPERTY_LIST, Some(16), Ok(&[146, 1, 155])),
+            (P::PROPERTY_LIST, Some(17), Ok(&[146, 1, 156])),
+            (P::PROPERTY_LIST, Some(18), Ok(&[146, 1, 150])),
             (
                 P::PROPERTY_LIST,
-                Some(16),
+                Some(19),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
-            ),
-            (
-                P::PROPERTY_LIST,
-                Some(u32::MAX),
-                Err(ErrorCode::INVALID_ARRAY_INDEX),
-            ),
-            // Unserved NetworkPort table rows stay unknown. APDU_Length (399)
-            // is the table row with no dispatch arm (MAX_APDU_LENGTH_ACCEPTED
-            // (62) is the served mirror); Protocol_Level and Event_State
-            // likewise have no arm.
-            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::EVENT_STATE,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::APDU_LENGTH, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::APDU_LENGTH,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::PROTOCOL_LEVEL, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::PROTOCOL_LEVEL,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
         ];
         let mut request = BytesMut::new();

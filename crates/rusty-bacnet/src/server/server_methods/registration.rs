@@ -693,13 +693,6 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Network Port object to the server (before starting).
-    #[pyo3(signature = (instance, name, network_type=0))]
-    fn add_network_port(&self, instance: u32, name: &str, network_type: u32) -> PyResult<()> {
-        let obj = NetworkPortObject::new(instance, name, network_type).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add an Event Enrollment object to the server (before starting).
     #[pyo3(signature = (instance, name, event_type=0))]
     fn add_event_enrollment(&self, instance: u32, name: &str, event_type: u32) -> PyResult<()> {

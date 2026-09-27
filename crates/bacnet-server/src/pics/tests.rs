@@ -305,7 +305,15 @@ fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
     assert!(!device.is_createable(), "Device must not be createable");
     assert!(!device.is_deleteable(), "Device must not be deleteable");
 
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
+    let np = NetworkPortObject::new_non_bip(
+        1,
+        "NP-1",
+        bacnet_types::enums::NetworkType::from_raw(0),
+        0,
+        Default::default(),
+        1476,
+    )
+    .unwrap();
     assert!(!np.is_createable(), "NetworkPort must not be createable");
     assert!(!np.is_deleteable(), "NetworkPort must not be deleteable");
 }

@@ -32,7 +32,6 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
-use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
@@ -163,6 +162,7 @@ mod server_methods {
     mod dcc_outcomes;
     mod file_configuration;
     mod lifecycle;
+    mod network_port;
     mod registration;
     mod request_admission;
     mod value_registration;

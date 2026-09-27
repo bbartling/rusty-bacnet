@@ -2204,6 +2204,27 @@ let client = BACnetClient::generic_builder()
 
 ---
 
+### Configured Network Port snapshots
+
+`NetworkPortObject::new_bip(instance, name, BipPortConfig)` constructs a complete,
+unbound flat IPV4/NORMAL application configuration. Instance is the declared local
+Port ID (local policy: 1–255), separate from UDP port zero. `BipPortConfig` carries
+fixed four-octet IP/mask/gateway values, a nonempty DNS array, network number
+0–65534, and APDU_Length399 >=50. Defaults are unknown zero addresses/mask/gateway,
+one zero DNS address, UDP47808 and declared port capacity1476. Device62 and its
+discrete APDU sizes remain independent; neither constructor discovers a NIC or
+binds a transport.
+
+The snapshot denies activation-dependent network writes and derives its readonly
+MAC from configured IP/UDP. Reconstruct it to change configuration. It has no
+pending activation, inert Command, or obsolete port62 projection. Link_Speed is
+optional and zero means unknown. The former raw `new` constructor and configuration
+setters are removed. `new_non_bip` takes explicit Ethernet/VIRTUAL number, MAC and
+capacity and exposes common application rows only; it does not claim a complete
+SC or Ethernet profile. Both `DeviceIdentity` database builders use these same
+constructors with declared1476 port capacity independent of Device/role limits.
+Live transport association, post-bind synchronization and activation are separate.
+
 ## bacnet-endpoint (forward path, RB-18)
 
 `bacnet-endpoint` composes client and server roles for one BACnet device under

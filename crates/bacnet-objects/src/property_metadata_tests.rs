@@ -288,7 +288,17 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(crate::group::GlobalGroupObject::new(1, "GG-1").unwrap()),
         Box::new(crate::group::StructuredViewObject::new(1, "SV-1").unwrap()),
         Box::new(crate::load_control::LoadControlObject::new(1, "LC-1").unwrap()),
-        Box::new(crate::network_port::NetworkPortObject::new(1, "NP-1", 0).unwrap()),
+        Box::new(
+            crate::network_port::NetworkPortObject::new_non_bip(
+                1,
+                "NP-1",
+                bacnet_types::enums::NetworkType::from_raw(0),
+                0,
+                Default::default(),
+                1476,
+            )
+            .unwrap(),
+        ),
         Box::new(crate::elevator::ElevatorGroupObject::new(1, "EG-1").unwrap()),
         Box::new(crate::elevator::EscalatorObject::new(1, "ESC-1").unwrap()),
         Box::new(crate::elevator::LiftObject::new(1, "LIFT-1", 3).unwrap()),

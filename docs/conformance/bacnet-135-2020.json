@@ -22,6 +22,42 @@
  ],
  "rows": [
   {
+   "id": "BACNET-12-CONFIGURED-BIP-PORT",
+   "standard_anchor": "Clause12.56/Table12-71 application footnote25; printed551-557/PDF553-559 configuration activation, MAC/APDU/DNS; official2024-04-29 errata item23 (Link_Speed optional)",
+   "priority": "P1",
+   "requirement_summary": "Configured unbound flat IPV4/NORMAL application Network Port snapshot has complete required fields, nonempty DNS array, readonly activation-dependent configuration and derived MAC; independent port APDU_Length399 replaces obsolete port62.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/network_port.rs",
+    "crates/bacnet-objects/src/network_port/bip_config.rs",
+    "crates/bacnet-objects/src/network_port/metadata.rs",
+    "crates/bacnet-endpoint/src/identity.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/network_port/tests.rs::configured_bip_metadata_exact_sets_and_indexed_list",
+    "crates/bacnet-objects/src/network_port/tests.rs::configured_bip_dns_array_and_derived_mac",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/network_port.rs::rpm_network_port_configured_profile_wire_bytes_and_dns_indices",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/network_port.rs::rpm_network_port_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/network_port.rs::pics_network_port_property_metadata_is_exact",
+    "crates/bacnet-endpoint/tests/rb16_identity.rs::configured_port_both_database_builders_keep_capacity_separate_from_device",
+    "crates/rusty-bacnet/tests/test_configured_bip_port.py"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/network_port/tests.rs::configured_bip_numeric_boundaries_and_quality",
+    "crates/bacnet-objects/src/network_port/tests.rs::configured_snapshot_refuses_activation_writes_without_state_change",
+    "crates/bacnet-objects/src/network_port/tests.rs::non_bip_application_rows_do_not_claim_ipv4_fields",
+    "crates/bacnet-server/src/pics/property_metadata_tests/network_port.rs::pics_non_bip_application_profiles_exclude_ipv4_rows"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md Configured Network Port snapshots",
+    "docs/python-api.md add_bip_network_port",
+    "CHANGELOG.md #867"
+   ],
+   "notes": "Refs #867. Constructor snapshot only: no active socket/NIC association, activation owner, dormant lease or registration API. Changes_Pending remains false because activation-dependent writes are denied; Command is absent. Description/OOS retain object-local behavior. Local B/IP instance/Port ID1..255 is conservative implementation policy, distinct from UDP0. Initial zero number is UNKNOWN, nonzero caller-supplied number CONFIGURED based on provenance. Port399 accepts Unsigned >=50 including non-Device-table51; declared default1476 is independent of Device62 and later live capability validation. Zero mask/gateway and nonempty zero-DNS sentinel do not invent interface facts. Ethernet/VIRTUAL constructors expose common application rows only, not complete link profiles. Both identity database builders use the same construction boundary. No whole NetworkPort, SC, BBMD, foreign, DHCP, router or live receiving-port support claim; #785 and #863 remain separate."
+  },
+  {
    "id": "BACNET-12-SCHEDULE-LOCAL-REFERENCES",
    "standard_anchor": "Clause 12.24 Table 12-28 (printed308/PDF310), output continuation (printed309/PDF311), reference property (printed311/PDF313); Clause21 BACnetDeviceObjectPropertyReference (printed891/PDF893)",
    "priority": "P1",

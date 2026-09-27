@@ -1847,8 +1847,29 @@ server.set_file_data(instance=1, data=b"mode=occupied\n")
 server.add_file(instance=2, name="Record File")
 server.set_file_access_method(instance=2, access_method="record")
 server.set_file_records(instance=2, records=[b"first", b"second"])
-server.add_network_port(instance=1, name="BIP Port", network_type=0)
+server.add_bip_network_port(instance=1, name="BIP Port", ip_address="192.0.2.10",
+                            udp_port=47808, network_number=0, apdu_length=1476)
 ```
+
+`add_bip_network_port` registers a configured, **unbound** IPV4/NORMAL application
+snapshot. It does not inspect or configure the server's socket. The local Port ID
+is its object instance, restricted to 1–255; UDP zero is independently allowed.
+The constructor accepts keyword-only `ip_address`, `udp_port`, `network_number`,
+`apdu_length`, `subnet_mask`, `default_gateway`, and `dns_servers`. Defaults use
+zero addresses/mask/gateway and one zero DNS address for unavailable configuration;
+an explicitly empty DNS list is invalid. Addresses must be IPv4 strings.
+Network numbers range from 0 to 65534; zero has UNKNOWN quality, and explicitly
+configured nonzero values have CONFIGURED quality. APDU_Length (399) is any
+unsigned value at least 50, independent of Device property62's discrete limits.
+The default 1476 is declared B/IP capacity, not a measured or verified live limit.
+
+Port configuration and the derived six-octet IP/UDP MAC are read-only. Successful
+BACnet configuration writes require pending-change activation under Clause12.56;
+this snapshot has no activation owner and rejects those writes. Changes_Pending
+remains false, Command and obsolete Network Port property62 are absent. Description
+and Out_Of_Service retain their existing object-local behavior. This is not a live
+port control or complete Network Port/BBMD/foreign/DHCP support claim. The pre-1.0
+raw `add_network_port(network_type=...)` API is removed.
 
 The seven File configuration methods are synchronous and operate only on a
 pending built-in File before `start()`:

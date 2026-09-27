@@ -155,9 +155,9 @@ fn identity_builds_device_plus_ports_plus_uuid() {
         PropertyValue::Unsigned(47808)
     );
     assert_eq!(
-        bip.read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)
+        bip.read_property(PropertyIdentifier::APDU_LENGTH, None)
             .unwrap(),
-        PropertyValue::Unsigned(480)
+        PropertyValue::Unsigned(1476)
     );
 
     // SC port is VIRTUAL with VMAC, no IP socket fields.
@@ -464,4 +464,92 @@ fn standalone_session_keeps_480_default() {
     let s = EndpointSession::new(t, SessionRole::ClientOnly, SessionConfig::default()).unwrap();
     assert!(s.identity().is_none());
     let _ = ObjectDatabase::new();
+}
+
+#[test]
+fn configured_port_both_database_builders_keep_capacity_separate_from_device() {
+    let identity = DeviceIdentity::new(2867, 42)
+        .unwrap()
+        .with_max_apdu(50)
+        .unwrap()
+        .with_bip_port(255, 65534, Ipv4Addr::new(192, 0, 2, 10), 0)
+        .unwrap()
+        .with_sc_port(0, 0, [2; 6])
+        .unwrap();
+    for db in [
+        identity.build_database().unwrap(),
+        build_database_with_extra(&identity, vec![analog(12, 3.0)]).unwrap(),
+    ] {
+        let dev = db.get(&identity.device_oid()).unwrap();
+        assert_eq!(
+            dev.read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)
+                .unwrap(),
+            PropertyValue::Unsigned(50)
+        );
+        let bip = db.get(&object_id(ObjectType::NETWORK_PORT, 255)).unwrap();
+        for (p, value) in [
+            (
+                PropertyIdentifier::APDU_LENGTH,
+                PropertyValue::Unsigned(1476),
+            ),
+            (
+                PropertyIdentifier::NETWORK_NUMBER_QUALITY,
+                PropertyValue::Enumerated(3),
+            ),
+            (
+                PropertyIdentifier::PROTOCOL_LEVEL,
+                PropertyValue::Enumerated(2),
+            ),
+            (
+                PropertyIdentifier::BACNET_IP_MODE,
+                PropertyValue::Enumerated(0),
+            ),
+            (
+                PropertyIdentifier::MAC_ADDRESS,
+                PropertyValue::OctetString(vec![192, 0, 2, 10, 0, 0]),
+            ),
+        ] {
+            assert_eq!(bip.read_property(p, None).unwrap(), value);
+        }
+        assert_eq!(
+            bip.read_property(PropertyIdentifier::IP_DNS_SERVER, Some(1))
+                .unwrap(),
+            PropertyValue::OctetString(vec![0; 4])
+        );
+        assert!(bip
+            .read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)
+            .is_err());
+        let sc = db.get(&object_id(ObjectType::NETWORK_PORT, 0)).unwrap();
+        for p in [
+            PropertyIdentifier::APDU_LENGTH,
+            PropertyIdentifier::PROTOCOL_LEVEL,
+            PropertyIdentifier::NETWORK_NUMBER_QUALITY,
+        ] {
+            sc.read_property(p, None).unwrap();
+        }
+        for p in [
+            PropertyIdentifier::IP_ADDRESS,
+            PropertyIdentifier::BACNET_IP_MODE,
+            PropertyIdentifier::IP_DNS_SERVER,
+        ] {
+            assert!(sc.read_property(p, None).is_err());
+            assert!(!sc.property_list().contains(&p));
+        }
+    }
+}
+
+#[test]
+fn configured_port_identity_admission_checks_profile_bounds() {
+    for instance in [0, 256, 4_194_303] {
+        assert!(DeviceIdentity::new(2867, 42)
+            .unwrap()
+            .with_bip_port(instance, 0, Ipv4Addr::LOCALHOST, 0)
+            .is_err());
+    }
+    for number in [65535, u32::MAX] {
+        assert!(DeviceIdentity::new(2867, 42)
+            .unwrap()
+            .with_bip_port(1, number, Ipv4Addr::LOCALHOST, 0)
+            .is_err());
+    }
 }
