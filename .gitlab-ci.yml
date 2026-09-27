@@ -1,132 +1,31 @@
-# Linux validation only. See docs/gitlab-ci.md for migration scope and image pins.
+# Hosted Linux tests only; required local merge evidence: docs/gitlab-ci.md.
 workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "dev" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
     - when: never
-
-default:
-  image: rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97
-  tags: [saas-linux-small-amd64]
-  interruptible: true
-
-variables:
-  CARGO_TERM_COLOR: always
-  # Preserve [workspace.lints]; -Dwarnings would override intentional warnings.
 
 stages: [check]
 
-.lean-gates:
-  timeout: 20 minutes
-  # Explicit rules also enroll these jobs in merge-request pipelines.
-  rules:
-    - when: on_success
-
-.native-build:
-  extends: .lean-gates
-  tags: [saas-linux-medium-amd64]
+test-linux:
+  stage: check
+  image: rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97
+  tags: [saas-linux-small-amd64]
+  interruptible: true
   timeout: 60 minutes
   variables:
+    CARGO_TERM_COLOR: always
     CARGO_BUILD_JOBS: "1"
+    CARGO_PROFILE_TEST_DEBUG: "0"
+  # Explicit rules enroll this job in the admitted merge-request pipelines.
+  rules:
+    - when: on_success
   before_script:
+    - df -h
     - apt-get update
     - apt-get install -y --no-install-recommends pkg-config libudev-dev cmake perl
-
-.main-gates:
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
-    - when: never
-
-fmt:
-  extends: .lean-gates
-  stage: check
-  script:
-    - rustup component add rustfmt
-    - cargo fmt --all --check
-
-clippy:
-  extends: .native-build
-  stage: check
-  script:
-    - rustup component add clippy
-    - cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
-
-file-size-cap:
-  extends: .lean-gates
-  stage: check
-  script:
-    - bash .github/scripts/check-file-size.sh
-
-no-secret-scan:
-  extends: .lean-gates
-  stage: check
-  script:
-    - bash .github/scripts/test-check-no-secrets.sh
-    - bash .github/scripts/check-no-secrets.sh
-
-test-linux:
-  extends: .native-build
-  stage: check
   script:
     - cargo test --workspace --exclude rusty-bacnet --locked --features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet
-
-msrv:
-  extends: [.native-build, .main-gates]
-  stage: check
-  image: rust:1.93-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31
-  variables:
-    RUSTUP_TOOLCHAIN: "1.93"
-  before_script:
-    - apt-get update
-    - apt-get install -y --no-install-recommends pkg-config cmake perl python3
-    - rustup toolchain install 1.93 --profile minimal
-  script:
-    - bash .github/scripts/check-msrv.sh
-
-audit:
-  extends: .main-gates
-  stage: check
-  timeout: 30 minutes
-  variables:
-    CARGO_BUILD_JOBS: "1"
-  script:
-    - cargo install cargo-audit --version 0.22.2 --locked
-    - cargo audit --color always
-
-deny:
-  extends: .main-gates
-  stage: check
-  timeout: 30 minutes
-  variables:
-    CARGO_BUILD_JOBS: "1"
-  script:
-    - cargo install cargo-deny --version 0.20.2 --locked
-    # cargo-deny-action v2 defaults to --all-features, overriding deny.toml.
-    - cargo deny --all-features check
-
-docs-validation:
-  stage: check
-  timeout: 20 minutes
-  image: node:24-bookworm@sha256:64af3819f9275802414d7cdc38c27e9d82bd564dec4d4da87d008255d36c63b4
-  variables:
-    DOCS_TEST_PORT: "46329"
-  rules:
-    - changes:
-        - website/**/*
-        - .gitlab-ci.yml
-        - .github/workflows/docs-pages.yml
-    - when: never
-  script:
-    - cd website
-    - npm ci
-    - npx playwright install --with-deps chromium
-    - npm run verify
-  artifacts:
-    when: on_failure
-    expire_in: 7 days
-    paths:
-      - website/playwright-report/
-      - website/test-results/
+  after_script:
+    - df -h
