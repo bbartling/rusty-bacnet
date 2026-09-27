@@ -2,6 +2,12 @@
 
 Rusty BACnet is a workspace of 8 published crates implementing the BACnet protocol stack (ASHRAE 135-2020).
 
+This reference describes current development-source APIs, including unreleased
+changes. Published crates and hosted guides target **0.11.0**; use the
+[versioned Rust API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/) and
+[installation guidance](../README.md#installation) for that release. To use the
+checkout APIs described here, follow [Build from source](../README.md#build-from-source).
+
 ## Crate Dependency Order
 
 ```
@@ -2362,7 +2368,7 @@ Routed controls, malformed payloads and Original-Unicast Network-Number-Is are i
 
 Control work has its own bounded receiver and serial worker, so a blocked learning operation does not stop APDU/Audit acknowledgment dispatch. Stop seals, aborts and joins that worker before transport cleanup; cancellation retains cleanup ownership. Queued endpoint control sends are caller-owned and canceled with the worker, while a send already started may have reached the wire. The registered-object lease remains with the final socket and admitted work.
 
-The [conformance evidence](conformance/support-summary.md#bacnet-06-nonrouter-network-number) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The new owner fixture does not capture outgoing BVLL frames. These controls do not establish a complete Network Port or router profile.
+The `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [conformance evidence](conformance/support-summary.md#ledger-rows) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The new owner fixture does not capture outgoing BVLL frames. These controls do not establish a complete Network Port or router profile.
 
 
 A configured object becomes the receiving port only through explicit selection:
