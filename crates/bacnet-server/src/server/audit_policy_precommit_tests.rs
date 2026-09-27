@@ -245,7 +245,7 @@ async fn mandatory_policy_no_runtime_refuses_without_consuming_sequence() {
                 let mut db = f.server.db.blocking_write();
                 let mut audit = audit_reporter::WriteAudit::local(
                     &f.server.config,
-                    &f.server.network,
+                    f.server.test_network(),
                     &f.server.notification_transactions,
                     &f.server.comm_state,
                     &db,
@@ -517,7 +517,7 @@ async fn mandatory_policy_stop_between_capture_and_commit_denies_without_assignm
     };
     let mut audit = audit_reporter::WriteAudit::local(
         &f.server.config,
-        &f.server.network,
+        f.server.test_network(),
         &f.server.notification_transactions,
         &f.server.comm_state,
         &db,

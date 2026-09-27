@@ -267,11 +267,11 @@ async fn request_tasks_reap_success_and_panic_without_killing_dispatch() {
             .unwrap()
             .unwrap();
         server
-            .network
+            .test_network()
             .transport()
             .panic_next
             .store(panic, Ordering::Release);
-        server.network.transport().release.notify_one();
+        server.test_network().transport().release.notify_one();
         released.await.unwrap();
         wait_reaped(&server).await;
         assert!(!server.dispatch_task.as_ref().unwrap().is_finished());
@@ -352,7 +352,7 @@ async fn request_tasks_reap_with_active_control_ingress() {
         .await
         .unwrap()
         .unwrap();
-    server.network.transport().release.notify_one();
+    server.test_network().transport().release.notify_one();
     let ingress = async {
         for invoke_id in 0..128 {
             inject(

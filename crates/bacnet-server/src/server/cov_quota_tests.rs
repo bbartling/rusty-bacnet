@@ -578,7 +578,7 @@ async fn fanout_and_work_budgets_enforced() {
     // Fire notifications for AI:1
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.cov_in_flight,
         &server.notification_transactions,
@@ -644,7 +644,7 @@ async fn in_flight_confirmed_per_peer_throttled() {
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.cov_in_flight,
         &server.notification_transactions,

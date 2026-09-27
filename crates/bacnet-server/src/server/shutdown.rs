@@ -8,6 +8,14 @@ mod request_tasks_tests;
 #[path = "producer_shutdown_tests.rs"]
 mod producer_shutdown_tests;
 
+#[cfg(test)]
+#[path = "transport_shutdown_tests.rs"]
+mod transport_shutdown_tests;
+
+#[cfg(test)]
+#[path = "owned_shutdown_tests.rs"]
+mod owned_shutdown_tests;
+
 async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
     // Borrow across the join so cancellation leaves the handle recoverable.
     // Clear synchronously after completion: a later stop must not poll it twice.
@@ -19,8 +27,14 @@ async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Stop the server.
+    /// Seal egress, join admitted work, and stop the owned transport.
+    ///
+    /// Cancelling this waiter leaves cleanup owned by the server. A later stop
+    /// joins it; after transport cleanup begins, dropping the server lets that
+    /// cleanup finish. Local mutation and broadcasts are rejected from the first
+    /// stop poll; local reads and database inspection remain available.
     pub async fn stop(&mut self) -> Result<(), Error> {
+        self.broadcaster.seal();
         self.request_tasks.close();
         if let Some(runtime) = &self.target_audit {
             // Only the target drain retains ingress for ACK/control progress.
@@ -90,12 +104,52 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             runtime.uninstall(&mut *self.db.write().await);
         }
         self.target_audit = None;
-        Ok(())
+        if let Some(error) = &self.transport_cleanup_error {
+            return Err(Error::Encoding(error.clone()));
+        }
+        if self.transport_cleanup.is_none() {
+            if let Some(network) = self.network.take() {
+                let mut network = match Arc::try_unwrap(network) {
+                    Ok(network) => network,
+                    Err(network) => {
+                        self.network = Some(network);
+                        return Err(Error::Encoding(
+                            "server network still has an internal owner".into(),
+                        ));
+                    }
+                };
+                // Own the complete future, including cancellation-unsafe custom
+                // transport cleanup. Drop deliberately leaves this task running.
+                self.transport_cleanup = Some(tokio::spawn(async move {
+                    let result = network.stop().await;
+                    (network, result)
+                }));
+            }
+        }
+        let Some(cleanup) = self.transport_cleanup.as_mut() else {
+            return Ok(());
+        };
+        let outcome = cleanup.await;
+        self.transport_cleanup = None;
+        match outcome {
+            Ok((network, result)) => {
+                if result.is_err() {
+                    self.network = Some(Arc::new(network));
+                }
+                result
+            }
+            Err(error) => {
+                let message = format!("transport cleanup task failed: {error}");
+                self.transport_cleanup_error = Some(message.clone());
+                Err(Error::Encoding(message))
+            }
+        }
     }
 }
 
 impl<T: TransportPort> Drop for BACnetServer<T> {
     fn drop(&mut self) {
+        self.broadcaster.seal();
         self.notification_transactions
             .application_sealed
             .store(true, Ordering::Release);

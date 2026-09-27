@@ -54,7 +54,7 @@ async fn dispatch(
     let (tx, rx) = oneshot::channel();
     BACnetServer::dispatch(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.cov_table,
         &server.seg_ack_senders,
         &server.seg_send_permits,
@@ -188,7 +188,13 @@ async fn mutation_policy_matrix_all_ten_decisions_tracking_and_retention() {
                 } else {
                     assert_denied(response, service, 1);
                     assert_eq!(snapshot(&server).await, before, "{service:?}");
-                    assert!(server.network.transport().sent.lock().unwrap().is_empty());
+                    assert!(server
+                        .test_network()
+                        .transport()
+                        .sent
+                        .lock()
+                        .unwrap()
+                        .is_empty());
                 }
                 let counters = expected(
                     service,
@@ -452,7 +458,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
         .unwrap();
     BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &server.db,
-        &server.network,
+        server.test_network(),
         &server.config,
         None,
         &server.comm_state,
@@ -478,7 +484,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
     )
     .await;
     let sent = server
-        .network
+        .test_network()
         .transport()
         .sent
         .lock()

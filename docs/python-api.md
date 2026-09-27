@@ -1288,6 +1288,11 @@ await client.who_am_i()
 
 ## BACnetServer
 
+Await `server.stop()` to join admitted work and release the transport. Cancelling
+its Future retains the server's shutdown owner; a later `stop()` joins it, and a
+cleanup error leaves the owner available for retry. Local mutation rejects once
+shutdown begins. Successful stop clears the Python server's running instance.
+
 Async BACnet server that hosts objects and responds to remote requests.
 
 ### Constructor

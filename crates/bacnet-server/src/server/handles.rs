@@ -1,7 +1,8 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Get the server's local MAC address.
+    /// Return the last bound local MAC snapshot, including after stop.
+    /// This retained address does not assert that the transport is still active.
     pub fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
@@ -70,9 +71,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Create a cloneable handle for unsolicited I-Am announcements.
     pub fn i_am_broadcaster(&self) -> IAmBroadcaster<T> {
         IAmBroadcaster {
-            config: self.config.clone(),
-            network: Arc::clone(&self.network),
-            db: Arc::clone(&self.db),
+            state: Arc::downgrade(&self.broadcaster),
         }
     }
 

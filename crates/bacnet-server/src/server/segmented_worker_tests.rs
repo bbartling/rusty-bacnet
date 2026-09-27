@@ -23,7 +23,7 @@ fn oversized_request() -> Apdu {
 }
 
 fn direct_worker(server: &BACnetServer<HeldTransport>) -> JoinHandle<()> {
-    let network = Arc::clone(&server.network);
+    let network = Arc::clone(server.test_network());
     let senders = Arc::clone(&server.seg_ack_senders);
     let permits = Arc::clone(&server.seg_send_permits);
     tokio::spawn(async move {
@@ -76,7 +76,13 @@ async fn segmented_worker_stop_joins_production_descendant() {
     inject(&tx, oversized_request()).await;
     let mut released = started_send(&mut started).await;
     assert!(matches!(
-        server.network.transport().frames.lock().unwrap().last(),
+        server
+            .test_network()
+            .transport()
+            .frames
+            .lock()
+            .unwrap()
+            .last(),
         Some(Apdu::ComplexAck(ComplexAck {
             segmented: true,
             sequence_number: Some(0),
@@ -146,11 +152,11 @@ async fn segmented_worker_production_panic_is_reaped_and_cleans_registry() {
     let released = started_send(&mut started).await;
     assert_eq!(server.seg_ack_senders.lock().len(), 1);
     server
-        .network
+        .test_network()
         .transport()
         .panic_next
         .store(true, Ordering::Release);
-    server.network.transport().release.notify_one();
+    server.test_network().transport().release.notify_one();
     released.await.unwrap();
     wait_reaped(&server).await;
     assert!(server.seg_ack_senders.lock().is_empty());

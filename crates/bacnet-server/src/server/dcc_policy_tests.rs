@@ -191,7 +191,7 @@ async fn dcc_source_denied_enable_still_occupies_recovery() {
         assert_eq!(server.comm_state(), 2);
         assert!(server.dcc_timer.lock().await.is_none());
         assert!(
-            matches!(server.network.transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
+            matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
             if e.error_class == ErrorClass::SERVICES && e.error_code == ErrorCode::SERVICE_REQUEST_DENIED)
         );
     }
@@ -339,7 +339,7 @@ async fn dcc_default_recovery_admission_does_not_authorize_enable() {
             assert_eq!(server.comm_state(), 2);
             assert!(server.dcc_timer.lock().await.is_none());
             assert!(
-                matches!(server.network.transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
+                matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
                 if e.error_class == ErrorClass::SERVICES && e.error_code == ErrorCode::SERVICE_REQUEST_DENIED)
             );
         }

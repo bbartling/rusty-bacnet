@@ -131,7 +131,11 @@ async fn audit_target_routes_use_actual_bound_bip_broadcast_port() {
     )
     .await
     .unwrap();
-    let endpoint = server.network.transport().bip_broadcast_endpoint().unwrap();
+    let endpoint = server
+        .test_network()
+        .transport()
+        .bip_broadcast_endpoint()
+        .unwrap();
     assert_ne!(endpoint.port(), 0);
     let recipient = |port: u16| {
         let mut mac = broadcast.octets().to_vec();

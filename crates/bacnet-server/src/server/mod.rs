@@ -581,6 +581,8 @@ impl BipServerBuilder {
     }
 }
 
+type TransportCleanup<T> = JoinHandle<(NetworkLayer<T>, Result<(), Error>)>;
+
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
     target_audit: Option<Arc<audit_recipient::TargetAudit<T>>>,
@@ -592,7 +594,10 @@ pub struct BACnetServer<T: TransportPort> {
     _clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) for post-write COV/event sends).
-    network: Arc<NetworkLayer<T>>,
+    network: Option<Arc<NetworkLayer<T>>>,
+    broadcaster: Arc<broadcaster::BroadcasterState<T>>,
+    transport_cleanup: Option<TransportCleanup<T>>,
+    transport_cleanup_error: Option<String>,
     /// Shared object database.
     db: Arc<RwLock<ObjectDatabase>>,
     /// COV subscription table (also held by dispatch task; read by
@@ -639,19 +644,20 @@ pub struct BACnetServer<T: TransportPort> {
     local_mac: MacAddr,
 }
 
-/// Cloneable handle for sending unsolicited I-Am announcements.
+/// Cloneable handle for unsolicited I-Am announcements while its server runs.
+///
+/// At most 32 local broadcasts may be in flight. Admission fails immediately
+/// at capacity or after shutdown begins. Admitted sends belong to the server:
+/// cancelling their caller only drops its waiter; stop cancels and joins them.
+/// Retaining this handle does not retain the transport after shutdown.
 pub struct IAmBroadcaster<T: TransportPort> {
-    config: ServerConfig,
-    network: Arc<NetworkLayer<T>>,
-    db: Arc<RwLock<ObjectDatabase>>,
+    state: std::sync::Weak<broadcaster::BroadcasterState<T>>,
 }
 
 impl<T: TransportPort> Clone for IAmBroadcaster<T> {
     fn clone(&self) -> Self {
         Self {
-            config: self.config.clone(),
-            network: Arc::clone(&self.network),
-            db: Arc::clone(&self.db),
+            state: self.state.clone(),
         }
     }
 }
@@ -861,3 +867,5 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
 #[cfg(test)]
 mod cov_identity_completion_tests;
+
+mod broadcaster;

@@ -242,22 +242,25 @@ impl BACnetServer {
         pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Stop the server.
+    /// Stop admitted work and release the owned transport.
+    /// Cancellation keeps shutdown available for a later stop to join.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let started = self.started.clone();
         let future = async move {
             let mut guard = inner.lock().await;
-            if let Some(mut srv) = guard.take() {
+            if let Some(srv) = guard.as_mut() {
                 srv.stop().await.map_err(to_py_err)?;
             }
+            guard.take();
             started.store(false, Ordering::Release);
             Ok(())
         };
         pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Get the server's local address as a string.
+    /// Get the retained server instance's last bound address as a string.
+    /// This remains a snapshot during interrupted shutdown; successful stop clears it.
     ///
     /// For BIP: "ip:port", for IPv6: "[ip]:port", for SC: hex-encoded VMAC.
     fn local_address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

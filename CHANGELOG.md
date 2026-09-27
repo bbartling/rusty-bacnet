@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Make full-server shutdown retire exported I-Am admission, join admitted sends,
+  and stop its owned transport (#872). Retained broadcaster handles no longer
+  keep sockets alive; local broadcasts have a shared 32-operation bound. Stop
+  cancellation retains cleanup ownership, including the Python server wrapper;
+  transport errors permit retry. Local mutations and broadcasts reject once
+  shutdown starts; Rust local reads remain available.
+
 - Replace incomplete raw Network Port construction with a configured, unbound
   IPV4/NORMAL snapshot: required application properties and DNS array, readonly
   configuration/derived MAC, optional unknown Link_Speed, and no inert Command or
