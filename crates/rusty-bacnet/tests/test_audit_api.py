@@ -1754,7 +1754,8 @@ class AuditContractArtifactTests(unittest.TestCase):
                         datum = record["record"]["datum"]
                         self.assertEqual(datum["kind"], "audit_notification")
                         saved.append((datum["audit_notification"]["target_value"], datum["audit_notification"]["current_value"]))
-                    self.assertEqual(saved, [(None, None), (b"", None), (None, b""), (b"", b""), (b"\x00", b"")])
+                    # Audit queries return retained records newest-first.
+                    self.assertEqual(saved, [(b"\x00", b""), (b"", b""), (None, b""), (b"", None), (None, None)])
             finally:
                 await server.stop()
 
