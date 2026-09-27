@@ -348,19 +348,54 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(b_reads_a.value, 21.5)
 
     async def test_single_bind_conflict_proves_one_socket(self):
-        port = free_port()
-        first = BipEndpoint(**bip_kwargs(port=port, device_instance=2001))
-        await asyncio.wait_for(first.start(), 10)
+        first = BipEndpoint(**bip_kwargs(port=0, device_instance=2001))
+        second = None
         try:
+            await asyncio.wait_for(first.start(), 10)
+            # local_address() retains configured port0. Observe the actual
+            # source port on a request while the first socket remains bound.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+                peer.bind(("127.0.0.1", 0))
+                peer.setblocking(False)
+                client = await first.client()
+                probe = asyncio.ensure_future(client.read_property(
+                    f"127.0.0.1:{peer.getsockname()[1]}",
+                    ObjectIdentifier(ObjectType.DEVICE, 2001),
+                    PropertyIdentifier.DESCRIPTION,
+                ))
+                try:
+                    wire, source = await asyncio.wait_for(
+                        asyncio.get_running_loop().sock_recvfrom(peer, 2048), 5
+                    )
+                    self.assertEqual(wire[:2], b"\x81\x0a")
+                    self.assertEqual(wire[9], 12)  # ReadProperty
+                    expected = b"\x0c" + ((8 << 22) | 2001).to_bytes(4, "big") + b"\x19\x1c"
+                    self.assertEqual(wire[10:], expected)
+                    self.assertEqual(source[0], "127.0.0.1")
+                    port = source[1]
+                    self.assertGreater(port, 0)
+                finally:
+                    probe.cancel()
+                    drained = await asyncio.gather(probe, return_exceptions=True)
+                self.assertIsInstance(drained[0], asyncio.CancelledError)
+
+            async def wait_for_probe_release():
+                while (await first.status())["active_leases"]:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(wait_for_probe_release(), 5)
             second = BipEndpoint(**bip_kwargs(port=port, device_instance=2002))
             # Rust-side single-bind assertion: the first endpoint holds the
             # one UDP bind, so a second bind on the same port must fail
             # (BacnetError via the transport mapping, never silent sharing).
             with self.assertRaises(BacnetError):
                 await asyncio.wait_for(second.start(), 10)
-            await asyncio.wait_for(second.close(), 5)
         finally:
-            await asyncio.wait_for(first.close(), 5)
+            try:
+                if second is not None:
+                    await asyncio.wait_for(second.close(), 5)
+            finally:
+                await asyncio.wait_for(first.close(), 5)
 
     async def test_identity_agreement_iam_device(self):
         port_a, port_b = free_port(), free_port()

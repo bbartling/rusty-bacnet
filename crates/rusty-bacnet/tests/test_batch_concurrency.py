@@ -43,7 +43,7 @@ class BatchConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         tree = ast.parse(Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "BACnetClient")
         for name in METHODS:
-            method = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
+            method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
             arg = next(a for a in method.args.args if a.arg == "max_concurrent")
             self.assertEqual(ast.unparse(arg.annotation), "Optional[int]")
             self.assertIn("Zero raises ValueError synchronously", ast.get_docstring(method))
@@ -60,6 +60,7 @@ class BatchConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(await asyncio.wait_for(getattr(client, name)([], max_concurrent=limit), 2), [])
                             results = await asyncio.wait_for(getattr(client, name)(requests(name, [9123, 9123]), max_concurrent=limit), 3)
                             self.assertEqual(len(results), 2)
+                            self.assertEqual(sorted(r["request_index"] for r in results), [0, 1])
                             self.assertTrue(all(r["error"] is None for r in results), results)
                 self.assertEqual(await client.read_property(await server.local_address(), OID, PID), PropertyValue.character_string("batch"))
         finally:
@@ -83,6 +84,7 @@ class BatchConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                     await reply_read(peer, *first)
                     results = await asyncio.wait_for(task, 2)
                     self.assertEqual([r["device_instance"] for r in results], [2, 3, 1])
+                    self.assertEqual([r["request_index"] for r in results], [1, 2, 0])
                     self.assertTrue(all(r["value"] == PropertyValue.unsigned(42) for r in results))
                 finally:
                     task.cancel()

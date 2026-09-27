@@ -93,6 +93,7 @@ async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_sen
             )
             .await;
         assert!(matches!(results[0].result, Err(Error::Encoding(_))));
+        assert_eq!(results[0].request_index, 0);
     }
     assert!(timeout(Duration::from_millis(25), received.recv())
         .await

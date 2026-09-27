@@ -6,7 +6,7 @@ as class attributes; vendor-proprietary values are available via ``from_raw()``.
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, Optional, TypedDict, Union
+from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
 
 # ---------------------------------------------------------------------------
@@ -1384,6 +1384,25 @@ class BacnetAbortError(BacnetError):
 # Client
 # ---------------------------------------------------------------------------
 
+# Private structural helpers used only by the installed stub; no runtime classes.
+class _DeviceReadBatchResult(TypedDict):
+    request_index: int
+    device_instance: int
+    value: PropertyValue | None
+    error: BacnetError | None
+
+class _DeviceRpmBatchResult(TypedDict):
+    request_index: int
+    device_instance: int
+    results: list[ReadAccessResult] | None
+    error: BacnetError | None
+
+class _DeviceWriteBatchResult(TypedDict):
+    request_index: int
+    device_instance: int
+    error: BacnetError | None
+
+
 class BACnetClient:
     """Async BACnet client for reading/writing properties on remote devices.
 
@@ -1519,24 +1538,29 @@ class BACnetClient:
 
     # --- Multi-device batch operations ---
 
-    async def read_property_from_devices(
+    def read_property_from_devices(
         self,
         requests: list[
             tuple[int, ObjectIdentifier, PropertyIdentifier, Optional[int]]
         ],
         max_concurrent: Optional[int] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> Awaitable[list[_DeviceReadBatchResult]]:
         """Read a property from multiple discovered devices concurrently.
 
         ``requests`` is ``[(device_instance, object_id, property_id, array_index), ...]``.
         ``max_concurrent`` must be positive and fit the native usize; None uses 32.
         Zero raises ValueError synchronously; out-of-range integers raise OverflowError.
-        Results are returned in completion order.
-        Returns ``[{"device_instance": int, "value": PropertyValue | None, "error": str | None}, ...]``.
+        Returns an asyncio Future, accepted by await or asyncio.ensure_future,
+        not a coroutine for asyncio.create_task. Results are returned in completion
+        order; request_index is the zero-based
+        input occurrence, including identical duplicates. Errors are BacnetError
+        instances with their protocol attributes. Python construction failures
+        raise from the whole call; cancellation returns no partial list.
+        Returns ``[{"request_index": int, "device_instance": int, "value": PropertyValue | None, "error": BacnetError | None}, ...]``.
         """
         ...
 
-    async def read_property_multiple_from_devices(
+    def read_property_multiple_from_devices(
         self,
         requests: list[
             tuple[
@@ -1547,23 +1571,28 @@ class BACnetClient:
             ]
         ],
         max_concurrent: Optional[int] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> Awaitable[list[_DeviceRpmBatchResult]]:
         """Read multiple properties from multiple devices concurrently (RPM batch).
 
         ``max_concurrent`` must be positive and fit the native usize; None uses 32.
         Zero raises ValueError synchronously; out-of-range integers raise OverflowError.
-        Results are returned in completion order.
-        Returns ``[{"device_instance": int, "results": Any | None, "error": str | None}, ...]``.
+        Returns an asyncio Future, accepted by await or asyncio.ensure_future,
+        not a coroutine for asyncio.create_task. Results are returned in completion
+        order; request_index is the zero-based
+        input occurrence, including identical duplicates. Errors are BacnetError
+        instances with their protocol attributes. Python construction failures
+        raise from the whole call; cancellation returns no partial list.
+        Returns ``[{"request_index": int, "device_instance": int, "results": list[ReadAccessResult] | None, "error": BacnetError | None}, ...]``.
         """
         ...
 
-    async def write_property_to_devices(
+    def write_property_to_devices(
         self,
         requests: list[
             tuple[int, ObjectIdentifier, PropertyIdentifier, PropertyValue, Optional[int], Optional[int]]
         ],
         max_concurrent: Optional[int] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> Awaitable[list[_DeviceWriteBatchResult]]:
         """Write a property to multiple devices concurrently.
 
         Every priority must be None or 1..16; invalid u8 priorities raise
@@ -1573,8 +1602,13 @@ class BACnetClient:
         ``requests`` is ``[(device_instance, object_id, property_id, value, priority, array_index), ...]``.
         ``max_concurrent`` must be positive and fit the native usize; None uses 32.
         Zero raises ValueError synchronously; out-of-range integers raise OverflowError.
-        Results are returned in completion order.
-        Returns ``[{"device_instance": int, "error": str | None}, ...]``.
+        Returns an asyncio Future, accepted by await or asyncio.ensure_future,
+        not a coroutine for asyncio.create_task. Results are returned in completion
+        order; request_index is the zero-based
+        input occurrence, including identical duplicates. Errors are BacnetError
+        instances with their protocol attributes. Python construction failures
+        raise from the whole call; cancellation returns no partial list.
+        Returns ``[{"request_index": int, "device_instance": int, "error": BacnetError | None}, ...]``.
         """
         ...
 

@@ -2683,5 +2683,35 @@ ranges, overload behavior, and the known extreme-overload/conformance limitation
 `usize`. Zero raises `ValueError` synchronously before starting a future or I/O,
 including an empty batch on an unstarted client. Negative or oversized integers
 raise `OverflowError`. Normal calls require a running client; empty batches then
-return an empty list. Results retain completion order and their existing shapes.
-Canceling the returned future cancels its pending requests.
+return an empty list. These methods synchronously return an `asyncio.Future`:
+use `await` or `asyncio.ensure_future`, not `asyncio.create_task`. Installed stubs
+express `Awaitable[list[...]]` with three private, structural `TypedDict` helpers;
+those helper names are not runtime classes to import.
+
+Results stay in completion order. Every dictionary now includes `request_index`,
+the zero-based position in the original input list, so repeated identical requests
+to the same Device remain distinguishable. The other keys are `device_instance`
+and `error`, plus `value` for RP or `results` for RPM. `error` is `None` on success
+or an existing `BacnetError` instance on a per-request failure, replacing the old
+string. `BacnetProtocolError.error_class/error_code` and
+`BacnetRejectError.reason`/`BacnetAbortError.reason` are numeric attributes.
+
+```python
+outcomes = await client.read_property_from_devices(requests, max_concurrent=8)
+for outcome in outcomes:
+    original_request = requests[outcome["request_index"]]
+    if outcome["error"] is not None:
+        print(original_request, type(outcome["error"]).__name__)
+    else:
+        print(original_request, outcome["value"])
+```
+
+RPM property-level `(ErrorClass, ErrorCode)` tuples and undecodable application
+values returned as `bytes` remain nested RPM data, not top-level item errors.
+Genuine Python result-construction exceptions propagate from the whole batch;
+they are not fabricated BACnet item failures. Mixed success means outcomes in a
+completed batch. Cancellation returns no partial list, cancels pending requests,
+and prevents queued requests from starting; it cannot retract writes already sent.
+Remote WP inputs remain six-tuples; the server's local `source_object` argument
+is unrelated. Results do not echo complete requests or encoded write values.
+Returned values remain inspectable; this is not a general secrecy guarantee.
