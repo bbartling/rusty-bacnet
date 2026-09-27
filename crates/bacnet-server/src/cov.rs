@@ -22,6 +22,7 @@ pub use observation::CovObservation;
 pub(crate) mod flags;
 mod lifetime;
 pub(crate) mod prepare;
+pub(crate) mod value_source;
 pub use lifetime::CovTimeRemaining;
 
 mod policy;
@@ -49,7 +50,7 @@ pub struct CovSubscription {
     pub issue_confirmed_notifications: bool,
     /// When this subscription expires (None = infinite lifetime).
     pub expires_at: Option<Instant>,
-    /// Last delivered selected-value/declared-flags pair.
+    /// Last delivered bounded observation, including specialized command fields.
     pub last_notified_observation: Option<CovObservation>,
     /// Monitored property for Single-property and Multiple-reference subscriptions.
     pub monitored_property: Option<PropertyIdentifier>,

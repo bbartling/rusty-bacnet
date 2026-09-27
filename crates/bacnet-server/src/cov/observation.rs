@@ -1,14 +1,17 @@
-//! One immutable delivered selected-value/flags observation per accepted reference.
+//! One immutable delivered observation per accepted reference.
 use super::CovSample;
 use bacnet_types::{error::Error, primitives::PropertyValue};
 
 /// A bounded selected sample and its declared optional four-bit Status_Flags.
+/// Specialized commandable Value_Source reports also retain their captured PV
+/// and command priority; command time is reported but is not a trigger.
 /// No delivered observation is represented by the subscription's outer `None`;
 /// an observation with absent flags is a distinct successful delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CovObservation {
     sample: CovSample,
     flags: Option<u8>,
+    command: Option<(CovSample, CovSample)>,
 }
 impl CovObservation {
     /// Pair a validated selected sample with absent or canonical present flags.
@@ -16,8 +19,17 @@ impl CovObservation {
     pub fn new(sample: CovSample, flags: Option<&PropertyValue>) -> Result<Self, Error> {
         Ok(Self {
             sample,
+            command: None,
             flags: flags.map(validate_flags).transpose()?,
         })
+    }
+    /// Attach the bounded PV/priority tuple captured with a commandable source.
+    pub(crate) fn with_command(mut self, pv: CovSample, priority: CovSample) -> Self {
+        self.command = Some((pv, priority));
+        self
+    }
+    pub(crate) fn command(&self) -> Option<&(CovSample, CovSample)> {
+        self.command.as_ref()
     }
     /// The immutable bounded selected value.
     pub fn sample(&self) -> &CovSample {

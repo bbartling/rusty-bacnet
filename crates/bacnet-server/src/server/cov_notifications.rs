@@ -413,79 +413,94 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         for sub in subs {
-            let (notification_values, current_observation) = if let Some(property) =
-                sub.monitored_property
-            {
-                let db = if snapshot.is_none() {
-                    Some(db.read().await)
-                } else {
-                    None
-                };
-                let Some(object) = snapshot.or_else(|| db.as_deref()?.get(oid)) else {
-                    continue;
-                };
-                let Ok(flags) = crate::cov::flags::PreparedFlags::read(object) else {
-                    continue;
-                };
-                let prepared = if property == PropertyIdentifier::STATUS_FLAGS {
-                    flags.selected(object, sub.monitored_property_array_index)
-                } else {
-                    object
-                        .read_property(property, sub.monitored_property_array_index)
-                        .and_then(|value| {
-                            crate::cov::prepare::prepare_value(
-                                object,
-                                property,
-                                sub.monitored_property_array_index,
-                                sub.cov_increment,
-                                &value,
-                            )
-                        })
-                };
-                let Ok(prepared) = prepared else {
-                    continue;
-                };
-                let observation = flags.observation(prepared.sample.clone());
-                if !force
-                    && !prepared.reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
-                    && !observation.flags_changed(sub.last_notified_observation.as_ref())
-                {
-                    continue;
-                }
-                let mut values = vec![BACnetPropertyValue {
-                    property_identifier: property,
-                    property_array_index: sub.monitored_property_array_index,
-                    value: prepared.encoded,
-                    priority: None,
-                }];
-                if property != PropertyIdentifier::STATUS_FLAGS {
-                    if let Some(encoded) = flags.encoded {
-                        values.push(BACnetPropertyValue {
-                            property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                            property_array_index: None,
-                            value: encoded,
+            let (notification_values, current_observation) =
+                if let Some(property) = sub.monitored_property {
+                    let db = if snapshot.is_none() {
+                        Some(db.read().await)
+                    } else {
+                        None
+                    };
+                    let Some(object) = snapshot.or_else(|| db.as_deref()?.get(oid)) else {
+                        continue;
+                    };
+                    let Ok(flags) = crate::cov::flags::PreparedFlags::read(object) else {
+                        continue;
+                    };
+                    if crate::cov::value_source::applies(object, property) {
+                        if sub.monitored_property_array_index.is_some() {
+                            continue;
+                        }
+                        let Ok(prepared) =
+                            crate::cov::value_source::PreparedValueSource::read(object, &flags)
+                        else {
+                            continue;
+                        };
+                        if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
+                            continue;
+                        }
+                        (prepared.values(), prepared.observation)
+                    } else {
+                        let prepared = if property == PropertyIdentifier::STATUS_FLAGS {
+                            flags.selected(object, sub.monitored_property_array_index)
+                        } else {
+                            object
+                                .read_property(property, sub.monitored_property_array_index)
+                                .and_then(|value| {
+                                    crate::cov::prepare::prepare_value(
+                                        object,
+                                        property,
+                                        sub.monitored_property_array_index,
+                                        sub.cov_increment,
+                                        &value,
+                                    )
+                                })
+                        };
+                        let Ok(prepared) = prepared else {
+                            continue;
+                        };
+                        let observation = flags.observation(prepared.sample.clone());
+                        if !force
+                            && !prepared
+                                .reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
+                            && !observation.flags_changed(sub.last_notified_observation.as_ref())
+                        {
+                            continue;
+                        }
+                        let mut values = vec![BACnetPropertyValue {
+                            property_identifier: property,
+                            property_array_index: sub.monitored_property_array_index,
+                            value: prepared.encoded,
                             priority: None,
-                        });
+                        }];
+                        if property != PropertyIdentifier::STATUS_FLAGS {
+                            if let Some(encoded) = flags.encoded {
+                                values.push(BACnetPropertyValue {
+                                    property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                                    property_array_index: None,
+                                    value: encoded,
+                                    priority: None,
+                                });
+                            }
+                        }
+                        (values, observation)
                     }
-                }
-                (values, observation)
-            } else {
-                let Some((values, observation, increment)) = &ordinary else {
-                    continue;
+                } else {
+                    let Some((values, observation, increment)) = &ordinary else {
+                        continue;
+                    };
+                    if values.is_empty()
+                        || (!force
+                            && !CovSubscriptionTable::should_notify(
+                                sub,
+                                Some(observation.sample()),
+                                sub.cov_increment.or(*increment),
+                            )
+                            && !observation.flags_changed(sub.last_notified_observation.as_ref()))
+                    {
+                        continue;
+                    }
+                    (values.clone(), observation.clone())
                 };
-                if values.is_empty()
-                    || (!force
-                        && !CovSubscriptionTable::should_notify(
-                            sub,
-                            Some(observation.sample()),
-                            sub.cov_increment.or(*increment),
-                        )
-                        && !observation.flags_changed(sub.last_notified_observation.as_ref()))
-                {
-                    continue;
-                }
-                (values.clone(), observation.clone())
-            };
 
             // Resolve after every awaited read/callback and before fresh admission.
             let time_remaining = {
