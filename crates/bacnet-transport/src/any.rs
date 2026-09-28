@@ -370,7 +370,7 @@ mod tests {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip6(bip6);
         assert_eq!(any.local_mac().len(), 18);
-        assert!(!any.supports_local_nonrouter_number_controls());
+        assert!(any.supports_local_nonrouter_number_controls());
     }
 
     #[cfg(feature = "ipv6")]
