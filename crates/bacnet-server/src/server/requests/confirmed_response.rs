@@ -168,6 +168,7 @@ pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'sta
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+    pending: Option<PendingConfirmedRequest>,
 ) {
     send_response(
         network,
@@ -176,6 +177,7 @@ pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'sta
         source_network,
         reply_tx,
         true,
+        pending,
     )
     .await;
 }
@@ -196,6 +198,7 @@ pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static
         source_network,
         reply_tx,
         false,
+        None,
     )
     .await;
 }
@@ -272,6 +275,7 @@ async fn send_response<T: TransportPort + 'static>(
     source_network: Option<&NpduAddress>,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     log_errors: bool,
+    pending: Option<PendingConfirmedRequest>,
 ) {
     let mut buf = BytesMut::new();
     encode_apdu(&mut buf, response).expect("valid APDU encoding");
@@ -291,17 +295,25 @@ async fn send_response<T: TransportPort + 'static>(
         let mut npdu_buf = BytesMut::with_capacity(2 + apdu_bytes.len());
         match encode_npdu(&mut npdu_buf, &npdu) {
             Ok(()) => {
-                let _ = tx.send(npdu_buf.freeze());
+                let handed_off = tx.send(npdu_buf.freeze()).is_ok();
+                // Synchronous reply-channel handoff, not the serial worker's
+                // later turnaround. A failed handoff releases too, but is not
+                // reported as a successful reply.
+                drop(pending);
+                if !handed_off && log_errors {
+                    warn!("MS/TP reply receiver closed before response handoff");
+                }
             }
             Err(error) => {
                 if log_errors {
                     warn!(%error, "Failed to encode NPDU for MS/TP reply");
                 }
-                if let Err(error) = BACnetServer::<T>::send_confirmed_response_apdu(
+                if let Err(error) = BACnetServer::<T>::issue_terminal_response(
                     network,
                     &apdu_bytes,
                     source_mac,
                     source_network,
+                    pending,
                 )
                 .await
                 {
@@ -311,9 +323,14 @@ async fn send_response<T: TransportPort + 'static>(
                 }
             }
         }
-    } else if let Err(error) =
-        BACnetServer::<T>::send_confirmed_response_apdu(network, &buf, source_mac, source_network)
-            .await
+    } else if let Err(error) = BACnetServer::<T>::issue_terminal_response(
+        network,
+        &buf,
+        source_mac,
+        source_network,
+        pending,
+    )
+    .await
     {
         if log_errors {
             warn!(%error, "Failed to send response");

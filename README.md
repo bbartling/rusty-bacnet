@@ -386,7 +386,10 @@ reassembly. Queued work retains its admitting identity across replacement;
 different incarnations cannot share duplicate/replay or partial request state.
 See the [Rust identity API and limits](docs/rust-api.md#accepted-direct-tls-identity).
 These APIs postdate published 0.11.0; response socket affinity and Hub-relayed
-end-to-end identity remain separate.
+end-to-end identity remain separate. Ordinary confirmed duplicate detection now
+ends at local encoded reply issuance (or the segmented response's terminal
+outcome), allowing immediate Invoke ID reuse; LSO completed replay remains a
+separate policy. See [transaction lifetimes](docs/rust-api.md#confirmed-transaction-lifetimes).
 
 CA membership alone is not BACnet-operation authorization and does not bind a
 certificate to a VMAC or Device UUID. These checks are not a claim of the entire

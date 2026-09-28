@@ -305,7 +305,10 @@
     "crates/bacnet-server/src/server/segmentation.rs",
     "crates/bacnet-server/src/server/segmentation_tests/request_reassembly.rs",
     "crates/bacnet-server/src/server/segmentation_tests/routing_overlap.rs",
-    "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs"
+    "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
+    "crates/bacnet-server/src/server/confirmed_request_tracker.rs",
+    "crates/bacnet-server/src/server/requests/confirmed_response.rs",
+    "crates/bacnet-network/src/layer_issuance.rs::send_apdu_on_issuance"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
@@ -317,7 +320,9 @@
     "crates/bacnet-server/src/server/segmentation_tests/ack_window.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
     "crates/bacnet-server/src/server/segmentation_tests/ack_window.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
     "crates/bacnet-server/src/server/segmentation_tests/ack_window.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle",
-    "crates/bacnet-server/src/server/segmentation_tests/ack_window.rs::segmented_complex_ack_sets_npdu_expecting_reply_for_segments"
+    "crates/bacnet-server/src/server/segmentation_tests/ack_window.rs::segmented_complex_ack_sets_npdu_expecting_reply_for_segments",
+    "crates/bacnet-server/src/server/confirmed_issuance_tests.rs",
+    "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs::segmented_child_keeps_pending_after_parent_returns_through_final_ack"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/segmentation_tests/request_reassembly.rs::routed_peer_abort_through_new_router_removes_existing_reassembly_session",
@@ -333,13 +338,17 @@
     "crates/bacnet-server/src/server/segmentation_tests/control_limits.rs::same_key_replacement_does_not_wait_for_full_old_queue",
     "crates/bacnet-server/src/server/segmentation_tests/control_limits.rs::same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted",
     "crates/bacnet-server/src/server/segmentation_tests/control_limits.rs::segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reached",
-    "crates/bacnet-server/src/server/segmentation_tests/routing_overlap.rs::overlapping_same_peer_invoke_id_cancels_old_segmented_sender"
+    "crates/bacnet-server/src/server/segmentation_tests/routing_overlap.rs::overlapping_same_peer_invoke_id_cancels_old_segmented_sender",
+    "crates/bacnet-server/src/server/confirmed_response_lifetime_tests.rs",
+    "crates/bacnet-server/src/server/confirmed_tracker_tests.rs",
+    "crates/bacnet-network/src/issuance_tests.rs",
+    "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs"
    ],
    "benchmarks": [],
    "public_claims": [
     "README supported services"
    ],
-   "notes": "Server segmented transaction identity follows Clauses 5.3.5.3 and 6.2: valid routed SNET/SADR plus Invoke ID is stable across immediate routers, while local transactions use immediate MAC plus Invoke ID. Invalid routed metadata retains the immediate MAC and supplied metadata defensively. ConfirmedRequest reassembly, peer Abort removal, SegmentACK/Abort dispatch, and segmented ComplexACK sender registration use the same private key helper. Reply frames continue to use the current or captured immediate router MAC with NPDU DNET/DADR; the canonical empty-MAC sentinel is never a physical destination. Focused tests cover the identity matrix, routed request continuation and reply routing across routers, immediate peer-Abort cleanup, matching and mismatched routed sender events, and canonical sender replacement without stale cleanup. Existing send-side evidence remains: SegmentACKs with the server bit set are ignored; either ACK flavor naming the current segment advances; only a negative ACK naming the immediately preceding segment retransmits the current segment; stale and out-of-range ACKs are ignored; timeout, capacity, nonblocking dispatch, cancellation, and cleanup behavior remain covered. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage."
+   "notes": "Server segmented transaction identity follows Clauses 5.3.5.3 and 6.2: valid routed SNET/SADR plus Invoke ID is stable across immediate routers, while local transactions use immediate MAC plus Invoke ID. Invalid routed metadata retains the immediate MAC and supplied metadata defensively. ConfirmedRequest reassembly, peer Abort removal, SegmentACK/Abort dispatch, and segmented ComplexACK sender registration use the same private key helper. Reply frames continue to use the current or captured immediate router MAC with NPDU DNET/DADR; the canonical empty-MAC sentinel is never a physical destination. Focused tests cover the identity matrix, routed request continuation and reply routing across routers, immediate peer-Abort cleanup, matching and mismatched routed sender events, and canonical sender replacement without stale cleanup. Existing send-side evidence remains: SegmentACKs with the server bit set are ignored; either ACK flavor naming the current segment advances; only a negative ACK naming the immediately preceding segment retransmits the current segment; stale and out-of-range ACKs are ignored; timeout, capacity, nonblocking dispatch, cancellation, and cleanup behavior remain covered. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage. Refs #876: ordinary generic exact duplicate detection is pending-only, bounded to 256 entries and 64 KiB of service-request bytes per tracked entry. Unsegmented ownership retires after APDU/NPDU encoding at local network issuance or synchronous MS/TP reply handoff, before eventual transport Result. Byte-identical Invoke ID reuse then executes again. Segmented ownership moves to the child through final ACK or terminal outcome; generated terminal Abort retires at local issuance even while its send is held. Cancellation, errors and rejected spawn drop ownership. Request-task and segmented-send permits remain independent. LSO completed replay and Audit receipts are separate unchanged policies; direct leaf/incarnation keys remain in generic and LSO stores. Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes."
   },
   {
    "id": "BACNET-5-SEGMENTATION-WINDOW",
@@ -4209,7 +4218,7 @@
     "docs/rust-api.md#accepted-direct-tls-identity",
     "docs/python-api.md"
    ],
-   "notes": "Refs #803. Local identity is SHA-256 of exact verified leaf DER plus the existing checked process-wide membership generation; captured before upgrade and admitted under with_current. Same-cert reconnect changes incarnation. Complete admitted work retains its original snapshot after retirement. Real TLS listener-to-network-to-server tests use deterministic queued envelopes and DB barriers; old A segment controls are admitted before replacement, never freshly accepted from retired A. Generic duplicate and LSO replay entries add direct identity while preserving existing same-socket/non-direct behavior and bounds; generic completed retention is local implementation policy, not permanent API. Direct partial contexts and Abort cancellation isolate incarnations; non-direct address sweeps cannot remove direct contexts. Hub admission migrates to a distinct scope-only channel with no downstream direct leaf identity. Copy/Eq/Hash and redacted Debug are retained. No mandatory or enabled direct certificate-to-claimed-ID binding, Hub-relayed end-to-end identity, Python principal callback, #524 response socket/replay delivery/segmented-response control confinement, #886 outbound application NPDU intake, broader security-profile promotion or external certification. Source APIs postdate published0.11.0. Independent duplicate-partition and Abort-sweep negative controls are recorded in the scoped evidence narrative."
+   "notes": "Refs #803. Local identity is SHA-256 of exact verified leaf DER plus the existing checked process-wide membership generation; captured before upgrade and admitted under with_current. Same-cert reconnect changes incarnation. Complete admitted work retains its original snapshot after retirement. Real TLS listener-to-network-to-server tests use deterministic queued envelopes and DB barriers; old A segment controls are admitted before replacement, never freshly accepted from retired A. Generic duplicate and LSO replay entries retain direct identity with existing bounds and non-direct canonical keys. #876 makes generic detection pending-only: pending same-socket WP remains suppressed, completed same-socket WP reauthorizes, and completed LSO still replays without reauthorization. Direct partial contexts and Abort cancellation isolate incarnations; non-direct address sweeps cannot remove direct contexts. Hub admission migrates to a distinct scope-only channel with no downstream direct leaf identity. Copy/Eq/Hash and redacted Debug are retained. No mandatory or enabled direct certificate-to-claimed-ID binding, Hub-relayed end-to-end identity, Python principal callback, #524 response socket/replay delivery/segmented-response control confinement, #886 outbound application NPDU intake, broader security-profile promotion or external certification. Source APIs postdate published0.11.0. Independent duplicate-partition and Abort-sweep negative controls are recorded in the scoped evidence narrative."
   }
  ]
 }

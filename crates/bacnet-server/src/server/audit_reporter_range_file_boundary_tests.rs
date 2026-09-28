@@ -199,7 +199,7 @@ async fn audit_reporter_range_file_dcc_duplicate_and_overload_are_silent() {
             assert!(records(&fixture).is_empty(), "{kind:?} {case}");
             assert_idle(&fixture);
             if let Some(pending) = pending {
-                pending.complete();
+                drop(pending);
             }
             fixture.server.stop().await.unwrap();
         }

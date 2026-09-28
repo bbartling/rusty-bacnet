@@ -260,28 +260,15 @@ async fn admission_independent_handlers_and_eight_owned_abort_workers_never_queu
 }
 
 #[tokio::test]
-async fn admission_pending_and_completed_duplicates_at_capacity_have_no_abort() {
+async fn admission_pending_duplicate_precedes_capacity_but_issued_reuse_overloads() {
     let (mut server, _tx, mut started) = small_fixture().await;
+    let db = server.db.clone();
+    let held = db.write().await;
     dispatch(&server, request(1), None, None).await;
-    let original = observed(&mut started).await;
-    // Exact duplicate detection already works before another task is polled.
     dispatch(&server, request(1), None, None).await;
-    assert_eq!(
-        server
-            .request_admission_counters()
-            .confirmed_overloaded_total,
-        0
-    );
-    server.test_network().transport().release.notify_one();
-    original.await.unwrap();
-    wait_reaped(&server).await;
-    dispatch(&server, request(2), None, None).await;
-    observed(&mut started).await;
-    dispatch(&server, request(1), None, None).await;
-    dispatch(&server, request(2), None, None).await;
     assert_eq!(
         server.request_admission_counters().confirmed_admitted_total,
-        2
+        1
     );
     assert_eq!(
         server
@@ -289,15 +276,30 @@ async fn admission_pending_and_completed_duplicates_at_capacity_have_no_abort() 
             .confirmed_overloaded_total,
         0
     );
-    assert_eq!(server.request_admission_counters().abort_admitted_total, 0);
+    assert!(started.try_recv().is_err());
+    drop(held);
+    let original = observed(&mut started).await;
+    dispatch(&server, request(1), None, None).await;
+    let overloaded = observed(&mut started).await;
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
+        1
+    );
     assert_eq!(
         server
-            .test_network()
-            .transport()
-            .frames
-            .lock()
-            .unwrap()
-            .len(),
+            .request_admission_counters()
+            .confirmed_overloaded_total,
+        1
+    );
+    assert_eq!(server.request_admission_counters().abort_admitted_total, 1);
+    server.test_network().transport().release.notify_waiters();
+    original.await.unwrap();
+    overloaded.await.unwrap();
+    wait_reaped(&server).await;
+    dispatch(&server, request(1), None, None).await;
+    observed(&mut started).await;
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
         2
     );
     server.stop().await.unwrap();
@@ -535,41 +537,6 @@ async fn admission_direct_and_routed_abort_send_release_on_error_and_panic() {
     assert_eq!(server.request_admission_counters().abort_active, 0);
 }
 
-#[tokio::test]
-async fn admission_dcc_prechecks_and_duplicate_before_first_poll() {
-    let (mut server, _tx, mut started) = small_fixture().await;
-    dispatch(&server, request(1), None, None).await;
-    dispatch(&server, request(1), None, None).await;
-    assert_eq!(
-        server.request_admission_counters().confirmed_admitted_total,
-        1
-    );
-    assert_eq!(
-        server
-            .request_admission_counters()
-            .confirmed_overloaded_total,
-        0
-    );
-    observed(&mut started).await;
-    server.comm_state.store(1, Ordering::Release);
-    dispatch(&server, request(2), None, None).await;
-    dispatch(&server, who_is(), None, None).await;
-    assert_eq!(
-        server
-            .request_admission_counters()
-            .confirmed_overloaded_total,
-        0
-    );
-    assert_eq!(
-        server
-            .request_admission_counters()
-            .unconfirmed_admitted_total,
-        0
-    );
-    assert_eq!(server.request_admission_counters().abort_active, 0);
-    server.stop().await.unwrap();
-}
-
 struct NeverStart(Arc<AtomicBool>);
 impl TransportPort for NeverStart {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
@@ -692,23 +659,4 @@ async fn admission_every_class_releases_on_panic_and_before_first_poll_cancellat
             0
         );
     }
-}
-
-#[tokio::test]
-async fn admission_abort_rechecks_dcc_when_first_polled() {
-    let (mut server, _tx, mut started) = small_fixture().await;
-    dispatch(&server, request(1), None, None).await;
-    observed(&mut started).await;
-    dispatch(&server, request(2), None, None).await;
-    server.comm_state.store(1, Ordering::Release);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while server.request_admission_counters().abort_active != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert!(started.try_recv().is_err());
-    assert_eq!(server.request_admission_counters().abort_admitted_total, 1);
-    server.stop().await.unwrap();
 }

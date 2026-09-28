@@ -587,8 +587,10 @@ chain fails closed. Already admitted complete work may finish after close or
 replacement under its original snapshot; it is not revoked or reinterpreted
 using the new VMAC owner. Generic confirmed duplicate admission and the local
 LSO replay store partition by this leaf/incarnation in addition to their existing
-request keys. Same-socket and non-direct behavior and bounds remain unchanged;
-generic completed retention is local implementation policy, not a permanent API.
+request keys. Generic duplicate detection now retains only pending operations;
+LSO keeps its separate completed replay policy. Same-socket pending detection,
+non-direct canonical keys, and capacity bounds remain unchanged. See
+[confirmed transaction lifetimes](#confirmed-transaction-lifetimes).
 Receive reassembly and client Abort cancellation also isolate direct incarnations.
 Delayed, already-admitted A segments can finish A's context after replacement;
 new frames from retired A cannot enter it.
@@ -1997,6 +1999,37 @@ Drop seals admission and aborts owned application work. It does not synchronousl
 join task destruction. If transport cleanup has already begun, that owned task
 continues while the runtime runs. Use awaited `stop()` for the joined resource
 release guarantee. This is a local lifecycle contract, not a BACnet wire change.
+
+### Confirmed transaction lifetimes
+
+Current source detects exact ordinary confirmed duplicates only while their
+server transaction is pending. Once an unsegmented SimpleACK, ComplexACK, Error,
+Reject or Abort is encoded and its local network send is issued, the same peer,
+Invoke ID and bytes may execute again. The boundary precedes the transport
+future's eventual result; it establishes neither physical emission nor peer
+receipt. MS/TP uses the synchronous encoded reply-channel handoff. Failed
+encoding, failed handoff, cancellation and discarded work release ownership.
+
+A segmented ComplexACK transfers ownership to its response child before the
+request handler returns; the child may outlive that handler. It remains pending through the final SegmentACK or
+until terminal Abort, timeout, send failure or cancellation. A generated terminal
+Abort retires the transaction at local Abort issuance. Task and segmented-send
+capacity permits keep their own lifetimes, so a newly reusable Invoke ID may
+still encounter the normal resource limit while older send work is active.
+
+Detection remains bounded to 256 pending entries and 64 KiB of service-request
+bytes per tracked entry. Requests beyond those detection bounds proceed through
+normal service admission. Local peers retain canonical MAC keys; valid routed
+peers retain SNET/SADR keys across router changes. Accepted direct SC also retains
+the immutable leaf/incarnation partition described above. There is no generic
+completed cache or response replay. LifeSafetyOperation's separate completed
+replay policy and Audit service receipts are unchanged.
+
+This behavior postdates published 0.11.0. `NetworkLayer::send_apdu_on_issuance`
+provides the narrow post-NPDU-encoding callback used by these response owners;
+constructing its lazy future does not invoke the callback. This does not resolve
+response socket affinity or segmented-response ACK/Abort confinement (#524).
+See the [bounded TSM evidence](conformance/standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes).
 
 ### Building a Server
 

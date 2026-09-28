@@ -61,7 +61,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 LsoAdmission::New(pending) => pending,
             };
 
-            Self::handle_admitted_confirmed_request_with_lso(
+            Self::handle_admitted_confirmed_request(
                 db,
                 network,
                 cov_table,
@@ -82,7 +82,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 bacnet_transport::port::TransportProvenance::unverified(),
                 req,
                 reply_tx,
-                Some(lso_pending),
+                Some(ConfirmedRequestOwnership::LifeSafety(lso_pending)),
             )
             .await;
             return;
@@ -119,63 +119,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             bacnet_transport::port::TransportProvenance::unverified(),
             req,
             reply_tx,
-        )
-        .await;
-        pending.complete();
-    }
-}
-
-impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Handle one admitted confirmed request.
-    ///
-    /// Backward-compatible entry for callers without LSO replay state
-    /// (e.g. DCC-focused tests): LSO requests execute without storing a
-    /// replay, which is always safe (never suppresses first execution).
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::server) async fn handle_admitted_confirmed_request(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
-        seg_send_permits: &Arc<Semaphore>,
-        cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
-        dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-        dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
-        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
-        config: &ServerConfig,
-        request_tasks: &super::super::request_tasks::RequestTaskSpawner,
-        source_mac: &[u8],
-        source_network: Option<NpduAddress>,
-        provenance: bacnet_transport::port::TransportProvenance,
-        req: bacnet_encoding::apdu::ConfirmedRequest,
-        reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
-    ) {
-        Self::handle_admitted_confirmed_request_with_lso(
-            db,
-            network,
-            cov_table,
-            seg_ack_senders,
-            seg_send_permits,
-            cov_in_flight,
-            server_tsm,
-            notification_transactions,
-            device_bindings,
-            comm_state,
-            dcc_timer,
-            dcc_outcomes,
-            mutation_decisions,
-            config,
-            request_tasks,
-            source_mac,
-            source_network,
-            provenance,
-            req,
-            reply_tx,
-            None,
+            Some(ConfirmedRequestOwnership::Generic(pending)),
         )
         .await;
     }

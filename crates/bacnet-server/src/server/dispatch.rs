@@ -191,7 +191,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let result = request_tasks.try_spawn(class, peer.clone(), || {
                         let reply_tx = reply_tx.take();
                         async move {
-                            Self::handle_admitted_confirmed_request_with_lso(
+                            Self::handle_admitted_confirmed_request(
                                 &db,
                                 &network,
                                 &cov_table,
@@ -212,7 +212,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 provenance,
                                 req,
                                 reply_tx,
-                                Some(lso_pending),
+                                Some(ConfirmedRequestOwnership::LifeSafety(lso_pending)),
                             )
                             .await;
                         }
@@ -255,8 +255,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     && req.service_choice != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
                     && req.service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
                 {
-                    // Preserve the existing DCC discard and duplicate retention.
-                    pending.complete();
+                    // Preserve DCC discard; a discarded operation owns no pending entry.
+                    drop(pending);
                     return;
                 }
                 let invoke_id = req.invoke_id;
@@ -314,9 +314,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             provenance,
                             req,
                             reply_tx,
+                            Some(ConfirmedRequestOwnership::Generic(pending)),
                         )
                         .await;
-                        pending.complete();
                     }
                 });
                 if result == Err(Rejection::Overloaded) {

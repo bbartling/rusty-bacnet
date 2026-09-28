@@ -581,11 +581,8 @@ async fn recovery_protected_wire_exhaustion_duplicate_retry_and_abort_fallback()
     let (mut server, _tx, mut started) = fixture().await;
     for id in 0..4 {
         dispatch(&server, enable(id, None), source(id), None).await;
+        dispatch(&server, enable(id, None), source(id), None).await; // pending before first poll
         observed(&mut started).await;
-    }
-    // Exact duplicates are quiet even when their partition and peer are full.
-    for id in 0..4 {
-        dispatch(&server, enable(id, None), source(id), None).await;
     }
     assert_eq!(
         server
@@ -593,9 +590,13 @@ async fn recovery_protected_wire_exhaustion_duplicate_retry_and_abort_fallback()
             .confirmed_overloaded_total,
         0
     );
+    // Issued response ends duplicate ownership while its task still consumes
+    // the protected partition. Reuse therefore gets an ordinary capacity Abort.
+    dispatch(&server, enable(0, None), source(0), None).await;
+    observed(&mut started).await;
     for id in 4..13 {
         dispatch(&server, enable(id, None), source(id), None).await;
-        if id < 12 {
+        if id < 11 {
             observed(&mut started).await;
         }
     }
@@ -609,7 +610,7 @@ async fn recovery_protected_wire_exhaustion_duplicate_retry_and_abort_fallback()
             c.recovery_overloaded_total,
             c.confirmed_fallback_dropped_total
         ),
-        (9, 1)
+        (10, 2)
     );
     assert!(server.test_network().transport().frames.lock().unwrap()[4..].iter().all(|p| matches!(p, Apdu::Abort(a) if a.abort_reason == AbortReason::OUT_OF_RESOURCES && a.sent_by_server)));
     server.test_network().transport().release.notify_waiters();

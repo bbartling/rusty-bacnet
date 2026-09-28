@@ -104,19 +104,21 @@ async fn complete_replacement(lso: bool, same_leaf: bool) {
         );
     }
 
-    // Completed same-socket retries retain the pre-existing local policy:
-    // generic discard; LSO exact response replay, with no second authorization.
+    // After terminal issuance, ordinary WP is a fresh same-socket operation and
+    // reauthorizes B (still denied). LSO retains its distinct completed replay.
     let retry = f.capture(&mut b, &request).await;
     f.feed(retry).await;
-    if lso {
-        assert!(denied(&f.response().await));
-    }
+    assert!(denied(&f.response().await));
     f.dispatch_barrier(&mut b, 242).await;
     f.active(0).await;
-    assert_eq!(observed.lock().unwrap().len(), 2);
+    let after_retry = if lso { 2 } else { 3 };
+    assert_eq!(observed.lock().unwrap().len(), after_retry);
+    if !lso {
+        assert_eq!(observed.lock().unwrap()[2].0, b_identity);
+    }
 
     // Same certificate reconnect has a new incarnation and must reach policy,
-    // even while the completed result for that certificate's old socket exists.
+    // including while LSO retains that certificate's old completed result.
     let mut c = f.peer(b_tls).await;
     let fresh = f.capture(&mut c, &request).await;
     let c_identity = fresh.provenance.direct_sc_identity().unwrap();
@@ -127,8 +129,8 @@ async fn complete_replacement(lso: bool, same_leaf: bool) {
     assert!(denied(&f.response().await));
     f.active(0).await;
     let observed = observed.lock().unwrap().clone();
-    assert_eq!(observed.len(), 3);
-    assert_eq!(observed[2].0, c_identity);
+    assert_eq!(observed.len(), after_retry + 1);
+    assert_eq!(observed[after_retry].0, c_identity);
     for (_, debug) in observed {
         assert!(!debug.contains("private operator claim"));
         assert!(!debug.contains("A value"));
