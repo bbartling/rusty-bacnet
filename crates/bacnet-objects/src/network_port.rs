@@ -19,11 +19,9 @@ use crate::traits::BACnetObject;
 
 mod bip_config;
 mod metadata;
-mod number;
 mod registration;
+use bacnet_types::network_number::NetworkNumber;
 pub use bip_config::BipPortConfig;
-#[doc(hidden)]
-pub use number::NetworkNumber;
 
 /// A declared application-port snapshot, optionally associated with an owned link.
 pub struct NetworkPortObject {
@@ -60,7 +58,8 @@ impl NetworkPortObject {
             out_of_service: false,
             reliability: 0,
             network_type: NetworkType::IPV4,
-            network_number: NetworkNumber::configured(config.network_number),
+            network_number: NetworkNumber::configured(config.network_number)
+                .expect("validated Network Number"),
             mac_address: mac,
             apdu_length: config.apdu_length,
             bip: Some(config),
@@ -93,7 +92,8 @@ impl NetworkPortObject {
             out_of_service: false,
             reliability: 0,
             network_type,
-            network_number: NetworkNumber::configured(network_number),
+            network_number: NetworkNumber::configured(network_number)
+                .expect("validated Network Number"),
             mac_address,
             apdu_length,
             bip: None,

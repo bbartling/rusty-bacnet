@@ -20,6 +20,7 @@ pub mod bitstring;
 pub mod constructed;
 pub mod enums;
 pub mod error;
+pub mod network_number;
 pub mod primitives;
 
 /// BACnet MAC address — stack-allocated for typical sizes (≤6 bytes).

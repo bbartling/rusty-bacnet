@@ -8,7 +8,15 @@ impl NetworkPortObject {
         announcement: Option<(u16, u8)>,
     ) -> NetworkNumber {
         if let Some((number, flag)) = announcement {
-            self.network_number.observe(number, flag);
+            if self.network_number.observe(number, flag)
+                == bacnet_types::network_number::Observation::ConfiguredConflict
+            {
+                tracing::debug!(
+                    configured = self.network_number.snapshot().0,
+                    announced = number,
+                    "local Network Number configuration conflict"
+                );
+            }
         }
         self.network_number
     }
@@ -26,7 +34,8 @@ impl NetworkPortObject {
             ));
         }
         self.network_number =
-            NetworkNumber::configured(self.bip.as_ref().expect("validated B/IP").network_number);
+            NetworkNumber::configured(self.bip.as_ref().expect("validated B/IP").network_number)
+                .expect("validated Network Number");
         self.binding = Arc::downgrade(lease);
         Ok(())
     }
@@ -56,7 +65,8 @@ impl NetworkPortObject {
         config.udp_port = udp;
         config.apdu_length = capacity;
         config.validate(self.oid.instance_number())?;
-        self.network_number = NetworkNumber::configured(config.network_number);
+        self.network_number =
+            NetworkNumber::configured(config.network_number).expect("validated Network Number");
         self.apdu_length = capacity;
         self.mac_address = MacAddr::from_slice(&ip);
         self.mac_address.extend_from_slice(&udp.to_be_bytes());
