@@ -52,11 +52,15 @@ impl TransportPort for ObservedBip {
     fn abort(&mut self) {
         self.bip.abort();
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.bip.local_receive_apdu_capacity()
+    }
+
     fn local_mac(&self) -> &[u8] {
         self.bip.local_mac()
     }
-    fn max_apdu_length(&self) -> u16 {
-        self.bip.max_apdu_length()
+    fn egress_apdu_limit(&self) -> u16 {
+        self.bip.egress_apdu_limit()
     }
     async fn send_unicast(&self, mac: &[u8], npdu: &[u8]) -> Result<(), Error> {
         self.bip.send_unicast(mac, npdu).await

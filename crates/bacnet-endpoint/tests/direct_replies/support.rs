@@ -109,6 +109,10 @@ impl TransportPort for QueuedPort {
         self.attributes.lock().unwrap().push(attributes.to_vec());
         self.send_unicast(bytes, mac).await
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[0xaa; 6]
     }

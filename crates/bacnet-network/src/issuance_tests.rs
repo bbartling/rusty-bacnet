@@ -37,6 +37,10 @@ impl TransportPort for HeldPort {
     async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
         unreachable!()
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[2]
     }

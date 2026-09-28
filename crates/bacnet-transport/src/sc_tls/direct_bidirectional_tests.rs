@@ -285,3 +285,6 @@ mod identity_tests;
 
 #[path = "direct_outbound_intake_tests.rs"]
 mod intake_tests;
+
+#[path = "direct_local_capacity_tests.rs"]
+mod local_capacity_tests;

@@ -594,7 +594,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     more_follows: false,
                     segmented_response_accepted: false,
                     max_segments: None,
-                    max_apdu_length: config.max_apdu_length as u16,
+                    max_apdu_length: apdu::max_apdu_header_at_or_below(config.max_apdu_length)
+                        .expect("validated local APDU capacity"),
                     invoke_id: id,
                     sequence_number: None,
                     proposed_window_size: None,

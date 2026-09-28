@@ -37,7 +37,8 @@ fn bip_max_apdu_length() {
         0,
         std::net::Ipv4Addr::LOCALHOST,
     );
-    assert_eq!(transport.max_apdu_length(), 1476);
+    assert_eq!(transport.egress_apdu_limit(), 1476);
+    assert_eq!(transport.local_receive_apdu_capacity(), 1476);
 }
 
 #[test]

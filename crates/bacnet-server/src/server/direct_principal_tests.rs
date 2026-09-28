@@ -77,6 +77,10 @@ impl TransportPort for QueuedPort {
     async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
         Ok(())
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[0xaa; 6]
     }

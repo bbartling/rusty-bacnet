@@ -85,6 +85,10 @@ impl TransportPort for MockDiscoveryTransport {
         Ok(())
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[0x0A, 0x00, 0x00, 0x01]
     }
@@ -800,3 +804,6 @@ fn test_negative_who_has_cache_strictly_bounded_to_512() {
         WhoHasTarget::Id(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 599).unwrap());
     assert!(limiter.is_negative_who_has(&target_599, check_time));
 }
+
+#[path = "local_apdu_discovery_tests.rs"]
+mod local_apdu_tests;

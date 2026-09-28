@@ -15,6 +15,25 @@ separate. The object-specific absent/NULL priority inheritance interpretation
 conflicts with generic §19.6.3 and is documented in the [Rust API](../rust-api.md#object-owned-avbv-audit-policy).
 This does not promote the row or global evidence pins; #345/#782 remain open.
 
+## Local APDU receive declaration
+
+Refs #893: `BACNET-12-LOCAL-APDU-CAPACITY` records the bounded directional
+transport/server contract. Clause12.11.18 supplies the raw Device declaration
+and minimum 50; Clause16.10.3 carries that value in I-Am. Clause20.1.2.5 supplies
+the six header codes. Startup clamps the configured ceiling against stable local
+capacity and validates the selected Device before transport start. Both live
+I-Am paths revalidate the current selection; queued broadcasts check at execution.
+Confirmed COV, Audit and Event origins floor only their header field (raw 1474 to 1024).
+Client canonical configuration and dynamic egress remain separate.
+
+SC node Connect/Connect-Accept and intake use NPDU 1478 to carry local APDU 1476;
+BVLC, remote, routed and Hub-forwarding limits remain independent. Evidence
+includes actual transport Hub intake, both real-TLS direct directions,
+asymmetric link controls, raw I-Am and decoded notification headers, plus the
+binding-owned MS/TP Device constructor without serial I/O. This does not qualify
+MS/TP hardware, all custom transports or complete Annex AB. Global review pins
+and unrelated row statuses remain unchanged.
+
 ## Scope
 
 - Standard: ANSI/ASHRAE Standard 135-2020.

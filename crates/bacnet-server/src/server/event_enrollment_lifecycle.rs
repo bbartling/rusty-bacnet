@@ -10,6 +10,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     period: Duration,
     retry_ms: u64,
+    local_apdu_capacity: u32,
 ) -> JoinHandle<()> {
     let evaluation_interval_secs = period.as_secs().max(1);
     let owner = notification_transactions.audit_owner_lease();
@@ -65,6 +66,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                     &oid,
                     transition,
                     retry_ms,
+                    local_apdu_capacity,
                 )
                 .await;
             }

@@ -45,11 +45,15 @@ impl TransportPort for LimitedTransport {
         self.inner.send_broadcast(npdu).await
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.inner.local_receive_apdu_capacity()
+    }
+
     fn local_mac(&self) -> &[u8] {
         self.inner.local_mac()
     }
 
-    fn max_apdu_length(&self) -> u16 {
+    fn egress_apdu_limit(&self) -> u16 {
         self.max_apdu_length
     }
 }

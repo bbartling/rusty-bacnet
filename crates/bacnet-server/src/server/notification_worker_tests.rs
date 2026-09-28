@@ -131,6 +131,7 @@ async fn fire_event(server: &BACnetServer<HeldTransport>) {
             EventType::OUT_OF_RANGE,
         ),
         3000,
+        1476,
     )
     .await;
 }

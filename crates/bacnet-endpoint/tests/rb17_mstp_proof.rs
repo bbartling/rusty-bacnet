@@ -343,7 +343,7 @@ async fn one_owner_impl(mode: MstpExecutionMode) {
         .build_transport()
         .expect("transport must build");
     assert_eq!(transport.local_mac(), &[SESSION_MAC]);
-    assert_eq!(transport.max_apdu_length(), 480);
+    assert_eq!(transport.egress_apdu_limit(), 480);
     let _rx = transport.start().await.expect("transport must start");
     assert!(
         transport.start().await.is_err(),

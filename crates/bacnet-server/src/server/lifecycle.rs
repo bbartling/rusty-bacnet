@@ -1,4 +1,6 @@
 use super::*;
+#[path = "intrinsic_reporting_lifecycle.rs"]
+mod intrinsic;
 
 #[path = "lifecycle_period.rs"]
 mod period;
@@ -24,6 +26,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         super::network_port::validate_apdu_capacity(&mut config, &transport)?;
+        crate::local_device::validate_apdu_declaration(&db, config.max_apdu_length)?;
         let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.vendor_id == 0 {
@@ -647,6 +650,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Arc::clone(&device_bindings),
                     ee_period,
                     config.cov_retry_timeout_ms,
+                    config.max_apdu_length,
                 ),
             )
         } else {
@@ -716,59 +720,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
         let device_bindings_intrinsic = Arc::clone(&device_bindings);
         let intrinsic_retry_ms = config.cov_retry_timeout_ms;
-        let intrinsic_reporting_task = Some(spawn_owned(audit_owner.clone(), async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            // The countdown decrements exactly once per call, so a delayed wake
-            // must NOT burst-deliver missed ticks (each would decrement
-            // `remaining`, compressing the Time_Delay). `Delay` collapses a
-            // missed deadline into a single tick, preserving per-second
-            // granularity (ASHRAE 135-2020 §13.2.4).
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-                // DCC gates the outbound sender, not event-state detection or
-                // the local transition actions in Clause 13.2.2.1.4.
-                // Collect resolved transitions under a brief write lock, then
-                // drop it before sending (never hold the db lock across a
-                // network send — matches the per-write notification path).
-                //
-                // Event_Enable gates distribution only (Clause 12.12), so every
-                // proposal is committed locally before a suppressed
-                // transition is omitted from the outbound work list.
-                let fired = {
-                    let mut db = db_intrinsic.write().await;
-                    let mut out = Vec::new();
-                    for oid in db.list_objects() {
-                        let outcome = db
-                            .get_mut(&oid)
-                            .and_then(|object| object.tick_intrinsic_reporting());
-                        let resolved = outcome.and_then(|outcome| {
-                            Self::commit_intrinsic_transition(&mut db, &oid, outcome)
-                        });
-                        if let Some(resolved) = resolved {
-                            if resolved.distribute && resolved.event_values.is_some() {
-                                out.push((oid, resolved));
-                            }
-                        }
-                    }
-                    out
-                };
-                for (oid, resolved) in fired {
-                    Self::build_and_send_event_notification_with_bindings(
-                        &db_intrinsic,
-                        &network_intrinsic,
-                        &comm_state_intrinsic,
-                        &learned_routers_intrinsic,
-                        &notification_transactions_intrinsic,
-                        &device_bindings_intrinsic,
-                        &oid,
-                        resolved,
-                        intrinsic_retry_ms,
-                    )
-                    .await;
-                }
-            }
-        }));
+        let intrinsic_apdu_capacity = config.max_apdu_length;
+        let intrinsic_reporting_task = Some(spawn_owned(
+            audit_owner.clone(),
+            intrinsic::run(
+                db_intrinsic,
+                network_intrinsic,
+                comm_state_intrinsic,
+                learned_routers_intrinsic,
+                notification_transactions_intrinsic,
+                device_bindings_intrinsic,
+                intrinsic_retry_ms,
+                intrinsic_apdu_capacity,
+            ),
+        ));
 
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(

@@ -588,6 +588,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         device_bindings,
                         oid,
                         config.cov_retry_timeout_ms,
+                        config.max_apdu_length,
                     )
                     .await;
                 }
@@ -662,6 +663,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 device_bindings,
                 accepted,
                 config.cov_retry_timeout_ms,
+                config.max_apdu_length,
             )
             .await;
         }
@@ -676,6 +678,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 device_bindings,
                 oid,
                 config.cov_retry_timeout_ms,
+                config.max_apdu_length,
             )
             .await;
         }

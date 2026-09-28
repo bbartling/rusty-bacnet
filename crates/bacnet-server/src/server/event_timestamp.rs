@@ -247,6 +247,7 @@ mod tests {
                 EventType::OUT_OF_RANGE,
             ),
             1000,
+            1476,
         )
         .await;
     }

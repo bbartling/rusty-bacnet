@@ -61,6 +61,10 @@ impl TransportPort for RecordingTransport {
             .push(Bytes::copy_from_slice(npdu));
         Ok(())
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[127, 0, 0, 1, 0xBA, 0xC0]
     }
@@ -155,6 +159,7 @@ impl Harness {
                 EventType::OUT_OF_RANGE,
             ),
             self.retry_timeout_ms,
+            1474,
         )
         .await;
         // The confirmed path spawns its send; yield until it reaches the
@@ -198,6 +203,7 @@ impl Harness {
             &oid,
             committed,
             self.retry_timeout_ms,
+            1474,
         )
         .await;
         for _ in 0..16 {
@@ -481,7 +487,10 @@ async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
 fn decode_confirmed(frame: &Bytes) -> (bacnet_encoding::npdu::Npdu, ConfirmedRequestPdu) {
     let npdu = bacnet_encoding::npdu::decode_npdu(frame.clone()).expect("decode NPDU");
     match apdu::decode_apdu(npdu.payload.clone()).expect("decode APDU") {
-        Apdu::ConfirmedRequest(req) => (npdu, req),
+        Apdu::ConfirmedRequest(req) => {
+            assert_eq!(req.max_apdu_length, 1024, "raw1474 event header");
+            (npdu, req)
+        }
         other => panic!("expected ConfirmedRequest, got {other:?}"),
     }
 }

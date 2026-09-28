@@ -1,5 +1,11 @@
 //! Local BACnet/SC receive and WebSocket resource budgets.
 
+/// Node receive capacity is independent of every negotiated egress path.
+pub(crate) const LOCAL_RECEIVE_APDU_CAPACITY: u16 = 1476;
+pub(crate) const LOCAL_NPDU_HEADER_LEN: u16 = 2;
+pub(crate) const LOCAL_RECEIVE_NPDU_CAPACITY: u16 =
+    LOCAL_RECEIVE_APDU_CAPACITY + LOCAL_NPDU_HEADER_LEN;
+
 // Annex AB.5.1 hub workload: 16-byte envelope + 4192 encoded option bytes
 // + 1497-byte NPDU. Nodes use this full-message default independently of NPDU.
 pub(crate) const DEFAULT_MAX_BVLC_LENGTH: u16 = 5705;

@@ -672,3 +672,42 @@ fn unconfirmed_request_empty_service_data() {
     let decoded = decode_apdu(Bytes::from(encoded)).unwrap();
     assert_eq!(apdu, decoded);
 }
+
+#[test]
+fn raw_receive_capacity_floors_only_the_confirmed_header() {
+    assert!(max_apdu_header_at_or_below(49).is_err());
+    for (raw, header) in [
+        (50, 50),
+        (127, 50),
+        (1474, 1024),
+        (1476, 1476),
+        (u32::MAX, 1476),
+    ] {
+        assert_eq!(max_apdu_header_at_or_below(raw).unwrap(), header);
+        assert!(is_valid_max_apdu_length(header));
+        let request = Apdu::ConfirmedRequest(ConfirmedRequest {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: header,
+            invoke_id: 9,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_request: Bytes::new(),
+        });
+        let mut bytes = BytesMut::new();
+        encode_apdu(&mut bytes, &request).unwrap();
+        assert_eq!(
+            bytes[1] & 0x0f,
+            match raw {
+                50 | 127 => 0,
+                1474 => 4,
+                _ => 5,
+            }
+        );
+    }
+    // The encoder's exact-code API and client canonical policy stay strict.
+    assert!(validate_max_apdu_length(1474).is_err());
+}

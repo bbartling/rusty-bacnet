@@ -49,6 +49,10 @@ impl TransportPort for Capture {
     async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
         panic!("forwarding must be unicast")
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[1]
     }
@@ -106,10 +110,20 @@ async fn start(
     log: AuditLogObject,
     binding: Option<DeviceBinding>,
 ) -> (BACnetServer<Capture>, Capture) {
+    start_with_apdu(local, log, binding, 1476).await
+}
+
+async fn start_with_apdu(
+    local: u32,
+    log: AuditLogObject,
+    binding: Option<DeviceBinding>,
+    max_apdu_length: u32,
+) -> (BACnetServer<Capture>, Capture) {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
             instance: local,
+            max_apdu_length,
             ..Default::default()
         })
         .unwrap(),
@@ -119,6 +133,7 @@ async fn start(
     let wire = Capture::default();
     let server = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
+            max_apdu_length,
             audit_notification_sink: Some(oid(ObjectType::AUDIT_LOG, 7)),
             audit_notification_authorizer: Some(Arc::new(|_| true)),
             unconfirmed_audit_notification_authorizer: Some(Arc::new(|_| true)),
@@ -462,4 +477,43 @@ async fn audit_forwarding_saturation_deadline_shutdown_are_bounded_without_retry
         f.reliability().await,
         PropertyValue::Enumerated(Reliability::COMMUNICATION_FAILURE.to_raw())
     );
+}
+
+#[tokio::test]
+async fn immediate_audit_forwarder_raw_1474_emits_header_1024() {
+    let store = Arc::new(MemoryPersistence::default());
+    let mut log = AuditLogObject::new(7, "forwarder", 16, store.clone()).unwrap();
+    log.set_member_of(Some(parent()));
+    let (server, wire) = start_with_apdu(
+        10,
+        log,
+        Some(DeviceBinding::local(oid(ObjectType::DEVICE, 20), [2]).unwrap()),
+        1474,
+    )
+    .await;
+    let mut f = Fixture {
+        server,
+        store,
+        wire,
+    };
+    assert!(matches!(
+        f.confirmed(1, &[3], payload(true)).await,
+        Some(Apdu::SimpleAck(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while f.wire.sent.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let requests = f.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].max_apdu_length, 1024);
+    assert!(f.ack(
+        requests[0].invoke_id,
+        &[2],
+        ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION
+    ));
+    f.server.stop().await.unwrap();
 }

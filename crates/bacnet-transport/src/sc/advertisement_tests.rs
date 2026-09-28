@@ -366,7 +366,7 @@ async fn advertisement_result_for_keeps_existing_parse_and_fatal_policy() {
 fn solicited_reply_payload() -> Vec<u8> {
     let mut payload = vec![1, 0];
     payload.extend_from_slice(&crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH.to_be_bytes());
-    payload.extend_from_slice(&1476u16.to_be_bytes());
+    payload.extend_from_slice(&1478u16.to_be_bytes());
     payload
 }
 
@@ -379,7 +379,7 @@ async fn advertisement_default_accept_direct_stays_zero_on_raw_wire() {
     assert_ne!(&reply[2..4], &[0x22, 0x34]);
     assert_eq!(
         reply,
-        [4, 0, reply[2], reply[3], 1, 0, 0x16, 0x49, 0x05, 0xC4]
+        [4, 0, reply[2], reply[3], 1, 0, 0x16, 0x49, 0x05, 0xC6]
     );
     transport.stop().await.unwrap();
 }

@@ -116,42 +116,6 @@ impl BACnetServer {
         let future = async move {
             let mut db = ObjectDatabase::new();
 
-            // Create device object
-            let mut device = DeviceObject::new(DeviceConfig {
-                instance: device_instance,
-                name: device_name,
-                vendor_name: "Rusty BACnet".into(),
-                vendor_id: 555,
-                ..DeviceConfig::default()
-            })
-            .map_err(to_py_err)?;
-            if let Some(recipient) = audit_recipient {
-                device
-                    .provision_audit_recipient(recipient)
-                    .map_err(to_py_err)?;
-            }
-
-            // Collect object identifiers for device object-list
-            let dev_oid = device.object_identifier();
-            let mut object_list = vec![dev_oid];
-
-            // Move pending objects into the database
-            for obj in objects {
-                object_list.push(obj.object_identifier());
-                db.add(obj).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "duplicate object name: {e}"
-                    ))
-                })?;
-            }
-
-            device.set_object_list(object_list);
-            db.add(Box::new(device)).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "duplicate object name: {e}"
-                ))
-            })?;
-
             // Build transport based on type
             let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
@@ -209,6 +173,40 @@ impl BACnetServer {
                     )));
                 }
             };
+
+            // Create device object
+            let mut device = DeviceObject::new(generated_device_config(
+                device_instance,
+                device_name,
+                &transport,
+            ))
+            .map_err(to_py_err)?;
+            if let Some(recipient) = audit_recipient {
+                device
+                    .provision_audit_recipient(recipient)
+                    .map_err(to_py_err)?;
+            }
+
+            // Collect object identifiers for device object-list
+            let dev_oid = device.object_identifier();
+            let mut object_list = vec![dev_oid];
+
+            // Move pending objects into the database
+            for obj in objects {
+                object_list.push(obj.object_identifier());
+                db.add(obj).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "duplicate object name: {e}"
+                    ))
+                })?;
+            }
+
+            device.set_object_list(object_list);
+            db.add(Box::new(device)).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "duplicate object name: {e}"
+                ))
+            })?;
 
             let mut builder = builder
                 .database(db)
@@ -461,5 +459,47 @@ impl BACnetServer {
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
             Ok(srv.comm_state())
         })
+    }
+}
+
+// The binding owns this Device; derive its declaration before adding it to DB.
+fn generated_device_config<T: bacnet_transport::port::TransportPort>(
+    instance: u32,
+    name: String,
+    transport: &T,
+) -> DeviceConfig {
+    DeviceConfig {
+        instance,
+        name,
+        vendor_name: "Rusty BACnet".into(),
+        vendor_id: 555,
+        max_apdu_length: server::ServerConfig::default()
+            .max_apdu_length
+            .min(u32::from(transport.local_receive_apdu_capacity())),
+        ..DeviceConfig::default()
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
+    #[tokio::test]
+    async fn binding_generated_mstp_device_matches_local_480_before_io() {
+        let (serial, _peer) = LoopbackSerial::pair();
+        let transport: AnyTransport<LoopbackSerial> =
+            AnyTransport::Mstp(MstpTransport::new(serial, MstpConfig::default()));
+        let config = generated_device_config(893, "test".into(), &transport);
+        assert_eq!(config.max_apdu_length, 480);
+        let device = DeviceObject::new(config).unwrap();
+        assert_eq!(
+            device
+                .read_property(
+                    bacnet_types::enums::PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
+                    None
+                )
+                .unwrap(),
+            PropertyValue::Unsigned(480)
+        );
     }
 }

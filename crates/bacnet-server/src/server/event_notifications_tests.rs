@@ -47,6 +47,10 @@ impl TransportPort for RecordingTransport {
             .push(Bytes::copy_from_slice(npdu));
         Ok(())
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
@@ -100,6 +104,7 @@ async fn dcc_suppresses_periodic_event_send() {
         &oid,
         (change, EventType::OUT_OF_RANGE),
         1000,
+        1476,
     )
     .await;
 
@@ -275,6 +280,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
         &oid,
         (change, EventType::OUT_OF_RANGE),
         1000,
+        1476,
     )
     .await;
 
@@ -305,6 +311,7 @@ async fn event_notification_projects_fault_priority_from_class() {
         &oid,
         (change, EventType::CHANGE_OF_RELIABILITY),
         1000,
+        1476,
     )
     .await;
 
@@ -351,6 +358,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
         &oid,
         (change, EventType::CHANGE_OF_RELIABILITY),
         1000,
+        1476,
     )
     .await;
 
@@ -383,6 +391,7 @@ async fn event_notification_projects_normal_priority_from_class() {
         &oid,
         (change, EventType::OUT_OF_RANGE),
         1000,
+        1476,
     )
     .await;
 
@@ -461,6 +470,7 @@ async fn event_notification_missing_class_distributes_nothing() {
         &oid,
         (change, EventType::OUT_OF_RANGE),
         1000,
+        1476,
     )
     .await;
 
@@ -504,6 +514,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
         &oid,
         (change, EventType::OUT_OF_RANGE),
         1000,
+        1476,
     )
     .await;
 
@@ -599,6 +610,7 @@ pub(super) async fn broadcasts_from_per_write_path(
         &NotificationTransactions::new(),
         &oid,
         1000,
+        1476,
     )
     .await;
 

@@ -808,6 +808,10 @@ mod transport {
             self.send_unicast(npdu, &ETHERNET_BROADCAST).await
         }
 
+        fn local_receive_apdu_capacity(&self) -> u16 {
+            1476
+        }
+
         fn local_mac(&self) -> &[u8] {
             &self.local_mac
         }
@@ -816,7 +820,7 @@ mod transport {
             mac == ETHERNET_BROADCAST
         }
 
-        fn max_apdu_length(&self) -> u16 {
+        fn egress_apdu_limit(&self) -> u16 {
             1476
         }
     }

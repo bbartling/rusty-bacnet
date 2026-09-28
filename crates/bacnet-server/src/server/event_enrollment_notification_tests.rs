@@ -333,6 +333,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
         &enrollment_oid,
         transition,
         1000,
+        1476,
     )
     .await;
 

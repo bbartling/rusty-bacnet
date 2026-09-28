@@ -99,7 +99,7 @@ fn assert_untouched(
     assert!(transport.ws_shared.is_none());
     assert!(transport.recv_task.is_none());
     assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
-    assert_eq!(transport.max_apdu_length(), DEFAULT_MAX_APDU_LENGTH);
+    assert_eq!(transport.egress_apdu_limit(), DEFAULT_MAX_APDU_LENGTH);
     assert_eq!(transport.local_mac(), vmac);
     assert_eq!(transport.device_uuid, uuid);
 }
@@ -229,7 +229,7 @@ async fn accept_identity(ws: &impl WebSocketPort, vmac: Vmac, uuid: [u8; 16]) {
     let wire = recv(ws).await;
     assert_request_uuid(&wire, uuid);
     assert_eq!(&wire[4..10], &vmac);
-    assert_eq!(&wire[26..], &[0x16, 0x49, 0x05, 0xc4]); // local budgets: 5705/1476
+    assert_eq!(&wire[26..], &[0x16, 0x49, 0x05, 0xc6]); // local budgets: 5705/1478
     let mut accept = vec![7, 0, wire[2], wire[3]];
     accept.extend_from_slice(&[0x10; 6]);
     accept.extend_from_slice(&[0x48; 16]);

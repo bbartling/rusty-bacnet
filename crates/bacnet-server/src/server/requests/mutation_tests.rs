@@ -72,6 +72,10 @@ impl TransportPort for TestTransport {
     async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
         self.send_unicast(bytes, &[]).await
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[1]
     }

@@ -213,6 +213,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         notification_transactions: &Arc<NotificationTransactions>,
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
+        local_apdu_capacity: u32,
     ) {
         Self::fire_event_notifications_with_bindings(
             db,
@@ -223,6 +224,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &Arc::new(RwLock::new(DeviceBindingTable::new())),
             oid,
             retry_timeout_ms,
+            local_apdu_capacity,
         )
         .await;
     }
@@ -236,6 +238,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
+        local_apdu_capacity: u32,
     ) {
         let resolved = {
             let mut db = db.write().await;
@@ -259,6 +262,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     oid,
                     resolved,
                     retry_timeout_ms,
+                    local_apdu_capacity,
                 )
                 .await;
             }
@@ -283,6 +287,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
         retry_timeout_ms: u64,
+        local_apdu_capacity: u32,
     ) {
         Self::build_and_send_event_notification_with_bindings(
             db,
@@ -294,6 +299,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             oid,
             transition,
             retry_timeout_ms,
+            local_apdu_capacity,
         )
         .await;
     }
@@ -308,6 +314,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
         retry_timeout_ms: u64,
+        local_apdu_capacity: u32,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
@@ -524,7 +531,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     more_follows: false,
                     segmented_response_accepted: false,
                     max_segments: None,
-                    max_apdu_length: 1476,
+                    max_apdu_length: apdu::max_apdu_header_at_or_below(local_apdu_capacity)
+                        .expect("validated local APDU capacity"),
                     invoke_id: id,
                     sequence_number: None,
                     proposed_window_size: None,
@@ -722,6 +730,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         accepted: handlers::AcceptedAcknowledgeAlarm,
         retry_timeout_ms: u64,
+        local_apdu_capacity: u32,
     ) {
         let Some(notification) = accepted.notification else {
             return;
@@ -739,6 +748,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &accepted.event_object_identifier,
             NotificationTransition::acknowledgment(notification.change, notification.event_type),
             retry_timeout_ms,
+            local_apdu_capacity,
         )
         .await;
     }

@@ -741,8 +741,10 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     limiter: Option<&Arc<DiscoveryLimiter>>,
 ) -> Result<(), Error> {
-    let device_oid = crate::local_device::selected_device(&*db.read().await)
-        .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
+    let guard = db.read().await;
+    let device_oid =
+        crate::local_device::validate_apdu_declaration(&guard, config.max_apdu_length)?
+            .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
 
     // RB-16 alignment: this construction is field-for-field identical to
     // `bacnet-endpoint`'s `DeviceIdentity::iam_request` built from
@@ -761,6 +763,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
         }),
     )?;
 
+    drop(guard);
     if let Some(limiter) = limiter {
         limiter.record_i_am_sent(buf.len(), false, &MacAddr::new(), None, Instant::now());
     }

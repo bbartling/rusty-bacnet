@@ -335,6 +335,13 @@ cross-OS tests and release/publication workflows remain separate.
 
 ## BACnet/SC: current development checkout
 
+Local receive capacity is independent of negotiated outgoing limits. Current
+Rust server startup requires the selected Device declaration to match its
+locally clamped receive ceiling; raw Device/I-Am 1474 stays 1474 while originated
+confirmed notification headers advertise 1024. SC nodes receive NPDU 1478 for
+local APDU 1476 on each connection direction. See the [directional capacity API](docs/rust-api.md#local-receive-capacity-and-outgoing-limits)
+and `BACNET-12-LOCAL-APDU-CAPACITY` in the [conformance evidence](docs/conformance/support-summary.md#ledger-rows).
+
 **This section describes unreleased source behavior, not the installed 0.11.0
 package contract.** Build from current source if you need these changes. Review
 the [Python SC migration](docs/python-api.md#bacnetsc-secure-connect),

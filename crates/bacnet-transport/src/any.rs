@@ -223,6 +223,20 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         }
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        match self {
+            Self::Bip(t) => t.local_receive_apdu_capacity(),
+            Self::Mstp(t) => t.local_receive_apdu_capacity(),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.local_receive_apdu_capacity(),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.local_receive_apdu_capacity(),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.local_receive_apdu_capacity(),
+            Self::Loopback(t) => t.local_receive_apdu_capacity(),
+        }
+    }
+
     fn local_mac(&self) -> &[u8] {
         match self {
             Self::Bip(t) => t.local_mac(),
@@ -237,17 +251,17 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         }
     }
 
-    fn max_apdu_length(&self) -> u16 {
+    fn egress_apdu_limit(&self) -> u16 {
         match self {
-            Self::Bip(t) => t.max_apdu_length(),
-            Self::Mstp(t) => t.max_apdu_length(),
+            Self::Bip(t) => t.egress_apdu_limit(),
+            Self::Mstp(t) => t.egress_apdu_limit(),
             #[cfg(feature = "ipv6")]
-            Self::Bip6(t) => t.max_apdu_length(),
+            Self::Bip6(t) => t.egress_apdu_limit(),
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
-            Self::Ethernet(t) => t.max_apdu_length(),
+            Self::Ethernet(t) => t.egress_apdu_limit(),
             #[cfg(feature = "sc-tls")]
-            Self::Sc(t) => t.max_apdu_length(),
-            Self::Loopback(t) => t.max_apdu_length(),
+            Self::Sc(t) => t.egress_apdu_limit(),
+            Self::Loopback(t) => t.egress_apdu_limit(),
         }
     }
 
@@ -323,7 +337,8 @@ mod tests {
     fn any_transport_bip_max_apdu() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(bip);
-        assert_eq!(any.max_apdu_length(), 1476);
+        assert_eq!(any.egress_apdu_limit(), 1476);
+        assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
 
     #[test]
@@ -346,14 +361,16 @@ mod tests {
         let (serial, _) = LoopbackSerial::pair();
         let mstp = MstpTransport::new(serial, MstpConfig::default());
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Mstp(mstp);
-        assert_eq!(any.max_apdu_length(), 480);
+        assert_eq!(any.egress_apdu_limit(), 480);
+        assert_eq!(any.local_receive_apdu_capacity(), 480);
     }
 
     #[test]
     fn any_transport_from_bip() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
         let any: AnyTransport<LoopbackSerial> = bip.into();
-        assert_eq!(any.max_apdu_length(), 1476);
+        assert_eq!(any.egress_apdu_limit(), 1476);
+        assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
 
     #[test]
@@ -361,7 +378,8 @@ mod tests {
         let (serial, _) = LoopbackSerial::pair();
         let mstp = MstpTransport::new(serial, MstpConfig::default());
         let any: AnyTransport<LoopbackSerial> = mstp.into();
-        assert_eq!(any.max_apdu_length(), 480);
+        assert_eq!(any.egress_apdu_limit(), 480);
+        assert_eq!(any.local_receive_apdu_capacity(), 480);
     }
 
     #[cfg(feature = "ipv6")]
@@ -378,7 +396,8 @@ mod tests {
     fn any_transport_bip6_max_apdu() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip6(bip6);
-        assert_eq!(any.max_apdu_length(), 1476);
+        assert_eq!(any.egress_apdu_limit(), 1476);
+        assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
 
     #[cfg(feature = "ipv6")]
@@ -386,6 +405,7 @@ mod tests {
     fn any_transport_from_bip6() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
         let any: AnyTransport<LoopbackSerial> = bip6.into();
-        assert_eq!(any.max_apdu_length(), 1476);
+        assert_eq!(any.egress_apdu_limit(), 1476);
+        assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
 }

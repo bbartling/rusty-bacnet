@@ -453,7 +453,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let buf = match Self::encode_confirmed_cov_multiple_apdu(
                 &notification,
                 id,
-                config.max_apdu_length as u16,
+                apdu::max_apdu_header_at_or_below(config.max_apdu_length)
+                    .expect("validated local APDU capacity"),
             ) {
                 Ok(buf) => buf,
                 Err(e) => {

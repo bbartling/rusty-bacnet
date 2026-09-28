@@ -562,7 +562,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub(super) fn target_transport_max_apdu_length(&self, target: ConfirmedTarget<'_>) -> u16 {
         self.network
             .transport()
-            .max_apdu_length()
+            .egress_apdu_limit()
             .saturating_sub(target.additional_npdu_header_len())
     }
 

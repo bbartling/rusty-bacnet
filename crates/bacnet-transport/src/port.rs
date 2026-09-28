@@ -386,9 +386,15 @@ pub trait TransportPort: Send + Sync {
     /// This transport's local MAC address.
     fn local_mac(&self) -> &[u8];
 
-    /// Maximum APDU length this transport supports.
-    /// BIP/SC: 1476 (default), MS/TP: 480.
-    fn max_apdu_length(&self) -> u16 {
+    /// Stable local APDU receive capacity, independent of peers and egress routes.
+    ///
+    /// Implementations and wrappers must report their actual local capacity.
+    /// Negotiation, reconnects and failover must not change this declaration.
+    fn local_receive_apdu_capacity(&self) -> u16;
+
+    /// Current outgoing APDU limit for the transport's ordinary send path.
+    /// This may change as a connection negotiates remote receive limits.
+    fn egress_apdu_limit(&self) -> u16 {
         1476
     }
 

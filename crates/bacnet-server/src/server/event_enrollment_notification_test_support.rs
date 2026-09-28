@@ -52,6 +52,10 @@ impl TransportPort for RecordingTransport {
         Ok(())
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[127, 0, 0, 1, 0xBA, 0xC0]
     }
