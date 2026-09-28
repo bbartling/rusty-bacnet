@@ -1,5 +1,7 @@
 //! Bounded endpoint send admission and explicit completion ownership.
 use super::*;
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_network::response_route::ResponseRoute;
 
 pub(super) enum NetworkServicePayload {
     Apdu(Vec<u8>),
@@ -8,6 +10,7 @@ pub(super) enum NetworkServicePayload {
 
 pub(super) struct NetworkServiceCommand {
     pub(super) payload: NetworkServicePayload,
+    pub(super) response_route: Option<ResponseRoute>,
     pub(super) destination: EndpointApduDestination,
     pub(super) expecting_reply: bool,
     pub(super) priority: NetworkPriority,
@@ -121,6 +124,7 @@ impl EndpointEgress {
             data_attributes,
             deadline,
             deadline.is_some(),
+            None,
         )
     }
 
@@ -144,6 +148,40 @@ impl EndpointEgress {
             data_attributes,
             None,
             true,
+            None,
+        )
+    }
+
+    /// Queue a caller-owned reply under its immutable ingress authority.
+    /// Dropping completion retracts queued work; a started socket write may
+    /// already have reached the peer. Invalid/stale direct routes never fall back.
+    #[doc(hidden)]
+    pub fn admit_response_apdu(
+        &self,
+        apdu: Vec<u8>,
+        next_hop: MacAddr,
+        destination: Option<NpduAddress>,
+        route: ResponseRoute,
+    ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
+        let destination = match destination {
+            Some(address) => EndpointApduDestination::Routed {
+                destination_network: address.network,
+                destination_mac: address.mac_address,
+                router_mac: next_hop,
+            },
+            None => EndpointApduDestination::Direct {
+                destination_mac: next_hop,
+            },
+        };
+        self.admit(
+            apdu,
+            destination,
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+            None,
+            true,
+            Some(route),
         )
     }
 
@@ -157,6 +195,7 @@ impl EndpointEgress {
         data_attributes: Vec<DataAttribute>,
         deadline: Option<tokio::time::Instant>,
         cancel_on_drop: bool,
+        response_route: Option<ResponseRoute>,
     ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
         if !self.open.load(Ordering::Acquire) {
             return Err(EndpointEgressAdmissionError::Closed);
@@ -164,6 +203,7 @@ impl EndpointEgress {
         let (completion, result) = oneshot::channel();
         let command = NetworkServiceCommand {
             payload: NetworkServicePayload::Apdu(apdu),
+            response_route,
             destination,
             expecting_reply,
             priority,
@@ -199,6 +239,7 @@ impl EndpointEgress {
         self.commands
             .try_send(NetworkServiceCommand {
                 payload: NetworkServicePayload::LocalControl(npdu),
+                response_route: None,
                 destination: EndpointApduDestination::LocalBroadcast,
                 expecting_reply: false,
                 priority: NetworkPriority::NORMAL,

@@ -671,12 +671,55 @@ its authorization snapshot; final completion uses that saved route.
 
 This is selected local confinement policy, not a Standard requirement to deliver
 on a historical socket. It postdates published 0.11.0 and qualifies only the
-native server consumer. [GitLab #889 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/889)
-tracks client/shared-endpoint reply consumers. Outgoing client transaction
-ownership and [#886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886)
-ordinary bidirectional traffic remain separate prerequisites/outcomes. No full
+native server consumer described here. The [client and endpoint supplement](#accepted-direct-client-and-endpoint-replies)
+qualifies those additional inbound reply consumers. Outgoing client transaction
+policy and [#886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886)
+ordinary bidirectional traffic remain separate outcomes. No full
 Annex AB, external interoperability or certification claim follows. See the
 [scoped response evidence](conformance/standard-135-2020-ledger.md#accepted-direct-server-responses).
+
+### Accepted-direct client and endpoint replies
+
+Current source extends the selected original-socket response policy to standalone
+`BACnetClient` handling inbound confirmed COV/Event notifications and unsupported
+or segmented confirmed requests, and to `EndpointSession`'s existing narrow
+ReadProperty/authorized Device WriteProperty responder. This postdates published
+0.11.0. It does not change outgoing client transactions, their retries or their
+terminal/segment-control admission, native server notification traffic, or ordinary
+bidirectional direct routing. BACnet permits response path switching; this is a
+local confinement policy for these incoming-request consumers, not a universal
+protocol correlation requirement.
+
+Direct provenance **or any supplied direct capability** selects checked response
+issuance before `reply_tx`. Missing, mismatched, retired or sealed authority fails
+without a prompt-channel, address, replacement, Hub or new-dial fallback. Ordinary
+non-direct/no-capability ingress keeps existing MS/TP behavior: the standalone
+client falls back to ordinary routing after a failed prompt handoff, while the
+endpoint completes that prompt attempt even if its receiver closed. Endpoint
+reply suspension only consumes ordinary prompt work. Group requests and the
+client's COV `NoResponse` policy remain silent.
+
+The endpoint carries the saved `ResponseRoute` through its existing bounded
+egress queue (`SessionConfig.queue_capacity`). The hidden composition method
+`EndpointEgress::admit_response_apdu` returns caller-owned completion: dropping
+it retracts queued work. Stop/drop closes admission and cancels queued work;
+retained role handles cannot extend that lifetime. The accepted socket still has
+the separate 64-item writer queue and its existing bounded I/O. An already-started
+write cannot be recalled, and local completion does not prove peer receipt.
+
+After service execution, the endpoint caps a ComplexACK by the requester APDU
+limit and saved peer NPDU/BVLC limits using the actual local/routed NPDU header
+(Clause 5.2.1.2). It has no segmented response sender: an oversized ACK selects
+its existing `SEGMENTATION_NOT_SUPPORTED` Abort. If that Abort cannot fit, checked
+send fails without fallback. Retirement or invalid reply authority does not
+revoke the original authorization or roll back an admitted Device write.
+Direct responses use empty outgoing Data Options; ordinary endpoint egress keeps
+its existing data-attribute and destination behavior.
+
+[Scoped real-TLS and lifecycle evidence](conformance/standard-135-2020-ledger.md#accepted-direct-client-and-endpoint-replies)
+uses public client/session paths, held A envelopes and distinct-leaf B replacements,
+mixed prompt channels, exact response budgets and cancellation barriers. It is
+neither a full Annex AB claim nor Python direct-listener/API support.
 
 ### Hub certificate bindings
 

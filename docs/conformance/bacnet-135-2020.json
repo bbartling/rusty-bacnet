@@ -4279,6 +4279,43 @@
       "docs/python-api.md"
     ],
     "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Clause 5.2.1.2 response selection uses framing-derived path capacity as well as local/requester APDU limits; real TLS exact-boundary, local/routed, independent BVLC, segment-count and too-small cases cover fitting delivery or bounded failure. Sizing metadata is immutable and independent of current membership. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
+  },
+  {
+    "id": "BACNET-AB-SC-INBOUND-CONSUMER-RESPONSE",
+    "standard_anchor": "135-2020 Annex AB.4.2/AB.6 and Clause 5.2.1.2; local incoming-request response confinement policy",
+    "priority": "P0",
+    "requirement_summary": "Confine standalone BACnetClient inbound confirmed replies and the narrow EndpointSession responder to the saved accepted-direct capability and bounded owner lifetime.",
+    "status": "supported-with-clause-evidence",
+    "code_anchors": [
+      "crates/bacnet-client/src/client/lifecycle.rs",
+      "crates/bacnet-client/src/client/inbound_replies.rs",
+      "crates/bacnet-client/src/client/event_notifications.rs",
+      "crates/bacnet-endpoint-core/src/endpoint_egress.rs",
+      "crates/bacnet-endpoint-core/src/endpoint_ingress.rs",
+      "crates/bacnet-server/src/server/requests/endpoint_responder.rs",
+      "crates/bacnet-endpoint/src/session.rs"
+    ],
+    "positive_tests": [
+      "crates/bacnet-endpoint/tests/direct_replies.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/notifications.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/execution.rs",
+      "crates/bacnet-server/src/server/requests/endpoint_responder_tests.rs",
+      "crates/bacnet-client/src/client/confirmed_request_dispatch_tests.rs"
+    ],
+    "negative_tests": [
+      "crates/bacnet-endpoint/tests/direct_replies/authority.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/budget.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/lifecycle.rs",
+      "crates/bacnet-endpoint-core/src/endpoint_egress_deadline_tests.rs::owned_response_command_cancellation_is_independent_of_deadline"
+    ],
+    "benchmarks": [],
+    "public_claims": [
+      "README.md",
+      "docs/rust-api.md#accepted-direct-client-and-endpoint-replies",
+      "docs/python-api.md",
+      "crates/bacnet-endpoint/src/lib.rs"
+    ],
+    "notes": "Refs GitLab #889 under #524. Selected original-socket policy for inbound confirmed request consumers, not a BACnet requirement against response path switching. Direct provenance OR any capability selects checked issuance before reply_tx; malformed mixed envelopes cannot bypass through a one-shot or generic address send. Existing ordinary client failed-prompt fallback and endpoint failed-prompt completion remain distinct. Saved route crosses the existing bounded endpoint command queue with caller-owned cancellation; queue-full/closed and stop/drop remain bounded. Clause 5.2.1.2 local/routed NPDU and BVLC limits select the existing endpoint SEGMENTATION_NOT_SUPPORTED Abort for oversized ComplexACKs, without adding segmentation; even an unfit Abort fails without fallback. Admitted notification delivery/Device writes retain original execution authority after retirement or missing reply capability. Direct responses have empty Data Options; ordinary endpoint attributes remain unchanged. Real TLS baseline red proves generic egress, not cross-peer disclosure. A/B replacement, prompt-channel attacks, live session teardown, queue cancellation and exact sizing controls require explicit bacnet-endpoint/sc-tls; the standard hosted transport-only feature list does not select these integration cases. Excludes outgoing client transaction/retry policy and controls (#890), native notification traffic (#891), ordinary direct intake/routing (#886), Hub end-to-end identity, Python direct-entry support and full Annex AB/certification. Postdates published0.11.0."
   }
  ]
 }

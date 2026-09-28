@@ -418,6 +418,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
 ) -> EgressDrive {
     let NetworkServiceCommand {
         payload,
+        response_route,
         destination,
         expecting_reply,
         priority,
@@ -448,15 +449,50 @@ async fn drive_network_service<T: TransportPort + 'static>(
         let send = async {
             match &payload {
                 NetworkServicePayload::Apdu(apdu) => {
-                    send_network_service_apdu(
-                        network,
-                        apdu,
-                        &destination,
-                        expecting_reply,
-                        priority,
-                        &data_attributes,
-                    )
-                    .await
+                    if let Some(route) = &response_route {
+                        let (next_hop, destination) = match &destination {
+                            EndpointApduDestination::Direct { destination_mac } => {
+                                (destination_mac, None)
+                            }
+                            EndpointApduDestination::Routed {
+                                destination_network,
+                                destination_mac,
+                                router_mac,
+                            } => (
+                                router_mac,
+                                Some(bacnet_encoding::npdu::NpduAddress {
+                                    network: *destination_network,
+                                    mac_address: destination_mac.clone(),
+                                }),
+                            ),
+                            _ => {
+                                return Err(Error::Encoding(
+                                    "response requires a unicast destination".into(),
+                                ))
+                            }
+                        };
+                        network
+                            .send_response_apdu_on_issuance(
+                                apdu,
+                                next_hop,
+                                destination.as_ref(),
+                                expecting_reply,
+                                priority,
+                                route,
+                                || {},
+                            )
+                            .await
+                    } else {
+                        send_network_service_apdu(
+                            network,
+                            apdu,
+                            &destination,
+                            expecting_reply,
+                            priority,
+                            &data_attributes,
+                        )
+                        .await
+                    }
                 }
                 NetworkServicePayload::LocalControl(npdu) => {
                     network.transport().send_broadcast(npdu).await
