@@ -200,12 +200,20 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
         self.lifecycle = Lifecycle::Starting;
-        let controls = if network.transport().normal_bip_endpoint().is_some() {
+        let controls = if network
+            .transport()
+            .supports_local_nonrouter_number_controls()
+        {
             Some(network.enable_network_control_receiver()?)
         } else {
             None
         };
         let apdu_rx = network.start().await?;
+        let controls = network
+            .transport()
+            .supports_local_nonrouter_number_controls()
+            .then_some(controls)
+            .flatten();
         let normal_bip_port = network
             .transport()
             .normal_bip_endpoint()
@@ -246,7 +254,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.lifecycle = Lifecycle::Running;
 
         Ok(IngressReceivers {
-            network_controls: normal_bip_port.and(controls),
+            network_controls: controls,
             normal_bip_port,
             bip_local_address,
             bip_broadcast_endpoint,

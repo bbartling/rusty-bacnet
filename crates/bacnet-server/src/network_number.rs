@@ -1,4 +1,4 @@
-//! The two local nonrouter controls for an owned NORMAL B/IP link.
+//! The two local nonrouter controls for an explicitly opted-in single link.
 use bacnet_network::layer::ReceivedNetworkControl;
 use bacnet_objects::{database::ObjectDatabase, network_port::NetworkNumber};
 use bacnet_types::primitives::ObjectIdentifier;

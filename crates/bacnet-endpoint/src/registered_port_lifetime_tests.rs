@@ -60,6 +60,9 @@ impl TransportPort for Controlled {
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
         self.bip.bip_broadcast_endpoint()
     }
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        self.bip.supports_local_nonrouter_number_controls()
+    }
     fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
         if self.bound && self.control.mismatch.load(Ordering::SeqCst) {
             None

@@ -7,6 +7,9 @@ use std::{
 };
 use tokio::net::UdpSocket;
 
+#[path = "sc_network_number_tests.rs"]
+mod sc_network_number_tests;
+
 fn selected() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::NETWORK_PORT, 2).unwrap()
 }
@@ -17,6 +20,9 @@ struct ObservedBip {
     input_override: Option<mpsc::Receiver<ReceivedNpdu>>,
 }
 impl TransportPort for ObservedBip {
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        self.bip.supports_local_nonrouter_number_controls()
+    }
     fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
         self.bip.normal_bip_endpoint()
     }

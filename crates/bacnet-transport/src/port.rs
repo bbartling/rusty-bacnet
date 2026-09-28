@@ -290,6 +290,18 @@ pub trait TransportPort: Send + Sync {
         None
     }
 
+    /// Opt in to the existing single-link nonrouter Network Number owner.
+    ///
+    /// Local What-Is-Network-Number may arrive by unicast or logical broadcast;
+    /// Network-Number-Is must be classified as logical broadcast to teach state.
+    /// `send_broadcast` must emit the reply on this same local link. This grants
+    /// neither configured Network Port authority nor router/control-origin trust.
+    /// Built-in NORMAL B/IP and SC opt in. Other links default to false until
+    /// their ingress/egress semantics are qualified. Wrappers must delegate.
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        false
+    }
+
     /// Explicit capability for registration as one NORMAL IPv4 Network Port.
     ///
     /// Before start this is the configured announced interface/UDP port; after
