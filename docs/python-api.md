@@ -291,7 +291,7 @@ client = BACnetClient(
     apdu_timeout_ms=6000,
     transport="bip",             # "bip", "ipv6", or "sc"
     # IPv6 options:
-    ipv6_interface=None,         # IPv6 bind address
+    ipv6_interface=None,         # IPv6 selected local address; None means ::
     # SC options:
     sc_hub=None,                 # WebSocket hub URL
     sc_vmac=None,                # 6-byte VMAC
@@ -2628,6 +2628,26 @@ server = BACnetServer(
 ```
 
 ### BACnet/IPv6
+
+In current source, `ipv6_interface=None` and `"::"` select one unambiguous usable
+local link and address. A non-loopback multicast interface is preferred; a unique
+non-link-local address on it is preferred over a unique link-local address.
+Ambiguity fails async client entry or server startup; use a concrete local IPv6
+address to select its unique interface. This replaces published 0.11.0's wildcard
+fallback without changing constructor signatures. There is no silent `::1`
+fallback for failed physical selection. Explicit loopback remains node-local.
+
+The selected address and actual bound port are used for outgoing data and control
+frames. Incoming packets must belong to that interface and the selected unicast
+address or BACnet multicast group before they can populate the VMAC table or
+reach the application. Link-local addresses retain the interface zone internally;
+multicast scope does not make them routable beyond their link. There is no Python
+foreign-device entry point in this change.
+
+Fresh installed Linux tests cover default and explicit ULA server Who-Is/I-Am and
+client discovery. macOS loopback covers transport multicast intake and
+unicast/control source preservation; Windows has compile evidence only. Full
+Annex U conformance and deployment-network reachability remain unqualified.
 
 ```python
 # Client

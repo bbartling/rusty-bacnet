@@ -318,7 +318,7 @@ flag list to the whole workspace.
 | Transport | Feature | Scope |
 |---|---|---|
 | BACnet/IP (UDP/IPv4) | Available without optional features | Client/server transport and BBMD-related paths; see Annex J evidence. |
-| BACnet/IPv6 (UDP multicast) | `ipv6` | Cross-platform networking code; interface and multicast behavior need validation on the deployment network. |
+| BACnet/IPv6 (UDP multicast) | `ipv6` | Current source selects one concrete link/address (ambiguous `::` fails), preserving source and receive-interface metadata. Isolated Linux wire and macOS loopback evidence; Windows runtime and deployment-network behavior remain unqualified. See [IPv6 API policy](docs/rust-api.md#bip6-ipv6) and [Annex U evidence](docs/conformance/standard-135-2020-ledger.md#annex-u-bacnetipv6). |
 | BACnet/SC nodes and hub | `sc-tls` | WebSocket/TLS code for nodes and an accepting relay hub; current-development security and admission limits below. |
 | MS/TP | `serial`; `serial-gpio` for GPIO support | Protocol core, serial adapter, and loopback evidence. Kernel RS-485/ioctl and GPIO facilities are Linux-specific; physical timing is not qualified across operating systems or adapters. |
 | Ethernet (802.3 LLC) | `ethernet` | Linux `AF_PACKET` transport, not a generic BPF backend. Requires suitable interface permissions and platform qualification. |

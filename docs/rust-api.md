@@ -464,12 +464,46 @@ let transport = BipTransport::new(
 use bacnet_transport::bip6::Bip6Transport;
 
 let transport = Bip6Transport::new(
-    Ipv6Addr::UNSPECIFIED,  // bind interface
+    Ipv6Addr::UNSPECIFIED,  // select one unambiguous local link/address
     0xBAC0,                 // port
     None,                   // device_instance (auto VMAC)
 );
 // 3-byte VMAC, 3 multicast scopes, collision detection
 ```
+
+Current source selects one concrete local address and OS interface for normal
+B/IPv6 operation. `::` requires one usable non-loopback multicast interface (or
+loopback if none exists), then a unique non-link-local address on that interface,
+otherwise a unique link-local address. Multiple interfaces or addresses in the
+selected class fail startup; configure an existing concrete address to resolve
+ambiguity. A concrete address must have one usable local owner. This is local
+selection policy, not an Annex U requirement, and differs from published 0.11.0's
+wildcard address fallback.
+
+The selected address and actual UDP port form `local_mac()`. One wildcard socket
+receives selected unicast and BACnet multicast traffic; packet metadata fences
+other interfaces and destinations before collision handling, VMAC learning or
+NPDU admission. Every normal data/control send retains the selected source and
+interface. Required joins and random-VMAC collision probing finish before
+publishing startup state. Failed or cancelled startup, stop, restart and drop
+reclaim the socket/task lifetime; port zero selects a fresh ephemeral port on
+restart. Link-local addresses retain their OS zone internally but cannot reach
+other links; `::1` is node-local. FF05/FF08 group scope alone does not prove
+cross-link reachability.
+
+With `register_as_foreign_device`, `::` instead derives a concrete unicast source
+usable for the configured BBMD; an explicit source is retained. The production
+socket is bound to that source, so registration, DBTN and ordinary unicast agree
+with `local_mac()`. This branch requires the existing configured Device instance
+and preserves trusted-BBMD handling without normal multicast prerequisites.
+
+The selected-link wire fixtures qualify Linux on isolated ULA bridges and macOS
+on loopback for multicast intake and unicast/control replies. Windows code is
+compile-checked; its runtime remains unqualified. Unique link-local selection has
+unit evidence, not physical-link wire qualification. This is bounded transport
+evidence, not full Annex U conformance. External fixture commands and their
+intentional exclusion from normal test runs are documented in
+[the qualification guide](../crates/bacnet-transport/tests/ipv6_selected_link/README.md).
 
 ### BACnet/SC (Client Transport)
 
