@@ -130,7 +130,7 @@ impl ObjectDatabase {
         &mut self,
         oid: ObjectIdentifier,
         announcement: Option<(u16, u8)>,
-    ) -> Option<crate::network_port::NetworkNumber> {
+    ) -> Option<bacnet_types::network_number::NetworkNumber> {
         if self.registered_bip_port_internal() != Some(oid) {
             return None;
         }

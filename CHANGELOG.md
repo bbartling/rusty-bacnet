@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Standalone clients now passively learn and answer local Network Number controls on opted-in transports. A bounded worker preserves routed Reject/APDU progress and is canceled and joined during stop (#879).
+
 - Optional immutable SC Hub certificate bindings restrict verified leaf SHA-256
   identities to provisioned UUID/VMAC groups, including offline reservations and
   listed rotation certificates. Rust and frozen Python group values share validation;
@@ -16,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an intentional profile; no downstream leaf-authentication claim is made (#800).
 
 ### Changed
+
+- Move the pre-1.0 `bacnet_objects::network_port::NetworkNumber` helper directly to `bacnet_types::network_number::NetworkNumber`. `configured` now returns `None` for reserved 65535; default construction is UNKNOWN. Shared nonrouter packet handling lives in `bacnet_network::network_number` (#879).
 
 - Remove the pre-1.0 Rust `BACnetClient::builder()` and
   `BACnetServer::builder()` aliases. Rust callers must use `bip_builder()` for

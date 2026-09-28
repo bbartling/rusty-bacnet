@@ -464,6 +464,7 @@ pub struct BACnetClient<T: TransportPort> {
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     dispatch_task: Option<JoinHandle<()>>,
+    network_number_task: Option<JoinHandle<()>>,
     /// Owner-qualified channels feeding SegmentACKs to in-flight segmented sends.
     ///
     /// Dispatch may hold [`Self::tsm`] while acquiring this lock so phase
@@ -951,3 +952,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod number_tests;
+
+mod network_number;

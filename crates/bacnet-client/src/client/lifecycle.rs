@@ -10,11 +10,22 @@ const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
 const DEVICE_MAX_AGE: Duration = Duration::ZERO;
 
 impl<T: TransportPort> BACnetClient<T> {
-    fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
-        let task = self.dispatch_task.take()?;
-        task.abort();
-        Some(task)
+    fn abort_owned_tasks(&self) {
+        for task in [&self.dispatch_task, &self.network_number_task]
+            .into_iter()
+            .flatten()
+        {
+            task.abort();
+        }
     }
+}
+
+async fn join_owned_task(slot: &mut Option<JoinHandle<()>>) {
+    // A canceled stop retains the join and its network Arc until it completes.
+    if let Some(task) = slot.as_mut() {
+        let _ = task.await;
+    }
+    *slot = None;
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -51,6 +62,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
+        let (number_tx, network_number_task) = if network
+            .transport()
+            .supports_local_nonrouter_number_controls()
+        {
+            let (tx, task) = network_number::spawn(&network);
+            (Some(tx), Some(task))
+        } else {
+            (None, None)
+        };
 
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let tsm = Arc::new(Mutex::new(new_coordinated_tsm(&config, coordinator)));
@@ -97,9 +117,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     control = network_control_rx.recv(), if network_control_open => {
                         match control {
                             Some(control) => {
-                                routed_path_limits_dispatch
-                                    .handle_network_control(&tsm_dispatch, control)
-                                    .await;
+                                if let Some((tx, parsed)) = number_tx.as_ref().and_then(|tx| {
+                                    bacnet_network::network_number::NumberControl::parse(&control)
+                                        .map(|parsed| (tx, parsed))
+                                }) {
+                                    if tx.try_send(parsed).is_err() {
+                                        debug!("client Number control queue full or closed; dropping control");
+                                    }
+                                } else {
+                                    // Preserve the original envelope and ingress sequence for Reject correlation.
+                                    routed_path_limits_dispatch
+                                        .handle_network_control(&tsm_dispatch, control)
+                                        .await;
+                                }
                             }
                             None => network_control_open = false,
                         }
@@ -213,6 +243,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_tx,
             device_collision_tx,
             dispatch_task: Some(dispatch_task),
+            network_number_task,
             seg_ack_senders,
             cleanup_tx,
             #[cfg(test)]
@@ -251,11 +282,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.network.transport().egress_apdu_limit()
     }
 
-    /// Stop the client, aborting the dispatch task.
+    /// Stop the client, aborting and joining dispatch and local Number work.
+    /// Canceling this waiter retains task joins for a subsequent stop.
     pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.abort_dispatch_task() {
-            let _ = task.await;
-        }
+        self.abort_owned_tasks();
+        join_owned_task(&mut self.network_number_task).await;
+        join_owned_task(&mut self.dispatch_task).await;
         self.tsm.lock().await.cancel_all_transactions();
         let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while network references remain".into())
@@ -267,7 +299,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
 impl<T: TransportPort> Drop for BACnetClient<T> {
     fn drop(&mut self) {
-        let _ = self.abort_dispatch_task();
+        self.abort_owned_tasks();
         if let Ok(mut tsm) = self.tsm.try_lock() {
             tsm.cancel_all_transactions();
         }

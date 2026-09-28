@@ -1,6 +1,7 @@
 //! BACnet network layer: packet assembly, dispatch, and routing.
 
 pub mod layer;
+pub mod network_number;
 pub mod priority_channel;
 pub mod response_route;
 pub mod router;
