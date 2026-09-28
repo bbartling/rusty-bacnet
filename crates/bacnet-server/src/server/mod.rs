@@ -19,9 +19,9 @@ use tokio::time::Duration;
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ComplexAck,
-    ConfirmedRequest as ConfirmedRequestPdu, ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu,
-    SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
+    self, encode_apdu, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu,
+    ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
+    UnconfirmedRequest as UnconfirmedRequestPdu,
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;

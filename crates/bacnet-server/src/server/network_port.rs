@@ -62,7 +62,7 @@ pub(super) fn publish<T: TransportPort + 'static>(
         oid,
         address.ip().octets(),
         address.port(),
-        network.transport().max_apdu_length() as u32,
+        network.transport().local_receive_apdu_capacity() as u32,
     )
 }
 
@@ -183,14 +183,13 @@ pub(super) fn validate_apdu_capacity<T: TransportPort>(
     config: &mut ServerConfig,
     transport: &T,
 ) -> Result<(), Error> {
-    let transport_max = transport.max_apdu_length() as u32;
+    let transport_max = transport.local_receive_apdu_capacity() as u32;
     config.max_apdu_length = config.max_apdu_length.min(transport_max);
-    let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {
-        Error::Encoding(format!(
-            "invalid max_apdu_length {}; expected one of 50, 128, 206, 480, 1024, 1476",
+    if config.max_apdu_length < u32::from(apdu::MINIMUM_MESSAGE_SIZE) {
+        return Err(Error::Encoding(format!(
+            "local max_apdu_length {} is below 50",
             config.max_apdu_length
-        ))
-    })?;
-    validate_max_apdu_length(max_apdu)?;
+        )));
+    }
     Ok(())
 }

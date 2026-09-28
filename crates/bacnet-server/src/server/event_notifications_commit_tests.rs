@@ -247,6 +247,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
         &oid,
         committed,
         1000,
+        1476,
     )
     .await;
 

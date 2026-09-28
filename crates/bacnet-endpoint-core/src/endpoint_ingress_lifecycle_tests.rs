@@ -32,6 +32,14 @@ impl TransportPort for GatedStop {
     async fn send_broadcast(&self, data: &[u8]) -> Result<(), Error> {
         self.inner.send_broadcast(data).await
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.inner.local_receive_apdu_capacity()
+    }
+
+    fn egress_apdu_limit(&self) -> u16 {
+        self.inner.egress_apdu_limit()
+    }
+
     fn local_mac(&self) -> &[u8] {
         self.inner.local_mac()
     }

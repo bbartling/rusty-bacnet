@@ -32,7 +32,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         validate_max_apdu_length(config.max_apdu_length)?;
         validate_max_segments(config.max_segments)?;
         config.max_apdu_length =
-            cap_max_apdu_to_transport(config.max_apdu_length, transport.max_apdu_length())?;
+            cap_max_apdu_to_transport(config.max_apdu_length, transport.egress_apdu_limit())?;
         if !(1..=127).contains(&config.proposed_window_size) {
             return Err(Error::Encoding(format!(
                 "invalid proposed-window-size {}; expected 1..=127",
@@ -46,7 +46,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut apdu_rx = network.start().await?;
         config.max_apdu_length = cap_max_apdu_to_transport(
             config.max_apdu_length,
-            network.transport().max_apdu_length(),
+            network.transport().egress_apdu_limit(),
         )?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
@@ -237,7 +237,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         max_apdu_bucket_at_or_below(
             self.config
                 .max_apdu_length
-                .min(self.network.transport().max_apdu_length()),
+                .min(self.network.transport().egress_apdu_limit()),
         )
         .unwrap_or(0)
     }
@@ -248,7 +248,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// and may be lower than the encoded BACnet max-APDU bucket advertised by
     /// the client.
     pub fn transport_max_apdu_length(&self) -> u16 {
-        self.network.transport().max_apdu_length()
+        self.network.transport().egress_apdu_limit()
     }
 
     /// Stop the client, aborting the dispatch task.

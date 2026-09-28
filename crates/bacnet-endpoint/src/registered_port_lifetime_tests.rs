@@ -98,6 +98,15 @@ impl TransportPort for Controlled {
     fn abort(&mut self) {
         self.bip.abort();
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.bip.local_receive_apdu_capacity()
+    }
+
+    fn egress_apdu_limit(&self) -> u16 {
+        // Deliberately asymmetric wrapper: port publication must use local1476.
+        480
+    }
+
     fn local_mac(&self) -> &[u8] {
         self.bip.local_mac()
     }
@@ -425,4 +434,50 @@ async fn registered_port_active_endpoint_cancelled_stop_retains_and_then_release
     assert!(!idle.is_session_alive());
     assert!(!control.alive());
     assert!(db.write().await.remove(&port()).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn both_registered_bip_snapshots_use_local_capacity_not_smaller_egress() {
+    let control = Control::new();
+    let mut full = server(control.clone()).await;
+    assert_eq!(
+        full.database()
+            .read()
+            .await
+            .get(&port())
+            .unwrap()
+            .read_property(PropertyIdentifier::APDU_LENGTH, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1476)
+    );
+    control.release.add_permits(1);
+    full.stop().await.unwrap();
+
+    let control = Control::new();
+    let id = identity();
+    let mut session = EndpointSession::new(
+        Controlled::new(control.clone()),
+        SessionRole::ServerOnly,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_database(id.build_database().unwrap())
+    .with_identity(id)
+    .with_registered_network_port(port());
+    session.start().await.unwrap();
+    assert_eq!(
+        session
+            .database
+            .as_ref()
+            .unwrap()
+            .read()
+            .await
+            .get(&port())
+            .unwrap()
+            .read_property(PropertyIdentifier::APDU_LENGTH, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1476)
+    );
+    control.release.add_permits(1);
+    session.stop().await.unwrap();
 }

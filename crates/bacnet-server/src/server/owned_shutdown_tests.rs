@@ -67,6 +67,10 @@ impl TransportPort for Held {
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
         self.send_unicast(npdu, &[]).await
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[2]
     }

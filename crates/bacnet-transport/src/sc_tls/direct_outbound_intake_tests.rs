@@ -54,7 +54,7 @@ async fn outbound_wire_shapes_options_and_saturated_npdu_intake_preserve_control
         frame.payload = Bytes::new();
         invalid.push(frame);
         let mut frame = base.clone();
-        frame.payload = Bytes::from(vec![1; 1477]);
+        frame.payload = Bytes::from(vec![1; 1479]);
         invalid.push(frame);
         for frame in invalid {
             bytes.clear();

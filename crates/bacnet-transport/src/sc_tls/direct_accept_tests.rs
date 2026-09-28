@@ -534,7 +534,7 @@ async fn registered_listener(
 
 async fn assert_accept_direct(hub: &crate::sc::LoopbackWebSocket, expected: u8) {
     // Independent AB.2.8.1 wire vector: no addresses/options, fresh ID,
-    // primary-hub status, live accept flag, unchanged 5705/1476 maxima.
+    // primary-hub status, live accept flag, unchanged 5705/1478 maxima.
     hub.send(&[5, 0, 0x22, 0x34]).await.unwrap();
     let reply = tokio::time::timeout(Duration::from_secs(5), hub.recv())
         .await
@@ -544,7 +544,7 @@ async fn assert_accept_direct(hub: &crate::sc::LoopbackWebSocket, expected: u8) 
     assert_ne!(&reply[2..4], &[0x22, 0x34]);
     assert_eq!(
         reply,
-        [4, 0, reply[2], reply[3], 1, expected, 0x16, 0x49, 0x05, 0xC4]
+        [4, 0, reply[2], reply[3], 1, expected, 0x16, 0x49, 0x05, 0xC6]
     );
     // Address-Resolution must agree with Advertisement's live capability,
     // including after accept-task cancellation or application-intake closure.

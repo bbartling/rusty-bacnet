@@ -337,6 +337,10 @@ impl bacnet_transport::port::TransportPort for MemTransport {
             })
             .map_err(|_| bacnet_types::error::Error::Encoding("wire full".into()))
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.mac
     }

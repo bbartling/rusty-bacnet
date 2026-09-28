@@ -67,7 +67,7 @@ impl ScConnection {
             device_uuid,
             hub_vmac: None,
             max_bvlc_length: crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH,
-            max_apdu_length: 1476,
+            max_apdu_length: crate::sc_limits::LOCAL_RECEIVE_NPDU_CAPACITY,
             hub_max_bvlc_length: 1476,
             hub_max_apdu_length: 1476,
             next_message_id: 1,

@@ -98,7 +98,8 @@ pub trait TransportPort: Send + Sync {
     fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
     fn send_broadcast(&self, npdu: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
     fn local_mac(&self) -> &[u8];
-    fn max_apdu_length(&self) -> u16;  // BIP/SC: 1476, MS/TP: 480
+    fn local_receive_apdu_capacity(&self) -> u16; // stable local declaration
+    fn egress_apdu_limit(&self) -> u16; // current outgoing path limit
 }
 ```
 

@@ -274,6 +274,10 @@ impl TransportPort for PassiveTransport {
         Ok(())
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         LOCAL_PEER
     }
@@ -480,6 +484,10 @@ impl TransportPort for StartTrackingTransport {
 
     async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
         Ok(())
+    }
+
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
     }
 
     fn local_mac(&self) -> &[u8] {

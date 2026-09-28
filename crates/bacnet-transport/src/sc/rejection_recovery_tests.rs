@@ -151,7 +151,7 @@ async fn fresh_redial_validates_probe(wire_index: usize) {
     wait_for_state(&transport, ScConnectionState::Connected)
         .await
         .unwrap();
-    assert_eq!(transport.max_apdu_length(), 28);
+    assert_eq!(transport.egress_apdu_limit(), 28);
     assert_eq!(
         transport.connection().unwrap().lock().await.hub_vmac,
         Some([0x11; 6])

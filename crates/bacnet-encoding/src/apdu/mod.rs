@@ -114,13 +114,28 @@ pub const MINIMUM_MESSAGE_SIZE: u16 = 50;
 /// Decoded max-APDU-length values indexed by the 4-bit field.
 const MAX_APDU_DECODE: [u16; 6] = [MINIMUM_MESSAGE_SIZE, 128, 206, 480, 1024, 1476];
 
+/// Floor a raw local receive capacity to a Confirmed-Request header value.
+///
+/// Device `Max_APDU_Length_Accepted` and I-Am retain the raw unsigned value.
+/// Only the Clause 20.1.2.5 header uses this six-code representation; flooring
+/// must not change byte budgets or the Device declaration. Values below
+/// MinimumMessageSize are invalid, while larger values saturate at 1476.
+pub fn max_apdu_header_at_or_below(capacity: u32) -> Result<u16, Error> {
+    MAX_APDU_DECODE
+        .iter()
+        .rev()
+        .copied()
+        .find(|value| u32::from(*value) <= capacity)
+        .ok_or_else(|| Error::Encoding(format!("local APDU capacity {capacity} is below 50")))
+}
+
 /// Return true when `value` is one of the BACnet max-APDU-length encodings
 /// defined by ASHRAE 135-2020 Clause 20.1.2.5.
 pub fn is_valid_max_apdu_length(value: u16) -> bool {
     matches!(value, 50 | 128 | 206 | 480 | 1024 | 1476)
 }
 
-/// Validate a locally configured max-APDU-length value.
+/// Validate an exact Confirmed-Request max-APDU-length header value.
 pub fn validate_max_apdu_length(value: u16) -> Result<(), Error> {
     if is_valid_max_apdu_length(value) {
         Ok(())

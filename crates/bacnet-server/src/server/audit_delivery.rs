@@ -19,7 +19,7 @@ pub(in crate::server) fn encode_notification(
             more_follows: false,
             segmented_response_accepted: false,
             max_segments: None,
-            max_apdu_length: max_apdu as u16,
+            max_apdu_length: apdu::max_apdu_header_at_or_below(max_apdu).ok()?,
             invoke_id,
             sequence_number: None,
             proposed_window_size: None,

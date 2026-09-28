@@ -69,7 +69,7 @@ class RejectionDeadlineTests(mtls.MtlsFixture):
                              b"\r\nSec-WebSocket-Protocol: hub.bsc.bacnet.org\r\n\r\n")
                 await asyncio.wait_for(writer.drain(), 3)
                 connect = await self.binary(reader)
-                self.assertEqual(connect, b"\x06\0\0\1" + vmac + mtls.SERVER_UUID + b"\x16\x49\x05\xc4")
+                self.assertEqual(connect, b"\x06\0\0\1" + vmac + mtls.SERVER_UUID + b"\x16\x49\x05\xc6")
                 sessions.append(writer.get_extra_info("peername"))
                 await self.send_frame(writer, b"\x07\0\0\1" + mtls.HUB_VMAC + mtls.HUB_UUID + b"\x05\xc4\x05\xc4")
                 # Independent RP AI0/PV bytes. Neither rejected NPDU may dispatch.

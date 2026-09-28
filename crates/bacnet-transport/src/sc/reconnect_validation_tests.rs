@@ -112,7 +112,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
                 assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
                 assert_eq!(transport.local_mac(), vmac);
                 assert_eq!(transport.device_uuid, uuid);
-                assert_eq!(transport.max_apdu_length(), DEFAULT_MAX_APDU_LENGTH);
+                assert_eq!(transport.egress_apdu_limit(), DEFAULT_MAX_APDU_LENGTH);
             }
         }
     }
@@ -399,7 +399,7 @@ async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<
     wait_for_hub(&transport, [0x20; 6]).await;
     let conn = transport.connection().unwrap().clone();
     let before = conn.lock().await.clone();
-    let effective_limit = transport.max_apdu_length();
+    let effective_limit = transport.egress_apdu_limit();
     assert_eq!(*state.borrow_and_update(), ScConnectionState::Connected);
 
     let probe_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
@@ -438,7 +438,7 @@ async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<
         );
         assert_eq!(after.connect_retry_allowed, before.connect_retry_allowed);
     }
-    assert_eq!(transport.max_apdu_length(), effective_limit);
+    assert_eq!(transport.egress_apdu_limit(), effective_limit);
     assert!(
         !state.has_changed().unwrap(),
         "failed primary probe published state"

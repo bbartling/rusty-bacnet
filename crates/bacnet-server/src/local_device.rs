@@ -16,6 +16,29 @@ pub(crate) fn selected_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
     select_device(db.find_by_type(ObjectType::DEVICE))
 }
 
+/// Validate the current selected Device under the caller's database guard.
+/// An empty database remains supported; applications own their Device objects.
+pub(crate) fn validate_apdu_declaration(
+    db: &ObjectDatabase,
+    capacity: u32,
+) -> Result<Option<ObjectIdentifier>, bacnet_types::error::Error> {
+    use bacnet_types::primitives::PropertyValue;
+    use bacnet_types::{enums::PropertyIdentifier, error::Error};
+    let Some(oid) = selected_device(db) else {
+        return Ok(None);
+    };
+    let declared = db
+        .get(&oid)
+        .expect("selected under same database guard")
+        .read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)?;
+    if declared != PropertyValue::Unsigned(u64::from(capacity)) {
+        return Err(Error::Encoding(format!(
+            "selected Device Max_APDU_Length_Accepted must equal effective server capacity {capacity}"
+        )));
+    }
+    Ok(Some(oid))
+}
+
 fn select_device(
     candidates: impl IntoIterator<Item = ObjectIdentifier>,
 ) -> Option<ObjectIdentifier> {

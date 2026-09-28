@@ -363,9 +363,9 @@ async fn server_runs_fault_detection_without_enrollment() {
 }
 
 #[tokio::test]
-async fn server_rejects_invalid_max_apdu_length() {
+async fn server_rejects_below_minimum_local_apdu_capacity() {
     let config = ServerConfig {
-        max_apdu_length: 1000,
+        max_apdu_length: 49,
         ..ServerConfig::default()
     };
     let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);

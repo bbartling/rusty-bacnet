@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 63 |
+| Priority | P1 | 64 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 35 |
+| Status | supported-with-clause-evidence | 36 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -34,6 +34,7 @@
 
 | ID | Anchor | Priority | Status | Public Claims |
 |---|---|---|---|---|
+| `BACNET-12-LOCAL-APDU-CAPACITY` | Clauses12.11.18 (raw Device acceptance),16.10.3 (I-Am),20.1.2.5 (Confirmed-Request header codes); AnnexAB.2.10.1/AB.2.11.1 (Connect receive limits) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-CONFIGURED-BIP-PORT` | Clause12.56/Table12-71 application footnote25; printed551-557/PDF553-559 configuration activation, MAC/APDU/DNS; official2024-04-29 errata item23 (Link_Speed optional) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-SCHEDULE-LOCAL-REFERENCES` | Clause 12.24 Table 12-28 (printed308/PDF310), output continuation (printed309/PDF311), reference property (printed311/PDF313); Clause21 BACnetDeviceObjectPropertyReference (printed891/PDF893) | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-AUDIT-REPORTER-DELAY` | Clause 12.63 / Table 12-82, printed page 619 / PDF page 621; Maximum_Send_Delay and Send_Now printed pages 621-622 / PDF pages 623-624; Clause 19.6.6 and Table 19-5 (partial-profile loss filtering remains unresolved) | P1 | in-progress | 6 |

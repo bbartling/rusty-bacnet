@@ -30,7 +30,10 @@ pub struct ServerConfig {
     pub port: u16,
     /// Directed broadcast address.
     pub broadcast_address: Ipv4Addr,
-    /// Maximum APDU length accepted.
+    /// Raw local APDU receive ceiling, clamped to the transport's stable capacity.
+    /// The effective value must be at least 50 and equal the selected Device's
+    /// `Max_APDU_Length_Accepted`. I-Am retains this raw value; only originated
+    /// Confirmed-Request headers floor it to a supported encoding.
     pub max_apdu_length: u32,
     /// Segmentation support level.
     ///

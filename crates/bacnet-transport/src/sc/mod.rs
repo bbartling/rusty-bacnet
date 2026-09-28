@@ -64,7 +64,7 @@ pub(crate) use random48::set_test_random48_vmac_generator;
 pub use reconnect::ScReconnectConfig;
 
 const DEFAULT_MAX_APDU_LENGTH: u16 = 1476;
-const BACNET_NPDU_BASE_HEADER_LEN: u16 = 2;
+use crate::sc_limits::LOCAL_NPDU_HEADER_LEN;
 const SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN: u16 = 10;
 
 // ---------------------------------------------------------------------------
@@ -120,6 +120,10 @@ pub struct ScTransport<W: WebSocketPort> {
 }
 
 impl<W: WebSocketPort> ScTransport<W> {
+    /// Stable local APDU receive capacity, available before opening a connection.
+    /// Negotiated outgoing limits do not change this declaration.
+    pub const LOCAL_RECEIVE_APDU_CAPACITY: u16 = crate::sc_limits::LOCAL_RECEIVE_APDU_CAPACITY;
+
     /// Create an unstarted transport with an unconfigured, zero UUID placeholder.
     /// Call [`Self::with_device_uuid`] before [`TransportPort::start`].
     /// The supplied local VMAC must be neither all-zero nor broadcast.
@@ -250,7 +254,7 @@ fn effective_max_apdu_length(conn: &ScConnection) -> u16 {
         .hub_max_bvlc_length
         .saturating_sub(SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN);
     let effective_npdu = conn.hub_max_apdu_length.min(bvlc_npdu_budget);
-    effective_npdu.saturating_sub(BACNET_NPDU_BASE_HEADER_LEN)
+    effective_npdu.saturating_sub(LOCAL_NPDU_HEADER_LEN)
 }
 
 fn publish_effective_max_apdu_length(store: &AtomicU16, conn: &ScConnection) {
@@ -792,6 +796,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             .await
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        Self::LOCAL_RECEIVE_APDU_CAPACITY
+    }
+
     fn local_mac(&self) -> &[u8] {
         // We need a reference with 'static-ish lifetime; store VMAC in struct
         // Since local_vmac is stored in the struct, we can reference it.
@@ -800,7 +808,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         &self.local_vmac
     }
 
-    fn max_apdu_length(&self) -> u16 {
+    fn egress_apdu_limit(&self) -> u16 {
         self.effective_max_apdu_length.load(Ordering::Relaxed)
     }
 

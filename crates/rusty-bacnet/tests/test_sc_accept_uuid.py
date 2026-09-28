@@ -47,7 +47,7 @@ class AcceptUuidTests(mtls.MtlsFixture):
                 await asyncio.wait_for(writer.drain(), 3)
                 opcode, request = await self.frame(reader, True)
                 self.assertEqual(opcode, 2)
-                self.assertEqual(request, b"\x06\0\0\1" + vmac + uuid + b"\x16\x49\x05\xc4")
+                self.assertEqual(request, b"\x06\0\0\1" + vmac + uuid + b"\x16\x49\x05\xc6")
                 # Independent base-2020 AB.2.11 bytes, not a product codec.
                 nil = b"\x07\0\0\1" + b"\x22" * 6 + bytes(16) + b"\x20\0\x10\0"
                 if limits is not None:

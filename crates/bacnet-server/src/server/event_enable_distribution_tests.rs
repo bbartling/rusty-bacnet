@@ -55,6 +55,10 @@ impl TransportPort for RecordingTransport {
             .push(Bytes::copy_from_slice(npdu));
         Ok(())
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[127, 0, 0, 1, 0xBA, 0xC0]
     }
@@ -221,6 +225,7 @@ impl Fixture {
             &self.notification_transactions,
             &self.oid,
             1000,
+            1476,
         )
         .await;
     }

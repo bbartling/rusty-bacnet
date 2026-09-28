@@ -62,8 +62,6 @@ pub const MAX_COV_CHANNEL_CAPACITY: usize = 65_536;
 /// Device discovery event broadcast channel capacity.
 pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
 
-const VALID_MAX_APDU_LENGTHS: [u16; 6] = [50, 128, 206, 480, 1024, 1476];
-
 /// Type of change observed in the device discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceEventKind {
@@ -825,11 +823,7 @@ impl<'a> ConfirmedTarget<'a> {
 }
 
 fn max_apdu_bucket_at_or_below(limit: u16) -> Option<u16> {
-    VALID_MAX_APDU_LENGTHS
-        .iter()
-        .rev()
-        .copied()
-        .find(|bucket| *bucket <= limit)
+    bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(limit)).ok()
 }
 
 fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u16, Error> {

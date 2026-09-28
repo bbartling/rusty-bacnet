@@ -57,6 +57,10 @@ impl TransportPort for RoutingTransport {
             .push(Bytes::copy_from_slice(npdu));
         Ok(())
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &[127, 0, 0, 1, 0xBA, 0xC0]
     }
@@ -181,6 +185,7 @@ pub(super) async fn distribute_from_database_with_bindings(
             EventType::OUT_OF_RANGE,
         ),
         1000,
+        1476,
     )
     .await;
 

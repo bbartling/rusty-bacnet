@@ -94,6 +94,10 @@ impl TransportPort for LoopbackTransport {
             .map_err(|_| Error::Encoding("loopback peer channel closed".to_string()))
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }

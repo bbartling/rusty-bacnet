@@ -1,4 +1,5 @@
 use super::super::*;
+use bacnet_transport::port::TransportPort;
 
 #[pymethods]
 impl BACnetServer {
@@ -116,14 +117,57 @@ impl BACnetServer {
         let future = async move {
             let mut db = ObjectDatabase::new();
 
-            // Create device object
-            let mut device = DeviceObject::new(DeviceConfig {
-                instance: device_instance,
-                name: device_name,
-                vendor_name: "Rusty BACnet".into(),
-                vendor_id: 555,
-                ..DeviceConfig::default()
-            })
+            // Prepare non-SC transports locally before constructing our Device.
+            let prepared_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
+                match transport_type.as_str() {
+                    "bip" => {
+                        let interface: Ipv4Addr = interface_str.parse().map_err(|e| {
+                            PyRuntimeError::new_err(format!("invalid interface: {e}"))
+                        })?;
+                        let broadcast: Ipv4Addr = broadcast_str.parse().map_err(|e| {
+                            PyRuntimeError::new_err(format!("invalid broadcast: {e}"))
+                        })?;
+                        Some(AnyTransport::Bip(BipTransport::new(
+                            interface, port, broadcast,
+                        )))
+                    }
+                    "ipv6" => {
+                        let iface_str = ipv6_interface.as_deref().unwrap_or("::");
+                        let interface: std::net::Ipv6Addr = iface_str.parse().map_err(|e| {
+                            PyRuntimeError::new_err(format!("invalid IPv6 interface: {e}"))
+                        })?;
+                        Some(AnyTransport::Bip6(Bip6Transport::new(
+                            interface, port, None,
+                        )))
+                    }
+                    // SC can only be constructed after its dial; defer that I/O.
+                    "sc" => None,
+                    "mstp" => Some(mstp_transport.take().ok_or_else(|| {
+                        PyRuntimeError::new_err("MS/TP transport was not prepared")
+                    })?),
+                    other => {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
+                        )));
+                    }
+                };
+
+            let local_capacity =
+                match &prepared_transport {
+                    Some(transport) => transport.local_receive_apdu_capacity(),
+                    // Only the SC branch defers construction. Its receive declaration
+                    // is owned by ScTransport and available before opening a socket.
+                    None => bacnet_transport::sc::ScTransport::<
+                        bacnet_transport::sc_tls::TlsWebSocket,
+                    >::LOCAL_RECEIVE_APDU_CAPACITY,
+                };
+
+            // Validate the generated Device and entire pending DB before SC I/O.
+            let mut device = DeviceObject::new(generated_device_config(
+                device_instance,
+                device_name,
+                local_capacity,
+            ))
             .map_err(to_py_err)?;
             if let Some(recipient) = audit_recipient {
                 device
@@ -152,25 +196,9 @@ impl BACnetServer {
                 ))
             })?;
 
-            // Build transport based on type
-            let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
-                "bip" => {
-                    let interface: Ipv4Addr = interface_str
-                        .parse()
-                        .map_err(|e| PyRuntimeError::new_err(format!("invalid interface: {e}")))?;
-                    let broadcast: Ipv4Addr = broadcast_str
-                        .parse()
-                        .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
-                    AnyTransport::Bip(BipTransport::new(interface, port, broadcast))
-                }
-                "ipv6" => {
-                    let iface_str = ipv6_interface.as_deref().unwrap_or("::");
-                    let interface: std::net::Ipv6Addr = iface_str.parse().map_err(|e| {
-                        PyRuntimeError::new_err(format!("invalid IPv6 interface: {e}"))
-                    })?;
-                    AnyTransport::Bip6(Bip6Transport::new(interface, port, None))
-                }
-                "sc" => {
+            let transport = match prepared_transport {
+                Some(transport) => transport,
+                None => {
                     let hub_url = sc_hub.ok_or_else(|| {
                         PyRuntimeError::new_err("sc_hub is required for SC transport")
                     })?;
@@ -199,14 +227,6 @@ impl BACnetServer {
                         sc = sc.with_heartbeat_timeout_ms(ms);
                     }
                     AnyTransport::Sc(Box::new(sc))
-                }
-                "mstp" => mstp_transport
-                    .take()
-                    .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?,
-                other => {
-                    return Err(PyRuntimeError::new_err(format!(
-                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
-                    )));
                 }
             };
 
@@ -461,5 +481,48 @@ impl BACnetServer {
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
             Ok(srv.comm_state())
         })
+    }
+}
+
+// The binding owns this Device; derive its declaration before adding it to DB.
+fn generated_device_config(
+    instance: u32,
+    name: String,
+    local_receive_apdu_capacity: u16,
+) -> DeviceConfig {
+    DeviceConfig {
+        instance,
+        name,
+        vendor_name: "Rusty BACnet".into(),
+        vendor_id: 555,
+        max_apdu_length: server::ServerConfig::default()
+            .max_apdu_length
+            .min(u32::from(local_receive_apdu_capacity)),
+        ..DeviceConfig::default()
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
+    #[tokio::test]
+    async fn binding_generated_mstp_device_matches_local_480_before_io() {
+        let (serial, _peer) = LoopbackSerial::pair();
+        let transport: AnyTransport<LoopbackSerial> =
+            AnyTransport::Mstp(MstpTransport::new(serial, MstpConfig::default()));
+        let config =
+            generated_device_config(893, "test".into(), transport.local_receive_apdu_capacity());
+        assert_eq!(config.max_apdu_length, 480);
+        let device = DeviceObject::new(config).unwrap();
+        assert_eq!(
+            device
+                .read_property(
+                    bacnet_types::enums::PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
+                    None
+                )
+                .unwrap(),
+            PropertyValue::Unsigned(480)
+        );
     }
 }

@@ -50,6 +50,10 @@ impl TransportPort for RecordingTransport {
         Ok(())
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
@@ -563,6 +567,7 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
     }
     let config = ServerConfig {
         cov_retry_timeout_ms: 100,
+        max_apdu_length: 1474,
         ..ServerConfig::default()
     };
 
@@ -594,6 +599,10 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
             let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected confirmed COV notification");
             };
+            assert_eq!(
+                request.max_apdu_length, 1024,
+                "raw1474 floors in both COV headers"
+            );
             (request.service_choice, request.invoke_id)
         })
         .collect();
@@ -619,6 +628,10 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
             let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected confirmed COV retry");
             };
+            assert_eq!(
+                request.max_apdu_length, 1024,
+                "raw1474 floors in both COV headers"
+            );
             (request.service_choice, request.invoke_id)
         })
         .collect();

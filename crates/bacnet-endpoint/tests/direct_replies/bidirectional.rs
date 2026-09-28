@@ -42,11 +42,15 @@ impl TransportPort for StartedSc {
     async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
         self.transport.send_broadcast(bytes).await
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.transport.local_receive_apdu_capacity()
+    }
+
     fn local_mac(&self) -> &[u8] {
         self.transport.local_mac()
     }
-    fn max_apdu_length(&self) -> u16 {
-        self.transport.max_apdu_length()
+    fn egress_apdu_limit(&self) -> u16 {
+        self.transport.egress_apdu_limit()
     }
 }
 struct Peer {

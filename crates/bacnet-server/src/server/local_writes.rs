@@ -285,6 +285,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &self.device_bindings,
             oid,
             self.config.cov_retry_timeout_ms,
+            self.config.max_apdu_length,
         )
         .await;
         if life_safety {
@@ -445,6 +446,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             device_bindings,
                             &target.object_identifier,
                             config.cov_retry_timeout_ms,
+                            config.max_apdu_length,
                         )
                         .await;
                         Self::fire_cov_notifications(
@@ -478,6 +480,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     device_bindings,
                     &plan.source,
                     config.cov_retry_timeout_ms,
+                    config.max_apdu_length,
                 )
                 .await;
                 Self::fire_cov_notifications(

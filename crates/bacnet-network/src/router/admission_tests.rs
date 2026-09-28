@@ -60,6 +60,10 @@ impl TransportPort for IngressTransport {
             .map_err(|_| Error::Encoding("test wire queue unavailable".into()))
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.mac
     }

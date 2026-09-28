@@ -123,7 +123,7 @@ impl DirectAcceptConfig {
             max_established_peers: DIRECT_ACCEPT_MAX_ESTABLISHED_PEERS,
             npdu_admission_policy: ScNpduAdmissionPolicy::default(),
             max_bvlc_length: crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH,
-            max_apdu_length: 1476,
+            max_apdu_length: crate::sc_limits::LOCAL_RECEIVE_NPDU_CAPACITY,
         }
     }
 

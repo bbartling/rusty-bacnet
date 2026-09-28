@@ -435,6 +435,44 @@ unqualified Clause 13.19 support claim; see the conformance ledger.
 
 Transport-layer implementations. All implement the `TransportPort` trait.
 
+### Local receive capacity and outgoing limits
+
+In the current development checkout, every `TransportPort` implementation must
+provide `local_receive_apdu_capacity() -> u16`, a stable receive declaration.
+Transparent wrappers and `AnyTransport` delegate it. The former transport method
+`max_apdu_length()` is now `egress_apdu_limit()` without an alias: it describes
+the current outgoing path, and SC negotiation/reconnect/failover can change it.
+Client budgets continue using egress limits and the client's existing canonical
+configuration policy. Unrelated Device, client and configuration APIs retain
+their names.
+
+`ServerConfig.max_apdu_length` is a raw receive ceiling. Startup clamps it to the
+transport's local capacity, rejects an effective value below 50, and requires the
+current selected Device's `Max_APDU_Length_Accepted` to equal that effective
+value before starting the transport. The server does not rewrite an
+application-owned Device. No Device remains a valid startup configuration but
+cannot emit I-Am. Both live I-Am paths recheck the selected Device under the
+same database guard; queued spontaneous announcements check at execution before
+encoding or limiter accounting. A mismatched replacement refuses announcement,
+and a later matching replacement restores it. Database replacement does not
+rebind the discovery limiter's startup identity.
+
+Raw declarations need not be header codes: Device/I-Am 1474 stays 1474, while
+originated confirmed COV, Audit and Event notifications advertise the floor 1024
+in their Confirmed-Request header. The codec helper
+`max_apdu_header_at_or_below(u32)` returns the largest code in
+50/128/206/480/1024/1476 not exceeding its input, rejects values below 50 and
+saturates larger unsigned values at 1476. This conversion does not shrink raw
+byte budgets or I-Am values. It is separate from the exact-code encoder API.
+
+Built-in B/IP, B/IPv6, Ethernet and SC declare local APDU 1476; MS/TP declares 480.
+Both registered B/IP port snapshots use local capacity independently of the
+Device/server ceiling. SC nodes advertise and enforce local NPDU 1478, including
+the two-byte plain NPDU header, on Hub, accepted-direct and outbound-direct
+intake. Complete BVLC bounds, remote/path limits, routed overhead and the Hub's
+forwarding capacity remain independent. These source APIs postdate published
+0.11.0; this bounded evidence is not a full Annex AB or hardware qualification.
+
 ### Feature Flags
 
 | Feature | Platforms | Transport |

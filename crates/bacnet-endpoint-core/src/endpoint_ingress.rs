@@ -218,7 +218,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let normal_bip_port = network
             .transport()
             .normal_bip_endpoint()
-            .map(|address| (address, network.transport().max_apdu_length()));
+            .map(|address| (address, network.transport().local_receive_apdu_capacity()));
         let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
         let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
             bacnet_transport::bvll::decode_bip_mac(network.local_mac())

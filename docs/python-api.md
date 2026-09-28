@@ -1309,6 +1309,17 @@ await client.who_am_i()
 
 ## BACnetServer
 
+In the current development checkout, the full server constructs its owned
+Device with the selected transport's stable local receive capacity: 1476 for
+B/IP, B/IPv6 and SC, or 480 for MS/TP. Device
+`Max_APDU_Length_Accepted` and I-Am therefore match the effective server
+acceptance; negotiated SC egress does not change that declaration. This adds no
+Python capacity argument and does not rewrite application-owned Rust Devices.
+The MS/TP constructor correction has a non-hardware binding test; it is not
+serial-hardware qualification. The [directional Rust contract](rust-api.md#local-receive-capacity-and-outgoing-limits)
+explains raw declarations and Confirmed-Request header flooring. These changes
+postdate published 0.11.0.
+
 Await `server.stop()` to join admitted work and release the transport. Cancelling
 its Future retains the server's shutdown owner; a later `stop()` joins it, and a
 cleanup error leaves the owner available for retry. Local mutation rejects once

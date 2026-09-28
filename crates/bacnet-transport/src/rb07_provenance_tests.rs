@@ -144,7 +144,7 @@ async fn caller_provided_untrusted_option_stays_untrusted() {
     let any = super::any::AnyTransport::<LoopbackSerial>::Loopback(loopback);
     // Delegation preserves inner provenance (unverified here); no data-link
     // implementation is forced to pretend auth support.
-    assert_eq!(any.max_apdu_length(), 1476);
+    assert_eq!(any.egress_apdu_limit(), 1476);
 }
 
 async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: [u8; 6]) {

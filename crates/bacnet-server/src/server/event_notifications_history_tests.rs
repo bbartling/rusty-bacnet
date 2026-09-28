@@ -235,6 +235,7 @@ async fn commit_and_capture_history_notification(
             &oid,
             committed,
             1000,
+            1476,
         )
         .await;
     }

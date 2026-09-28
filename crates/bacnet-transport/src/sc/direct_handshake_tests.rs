@@ -84,7 +84,7 @@ fn assert_direct_request(req: &ScMessage) {
     );
     assert_eq!(
         u16::from_be_bytes([req.payload[24], req.payload[25]]),
-        1476u16
+        1478u16
     );
 }
 

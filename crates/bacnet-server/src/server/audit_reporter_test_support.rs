@@ -107,6 +107,10 @@ impl TransportPort for CaptureTransport {
     async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
         Ok(())
     }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         if self.six_byte_mac {
             &[127, 0, 0, 1, 0xba, 0xc0]
@@ -279,6 +283,7 @@ pub(super) async fn try_servers_config(
             DeviceObject::new(DeviceConfig {
                 instance,
                 name: format!("Device {instance}"),
+                max_apdu_length: max_apdu_length.min(1476),
                 ..Default::default()
             })
             .unwrap(),

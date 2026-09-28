@@ -620,11 +620,15 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         }
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        480
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
 
-    fn max_apdu_length(&self) -> u16 {
+    fn egress_apdu_limit(&self) -> u16 {
         480
     }
 
