@@ -52,13 +52,13 @@ async fn normal_capability_and_joined_stop_release_are_explicit() {
         .is_err());
     let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd.enable_bbmd(vec![]);
-    assert!(!bbmd.supports_local_nonrouter_number_controls());
+    assert!(bbmd.supports_local_nonrouter_number_controls());
     assert!(bbmd.normal_bip_endpoint().is_none());
     assert!(bbmd
         .retain_network_port_lease_internal(Arc::new(()))
         .is_err());
     let _received = bbmd.start().await.unwrap();
-    assert!(!bbmd.supports_local_nonrouter_number_controls());
+    assert!(bbmd.supports_local_nonrouter_number_controls());
     assert!(bbmd.normal_bip_endpoint().is_none());
     bbmd.stop().await.unwrap();
     let mut foreign = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -67,7 +67,7 @@ async fn normal_capability_and_joined_stop_release_are_explicit() {
         bbmd_port: 47808,
         ttl: 60,
     });
-    assert!(!foreign.supports_local_nonrouter_number_controls());
+    assert!(foreign.supports_local_nonrouter_number_controls());
     assert!(foreign.normal_bip_endpoint().is_none());
     assert!(foreign
         .retain_network_port_lease_internal(Arc::new(()))

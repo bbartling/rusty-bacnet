@@ -364,3 +364,83 @@ async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
     let counters = bbmd_state.lock().await.fdt_counters();
     assert_eq!(counters.fanout_budget_reached, 1);
 }
+
+#[tokio::test]
+async fn forwarded_npdu_bbmd_self_sender_is_ignored_before_delivery_and_fanout() {
+    let socket = Arc::new(super::BipSocket::new(
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap(),
+        None,
+    ));
+    let local_port = socket.local_addr().unwrap().port();
+    let local_sink = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let foreign = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let peer_sender = (
+        Ipv4Addr::LOCALHOST.octets(),
+        peer.local_addr().unwrap().port(),
+    );
+    let self_sender = (Ipv4Addr::LOCALHOST.octets(), local_port);
+    let mut state = BbmdState::new(self_sender.0, local_port);
+    state
+        .set_bdt(vec![BdtEntry {
+            ip: peer_sender.0,
+            port: peer_sender.1,
+            broadcast_mask: [255; 4],
+        }])
+        .unwrap();
+    assert!(
+        state.is_bdt_peer(self_sender.0, self_sender.1),
+        "retain the required self BDT entry"
+    );
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
+    assert_eq!(
+        state.register_foreign_device(
+            Ipv4Addr::LOCALHOST.octets(),
+            foreign.local_addr().unwrap().port(),
+            60
+        ),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+    let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
+    let ctx = RecvContext {
+        local_mac: encode_bip_mac(self_sender.0, local_port),
+        socket,
+        npdu_tx,
+        bbmd: Some(Arc::new(Mutex::new(state))),
+        broadcast_addr: Ipv4Addr::LOCALHOST,
+        broadcast_port: local_sink.local_addr().unwrap().port(),
+        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
+        force_dbtn_forward_failure: false,
+    };
+    let mut msg = BvllMessage {
+        function: BvlcFunction::FORWARDED_NPDU,
+        payload: Bytes::from_static(&[1, 0x80, 0x13, 0, 99, 1]),
+        originating_ip: Some([192, 0, 2, 9]),
+        originating_port: Some(47808),
+    };
+    // Remote embedded origin does not make our looped-back UDP send a peer.
+    handle_bvll_message(&msg, self_sender, &ctx).await;
+    msg.payload = Bytes::from_static(&[1, 0x80, 0x13, 0, 77, 1]);
+    // Same IP, different port is an admitted peer: this fences every output
+    // without a timeout-only silence assertion and rejects an IP-only filter.
+    handle_bvll_message(&msg, peer_sender, &ctx).await;
+    let received = timeout(Duration::from_secs(2), npdu_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.npdu, msg.payload);
+    assert!(received.link_layer_group);
+    assert_eq!(
+        received.source_mac.as_slice(),
+        encode_bip_mac([192, 0, 2, 9], 47808)
+    );
+    for sink in [&local_sink, &foreign] {
+        let received = recv_bvll(sink).await;
+        assert_eq!(received.function, BvlcFunction::FORWARDED_NPDU);
+        assert_eq!(received.payload, msg.payload);
+        assert_eq!(received.originating_ip, msg.originating_ip);
+        assert_eq!(received.originating_port, msg.originating_port);
+    }
+}
