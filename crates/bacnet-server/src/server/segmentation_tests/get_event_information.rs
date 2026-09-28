@@ -296,7 +296,12 @@ async fn segmentation_capable_dispatch_retains_the_complete_service_ack() {
     )
     .await
     .expect("parent must return without awaiting segmented response ACKs");
-    let key = segmented_transaction_key(&source_mac, None, INVOKE_ID);
+    let key = segmented_transaction_key(
+        &source_mac,
+        None,
+        INVOKE_ID,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     let mut reconstructed = BytesMut::new();
     let mut index = 0usize;
 

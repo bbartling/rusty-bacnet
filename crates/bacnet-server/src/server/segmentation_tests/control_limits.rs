@@ -38,6 +38,7 @@ async fn non_rung_request_header_conservatively_bounds_server_response() {
         &seg_send_permits,
         source_mac.as_slice(),
         None,
+        &bacnet_network::response_route::ResponseRoute::unverified(),
         0x49,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
         &[0xA5; 256],
@@ -61,7 +62,7 @@ async fn client_abort_routed_by_dispatch_terminates_segmented_complex_ack() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(10);
     let invoke_id = 0x4A;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack_with_options(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -128,6 +129,7 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
                 &seg_send_permits,
                 source_mac.as_slice(),
                 None,
+                &bacnet_network::response_route::ResponseRoute::unverified(),
                 invoke_id,
                 ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
                 &[0xF2; 128],
@@ -176,7 +178,7 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = {
         let network = Arc::clone(&network);
         let seg_ack_senders = Arc::clone(&seg_ack_senders);
@@ -189,6 +191,7 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
                 &seg_send_permits,
                 source_mac.as_slice(),
                 None,
+                &bacnet_network::response_route::ResponseRoute::unverified(),
                 invoke_id,
                 ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
                 &[0xF3; 128],
@@ -268,6 +271,7 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
                 &seg_send_permits,
                 source_mac.as_slice(),
                 None,
+                &bacnet_network::response_route::ResponseRoute::unverified(),
                 invoke_id,
                 ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
                 &[0xF4; 128],
@@ -306,6 +310,7 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
                 &seg_send_permits,
                 source_mac.as_slice(),
                 None,
+                &bacnet_network::response_route::ResponseRoute::unverified(),
                 invoke_id,
                 ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
                 &[0xF5; 128],
@@ -351,7 +356,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
     let seg_send_permits = Arc::new(Semaphore::new(1));
     let source_mac = test_mac(16);
     let invoke_id = 0x50;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
 
     let first = {
         let network = Arc::clone(&network);
@@ -365,6 +370,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
                 &seg_send_permits,
                 source_mac.as_slice(),
                 None,
+                &bacnet_network::response_route::ResponseRoute::unverified(),
                 invoke_id,
                 ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
                 &[0xF8; 128],
@@ -390,6 +396,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         &seg_send_permits,
         source_mac.as_slice(),
         None,
+        &bacnet_network::response_route::ResponseRoute::unverified(),
         invoke_id,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
         &[0xF9; 128],
@@ -445,7 +452,7 @@ async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reach
         let mut senders = seg_ack_senders.lock();
         for idx in 0..MAX_SEG_SENDERS {
             let (handle, _segment_rx, _control_rx) = fake_segmented_send_handle(1, 2, 0);
-            senders.insert((test_mac(idx as u8), None, idx as u8), handle);
+            senders.insert((test_mac(idx as u8), None, idx as u8, None), handle);
         }
     }
 
@@ -457,6 +464,7 @@ async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reach
         &seg_send_permits,
         source_mac.as_slice(),
         None,
+        &bacnet_network::response_route::ResponseRoute::unverified(),
         invoke_id,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
         &[0xF6; 128],
@@ -480,7 +488,7 @@ async fn dispatch_returns_when_segment_ack_queue_is_full() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(13);
     let invoke_id = 0x4D;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let (handle, _rx, _control_rx) = fake_segmented_send_handle(1, 2, 0);
     handle
         .segment_ack_tx
@@ -510,7 +518,7 @@ async fn dispatch_client_abort_not_blocked_by_full_segment_ack_queue() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let (handle, _rx, mut control_rx) = fake_segmented_send_handle(1, 2, 0);
     handle
         .segment_ack_tx
@@ -557,7 +565,7 @@ async fn same_key_replacement_does_not_wait_for_full_old_queue() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(15);
     let invoke_id = 0x4F;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let (old_handle, _old_rx, mut old_control_rx) = fake_segmented_send_handle(1, 2, 0);
     old_handle
         .segment_ack_tx

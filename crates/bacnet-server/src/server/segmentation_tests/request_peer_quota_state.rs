@@ -24,6 +24,7 @@ fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
         .save_new(0, first_req.service_request.clone(), Some(0))
         .unwrap();
     SegmentedRequestState {
+        direct_response: None,
         payload,
         provenance: TransportProvenance::unverified(),
         last_activity: now,

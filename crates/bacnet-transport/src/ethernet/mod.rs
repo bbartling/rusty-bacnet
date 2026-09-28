@@ -697,6 +697,7 @@ mod transport {
                                     );
                                     if tx
                                         .try_send(ReceivedNpdu {
+                                            direct_response: None,
                                             npdu: frame.payload.clone(),
                                             source_mac: MacAddr::from(frame.source),
                                             link_layer_group: is_ethernet_group(&frame.destination),

@@ -581,6 +581,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         let is_group =
                             is_group_delivery(received.link_layer_group, npdu.destination.as_ref());
                         let apdu = ReceivedApdu {
+                            direct_response: received.direct_response.clone(),
                             apdu: npdu.payload,
                             source_mac: received.source_mac,
                             ingress_network: None,

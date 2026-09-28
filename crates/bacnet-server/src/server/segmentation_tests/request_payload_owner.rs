@@ -74,6 +74,7 @@ fn state(now: Instant, first: &[u8]) -> SegmentedRequestState {
     let mut payload = RequestPayload::new(&req);
     payload.save_new(0, req.service_request, Some(0)).unwrap();
     SegmentedRequestState {
+        direct_response: None,
         payload,
         provenance: TransportProvenance::unverified(),
         last_activity: now,

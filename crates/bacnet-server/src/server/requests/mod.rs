@@ -67,11 +67,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
         source_network: Option<NpduAddress>,
-        provenance: bacnet_transport::port::TransportProvenance,
+        route: bacnet_network::response_route::ResponseRoute,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
         ownership: Option<ConfirmedRequestOwnership>,
     ) {
+        let provenance = route.provenance();
         let (pending, lso_pending) = match ownership {
             Some(ConfirmedRequestOwnership::Generic(pending)) => (Some(pending), None),
             Some(ConfirmedRequestOwnership::LifeSafety(pending)) => (None, Some(pending)),
@@ -546,6 +547,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &buf,
                         source_mac,
                         source_network.as_ref(),
+                        &route,
                         pending,
                     )
                     .await
@@ -560,6 +562,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         request_tasks,
                         source_mac,
                         source_network,
+                        &route,
                         invoke_id,
                         service_choice,
                         ack.service_ack.clone(),
@@ -637,6 +640,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &response,
             source_mac,
             source_network.as_ref(),
+            &route,
             reply_tx,
             pending,
         )

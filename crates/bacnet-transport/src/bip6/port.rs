@@ -529,6 +529,7 @@ impl TransportPort for Bip6Transport {
                                         }
                                         if tx
                                             .try_send(ReceivedNpdu {
+                                                direct_response: None,
                                                 npdu: frame.payload.clone(),
                                                 source_mac,
                                                 link_layer_group: frame.function
@@ -578,6 +579,7 @@ impl TransportPort for Bip6Transport {
                                                 );
                                                 if tx
                                                     .try_send(ReceivedNpdu {
+                                                        direct_response: None,
                                                         npdu: Bytes::copy_from_slice(npdu_bytes),
                                                         source_mac: MacAddr::from_slice(
                                                             &source_mac,

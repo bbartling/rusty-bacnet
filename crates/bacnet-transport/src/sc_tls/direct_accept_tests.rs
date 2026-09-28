@@ -695,3 +695,6 @@ impl TestCa {
         self.node_config(vec!["localhost".into()]).acceptor()
     }
 }
+
+#[path = "direct_response_lifecycle_tests.rs"]
+mod direct_response_lifecycle_tests;

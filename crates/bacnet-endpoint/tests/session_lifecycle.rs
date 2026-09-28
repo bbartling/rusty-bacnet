@@ -210,6 +210,7 @@ async fn reply_sender_is_single_consumer_one_use() {
     // exactly once via `.take()`.
     let (reply_tx, reply_rx) = oneshot::channel();
     let received = ReceivedApdu {
+        direct_response: None,
         apdu: Bytes::from_static(&[0x10, 0x08]),
         source_mac: MacAddr::from_slice(&[0x02]),
         ingress_network: None,
@@ -235,6 +236,7 @@ async fn reply_sender_is_single_consumer_one_use() {
     // Routed + group + provenance envelope still clones without authority.
     let (reply_tx, _rx) = oneshot::channel();
     let routed = ReceivedApdu {
+        direct_response: None,
         apdu: Bytes::from_static(&[0x10, 0x08]),
         source_mac: MacAddr::from_slice(&[0x02]),
         ingress_network: Some(1),

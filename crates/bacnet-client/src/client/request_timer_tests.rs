@@ -36,6 +36,7 @@ fn encode_inbound(apdu: &Apdu) -> ReceivedNpdu {
     )
     .expect("valid NPDU encoding");
     ReceivedNpdu {
+        direct_response: None,
         npdu: npdu_buf.freeze(),
         source_mac: MacAddr::from_slice(SERVER_MAC),
         link_layer_group: false,

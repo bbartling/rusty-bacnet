@@ -75,6 +75,7 @@ async fn dispatch(
         SOURCE,
         Apdu::ConfirmedRequest(request(service, bytes, id)),
         ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
             ingress_network: None,
@@ -513,6 +514,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
             service_request: Bytes::new(),
         },
         &ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
             ingress_network: None,

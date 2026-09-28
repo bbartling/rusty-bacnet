@@ -25,6 +25,7 @@ fn saved_state(last_progress: Instant, last_activity: Instant) -> SegmentedReque
         .save_new(0, first_req.service_request.clone(), Some(0))
         .unwrap();
     SegmentedRequestState {
+        direct_response: None,
         payload,
         provenance: TransportProvenance::unverified(),
         last_activity,

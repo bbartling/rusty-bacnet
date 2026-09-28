@@ -357,6 +357,7 @@ impl MasterNode {
                     // ReceivedReply or ReceivedUnexpectedFrame — validate source
                     if self.expected_reply_source == Some(frame.source) {
                         let result = npdu_tx.try_send(ReceivedNpdu {
+                            direct_response: None,
                             npdu: frame.data.clone(),
                             source_mac: MacAddr::from_slice(&[frame.source]),
                             link_layer_group: false,
@@ -375,6 +376,7 @@ impl MasterNode {
                     || frame.destination == BROADCAST_MAC
                 {
                     let result = npdu_tx.try_send(ReceivedNpdu {
+                        direct_response: None,
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
                         link_layer_group: frame.destination == BROADCAST_MAC,
@@ -398,6 +400,7 @@ impl MasterNode {
                     let (tx, rx) = oneshot::channel();
                     self.reply_rx = Some(rx);
                     let result = npdu_tx.try_send(ReceivedNpdu {
+                        direct_response: None,
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
                         link_layer_group: false,

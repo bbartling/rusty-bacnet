@@ -193,6 +193,7 @@ async fn npdu_encoding_failure_including_mstp_fallback_drops_owner_without_issua
             }),
             &[1],
             Some(&invalid_route),
+            &bacnet_network::response_route::ResponseRoute::unverified(),
             reply_channel.then_some(tx),
             Some(pending),
         )

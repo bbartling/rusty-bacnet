@@ -43,6 +43,7 @@ async fn ingress(
         SOURCE,
         Apdu::ConfirmedRequest(req),
         bacnet_network::layer::ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
             ingress_network: None,

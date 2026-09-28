@@ -64,6 +64,7 @@ impl TransportPort for LoopbackTransport {
 
     async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
         let msg = ReceivedNpdu {
+            direct_response: None,
             npdu: Bytes::copy_from_slice(npdu),
             source_mac: self.local_mac.clone(),
             link_layer_group: false,
@@ -79,6 +80,7 @@ impl TransportPort for LoopbackTransport {
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
         let msg = ReceivedNpdu {
+            direct_response: None,
             npdu: Bytes::copy_from_slice(npdu),
             source_mac: self.local_mac.clone(),
             link_layer_group: true,

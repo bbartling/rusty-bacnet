@@ -59,6 +59,7 @@ async fn dispatch_admitted(
     bytes: Bytes,
     id: u8,
     provenance: TransportProvenance,
+    response: Option<bacnet_transport::port::DirectResponse>,
 ) -> Option<Bytes> {
     let (tx, rx) = oneshot::channel();
     BACnetServer::<TestTransport>::handle_admitted_confirmed_request(
@@ -79,7 +80,7 @@ async fn dispatch_admitted(
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         SOURCE,
         route(),
-        provenance,
+        bacnet_network::response_route::ResponseRoute::new(provenance, response),
         confirmed(service, bytes, id),
         Some(tx),
         None,
@@ -129,6 +130,7 @@ async fn deny_all_dominates_allow_all_without_invoking_callback() {
             bytes,
             17,
             TransportProvenance::unverified(),
+            None,
         )
         .await
         .unwrap();
@@ -227,6 +229,7 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
         SOURCE,
         Apdu::ConfirmedRequest(confirmed(service, bytes, 18)),
         ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
             ingress_network: None,
@@ -298,6 +301,7 @@ async fn shared_endpoint_rejects_every_mutation_choice() {
         .unwrap();
         assert!(responder
             .handle(ReceivedApdu {
+                direct_response: None,
                 apdu: encoded.freeze(),
                 source_mac: MacAddr::from_slice(SOURCE),
                 ingress_network: None,
@@ -325,6 +329,7 @@ async fn shared_endpoint_rejects_every_mutation_choice() {
     encode_apdu(&mut encoded, &Apdu::ConfirmedRequest(segmented)).unwrap();
     assert!(responder
         .handle(ReceivedApdu {
+            direct_response: None,
             apdu: encoded.freeze(),
             source_mac: MacAddr::from_slice(SOURCE),
             ingress_network: None,
@@ -504,6 +509,7 @@ async fn read_only_controls_unaffected_under_deny_all() {
                 service_request: Bytes::new(),
             },
             &ReceivedApdu {
+                direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(SOURCE),
                 ingress_network: None,
@@ -546,9 +552,14 @@ async fn read_only_controls_unaffected_under_deny_all() {
 /// (loopback TCP, in-test rcgen CA, no committed keys, no sleeps). The
 /// handshake evidence is the listener's post-handshake accept, not the test's.
 #[cfg(feature = "sc-tls")]
-async fn direct_peer_provenance() -> TransportProvenance {
+async fn direct_peer() -> (
+    TransportProvenance,
+    bacnet_transport::port::DirectResponse,
+    bacnet_transport::sc_tls::DirectListener,
+    bacnet_transport::sc_tls::TlsWebSocket,
+) {
     use bacnet_transport::sc::{ScConnection, WebSocketPort};
-    use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+    use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message};
     use bacnet_transport::sc_tls::{
         DirectAcceptConfig, DirectListener, ScNodeTlsConfig, TlsWebSocket,
     };
@@ -580,7 +591,7 @@ async fn direct_peer_provenance() -> TransportProvenance {
         [9; 16],
         listener_tls,
     );
-    let (mut listener, mut rx) = DirectListener::start(config).await.unwrap();
+    let (listener, mut rx) = DirectListener::start(config).await.unwrap();
     let url = format!(
         "wss://localhost:{}/.bacnet/sc",
         listener.local_addr().port()
@@ -613,9 +624,12 @@ async fn direct_peer_provenance() -> TransportProvenance {
         .expect("direct NPDU timed out")
         .expect("listener closed");
     assert!(received.provenance.is_direct_peer());
-    let provenance = received.provenance;
-    listener.stop().await;
-    provenance
+    (
+        received.provenance,
+        received.direct_response.unwrap(),
+        listener,
+        ws,
+    )
 }
 
 /// Direct-SC versus hub-mediated-unknown through one verified-only gate: the
@@ -624,7 +638,8 @@ async fn direct_peer_provenance() -> TransportProvenance {
 #[cfg(feature = "sc-tls")]
 #[tokio::test]
 async fn direct_channel_allows_where_unknown_leaf_denies() {
-    let direct = direct_peer_provenance().await;
+    use bacnet_transport::sc::WebSocketPort;
+    let (direct, response, mut listener, peer) = direct_peer().await;
     assert_eq!(
         MutationTrust::from_provenance(direct),
         MutationTrust::VerifiedChannel
@@ -642,10 +657,30 @@ async fn direct_channel_allows_where_unknown_leaf_denies() {
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
 
-    let allowed = dispatch_admitted(&fixture, &decisions, service, bytes.clone(), 40, direct)
+    let oneshot = dispatch_admitted(
+        &fixture,
+        &decisions,
+        service,
+        bytes.clone(),
+        40,
+        direct,
+        Some(response),
+    )
+    .await;
+    assert!(
+        oneshot.is_none(),
+        "direct replies cannot use the MS/TP handoff"
+    );
+    let wire = tokio::time::timeout(Duration::from_secs(5), peer.recv())
         .await
+        .unwrap()
         .unwrap();
-    assert!(matches!(apdu(allowed), Apdu::SimpleAck(_)));
+    let reply = bacnet_transport::sc_frame::decode_sc_message(&wire).unwrap();
+    assert_eq!(
+        reply.function,
+        bacnet_transport::sc_frame::ScFunction::EncapsulatedNpdu
+    );
+    assert!(matches!(apdu(reply.payload), Apdu::SimpleAck(ack) if ack.invoke_id == 40));
 
     let denied = dispatch_admitted(
         &fixture,
@@ -654,6 +689,7 @@ async fn direct_channel_allows_where_unknown_leaf_denies() {
         bytes,
         41,
         TransportProvenance::unverified(),
+        None,
     )
     .await
     .unwrap();
@@ -674,4 +710,6 @@ async fn direct_channel_allows_where_unknown_leaf_denies() {
     assert_eq!(contexts[1].trust, MutationTrust::Unverified);
     assert_eq!(decisions.snapshot().write_property.allow_total, 1);
     assert_eq!(decisions.snapshot().write_property.deny_total, 1);
+    drop(contexts);
+    listener.stop().await;
 }

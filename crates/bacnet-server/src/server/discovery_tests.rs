@@ -107,6 +107,7 @@ fn wrap_apdu(apdu: Bytes, source_mac: &[u8], routed: Option<(u16, &[u8])>) -> Re
     let mut raw_buf = BytesMut::new();
     encode_npdu(&mut raw_buf, &npdu).unwrap();
     ReceivedNpdu {
+        direct_response: None,
         npdu: raw_buf.freeze(),
         source_mac: MacAddr::from_slice(source_mac),
         link_layer_group: false,
@@ -441,6 +442,7 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
 
     let t0 = std::time::Instant::now();
     tx.send(ReceivedNpdu {
+        direct_response: None,
         npdu: raw_buf.freeze(),
         source_mac: MacAddr::from_slice(client_mac),
         link_layer_group: false,
@@ -638,6 +640,7 @@ fn mock_received(
     routed: Option<(u16, &[u8])>,
 ) -> bacnet_network::layer::ReceivedApdu {
     bacnet_network::layer::ReceivedApdu {
+        direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),
         ingress_network: None,

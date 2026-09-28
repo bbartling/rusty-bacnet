@@ -274,6 +274,7 @@ async fn unconfirmed(
     .unwrap();
     wire.tx
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: npdu.freeze(),
             source_mac: MacAddr::from_slice(&direct().mac),
             link_layer_group: false,

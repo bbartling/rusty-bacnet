@@ -137,6 +137,7 @@ pub(super) async fn handle_bvll_message(
             if ctx
                 .npdu_tx
                 .try_send(ReceivedNpdu {
+                    direct_response: None,
                     npdu: msg.payload.clone(),
                     source_mac,
                     link_layer_group: false,
@@ -159,6 +160,7 @@ pub(super) async fn handle_bvll_message(
             if ctx
                 .npdu_tx
                 .try_send(ReceivedNpdu {
+                    direct_response: None,
                     npdu: msg.payload.clone(),
                     source_mac,
                     link_layer_group: true,
@@ -233,6 +235,7 @@ pub(super) async fn handle_bvll_message(
                 if ctx
                     .npdu_tx
                     .try_send(ReceivedNpdu {
+                        direct_response: None,
                         npdu: msg.payload.clone(),
                         source_mac,
                         link_layer_group: true,
@@ -289,6 +292,7 @@ pub(super) async fn handle_bvll_message(
                 if ctx
                     .npdu_tx
                     .try_send(ReceivedNpdu {
+                        direct_response: None,
                         npdu: msg.payload.clone(),
                         source_mac,
                         link_layer_group: true,
@@ -330,6 +334,7 @@ pub(super) async fn handle_bvll_message(
                 if ctx
                     .npdu_tx
                     .try_send(ReceivedNpdu {
+                        direct_response: None,
                         npdu: msg.payload.clone(),
                         source_mac,
                         link_layer_group: true,

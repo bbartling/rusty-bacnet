@@ -9,7 +9,7 @@ async fn segmented_complex_ack_advances_after_negative_ack_zero() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(1);
     let invoke_id = 0x41;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -39,7 +39,7 @@ async fn segmented_complex_ack_ignores_future_positive_segment_ack() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(2);
     let invoke_id = 0x42;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -70,7 +70,7 @@ async fn segmented_complex_ack_retransmits_current_segment_after_negative_ack_pr
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(4);
     let invoke_id = 0x44;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -110,7 +110,7 @@ async fn segmented_complex_ack_advances_when_retransmitted_current_segment_recei
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack_with_options(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -176,7 +176,7 @@ async fn segmented_complex_ack_ignores_out_of_range_negative_segment_ack() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(5);
     let invoke_id = 0x45;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -207,7 +207,7 @@ async fn segmented_complex_ack_ignores_segment_ack_with_server_bit_set() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(6);
     let invoke_id = 0x46;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -243,7 +243,7 @@ async fn segmented_complex_ack_ignores_stale_positive_final_segment_ack() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(7);
     let invoke_id = 0x47;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -288,7 +288,7 @@ async fn segmented_complex_ack_aborts_after_repeated_negative_segment_ack() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(3);
     let invoke_id = 0x43;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -332,7 +332,7 @@ async fn segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_i
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(8);
     let invoke_id = 0x48;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack_with_options(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),

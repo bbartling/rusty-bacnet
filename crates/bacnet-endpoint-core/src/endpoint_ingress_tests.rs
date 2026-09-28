@@ -155,6 +155,7 @@ fn npdu_bytes(apdu: &[u8]) -> Bytes {
 
 fn received_npdu(apdu: &[u8]) -> ReceivedNpdu {
     ReceivedNpdu {
+        direct_response: None,
         npdu: npdu_bytes(apdu),
         source_mac: MacAddr::from_slice(&[0x11]),
         link_layer_group: false,
@@ -378,6 +379,7 @@ async fn request_route_preserves_the_complete_envelope_and_reply_sender() {
     handle
         .sender
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: buffer.freeze(),
             source_mac: MacAddr::from_slice(&[0xde, 0xad]),
             link_layer_group: true,

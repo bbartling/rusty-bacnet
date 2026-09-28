@@ -306,6 +306,7 @@ fn cloning_preserves_provenance_and_drops_reply() {
     use tokio::sync::oneshot;
     let (tx, _rx) = oneshot::channel();
     let original = ReceivedNpdu {
+        direct_response: None,
         npdu: Bytes::from_static(&[0x01, 0x00, 0x30]),
         source_mac: MacAddr::from_slice(&[0xAA; 6]),
         link_layer_group: false,
@@ -326,6 +327,7 @@ async fn reply_ownership_is_single_use() {
     use tokio::sync::oneshot;
     let (tx, rx) = oneshot::channel();
     let mut envelope = ReceivedNpdu {
+        direct_response: None,
         npdu: Bytes::from_static(&[0x01]),
         source_mac: MacAddr::from_slice(&[0x01]),
         link_layer_group: false,
@@ -353,6 +355,7 @@ async fn queueing_cannot_change_provenance_meaning() {
         TransportProvenance::verified_relayed_origin(),
     ] {
         tx.send(ReceivedNpdu {
+            direct_response: None,
             npdu: Bytes::from_static(&[0x01]),
             source_mac: MacAddr::from_slice(&[0x09]),
             link_layer_group: false,
@@ -371,6 +374,7 @@ async fn queueing_cannot_change_provenance_meaning() {
 fn debug_is_redacted_no_key_material() {
     let secret_mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
     let envelope = ReceivedNpdu {
+        direct_response: None,
         npdu: Bytes::from_static(&[0xDE, 0xAD]),
         source_mac: MacAddr::from_slice(&secret_mac),
         link_layer_group: true,

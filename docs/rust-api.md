@@ -525,6 +525,10 @@ existing rejection deadline and retirement behavior. See the
 `DirectListener::start(config)` creates a standalone direct listener.
 `ScTransport::with_direct_listener(config)` registers its intake and shares one
 UUID/VMAC owner with opt-in `with_direct_discovery` / `with_direct_dialer`.
+The returned listener handle may stop the listener independently; transport
+stop/abort/drop also seals that registered listener and its response writers.
+Retaining the handle permits explicit cleanup/join, not continued acceptance or
+responses after transport teardown. A standalone listener retains its own lifetime.
 Changing discovery does not erase accepted membership. Accepted and outbound
 peers share identity uniqueness while retaining separate numeric quotas.
 
@@ -564,8 +568,9 @@ A successful local WebSocket write does not confirm remote NPDU delivery.
 Private process-wide generations fence new work from old sockets and stale
 cleanup. Already queued complete NPDUs retain their original values, including
 the [direct TLS identity snapshot](#accepted-direct-tls-identity). UUID claims
-are not certificate bindings. Confirmed-response confinement (#524) remains
-separate. Ordinary
+are not certificate bindings. The bounded
+[server response policy](#accepted-direct-server-responses) is separate from
+ordinary routing. Ordinary
 bidirectional application NPDU routing over established direct sockets remains
 a pre-existing gap tracked in [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
 
@@ -607,8 +612,57 @@ Hub-relayed ingress, and unverified transports return no direct identity.
 
 These source APIs postdate published 0.11.0. This does not provide a Python
 principal callback, certificate-to-claim binding, Hub-relayed end-to-end identity,
-response socket affinity/replay delivery/segmented-response ACK or Abort
-confinement (#524), or outbound application NPDU intake (#886).
+or outbound application NPDU intake (#886). The narrower server response
+capability below is separate from authentication provenance.
+
+### Accepted direct server responses
+
+Current native `BACnetServer` replies to accepted-direct requests only through
+their original accepted TLS connection. This covers SimpleACK, ComplexACK,
+Error, Reject, server/overload Abort, LSO replay, segmented responses and retries,
+and segmented-request SegmentACK/Abort. Replacement, closure or missing/mismatched
+capability fails closed: there is no current-VMAC, replacement-socket, Hub or
+new-dial fallback. Complete admitted work may still execute under its original
+authorization; failure to reply does not roll it back or prove remote receipt.
+
+**Pre-1.0 API change:** `ReceivedNpdu` and `ReceivedApdu` add
+`direct_response: Option<DirectResponse>`; custom constructors use `None` for
+unverified ingress and forwarding consumers preserve the original value.
+`TransportProvenance` and `DirectScIdentity` remain `Copy + Eq + Hash`.
+The separately sealed, cloneable `DirectResponse` exposes its read-only identity
+and has redacted `Debug`; clones retain neither socket nor membership.
+`ReceivedApdu::response_route()` saves a `ResponseRoute`. Server response helpers
+use `NetworkLayer::send_response_apdu_on_issuance`, retaining routed DNET/DADR
+encoding while selecting only the original direct writer. Verified direct
+provenance without matching capability is an error; non-direct requests retain
+ordinary routing and MS/TP reply handoff. Generic pending ownership still ends
+at local encoded operation issuance, not the eventual send result.
+
+Each accepted connection has one socket writer and a 64-item response queue.
+Queue saturation fails immediately; queue wait and each write are bounded by
+the configured Connect timeout. The writer checks original membership and the
+network/server's irreversible `DirectResponseScope` before starting queued work.
+Network stop/drop and server stop/drop seal that scope synchronously. Low-level
+capability callers must retain a scope for their owner and seal it at shutdown;
+a sealed scope never reopens. Cancelled queued work is skipped. Already-started
+writes cannot be recalled; timeout or a failed/retired write closes the worker.
+The peer's negotiated Max-NPDU-Length and complete Max-BVLC-Length are checked.
+Response and received BVLC processing alternate preference to prevent a ready
+binary-frame stream or full response queue from starving the other direction.
+
+Segmented-response ACK/Abort admission includes the original direct leaf and
+incarnation. A reconnect cannot advance or cancel an old response child.
+Receive reassembly saves segment zero's response capability separately from
+its authorization snapshot; final completion uses that saved route.
+
+This is selected local confinement policy, not a Standard requirement to deliver
+on a historical socket. It postdates published 0.11.0 and qualifies only the
+native server consumer. [GitLab #889 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/889)
+tracks client/shared-endpoint reply consumers. Outgoing client transaction
+ownership and [#886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886)
+ordinary bidirectional traffic remain separate prerequisites/outcomes. No full
+Annex AB, external interoperability or certification claim follows. See the
+[scoped response evidence](conformance/standard-135-2020-ledger.md#accepted-direct-server-responses).
 
 ### Hub certificate bindings
 

@@ -61,6 +61,7 @@ async fn mutation_runtime_ingress_and_reassembly_share_retained_server_counters(
         .unwrap();
         let (reply_tx, reply_rx) = oneshot::channel();
         tx.send(ReceivedNpdu {
+            direct_response: None,
             npdu: npdu.freeze(),
             source_mac: MacAddr::from_slice(SOURCE),
             link_layer_group: false,

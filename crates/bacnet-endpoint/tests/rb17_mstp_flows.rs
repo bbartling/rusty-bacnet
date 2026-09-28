@@ -701,6 +701,7 @@ async fn mstp_responder_denial_releases_reply() {
     let (reply_tx, reply_rx) = oneshot::channel();
     let err = responder
         .handle(ReceivedApdu {
+            direct_response: None,
             apdu: read_request_apdu(7, 1),
             source_mac: MacAddr::from_slice(&[0x02]),
             ingress_network: None,

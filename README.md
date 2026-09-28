@@ -385,8 +385,13 @@ and connection incarnation into native server authorization and receive
 reassembly. Queued work retains its admitting identity across replacement;
 different incarnations cannot share duplicate/replay or partial request state.
 See the [Rust identity API and limits](docs/rust-api.md#accepted-direct-tls-identity).
-These APIs postdate published 0.11.0; response socket affinity and Hub-relayed
-end-to-end identity remain separate. Ordinary confirmed duplicate detection now
+These APIs postdate published 0.11.0. Native `BACnetServer` accepted-direct replies,
+LSO replay, and both segmentation directions now stay on the original socket;
+stale or missing response authority fails closed. Registered transport teardown
+also seals its listener, even when the application retains the listener handle.
+See [server response confinement and limits](docs/rust-api.md#accepted-direct-server-responses).
+Client/shared-endpoint reply consumers and ordinary bidirectional direct routing
+remain separate, as does Hub-relayed end-to-end identity. Ordinary confirmed duplicate detection now
 ends at local encoded reply issuance (or the segmented response's terminal
 outcome), allowing immediate Invoke ID reuse; LSO completed replay remains a
 separate policy. See [transaction lifetimes](docs/rust-api.md#confirmed-transaction-lifetimes).

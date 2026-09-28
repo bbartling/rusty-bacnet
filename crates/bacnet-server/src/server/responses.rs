@@ -8,15 +8,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         apdu: &[u8],
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
         pending: Option<PendingConfirmedRequest>,
     ) -> Result<(), Error> {
         network
-            .send_apdu_on_issuance(
+            .send_response_apdu_on_issuance(
                 apdu,
                 source_mac,
                 source_network,
                 false,
                 NetworkPriority::NORMAL,
+                route,
                 move || drop(pending),
             )
             .await
@@ -27,12 +29,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         apdu: &[u8],
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
     ) -> Result<(), Error> {
         Self::send_confirmed_response_apdu_expecting_reply(
             network,
             apdu,
             source_mac,
             source_network,
+            route,
             false,
         )
         .await
@@ -43,23 +47,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         apdu: &[u8],
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
         expecting_reply: bool,
     ) -> Result<(), Error> {
-        if let Some(destination) = source_network {
-            network
-                .send_apdu_routed(
-                    apdu,
-                    destination.network,
-                    &destination.mac_address,
-                    source_mac,
-                    expecting_reply,
-                    NetworkPriority::NORMAL,
-                )
-                .await
-        } else {
-            network
-                .send_apdu(apdu, source_mac, expecting_reply, NetworkPriority::NORMAL)
-                .await
-        }
+        network
+            .send_response_apdu_on_issuance(
+                apdu,
+                source_mac,
+                source_network,
+                expecting_reply,
+                NetworkPriority::NORMAL,
+                route,
+                || {},
+            )
+            .await
     }
 }

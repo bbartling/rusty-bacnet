@@ -84,7 +84,9 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     /// the receiver returned by [`crate::port::TransportPort::start`], with the
     /// existing bounded, drop-on-full policy. No forwarding task is spawned.
     /// Keep the listener only while using the transport; transport stop/drop
-    /// closes its intake but does not take ownership of this application handle.
+    /// closes its intake and seals the registered listener, including queued
+    /// responses. The independently retained handle can still join cleanup with
+    /// `listener.stop()`, but cannot keep response authority live.
     ///
     /// Solicited Advertisements report accept-direct 1 only while this listener
     /// is live, identities match, and both intakes are open. Stop/drop restores 0
@@ -130,6 +132,7 @@ impl<W: WebSocketPort> super::ScTransport<W> {
         let (listener, rx) =
             crate::sc_tls::DirectListener::start_shared(config, self.direct_membership.clone())
                 .await?;
+        self.direct_listener_shutdown = Some(listener.shutdown_signal());
         self.direct_intake = DirectIntake {
             npdus: Some(rx),
             listener: Some(ListenerStatus {

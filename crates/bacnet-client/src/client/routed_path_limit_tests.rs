@@ -134,6 +134,7 @@ async fn inject_apdu(
     .unwrap();
     inbound
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: npdu_buf.freeze(),
             source_mac: MacAddr::from_slice(immediate_source),
             link_layer_group: false,
@@ -164,6 +165,7 @@ async fn inject_control(
     .unwrap();
     inbound
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: npdu_buf.freeze(),
             source_mac: MacAddr::from_slice(immediate_source),
             link_layer_group: false,

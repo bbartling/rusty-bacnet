@@ -75,6 +75,7 @@ fn inbound(apdu: Apdu, source: Option<NpduAddress>) -> ReceivedNpdu {
     )
     .unwrap();
     ReceivedNpdu {
+        direct_response: None,
         npdu: npdu.freeze(),
         source_mac: MacAddr::from_slice(PEER),
         link_layer_group: false,

@@ -34,6 +34,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// cleanup finish. Local mutation and broadcasts are rejected from the first
     /// stop poll; local reads and database inspection remain available.
     pub async fn stop(&mut self) -> Result<(), Error> {
+        if let Some(network) = &self.network {
+            network.seal_responses();
+        }
         self.broadcaster.seal();
         self.request_tasks.close();
         stop_producer(&mut self.network_number_task).await;
@@ -150,6 +153,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
 impl<T: TransportPort> Drop for BACnetServer<T> {
     fn drop(&mut self) {
+        if let Some(network) = &self.network {
+            network.seal_responses();
+        }
         self.broadcaster.seal();
         self.notification_transactions
             .application_sealed

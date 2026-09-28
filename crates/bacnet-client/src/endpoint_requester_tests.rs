@@ -66,6 +66,7 @@ fn encoded_ack(invoke_id: u8, property_value: PropertyValue) -> (Apdu, Bytes) {
 
 fn received(apdu: Bytes, source: &[u8]) -> ReceivedApdu {
     ReceivedApdu {
+        direct_response: None,
         apdu,
         source_mac: MacAddr::from_slice(source),
         ingress_network: None,
