@@ -19,6 +19,9 @@ use support::*;
 #[path = "audit_reporter_array_tests.rs"]
 mod array;
 
+#[path = "audit_reporter_indexed_absence_tests.rs"]
+mod indexed_absence;
+
 #[path = "audit_recipient_routes_tests.rs"]
 mod recipient_routes;
 

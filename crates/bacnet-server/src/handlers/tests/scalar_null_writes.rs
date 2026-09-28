@@ -167,7 +167,7 @@ fn scalar_null_wp_preserves_property_state_and_error_precedence() {
                 )
                 .unwrap_err(),
                 ErrorClass::PROPERTY,
-                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                ErrorCode::UNKNOWN_PROPERTY,
             );
             assert_eq!(snapshot(&db, oid), before);
         }

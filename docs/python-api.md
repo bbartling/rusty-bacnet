@@ -355,6 +355,15 @@ A refused direct array write does not change the effective value or terminate
 an active lighting operation. WPM preserves valid earlier writes when it reaches
 such a denied element. This does not impose a write policy on custom objects.
 
+For indexed WP/WPM received by the bundled server, a property absent from
+nonempty effective object metadata returns `PROPERTY/UNKNOWN_PROPERTY` before
+value decoding. Served scalars and BACnetLIST properties retain
+`PROPERTY_IS_NOT_AN_ARRAY`; served arrays retain their object-specific write
+rules. Absence-first is a local error-precedence policy. Custom objects with empty
+metadata keep their existing classifier and writer delegation. WPM retains its
+successful prefix and leaves the failing element and suffix unmodified. This
+describes the current source build, not the error policy of a remote server.
+
 
 All three single-property entrypoints (`write_property`, `write_property_to_device`,
 and `write_property_to_devices`) accept omitted priority or 1–16. Values 0 or

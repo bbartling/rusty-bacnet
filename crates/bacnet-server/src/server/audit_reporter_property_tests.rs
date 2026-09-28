@@ -239,7 +239,9 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
     for selection in [None, Some(vec![]), Some(vec![Selector::None])] {
         for multiple in [false, true] {
             for index in [None, Some(0), Some(1)] {
-                let expected_code = if selection.is_none() && index.is_none() {
+                // Effective absence now wins at the indexed write gate too;
+                // a provisioned (including empty) array stays read-only.
+                let expected_code = if selection.is_none() {
                     ErrorCode::UNKNOWN_PROPERTY
                 } else {
                     ErrorCode::WRITE_ACCESS_DENIED
@@ -337,34 +339,43 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                     );
                     assert!(!object.is_writable_property(PropertyIdentifier::MONITORED_OBJECTS));
                 }
-                // As for existing Reporter configuration, the denied external
-                // execution is reported once. Delivery failure cannot recurse.
                 let requests = notifications(&fixture.transport.sent);
-                assert_eq!(requests.len(), 1);
-                let mut expected = failures::expected_value_write(
-                    1,
-                    0,
-                    0,
-                    Some((ErrorClass::PROPERTY, expected_code)),
-                );
-                expected.target_object = Some(target);
-                expected.target_property = Some(AuditPropertyReference {
-                    property_identifier: PropertyIdentifier::MONITORED_OBJECTS,
-                    property_array_index: index.map(u64::from),
-                });
-                expected.target_priority = None;
-                expected.target_value = Some(value);
-                expected.current_value = match (&selection, index) {
-                    (Some(values), Some(0)) => Some(vec![0x21, values.len() as u8]),
-                    (Some(values), None) if values.is_empty() => Some(vec![]),
-                    (Some(values), None | Some(1)) if !values.is_empty() => Some(vec![0x00]),
-                    _ => None,
-                };
-                assert_eq!(requests[0].notifications, vec![expected]);
-                assert_eq!(
-                    health(&fixture.server).await,
-                    Reliability::COMMUNICATION_FAILURE
-                );
+                if selection.is_none() && index.is_some() {
+                    // The indexed absence gate runs before the Audit observer.
+                    assert!(requests.is_empty());
+                    assert_eq!(
+                        health(&fixture.server).await,
+                        Reliability::NO_FAULT_DETECTED
+                    );
+                } else {
+                    // Present read-only arrays and unindexed absence still
+                    // reach the observer once. Delivery failure cannot recurse.
+                    assert_eq!(requests.len(), 1);
+                    let mut expected = failures::expected_value_write(
+                        1,
+                        0,
+                        0,
+                        Some((ErrorClass::PROPERTY, expected_code)),
+                    );
+                    expected.target_object = Some(target);
+                    expected.target_property = Some(AuditPropertyReference {
+                        property_identifier: PropertyIdentifier::MONITORED_OBJECTS,
+                        property_array_index: index.map(u64::from),
+                    });
+                    expected.target_priority = None;
+                    expected.target_value = Some(value);
+                    expected.current_value = match (&selection, index) {
+                        (Some(values), Some(0)) => Some(vec![0x21, values.len() as u8]),
+                        (Some(values), None) if values.is_empty() => Some(vec![]),
+                        (Some(values), None | Some(1)) if !values.is_empty() => Some(vec![0x00]),
+                        _ => None,
+                    };
+                    assert_eq!(requests[0].notifications, vec![expected]);
+                    assert_eq!(
+                        health(&fixture.server).await,
+                        Reliability::COMMUNICATION_FAILURE
+                    );
+                }
                 assert_eq!(fixture.server.notification_transactions.active_count(), 0);
                 assert!(fixture
                     .server

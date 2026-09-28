@@ -76,10 +76,10 @@ async fn delayed_target_audit_pair_wire_presence_scalar_null_and_wpm_prefix() {
                         };
                         assert_eq!(
                             error.error_code,
-                            if index.is_some() {
-                                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
-                            } else {
+                            if !present {
                                 ErrorCode::UNKNOWN_PROPERTY
+                            } else {
+                                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
                             }
                         );
                     }
