@@ -297,7 +297,7 @@ pub trait TransportPort: Send + Sync {
     /// `send_broadcast` must emit the reply on this same local link. This grants
     /// neither configured Network Port authority nor router/control-origin trust.
     /// Built-in B/IP (normal, BBMD or foreign), B/IPv6 (normal or foreign), SC,
-    /// and MS/TP opt in. Other
+    /// MS/TP, and Linux Ethernet opt in. Other
     /// links default to false until qualified. Wrappers must delegate.
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         false
