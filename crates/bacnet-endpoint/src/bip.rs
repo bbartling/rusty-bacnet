@@ -10,14 +10,14 @@
 //!
 //! Plain B/IP (unicast + local broadcast over one real UDP socket) is proven
 //! on real loopback UDP (RB-16): one socket per session, bidirectional
-//! confirmed traffic, I-Am identical to Device ReadProperty. **BBMD /
-//! foreign-device mode is experimental and unproven**: `enable_bbmd`,
-//! `foreign_device_policy`, `bbmd_management_acl`, `bdt_persist_path`,
-//! `fanout_policy`, and `register_as_foreign_device` have construction-only
-//! coverage (transport builds pre-start); there is no wire BBMD proof in this
-//! crate. Live BVLC queries (`read_bdt` / `write_bdt` / `read_fdt` / …) stay
-//! on [`BipTransport`](bacnet_transport::bip::BipTransport). Do not present
-//! BBMD mode as proven.
+//! confirmed traffic, I-Am identical to Device ReadProperty. BBMD and foreign
+//! modes have bounded local Network Number wire coverage: ServerOnly BBMD
+//! admission and Original-Broadcast replies, ClientOnly foreign DBTN/retry and
+//! alternate forwarders, and Both requester/responder progress with cleanup.
+//! Broader BBMD/foreign behavior remains experimental. Management ACL,
+//! persistence and fanout controls retain construction-only endpoint coverage.
+//! Live BVLC queries (`read_bdt` / `write_bdt` / `read_fdt` / …) stay on
+//! [`BipTransport`](bacnet_transport::bip::BipTransport).
 //!
 //! ```no_run
 //! use std::net::Ipv4Addr;
@@ -56,7 +56,7 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 /// [`BipTransport`] for real-transport proofs (RB-16/17).
 ///
 /// Plain mode is proven on real loopback UDP; BBMD/foreign-device setters are
-/// experimental (construction-only, no wire proof) — see the module docs.
+/// experimental beyond the bounded Number wire cases described above.
 pub struct BipEndpointBuilder {
     interface: Ipv4Addr,
     port: u16,
@@ -184,8 +184,8 @@ impl BipEndpointBuilder {
 
     /// Enables BBMD mode with the initial BDT (before start).
     ///
-    /// **Experimental / unproven**: staged pre-start only, construction
-    /// coverage, no wire BBMD proof. BBMD controls require this first:
+    /// Local Number controls have BBMD wire coverage; broader BBMD behavior
+    /// remains experimental. BBMD controls require this first:
     /// [`foreign_device_policy`](Self::foreign_device_policy) /
     /// [`bbmd_management_acl`](Self::bbmd_management_acl) without it fail
     /// [`build_transport`](Self::build_transport) with a typed
@@ -229,7 +229,8 @@ impl BipEndpointBuilder {
 
     /// Registers this endpoint as a foreign device (before start).
     ///
-    /// **Experimental / unproven**: staged pre-start only, no wire proof.
+    /// Local Number controls have foreign DBTN/retry wire coverage; broader
+    /// foreign-device behavior remains experimental.
     pub fn register_as_foreign_device(mut self, config: ForeignDeviceConfig) -> Self {
         self.foreign_device = Some(config);
         self
