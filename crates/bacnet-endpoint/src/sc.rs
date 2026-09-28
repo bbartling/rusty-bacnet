@@ -1,10 +1,18 @@
 //! Concrete BACnet/SC controls at endpoint level (no generic-trait erasure).
 //!
 //! Exposes [`ScTransport`] builders + hub handles first-class on the endpoint
-//! composition. Loopback composition stays for unit validation; the real-hub
-//! dial path ([`ScEndpointBuilder::build_hub_session`], `sc-tls` only) dials a
-//! local constrained-TLS [`ScHub`](bacnet_transport::sc_hub::ScHub) via
-//! [`TlsWebSocket`](bacnet_transport::sc_tls::TlsWebSocket) for RB-16 proofs.
+//! composition. Loopback composition stays for unit validation.
+#![cfg_attr(
+    feature = "sc-tls",
+    doc = "With `sc-tls`, [`ScEndpointBuilder::build_hub_session`] composes a session
+over a [`TlsWebSocket`](bacnet_transport::sc_tls::TlsWebSocket) connected to a
+local constrained-TLS [`ScHub`](bacnet_transport::sc_hub::ScHub) for RB-16 proofs."
+)]
+#![cfg_attr(
+    not(feature = "sc-tls"),
+    doc = "With `sc-tls`, `ScEndpointBuilder::build_hub_session` composes a session
+over a `TlsWebSocket` connected to a local constrained-TLS `ScHub` for RB-16 proofs."
+)]
 //! MS/TP/Ethernet/IPv6 surfaces are out of scope.
 //!
 //! # Evidence level
@@ -35,7 +43,14 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 ///
 /// Real hub dialing previously lived only in `bacnet-client` /
 /// `bacnet-server` SC builders; RB-16 adds the hub-dial path here
-/// ([`build_hub_session`](Self::build_hub_session), `sc-tls` only) so the
+#[cfg_attr(
+    feature = "sc-tls",
+    doc = "([`build_hub_session`](Self::build_hub_session), requires `sc-tls`) so the"
+)]
+#[cfg_attr(
+    not(feature = "sc-tls"),
+    doc = "(`build_hub_session`, requires `sc-tls`) so the"
+)]
 /// endpoint composition owns the same concrete validation (VMAC reservation,
 /// UUID presence, heartbeat timing, reconnect) without hiding behind
 /// `impl TransportPort`.
