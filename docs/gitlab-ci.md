@@ -49,18 +49,39 @@ For every MR targeting `main`, additionally run:
 
 ```bash
 rustup toolchain install 1.93 --profile minimal
-RUSTUP_TOOLCHAIN=1.93 bash .github/scripts/check-msrv.sh
+RUSTUP_TOOLCHAIN=1.93 bash .github/scripts/check-msrv.sh --linux-native
 cargo install cargo-audit --version 0.22.2 --locked
 cargo audit --color always
 cargo install cargo-deny --version 0.20.2 --locked
 cargo deny --all-features check
 ```
 
-Python 3 and the native dependencies needed by the selected TLS provider must
-be available for MSRV checking; Linux setup includes `pkg-config`, `cmake`, and
-`perl`. The existing MSRV script derives publishable crates and retains its
-existing optional-feature coverage. The explicit `RUSTUP_TOOLCHAIN=1.93`
-overrides the development toolchain for that command only. Reuse already
+The MSRV command is required **local Linux GNU evidence** for `main` targets.
+Provide an installed native Rust/Cargo 1.93 toolchain, Python 3, a C toolchain,
+`pkg-config`, `libpcap-dev` (Debian package name), `file`, and `ldd`, plus `cmake`
+and `perl` for the selected TLS provider. The compiler's GNU host triple must
+match the Linux host architecture reported by `uname -m`. macOS/Windows users
+must run this check in a separately provided Linux environment. The script
+does not install tools, skip unavailable features, start Docker or use hardware.
+The qualified serial/GPIO build needs neither `libudev-dev` nor `libgpiod-dev`.
+
+The script derives metadata-eligible packages (currently 11); eligibility is
+not proof of registry publication, which remains separate work in #195.
+`--linux-native` runs that baseline with its SC/IPv6 features, then separate
+locked transport checks for `ethernet`, `serial` and `serial-gpio`, and an actual
+locked `bacnet-cli --bin bacnet --features pcap` build. It resolves the executable
+from the successful Cargo JSON artifact, honors `CARGO_TARGET_DIR`, and requires
+an ELF executable with resolved dynamic `libpcap.so` and no `ldd` `not found`.
+Conflicting compiler/cross-target environment settings and active environment
+compiler wrappers fail; configured compiler/wrapper/target defaults are replaced
+by the verified compiler, disabled wrappers and an explicit native target.
+
+The no-argument `RUSTUP_TOOLCHAIN=1.93 bash .github/scripts/check-msrv.sh` remains
+the baseline used by the retained GitHub invocation; it is not the complete
+local Linux-native gate. The explicit toolchain selection overrides the development
+pin for these commands only. Script guard/parser regressions run with
+`python3 .github/scripts/test-check-msrv.py`; shims in those tests do not establish
+actual Linux compilation or dynamic linkage. Reuse already
 installed Cargo Audit 0.22.2 and Cargo Deny 0.20.2 after verifying their versions;
 the install commands specify exact versions and published lockfiles. Deny's
 `--all-features` preserves the existing GitHub action's default.
@@ -109,9 +130,13 @@ evidence is obtained; moving them out of hosted CI does not waive them.
 ## Hosted runner and image
 
 The sole job uses `saas-linux-small-amd64` (2 vCPU, 8 GB memory, 30 GB storage),
-`CARGO_BUILD_JOBS=1`, and a 60-minute timeout. This smaller runner is a candidate
-to reduce compute-minute consumption; qualification requires the full suite on
-the actual runner. Record the runner, duration, and any OOM or resource failure.
+`CARGO_BUILD_JOBS=1`, and a 60-minute timeout. The complete suite has passed on
+this runner: the latest [!892 pipeline](https://gitlab.com/justinscott-group/rusty-bacnet/-/pipelines/2887870969)
+and [Linux job](https://gitlab.com/justinscott-group/rusty-bacnet/-/jobs/16768305398)
+(project access required) completed in 637.6 seconds with about 11 GiB free;
+earlier observed passes took 666 and 739.6 seconds. These runs establish observed
+fit, not a controlled compute-cost comparison or a guarantee of future headroom.
+Record the runner, duration, and any OOM or resource failure for later runs.
 The job prints `df -h` before setup and in `after_script` for disk-headroom
 inspection; abrupt termination may prevent the final diagnostic. If memory or
 disk pressure or a material regression occurs, report that evidence for a
@@ -124,8 +149,8 @@ debug assertions, overflow checks, and test selection retain their existing
 defaults; no `RUSTFLAGS` or other profile override is introduced. The setting
 also changes the `DEBUG` environment observed by build scripts, so these builds
 are not claimed to be binary-equivalent to previous builds with full symbols.
-Actual savings and fit on the 8 GB runner remain unproven until hosted execution.
-The complete runtime suite and doctests must still pass with this setting.
+The observed passes establish fit with this setting; controlled savings remain
+unmeasured. The complete runtime suite and doctests must still pass for each head.
 
 The exact locked command remains:
 
