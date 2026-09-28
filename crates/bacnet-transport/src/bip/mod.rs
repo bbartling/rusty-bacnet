@@ -502,6 +502,9 @@ impl TransportPort for BipTransport {
         self.network_port_lease = Some(lease);
         Ok(())
     }
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        self.normal_bip_endpoint().is_some()
+    }
     fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
         if self.bbmd_config.is_some() || self.bbmd.is_some() || self.foreign_device.is_some() {
             return None;

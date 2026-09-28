@@ -132,8 +132,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
         let controls = if starting
             .network()
             .transport()
-            .normal_bip_endpoint()
-            .is_some()
+            .supports_local_nonrouter_number_controls()
         {
             Some(starting.network().enable_network_control_receiver()?)
         } else {
@@ -145,8 +144,9 @@ pub(super) async fn start<T: TransportPort + 'static>(
         let controls = starting
             .network()
             .transport()
-            .normal_bip_endpoint()
-            .and(controls);
+            .supports_local_nonrouter_number_controls()
+            .then_some(controls)
+            .flatten();
         Ok::<_, Error>((apdu_rx, routes, controls))
     }
     .await;

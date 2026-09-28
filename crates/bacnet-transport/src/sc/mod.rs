@@ -288,6 +288,9 @@ async fn publish_connected_ws<W: WebSocketPort>(
 }
 
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        true
+    }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         if let Some(config) = &self.reconnect_config {
             config.validate()?;

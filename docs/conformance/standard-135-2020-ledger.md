@@ -78,6 +78,31 @@ same-device multiport/router residual. Pending configuration, rebind, BBMD,
 foreign-device, DHCP and other-link support are not claimed. See the [Rust contract](../rust-api.md#registered-bip-network-port).
 Global evidence pins remain unchanged.
 
+## SC local nonrouter Network Number controls
+
+The SC slice of #879 extends `BACNET-06-NONROUTER-NETWORK-NUMBER` to full
+servers and shared endpoints using the existing owner and bounded control worker.
+Clauses 6.4.14–6.4.15 and 6.5.2.2 admit local unicast or broadcast What-Is;
+known owners reply by local broadcast. Only logical-broadcast NNI teaches state.
+SC starts UNKNOWN without configured SC registration and never borrows another
+Network Port object. Configured-source precedence and learned response flag zero
+are unchanged. A direct What-Is replies through the Hub broadcast path.
+
+[Constrained TLS tests](../../crates/bacnet-endpoint/tests/sc_network_numbers.rs)
+cover both owners through `AnyTransport`, actual BVLC destination/payload bytes,
+unknown/unicast/routed/malformed refusals and disconnected-Hub shutdown.
+[Full-server gates](../../crates/bacnet-server/src/server/sc_network_number_tests.rs)
+and [endpoint gates](../../crates/bacnet-endpoint/src/sc_network_number_tests.rs)
+separately prove blocked single-writer behavior, control saturation/closure,
+APDU handler and admitted Audit ACK progress, caller-owned Number cancellation,
+stop cancellation and joined cleanup. They are not OS/TLS backpressure tests.
+A started send may have reached wire; detached ordinary APDU ownership is unchanged.
+
+Parent #879 remains incomplete for other links and standalone clients; #863
+multiport routing and #518 SC control-origin authorization remain separate.
+No SC configured Network Port, authenticated Hub-relayed leaf, whole Annex AB,
+or complete Network Port profile is claimed. Global evidence pins stay unchanged.
+
 ## Endpoint WriteProperty source WRITE
 
 Refs #852 extends the bounded source profile under the still-in-progress #345

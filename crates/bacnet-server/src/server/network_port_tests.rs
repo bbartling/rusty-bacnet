@@ -2,6 +2,9 @@
 use super::*;
 use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 
+#[path = "sc_network_number_tests.rs"]
+mod sc_network_number_tests;
+
 #[tokio::test]
 async fn registered_port_bare_drop_and_retained_network_refusal_keep_lease() {
     for stop_first in [false, true] {
