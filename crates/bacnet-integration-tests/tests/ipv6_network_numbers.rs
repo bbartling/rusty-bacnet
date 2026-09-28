@@ -206,8 +206,9 @@ async fn stop_and_reuse(server: &mut Server, local: SocketAddrV6) {
 }
 
 async fn receive_fence(peer: &UdpSocket, local: SocketAddrV6) {
-    // The ACK follows the preceding unicast on the same UDP path. It fences
-    // transport admission before a multicast marker, not worker completion.
+    // Assuming ordered delivery on this controlled same-path UDP fixture, the
+    // ACK shows receive-loop progress, not successful queue admission or Number
+    // worker completion. The later exact-number response is the state oracle.
     bounded(peer.send_to(&frame(6, &[]), local)).await.unwrap();
     let ack = bounded(wire::receive(peer)).await.unwrap();
     assert_eq!(ack.bytes, [0x82, 7, 0, 10, 0x12, 0x34, 0x56, 0x40, 0x87, 9]);
