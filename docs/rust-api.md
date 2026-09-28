@@ -1105,6 +1105,19 @@ guards retain their precedence; custom object implementations retain their own
 write dispatch. WPM reports the failed coordinate and retains its successful
 prefix. See [bounded error evidence](conformance/support-summary.md#ledger-rows).
 
+At the indexed WP/WPM service gate, nonempty effective metadata that omits the
+property produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served
+scalar or BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served
+array retains its object-owned element, count and write-access rules. This
+absence-first ordering is a local error-precedence policy. Empty custom metadata
+does not prove absence: those objects keep their array classifier and writer
+delegation. For this early absence failure, WPM keeps its successful prefix and
+reports the exact failed object/property/index, without authorizing or observing
+the failing element or suffix. The rejected indexed attempt produces no execution
+Audit record; present read-only arrays and unindexed absence retain their existing
+Audit handling. The outer WP authorization check and direct object writes are
+unchanged.
+
 Intrinsic reporting uses one proposal/commit contract. The
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,

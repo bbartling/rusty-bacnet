@@ -65,6 +65,7 @@ mod file_persistence;
 mod file_storage_hook;
 mod framed_properties;
 mod get_event_information_projection;
+mod indexed_write_presence;
 mod life_safety_cov;
 mod life_safety_operation;
 mod life_safety_reset;

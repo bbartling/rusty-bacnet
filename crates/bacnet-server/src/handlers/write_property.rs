@@ -155,12 +155,10 @@ pub(crate) fn handle_write_property_multiple_observed(
                 committed_oids,
             );
         };
-        if reference.property_array_index.is_some() && !object.is_array_property(property) {
-            return semantic_failure(
-                protocol_error(ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-                reference,
-                committed_oids,
-            );
+        if let Err(error) =
+            check_write_array_index(object, property, reference.property_array_index)
+        {
+            return semantic_failure(error, reference, committed_oids);
         }
         let value = match decode_write_property_value(
             property,
@@ -262,6 +260,38 @@ fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
         class: class.to_raw() as u32,
         code: code.to_raw() as u32,
     }
+}
+
+/// At the existing indexed-write gate, effective absence takes precedence over
+/// array classification (local error-order policy for Clauses 15.9/15.10).
+fn check_write_array_index(
+    object: &dyn bacnet_objects::traits::BACnetObject,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(), Error> {
+    if index.is_none() {
+        return Ok(());
+    }
+    let metadata = object.property_metadata();
+    // Empty metadata is the optional custom/unmigrated default, not proof of
+    // absence. Preserve those objects' classifier and write dispatch.
+    if !metadata.is_empty()
+        && !metadata
+            .iter()
+            .any(|row| row.property_identifier == property)
+    {
+        return Err(protocol_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ));
+    }
+    if !object.is_array_property(property) {
+        return Err(protocol_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ));
+    }
+    Ok(())
 }
 
 fn wpm_undecodable_coordinate() -> BACnetObjectPropertyReference {
@@ -415,23 +445,14 @@ pub(crate) fn handle_write_property_observed(
     let request = WritePropertyRequest::decode(service_data)?;
     let oid = request.object_identifier;
 
-    if db.get(&oid).is_none() {
-        return Err(protocol_error(
-            ErrorClass::OBJECT,
-            ErrorCode::UNKNOWN_OBJECT,
-        ));
-    }
-    if request.property_array_index.is_some()
-        && !db
-            .get(&oid)
-            .expect("existence checked above")
-            .is_array_property(request.property_identifier)
-    {
-        return Err(protocol_error(
-            ErrorClass::PROPERTY,
-            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-        ));
-    }
+    let object = db
+        .get(&oid)
+        .ok_or_else(|| protocol_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
+    check_write_array_index(
+        object,
+        request.property_identifier,
+        request.property_array_index,
+    )?;
     let value = decode_write_property_value(
         request.property_identifier,
         request.property_array_index,
