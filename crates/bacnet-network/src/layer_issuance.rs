@@ -59,25 +59,12 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         route: &crate::response_route::ResponseRoute,
         on_issuance: impl FnOnce() + Send,
     ) -> Result<(), Error> {
-        let buf = if let Some(destination) = destination {
-            Self::encode_routed_npdu_buf(
-                apdu,
-                destination.network,
-                &destination.mac_address,
-                expecting_reply,
-                priority,
-            )?
-        } else {
-            let npdu = Npdu {
-                expecting_reply,
-                priority,
-                payload: Bytes::copy_from_slice(apdu),
-                ..Npdu::default()
-            };
-            let mut buf = BytesMut::with_capacity(2 + apdu.len());
-            encode_npdu(&mut buf, &npdu)?;
-            buf
-        };
+        let buf = crate::response_route::encode_response_npdu(
+            apdu,
+            destination,
+            expecting_reply,
+            priority,
+        )?;
         let direct = route.direct()?;
         on_issuance();
         if let Some(direct) = direct {

@@ -84,6 +84,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let client_accepts_segmented = req.segmented_response_accepted;
         let client_max_segments = req.max_segments;
         let effective_max_apdu = event_information::limit(client_max_apdu, config.max_apdu_length);
+        let effective_max_apdu = route
+            .max_apdu_length(effective_max_apdu, source_network.as_ref())
+            // Invalid reply authority must not revoke already-admitted service
+            // execution. Keep its construction budget; issuance still fails
+            // closed on the same invalid route without any fallback.
+            .unwrap_or(effective_max_apdu);
         let device_transmits_segments =
             event_information::can_segment(config.segmentation_supported);
         let segmented_response_available = client_accepts_segmented && device_transmits_segments;

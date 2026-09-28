@@ -108,6 +108,29 @@ impl DirectResponse {
         self.identity
     }
 
+    /// Maximum response NPDU payload after the original peer's independent
+    /// NPDU and complete BVLC receive limits. This immutable sizing snapshot
+    /// does not check liveness or confer authority to send after retirement.
+    pub fn max_npdu_length(&self) -> usize {
+        usize::from(self.peer_max_npdu)
+            .min(usize::from(self.peer_max_bvlc).saturating_sub(Self::encode_frame(&[], 0).len()))
+    }
+
+    fn encode_frame(npdu: &[u8], message_id: u16) -> BytesMut {
+        let frame = ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::copy_from_slice(npdu),
+        };
+        let mut bytes = BytesMut::new();
+        encode_sc_message(&mut bytes, &frame);
+        bytes
+    }
+
     /// Send one encoded response NPDU without Data Options on this connection.
     /// The peer's negotiated NPDU and complete BVLC limits are both enforced.
     pub async fn send(&self, npdu: &[u8], scope: &DirectResponseScope) -> Result<(), Error> {
@@ -119,17 +142,7 @@ impl DirectResponse {
                 "direct response exceeds peer Max-NPDU-Length".into(),
             ));
         }
-        let frame = ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: self.next_message.fetch_add(1, Ordering::Relaxed),
-            originating_vmac: None,
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::copy_from_slice(npdu),
-        };
-        let mut bytes = BytesMut::new();
-        encode_sc_message(&mut bytes, &frame);
+        let bytes = Self::encode_frame(npdu, self.next_message.fetch_add(1, Ordering::Relaxed));
         if bytes.len() > usize::from(self.peer_max_bvlc) {
             return Err(Error::Encoding(
                 "direct response exceeds peer Max-BVLC-Length".into(),

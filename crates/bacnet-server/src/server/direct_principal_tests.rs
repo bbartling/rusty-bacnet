@@ -125,6 +125,13 @@ impl Fixture {
         }
     }
     async fn peer(&mut self, tls: ScNodeTlsConfig) -> Peer {
+        self.peer_config(tls, |_| {}).await
+    }
+    async fn peer_config(
+        &mut self,
+        tls: ScNodeTlsConfig,
+        configure: impl FnOnce(&mut ScConnection),
+    ) -> Peer {
         let url = format!(
             "wss://localhost:{}/.bacnet/sc",
             self.listener.local_addr().port()
@@ -133,6 +140,7 @@ impl Fixture {
             .await
             .unwrap();
         let mut connection = ScConnection::new(PEER_MAC, PEER_UUID);
+        configure(&mut connection);
         let mut wire = BytesMut::new();
         encode_sc_message(&mut wire, &connection.build_connect_request());
         ws.send(&wire).await.unwrap();
@@ -143,17 +151,29 @@ impl Fixture {
         Peer { ws, connection }
     }
     async fn capture(&mut self, peer: &mut Peer, request: &Apdu) -> ReceivedNpdu {
+        self.capture_from(
+            peer,
+            request,
+            Some(NpduAddress {
+                network: 123,
+                mac_address: MacAddr::from_slice(&[3]),
+            }),
+        )
+        .await
+    }
+    async fn capture_from(
+        &mut self,
+        peer: &mut Peer,
+        request: &Apdu,
+        source: Option<NpduAddress>,
+    ) -> ReceivedNpdu {
         let mut payload = BytesMut::new();
         encode_apdu(&mut payload, request).unwrap();
         let mut npdu = BytesMut::new();
         encode_npdu(
             &mut npdu,
             &Npdu {
-                // Exercise routed-claim canonicalization too: identical for every peer.
-                source: Some(NpduAddress {
-                    network: 123,
-                    mac_address: MacAddr::from_slice(&[3]),
-                }),
+                source,
                 payload: payload.freeze(),
                 ..Npdu::default()
             },

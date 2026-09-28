@@ -388,8 +388,10 @@ See the [Rust identity API and limits](docs/rust-api.md#accepted-direct-tls-iden
 These APIs postdate published 0.11.0. Native `BACnetServer` accepted-direct
 confirmed replies, LSO replay, and segmented-request controls now stay on the
 original socket; stale or missing response authority fails closed. Unconfirmed
-Who-Is/Who-Has discovery replies retain ordinary routing. Registered transport teardown
-also seals its listener, even when the application retains the listener handle.
+Who-Is/Who-Has discovery replies retain ordinary routing. Response sizing includes
+the original peer's NPDU/BVLC limits and actual routing overhead. Registered
+transport teardown also seals its listener, even when the application retains
+the listener handle.
 See [server response confinement and limits](docs/rust-api.md#accepted-direct-server-responses).
 Client/shared-endpoint reply consumers and ordinary bidirectional direct routing
 remain separate, as does Hub-relayed end-to-end identity. Ordinary confirmed duplicate detection now

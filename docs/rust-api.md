@@ -649,6 +649,15 @@ capability callers must retain a scope for their owner and seal it at shutdown;
 a sealed scope never reopens. Cancelled queued work is skipped. Already-started
 writes cannot be recalled; timeout or a failed/retired write closes the worker.
 The peer's negotiated Max-NPDU-Length and complete Max-BVLC-Length are checked.
+`DirectResponse::max_npdu_length()` exposes that immutable payload budget;
+`ResponseRoute::max_apdu_length(cap, destination)` subtracts the same encoded
+local/routed NPDU header used for issuance. Following Clause 5.2.1.2, server
+response selection uses the minimum of this path budget, the requester's APDU
+acceptance and the server's configured APDU cap. ComplexACK segments fill this
+budget subject to the existing segment-count and capability limits. If no
+segment fits, the existing Abort path applies; if even that cannot fit, the
+bounded send fails without fallback. Sizing never requires current membership
+and does not revoke admitted execution; invalid authority still fails at send.
 Response and received WebSocket frames alternate preference: a ready binary,
 Ping or Pong frame can precede a queued response by at most one read turn, and
 a full response queue can precede input by at most one bounded write. Ignored

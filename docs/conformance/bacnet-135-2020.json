@@ -4235,7 +4235,7 @@
   },
   {
     "id": "BACNET-AB-SC-SERVER-RESPONSE",
-    "standard_anchor": "135-2020 Annex AB.4.2/AB.6 and Clause 5; local confirmed server response confinement policy",
+    "standard_anchor": "135-2020 Annex AB.4.2/AB.6 and Clause 5 (including 5.2.1.1-3); local confirmed server response confinement policy",
     "priority": "P0",
     "requirement_summary": "Confine BACnetServer accepted-direct confirmed terminal responses, LSO replay and segmented-request controls to the original accepted connection and its owner lifetime.",
     "status": "supported-with-clause-evidence",
@@ -4254,6 +4254,7 @@
     ],
     "positive_tests": [
       "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_same_socket_read_property",
+      "crates/bacnet-server/src/server/direct_response_budget_tests.rs",
       "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_success_error_reject_and_oversize_abort_use_original_socket",
       "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_lso_replay_and_same_leaf_reconnect_keep_original_route",
       "crates/bacnet-server/src/server/direct_response_segment_tests.rs::direct_response_segments_retry_and_final_ack_stay_on_original_socket",
@@ -4277,7 +4278,7 @@
       "docs/rust-api.md#accepted-direct-server-responses",
       "docs/python-api.md"
     ],
-    "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
+    "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Clause 5.2.1.2 response selection uses framing-derived path capacity as well as local/requester APDU limits; real TLS exact-boundary, local/routed, independent BVLC, segment-count and too-small cases cover fitting delivery or bounded failure. Sizing metadata is immutable and independent of current membership. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
   }
  ]
 }

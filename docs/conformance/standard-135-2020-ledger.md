@@ -1121,7 +1121,8 @@ full TSM conformance, external interoperability or BTL certification.
 
 `BACNET-AB-SC-SERVER-RESPONSE` records #888, a bounded child of #524.
 Annex AB.4.2/AB.6 supplies direct-connection and current-membership context;
-Clause 5 supplies confirmed response/segmentation state. Confinement to an
+Clauses 5.2.1.1–3 supply response sizing and Clause 5 supplies confirmed
+response/segmentation state. Confinement to an
 original accepted socket is selected local policy, not a normative promise of
 historical-socket delivery or an exhaustive Annex AB claim.
 
@@ -1143,6 +1144,18 @@ capabilities, overload, retry/terminal Abort, peer ACK/Abort isolation, receive
 NAK/ACK and saved segment-zero route. Baseline red observed a data-bearing reply
 at generic egress, not proven disclosure to another peer. Green tests decode A
 or B TLS data and use a generic-egress spy plus deterministic completion barriers.
+
+`direct_response_budget_tests.rs` adds Clause 5.2.1.2 (printed 30–31/PDF 32–33)
+evidence: response selection includes the original peer's independent NPDU/BVLC
+limits, the encoded local/routed header, requester APDU acceptance and local cap.
+A 479-byte ComplexACK over a 480-byte NPDU/484-byte BVLC path becomes two fitting
+segments; an exactly fitting 478-byte ACK stays unsegmented. Independent BVLC
+and six-byte routed-DADR limits, exact payload reassembly, final ACK cleanup and
+identical InvokeID reuse are checked over real TLS. No-segmentation, segment-count,
+segment-header and Abort-too-small controls preserve bounded failure with no
+fallback. Tiny positive receive limits are admitted-input robustness cases, not
+certification of every such endpoint advertisement. Sizing snapshots survive
+retirement but confer no send authority; admitted authorization remains intact.
 
 `direct_response_tests.rs` in transport checks queue capacity 64, weak membership,
 negotiated NPDU/complete BVLC limits, cancellation and bounded waiting.
