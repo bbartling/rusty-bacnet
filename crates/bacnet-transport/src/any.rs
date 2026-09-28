@@ -353,7 +353,8 @@ mod tests {
         let mstp = MstpTransport::new(serial, config);
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Mstp(mstp);
         assert_eq!(any.local_mac(), &[42]);
-        assert!(!any.supports_local_nonrouter_number_controls());
+        assert!(any.supports_local_nonrouter_number_controls());
+        assert!(any.normal_bip_endpoint().is_none());
     }
 
     #[test]
