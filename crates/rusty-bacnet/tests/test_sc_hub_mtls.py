@@ -586,7 +586,7 @@ class NodeIdentityMtlsTests(MtlsFixture):
                     self.assertEqual(connect[:4], b"\x06\0\0\1")
                     self.assertEqual(connect[4:10], vmac)
                     self.assertEqual(connect[10:26], uuid)
-                    self.assertEqual(connect[26:], b"\x16\x49\x05\xc4")
+                    self.assertEqual(connect[26:], b"\x16\x49\x05\xc6")
                     observed.append(connect[10:26])
                     await self.send_frame(writer, b"\x07\0\0\1" + b"\x02\0\0\0\0\x09" +
                                           bytes.fromhex("4a015cf2ec394d58ac2d11e1761ce86d") + b"\x05\xc4\x05\xc4")

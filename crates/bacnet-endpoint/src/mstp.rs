@@ -44,7 +44,7 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 
 /// MS/TP transport APDU bound enforced at endpoint composition.
 ///
-/// [`MstpTransport::max_apdu_length`](bacnet_transport::port::TransportPort::max_apdu_length)
+/// [`MstpTransport::local_receive_apdu_capacity`](bacnet_transport::port::TransportPort::local_receive_apdu_capacity)
 /// advertises 480; an identity advertising more would invite oversized
 /// responses that the standard-frame MAC must reject at `queue_npdu`.
 const MSTP_MAX_APDU: u16 = 480;

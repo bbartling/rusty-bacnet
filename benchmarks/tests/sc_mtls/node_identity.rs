@@ -52,7 +52,7 @@ async fn sc_server_uuid_wire_bytes_survive_reconnect_and_fresh_builds() {
             assert_eq!(&request[..4], &[6, 0, 0, 1]);
             assert_eq!(&request[4..10], &VMAC);
             assert_eq!(&request[10..26], &UUID);
-            assert_eq!(&request[26..], &[0x16, 0x49, 0x05, 0xc4]);
+            assert_eq!(&request[26..], &[0x16, 0x49, 0x05, 0xc6]);
             let mut accept = vec![7, 0, 0, 1];
             accept.extend_from_slice(&[2, 0, 0, 0, 0, 9]);
             accept.extend_from_slice(&[

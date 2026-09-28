@@ -120,6 +120,10 @@ pub struct ScTransport<W: WebSocketPort> {
 }
 
 impl<W: WebSocketPort> ScTransport<W> {
+    /// Stable local APDU receive capacity, available before opening a connection.
+    /// Negotiated outgoing limits do not change this declaration.
+    pub const LOCAL_RECEIVE_APDU_CAPACITY: u16 = crate::sc_limits::LOCAL_RECEIVE_APDU_CAPACITY;
+
     /// Create an unstarted transport with an unconfigured, zero UUID placeholder.
     /// Call [`Self::with_device_uuid`] before [`TransportPort::start`].
     /// The supplied local VMAC must be neither all-zero nor broadcast.
@@ -793,7 +797,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 
     fn local_receive_apdu_capacity(&self) -> u16 {
-        crate::sc_limits::LOCAL_RECEIVE_APDU_CAPACITY
+        Self::LOCAL_RECEIVE_APDU_CAPACITY
     }
 
     fn local_mac(&self) -> &[u8] {
