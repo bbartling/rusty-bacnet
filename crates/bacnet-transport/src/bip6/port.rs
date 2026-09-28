@@ -194,6 +194,10 @@ async fn send_register_foreign_device_v6(
 }
 
 impl TransportPort for Bip6Transport {
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        true
+    }
+
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         if self.recv_task.is_some() {
             return Err(Error::Transport(std::io::Error::new(

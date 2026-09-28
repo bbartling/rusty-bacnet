@@ -103,6 +103,32 @@ multiport routing and #518 SC control-origin authorization remain separate.
 No SC configured Network Port, authenticated Hub-relayed leaf, whole Annex AB,
 or complete Network Port profile is claimed. Global evidence pins stay unchanged.
 
+## B/IPv6 full-server local Network Number controls
+
+The IPv6 slice of #879 opts normal and configured foreign-device full servers
+into the same bounded nonrouter owner. Both start UNKNOWN without borrowing an
+unrelated Network Port object. Normal replies are OriginalBroadcast NNI on the
+selected link; foreign replies are DBTN to the configured BBMD. A trusted
+Forwarded-NPDU is a logical broadcast even on a unicast UDP hop. Existing Annex U
+selected-link, VMAC, destination/interface and configured-BBMD admission remain.
+
+[External Rust wire tests](../../crates/bacnet-integration-tests/tests/ipv6_network_numbers.rs)
+cover UNKNOWN, both query delivery forms, learned flag zero, configured-source
+precedence, unicast/routed/malformed/invalid refusals, wrong-BBMD refusal and
+stop/port reuse. Normal mode also reconstructs UNKNOWN on the same port.
+The explicit `bacnet-integration-tests/ipv6` feature and ignored-test invocation
+are required on an isolated IPv6 link; ordinary CI does not execute these tests.
+[Installed Python qualification](../../crates/rusty-bacnet/tests/qualifications/ipv6_network_numbers.py)
+uses the public full server and actual multicast intake/output on the same Linux
+topology. An independent observer container captures response bytes; no duplicate
+filter compensates for sender-namespace multicast reflection. These wire tests
+are separate from the unchanged deterministic owner lifecycle gates above.
+
+No IPv6 endpoint builder, number setter, configured IPv6 Network Port, Python
+foreign-device API, complete Annex U/Network Port profile or #879 closure is
+claimed. B/IP BBMD/foreign-device ownership, MS/TP, Ethernet and standalone-client
+controls remain outside this slice. Global evidence pins stay unchanged.
+
 ## Endpoint WriteProperty source WRITE
 
 Refs #852 extends the bounded source profile under the still-in-progress #345
