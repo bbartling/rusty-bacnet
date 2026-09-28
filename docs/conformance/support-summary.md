@@ -12,7 +12,7 @@
 
 | Dimension | Value | Count |
 |---|---|---|
-| Priority | P0 | 18 |
+| Priority | P0 | 19 |
 | Priority | P1 | 63 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 33 |
+| Status | supported-with-clause-evidence | 34 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -124,6 +124,7 @@
 | `BACNET-AB-SC-DIRECT-MEMBERSHIP` | 135-2020 Annex AB.4.2/AB.4.2.1, AB.6.2.1/AB.6.2.3 and AB.2.4.1 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-AB-SC-DIRECT-PRINCIPAL` | 135-2020 Annex AB.7.4 connection authentication; local request ownership policy | P0 | supported-with-clause-evidence | 3 |
 | `BACNET-AB-SC-SERVER-RESPONSE` | 135-2020 Annex AB.4.2/AB.6 and Clause 5 (including 5.2.1.1-3); local confirmed server response confinement policy | P0 | supported-with-clause-evidence | 3 |
+| `BACNET-AB-SC-INBOUND-CONSUMER-RESPONSE` | 135-2020 Annex AB.4.2/AB.6 and Clause 5.2.1.2; local incoming-request response confinement policy | P0 | supported-with-clause-evidence | 4 |
 
 ## Follow-Up Source
 

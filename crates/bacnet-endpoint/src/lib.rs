@@ -57,7 +57,12 @@
 //!   enables authorized writes to the one local Device's Description and its
 //!   installed source Audit recipient, with
 //!   deterministic and real B/IP loopback tests. Full `bacnet-server`
-//!   dispatch parity is out of scope.
+//!   dispatch parity is out of scope. Accepted-direct replies preserve the original
+//!   sealed response capability through the bounded endpoint queue, before any
+//!   prompt reply channel. Retired/invalid authority never falls back by address;
+//!   committed writes retain their admitting authorization. Saved direct link
+//!   limits constrain response size; this responder uses its existing Abort when
+//!   a ComplexACK cannot fit and does not add response segmentation.
 //!
 //! # Data-link support matrix (explicit, not silent)
 //!

@@ -202,10 +202,10 @@ impl EndpointResponder {
 
     /// Handles one inbound request, preserving provenance structurally.
     ///
-    /// Preserves `link_layer_group` (raw), `is_group` (effective),
-    /// `data_attributes`, `ingress_network` and `provenance` are threaded
-    /// through without new policy decisions; `data_attributes` are forwarded
-    /// on the reply send instead of being dropped.
+    /// Direct provenance or any supplied capability selects checked original-socket
+    /// egress before a prompt reply channel. Other ingress preserves ordinary
+    /// addressing, prompt reply semantics and data attributes. Admitted service
+    /// execution is independent of whether its saved response authority survives.
     #[doc(hidden)]
     pub async fn handle(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
         if !self.open.load(Ordering::Acquire) {
@@ -228,6 +228,9 @@ impl EndpointResponder {
             return Ok(false);
         };
 
+        let response_route = received.response_route();
+        let checked_response =
+            received.provenance.is_direct_peer() || received.direct_response.is_some();
         let invoke_id = request.invoke_id;
         let mut response = if request.segmented {
             Apdu::Abort(AbortPdu {
@@ -264,11 +267,14 @@ impl EndpointResponder {
             })
         };
 
+        // Sizing uses the saved link limits after application execution. Invalid
+        // authority is still rejected by checked send, never by address fallback.
+        let max_apdu = response_route
+            .max_apdu_length(request.max_apdu_length, received.source_network.as_ref())
+            .unwrap_or(request.max_apdu_length);
         let mut encoded = BytesMut::new();
         encode_apdu(&mut encoded, &response)?;
-        if matches!(response, Apdu::ComplexAck(_))
-            && encoded.len() > usize::from(request.max_apdu_length)
-        {
+        if matches!(response, Apdu::ComplexAck(_)) && encoded.len() > usize::from(max_apdu) {
             response = Apdu::Abort(AbortPdu {
                 sent_by_server: true,
                 invoke_id,
@@ -276,6 +282,21 @@ impl EndpointResponder {
             });
             encoded.clear();
             encode_apdu(&mut encoded, &response)?;
+        }
+
+        if checked_response {
+            drop(received.reply_tx.take());
+            self.egress
+                .admit_response_apdu(
+                    encoded.to_vec(),
+                    received.source_mac,
+                    received.source_network,
+                    response_route,
+                )?
+                .complete()
+                .await
+                .result?;
+            return Ok(true);
         }
 
         if let Some(reply_tx) = received.reply_tx.take() {

@@ -186,6 +186,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &received.source_mac,
                                     &received.source_network,
                                     received.provenance,
+                                    received.direct_response,
                                     received.is_group,
                                     received.reply_tx,
                                     decoded,

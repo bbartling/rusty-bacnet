@@ -84,7 +84,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         event_tx: &broadcast::Sender<ReceivedEventNotification>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
-        reply_tx: Option<oneshot::Sender<Bytes>>,
+        reply: InboundReply,
         req: ConfirmedRequestPdu,
     ) {
         let received = match ReceivedEventNotification::decode(
@@ -100,7 +100,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     network,
                     source_mac,
                     source_network,
-                    reply_tx,
+                    reply,
                     req.invoke_id,
                     RejectReason::INVALID_PARAMETER_DATA_TYPE,
                 )
@@ -119,8 +119,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
         if let Err(error) =
-            Self::send_received_reply_apdu(network, &buf, source_mac, source_network, reply_tx)
-                .await
+            Self::send_received_reply_apdu(network, &buf, source_mac, source_network, reply).await
         {
             warn!(%error, "Failed to send event notification acknowledgment");
         }

@@ -541,11 +541,11 @@ impl ServerRoleHandle {
 
     /// Arms one-shot deferred-reply suspension (RB-17 MS/TP wiring).
     ///
-    /// The next `reply_tx`-bearing inbound request handled while this arm is
+    /// The next ordinary non-direct `reply_tx`-bearing request handled while this arm is
     /// set answers token-owned via egress (after the MAC releases
     /// `ReplyPostponed`) instead of promptly via `reply_tx`. Fails closed
     /// once the owning session shuts down. Broadcasts (no `reply_tx`) never
-    /// consume the arm.
+    /// consume the arm; neither do direct provenance or capability-bearing envelopes.
     pub fn suspend_next_reply(&self) -> Result<(), Error> {
         let session = self.token.upgrade().ok_or_else(shutdown_error)?;
         if !session.is_open() {
@@ -558,13 +558,17 @@ impl ServerRoleHandle {
     /// Handles one inbound request via the wire invoke ID directly.
     ///
     /// Session dispatch only. Never touches the outbound coordinator pool.
-    /// Preserves link-group/attributes/provenance structurally through the
-    /// inner responder (pass-through, no new decisions). Honors a pending
-    /// RB-17 suspension arm identically to session dispatch (strips
-    /// `reply_tx` so the responder answers token-owned via egress).
+    /// Preserves the envelope's identity and response capability for the responder.
+    /// Honors a pending RB-17 suspension arm identically to session dispatch:
+    /// ordinary prompt work drops `reply_tx` and answers token-owned via egress.
+    /// Direct/capability-bearing envelopes retain checked original-route policy.
     pub async fn handle_inbound(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
         self.check_open()?;
-        if received.reply_tx.is_some() && self.token.upgrade().is_some_and(|s| s.take_suspend()) {
+        if !received.provenance.is_direct_peer()
+            && received.direct_response.is_none()
+            && received.reply_tx.is_some()
+            && self.token.upgrade().is_some_and(|s| s.take_suspend())
+        {
             let _ = received.reply_tx.take();
         }
         self.responder.handle(received).await

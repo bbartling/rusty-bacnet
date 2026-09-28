@@ -814,7 +814,11 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
     // responder never sees both for one request. No second serial owner, no
     // MAC state duplication, no transport change.
     let mut received = received;
-    if received.reply_tx.is_some() && parts.shared.token.take_suspend() {
+    if !received.provenance.is_direct_peer()
+        && received.direct_response.is_none()
+        && received.reply_tx.is_some()
+        && parts.shared.token.take_suspend()
+    {
         let _ = received.reply_tx.take();
     }
     match responder.handle(received).await {

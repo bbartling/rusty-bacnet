@@ -393,8 +393,13 @@ the original peer's NPDU/BVLC limits and actual routing overhead. Registered
 transport teardown also seals its listener, even when the application retains
 the listener handle.
 See [server response confinement and limits](docs/rust-api.md#accepted-direct-server-responses).
-Client/shared-endpoint reply consumers and ordinary bidirectional direct routing
-remain separate, as does Hub-relayed end-to-end identity. Ordinary confirmed duplicate detection now
+The standalone client's inbound confirmed notification replies and the shared
+endpoint responder also use this original route, checked before any MS/TP prompt
+channel. The endpoint retains its bounded response queue and unsegmented service
+scope; an oversized read response selects its existing Abort. See the
+[client/endpoint reply scope](docs/rust-api.md#accepted-direct-client-and-endpoint-replies).
+Outgoing client transaction policy, native notification traffic, ordinary
+bidirectional direct routing and Hub-relayed end-to-end identity remain separate. Ordinary confirmed duplicate detection now
 ends at local encoded reply issuance (or the segmented response's terminal
 outcome), allowing immediate Invoke ID reuse; LSO completed replay remains a
 separate policy. See [transaction lifetimes](docs/rust-api.md#confirmed-transaction-lifetimes).

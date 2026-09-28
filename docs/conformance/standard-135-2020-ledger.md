@@ -1179,3 +1179,69 @@ outgoing client transaction ownership, ordinary bidirectional direct application
 (#886), Hub-relayed end-to-end identity, Python direct-entry support, full Annex
 AB/PICS/BTL and external interoperability. Global evidence pins and broad row
 statuses remain unchanged. [Public API and lifecycle break](../rust-api.md#accepted-direct-server-responses).
+
+
+## Accepted-direct client and endpoint replies
+
+Scoped row `BACNET-AB-SC-INBOUND-CONSUMER-RESPONSE` (GitLab #889, under #524)
+extends the separate server response row to two inbound consumers only. The
+selected original-socket policy is local: BACnet allows response path switching;
+Annex AB.4.2/AB.6 do not mandate this historical-socket policy. Clause 5.2.1.2
+(printed 30–31 / PDF32–33) supplies the minimum path/receiver APDU sizing rule;
+AB.2.10.1/AB.2.11.1 carry the separate receive capacities. No broad row status
+or global source pin changes.
+
+The standalone client's confirmed COV/Event Ack/Reject, unsupported-service
+Reject and segmented-request Abort now preserve the admitting `ResponseRoute`.
+The shared endpoint's existing ReadProperty/authorized Device WriteProperty
+responder carries the same authority through its existing bounded egress queue.
+Direct provenance **or any capability** is classified before `reply_tx`; missing,
+mismatched, retired and sealed routes never fall back through a one-shot, claimed
+address, replacement, Hub or new dial. Ordinary non-direct/no-capability client
+failed prompt handoff still falls back; endpoint prompt handoff still completes
+even when its receiver closed. Group requests and COV `NoResponse` stay silent.
+Direct Data Options remain empty; ordinary endpoint data attributes are preserved.
+
+[Real TLS controls](../../crates/bacnet-endpoint/tests/direct_replies.rs) exercise
+the public `BACnetClient` and live `EndpointSession` through a queue of genuine
+listener-admitted envelopes and a generic-egress spy. Baseline failures observed
+actual generic response selection, not disclosure to another peer. The
+[authority matrix](../../crates/bacnet-endpoint/tests/direct_replies/authority.rs)
+first proves A's socket works, holds complete A work, commits distinct-leaf B
+with the same UUID/VMAC, then releases A and uses B's fresh reply as an ordered
+completion barrier. Invalid capability/prompt-channel combinations are silent;
+valid direct capability wins over an otherwise usable prompt channel.
+[Notification controls](../../crates/bacnet-endpoint/tests/direct_replies/notifications.rs)
+cover COV policy Ack/Reject/NoResponse, event Ack, malformed notification Reject,
+segmented Abort and admitted A notification delivery after replacement.
+[Device readback](../../crates/bacnet-endpoint/tests/direct_replies/execution.rs)
+proves retired/missing-route A writes still authorize and commit under A's saved
+identity, denied B writes cannot commit, and current B responses remain usable.
+
+[Budget controls](../../crates/bacnet-endpoint/tests/direct_replies/budget.rs)
+compare exact 479-byte ComplexACKs with a 478-byte local APDU budget, independent
+NPDU/BVLC restrictions and six-byte routed destination overhead. The endpoint
+uses its existing `SEGMENTATION_NOT_SUPPORTED` Abort; it gains no segmented send.
+Ordinary ingress still accepts the same response under request-only APDU480.
+Tiny admitted limits that cannot fit an Abort/reply fail bounded without fallback;
+these are robustness cases, not certification of every advertised endpoint limit.
+Sizing follows service execution and never revokes committed work.
+
+[Queue and lifecycle controls](../../crates/bacnet-endpoint/tests/direct_replies/lifecycle.rs)
+hold the sole endpoint egress owner, prove queue-full/closed behavior, cancel a
+queued response while its original A connection remains current, then require a
+fresh ordered reply. Live session stop/drop cancels queued original replies and
+retained role handles. Saved capability clones do not retain listener membership.
+The feature-independent [owned-command control](../../crates/bacnet-endpoint-core/src/endpoint_egress_deadline_tests.rs)
+preserves cancellation without a deadline. Existing MS/TP prompt/deferred,
+ordinary data-attribute and requester tests remain controls. Already-started
+writes cannot be recalled; local completion is not peer receipt.
+
+The real TLS integration suite requires explicit `bacnet-endpoint/sc-tls`.
+The standard hosted workspace command enabling only `bacnet-transport/sc-tls`
+does not select those endpoint-feature-gated cases; focused local evidence is
+recorded separately. Outgoing client transaction/retry policy and controls
+(#890), native notification traffic (#891), ordinary bidirectional direct traffic
+(#886), Hub-relayed end-to-end identity, Python direct entry, full Annex AB/PICS/BTL
+and external interoperability remain excluded. These source changes postdate
+published 0.11.0. See the [public scope](../rust-api.md#accepted-direct-client-and-endpoint-replies).

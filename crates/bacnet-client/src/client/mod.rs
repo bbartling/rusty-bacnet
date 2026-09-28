@@ -2,6 +2,10 @@
 //!
 //! The client owns a NetworkLayer, spawns an APDU dispatch task, and provides
 //! methods for sending confirmed and unconfirmed BACnet requests.
+//! Replies to inbound accepted-direct confirmed requests use the original sealed
+//! response capability before any prompt channel, without address fallback on
+//! retirement or invalid authority. This does not change outgoing transaction
+//! correlation, retries or their segmented controls.
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -846,6 +850,8 @@ mod device_events;
 mod device_mgmt;
 mod discovery;
 mod dispatch;
+mod inbound_replies;
+use inbound_replies::InboundReply;
 mod event_notifications;
 mod file_list;
 mod lifecycle;
