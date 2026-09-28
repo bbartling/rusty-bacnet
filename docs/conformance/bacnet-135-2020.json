@@ -2855,8 +2855,16 @@
     "crates/bacnet-transport/src/bip6",
     "crates/bacnet-types/src/enums/bvll.rs"
    ],
-   "positive_tests": [],
-   "negative_tests": [],
+   "positive_tests": [
+    "crates/bacnet-transport/src/bip6/link/tests.rs",
+    "crates/bacnet-transport/tests/ipv6_selected_link.rs (explicit external fixture)",
+    "crates/rusty-bacnet/tests/qualifications/ipv6_selected_link.py (fresh installed Linux extension)"
+   ],
+   "negative_tests": [
+    "crates/bacnet-transport/src/udp_metadata_ipv6_tests.rs",
+    "crates/bacnet-transport/src/bip6/socket.rs::tests",
+    "crates/bacnet-transport/tests/ipv6_selected_link_multi.rs (explicit external two-link fixture)"
+   ],
    "benchmarks": [
     "benchmarks/benches/bip6_latency.rs",
     "benchmarks/benches/bip6_throughput.rs"
@@ -2865,7 +2873,7 @@
     "README transports table: BACnet/IPv6",
     "docs/python-api.md BACnet/IPv6"
    ],
-   "notes": "Needs Annex U-specific malformed frame and multicast-scope tests."
+   "notes": "Selected-link source/index and receive authority are qualified with isolated Linux ULA wire controls, foreign BBMD source/trust, collision/lifecycle and fresh installed Python discovery. macOS loopback qualifies multicast intake and unicast/control source, not independent multicast-egress capture. Windows compilation and synthetic unique-link-local selection are not runtime wire evidence. External fixtures are intentionally opt-in; deployment topology and full Annex U conformance remain unqualified."
   },
   {
    "id": "BACNET-AB-SC-FRAME",

@@ -6,19 +6,18 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
-use crate::udp_metadata::{DestinationReceiver, IpVersion};
 
 use super::frame::destination_vmac_matches;
 use super::ingress::{
     forwarded_npdu_is_trusted, forwarded_source_is_usable, is_local_unicast_delivery,
     original_destination_matches,
 };
+use super::socket::Bip6Socket;
 use super::vmac_table::{derive_vmac_from_device_instance, generate_random_vmac, VmacTable};
 use super::{
     decode_bvlc6, decode_forwarded_npdu_payload, encode_address_resolution,
@@ -77,7 +76,7 @@ pub struct Bip6Transport {
     device_instance: Option<u32>,
     local_mac: [u8; 18],
     pub(super) source_vmac: Bip6Vmac,
-    pub(super) socket: Option<Arc<UdpSocket>>,
+    pub(super) socket: Option<Arc<Bip6Socket>>,
     recv_task: Option<JoinHandle<()>>,
     /// VMAC address table (Clause U.5).
     pub(super) vmac_table: VmacTable,
@@ -124,7 +123,12 @@ impl Bip6BroadcastScope {
 impl Bip6Transport {
     /// Create a new BACnet/IPv6 transport.
     ///
-    /// - `interface`: Local IPv6 address to bind (use `::` for all interfaces)
+    /// - `interface`: Concrete local IPv6 address selecting its unique usable
+    ///   interface, or `::` for unambiguous automatic selection. Automatic mode
+    ///   prefers a non-loopback link and a unique non-link-local address on it;
+    ///   ambiguity is an error. Loopback is node-local only. Normal operation
+    ///   retains the selected source/index on a wildcard receive socket.
+    ///   Foreign `::` instead selects a source usable for the configured BBMD.
     /// - `port`: UDP port (default 47808 / 0xBAC0)
     /// - `device_instance`: If `Some(id)`, derive the 3-byte VMAC from the
     ///   valid 22-bit device instance (per Clause H.7.2). Otherwise an
@@ -152,6 +156,9 @@ impl Bip6Transport {
 
     /// Configure this transport as a foreign device.
     ///
+    /// Foreign `::` derives a concrete source from the route to the BBMD and
+    /// binds the production socket to it. An explicit address is retained.
+    /// Foreign startup does not require normal-mode multicast membership.
     /// A foreign device must also have a configured Device instance. Random
     /// VMAC startup is rejected until BBMD-assisted collision resolution is
     /// implemented.
@@ -164,7 +171,7 @@ impl Bip6Transport {
 /// Derive a 3-byte VMAC from a 22-bit device instance (Clause H.7.2).
 /// Send a Register-Foreign-Device message (Clause U.4.5).
 async fn send_register_foreign_device_v6(
-    socket: &UdpSocket,
+    socket: &Bip6Socket,
     bbmd_addr: SocketAddrV6,
     ttl: u16,
     source_vmac: &Bip6Vmac,
@@ -183,25 +190,6 @@ async fn send_register_foreign_device_v6(
         warn!(error = %e, "BIP6: failed to send Register-Foreign-Device");
     } else {
         debug!(bbmd = %bbmd_addr, ttl = ttl, "BIP6: sent Register-Foreign-Device");
-    }
-}
-
-/// Resolve the local IPv6 address by connecting a UDP socket to a link-local
-/// multicast address and reading back the local address. No packets are sent.
-/// Uses ff02::1 (all-nodes link-local) to avoid any external DNS dependency.
-fn resolve_local_ipv6() -> Option<Ipv6Addr> {
-    let socket = std::net::UdpSocket::bind("[::]:0").ok()?;
-    // Connect to link-local all-nodes multicast on BACnet port -- no packets sent.
-    match socket.connect("[ff02::1]:47808") {
-        Ok(()) => {}
-        Err(_) => {
-            warn!("Could not resolve local IPv6 address via ff02::1, falling back to localhost");
-            return None;
-        }
-    }
-    match socket.local_addr().ok()? {
-        std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
-        _ => None,
     }
 }
 
@@ -225,94 +213,41 @@ impl TransportPort for Bip6Transport {
             )));
         }
 
-        let wildcard_bind = self.interface.is_unspecified();
-        let socket2_sock = socket2::Socket::new(
-            socket2::Domain::IPV6,
-            socket2::Type::DGRAM,
-            Some(socket2::Protocol::UDP),
-        )
-        .map_err(Error::Transport)?;
-
-        socket2_sock.set_only_v6(true).map_err(Error::Transport)?;
-        socket2_sock
-            .set_reuse_address(true)
-            .map_err(Error::Transport)?;
-        socket2_sock
-            .set_nonblocking(true)
-            .map_err(Error::Transport)?;
-        socket2_sock
-            .set_multicast_loop_v6(true)
-            .map_err(Error::Transport)?;
-
-        let bind_addr = SocketAddrV6::new(self.interface, self.port, 0, 0);
-        socket2_sock
-            .bind(&bind_addr.into())
-            .map_err(Error::Transport)?;
-
-        let destination_receiver = DestinationReceiver::configure(&socket2_sock, IpVersion::V6)
-            .map_err(Error::Transport)?;
-
-        let std_socket: std::net::UdpSocket = socket2_sock.into();
-        let socket = UdpSocket::from_std(std_socket).map_err(Error::Transport)?;
-
-        let local_addr = socket.local_addr().map_err(Error::Transport)?;
-        let local_port = local_addr.port();
-        self.port = local_port;
-
-        let local_ip = if self.interface.is_unspecified() {
-            resolve_local_ipv6().unwrap_or(Ipv6Addr::LOCALHOST)
-        } else {
-            self.interface
-        };
-        let local_unicast_ips = if wildcard_bind {
-            crate::local_addresses::ipv6()
-        } else {
-            vec![local_ip]
-        };
-        #[cfg(unix)]
-        if wildcard_bind && local_unicast_ips.is_empty() {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::AddrNotAvailable,
-                "could not enumerate local IPv6 addresses for wildcard ingress",
-            )));
-        }
-        self.local_mac = encode_bip6_mac(local_ip, local_port);
-
-        self.source_vmac = if let Some(id) = self.device_instance {
+        // Resolve and prepare privately. No identity, port, VMAC or socket is
+        // published until joins and the required collision exchange succeed.
+        let foreign = self
+            .foreign_device
+            .as_ref()
+            .map(|fd| SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0));
+        let socket = Arc::new(
+            Bip6Socket::bind(self.interface, self.port, foreign)
+                .await
+                .map_err(Error::Transport)?,
+        );
+        let local_port = socket.local_port().map_err(Error::Transport)?;
+        let local_ip = socket
+            .selection
+            .map(|link| link.address)
+            .unwrap_or(*socket.local_address().map_err(Error::Transport)?.ip());
+        let wildcard_bind = false;
+        let local_unicast_ips = vec![local_ip];
+        let local_mac = encode_bip6_mac(local_ip, local_port);
+        let mut source_vmac = if let Some(id) = self.device_instance {
             derive_vmac_from_device_instance(id)
         } else {
             generate_random_vmac()?
         };
-
-        let if_index =
-            crate::local_addresses::ipv6_interface_index(&local_ip).unwrap_or_else(|| {
-                warn!("Could not resolve interface index for {local_ip}, using OS default (0)");
-                0u32
-            });
+        let if_index = socket.selection.map_or(0, |link| link.index);
         let collision_probe_required = self.device_instance.is_none();
         let collision_group = self.broadcast_scope.multicast_addr();
-        for group in &[
-            BACNET_IPV6_MULTICAST_LINK_LOCAL,
-            BACNET_IPV6_MULTICAST_SITE_LOCAL,
-            BACNET_IPV6_MULTICAST_ORG_LOCAL,
-        ] {
-            if let Err(e) = socket.join_multicast_v6(group, if_index) {
-                if collision_probe_required && *group == collision_group {
-                    return Err(Error::Transport(e));
-                }
-                warn!("Could not join IPv6 multicast group {group} on interface {if_index}: {e}");
-            }
-        }
-
-        let socket = Arc::new(socket);
 
         // VMAC collision detection and resolution
         if self.foreign_device.is_none() {
-            let multicast_dest = SocketAddrV6::new(collision_group, self.port, 0, if_index);
+            let multicast_dest = SocketAddrV6::new(collision_group, local_port, 0, if_index);
             let mut check_buf = vec![0u8; 64];
 
             for attempt in 0..=MAX_VMAC_RETRIES {
-                let ar_msg = encode_address_resolution(&self.source_vmac, &self.source_vmac);
+                let ar_msg = encode_address_resolution(&source_vmac, &source_vmac);
                 if let Err(error) = socket.send_to(&ar_msg, multicast_dest).await {
                     if collision_probe_required {
                         return Err(Error::Transport(error));
@@ -323,11 +258,7 @@ impl TransportPort for Bip6Transport {
                 let mut collision = false;
                 let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
                 loop {
-                    match tokio::time::timeout_at(
-                        deadline,
-                        destination_receiver.recv_from(&socket, &mut check_buf),
-                    )
-                    .await
+                    match tokio::time::timeout_at(deadline, socket.recv_from(&mut check_buf)).await
                     {
                         Ok(Ok(received)) => {
                             if let Ok(frame) = decode_bvlc6(&check_buf[..received.len]) {
@@ -339,13 +270,13 @@ impl TransportPort for Bip6Transport {
                                                 || local_unicast_ips.contains(peer.ip()))
                                 );
                                 if frame.function == Bvlc6Function::AddressResolution
-                                    && frame.destination_vmac == Some(self.source_vmac)
+                                    && frame.destination_vmac == Some(source_vmac)
                                     && matches!(received.destination, std::net::IpAddr::V6(ip) if ip == collision_group)
                                     && received.os_group_delivery != Some(false)
                                     && !is_self_loop
                                 {
                                     let ack = encode_address_resolution_ack(
-                                        &self.source_vmac,
+                                        &source_vmac,
                                         &frame.source_vmac,
                                     );
                                     if let Err(error) = socket.send_to(&ack, received.peer).await {
@@ -354,19 +285,19 @@ impl TransportPort for Bip6Transport {
                                         }
                                         debug!(error = %error, "Configured-VMAC AR-Ack send failed");
                                     }
-                                    if frame.source_vmac == self.source_vmac {
+                                    if frame.source_vmac == source_vmac {
                                         collision = true;
                                         break;
                                     }
                                 }
                                 // AR-ACK from another node using our VMAC.
                                 if frame.function == Bvlc6Function::AddressResolutionAck
-                                    && frame.source_vmac == self.source_vmac
+                                    && frame.source_vmac == source_vmac
                                     && is_local_unicast_delivery(
                                         received.destination,
                                         frame.destination_vmac,
                                         local_ip,
-                                        self.source_vmac,
+                                        source_vmac,
                                         &local_unicast_ips,
                                         wildcard_bind,
                                         received.os_group_delivery,
@@ -404,11 +335,11 @@ impl TransportPort for Bip6Transport {
                 }
 
                 if attempt < MAX_VMAC_RETRIES {
-                    let old_vmac = self.source_vmac;
-                    self.source_vmac = generate_random_vmac()?;
+                    let old_vmac = source_vmac;
+                    source_vmac = generate_random_vmac()?;
                     warn!(
                         old_vmac = ?old_vmac,
-                        new_vmac = ?self.source_vmac,
+                        new_vmac = ?source_vmac,
                         attempt = attempt + 1,
                         max_retries = MAX_VMAC_RETRIES,
                         "BIP6 VMAC collision detected, re-deriving new VMAC"
@@ -424,13 +355,24 @@ impl TransportPort for Bip6Transport {
             }
         }
 
+        // Do the only foreign-device startup I/O before spawning owned tasks,
+        // so cancellation cannot orphan an unpublished receive worker.
+        if let Some(fd) = &self.foreign_device {
+            send_register_foreign_device_v6(
+                &socket,
+                SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0),
+                fd.ttl,
+                &source_vmac,
+            )
+            .await;
+        }
+
         /// NPDU receive channel capacity for high-throughput UDP transports.
         const NPDU_CHANNEL_CAPACITY: usize = 256;
 
         let (tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
-        let local_mac = self.local_mac;
 
-        let source_vmac_copy = self.source_vmac;
+        let source_vmac_copy = source_vmac;
         let foreign_bbmd = self
             .foreign_device
             .as_ref()
@@ -440,10 +382,7 @@ impl TransportPort for Bip6Transport {
         let recv_task = tokio::spawn(async move {
             let mut recv_buf = vec![0u8; 2048];
             loop {
-                match destination_receiver
-                    .recv_from(&socket_for_recv, &mut recv_buf)
-                    .await
-                {
+                match socket_for_recv.recv_from(&mut recv_buf).await {
                     Ok(received) => {
                         let data = &recv_buf[..received.len];
                         match decode_bvlc6(data) {
@@ -697,6 +636,8 @@ impl TransportPort for Bip6Transport {
             }
         });
 
+        self.local_mac = local_mac;
+        self.source_vmac = source_vmac;
         self.recv_task = Some(recv_task);
         self.socket = Some(Arc::clone(&socket));
 
@@ -706,9 +647,6 @@ impl TransportPort for Bip6Transport {
             let ttl = fd.ttl;
             let sock = Arc::clone(&socket);
             let source_vmac = self.source_vmac;
-
-            // Send initial registration
-            send_register_foreign_device_v6(&sock, bbmd_addr, ttl, &source_vmac).await;
 
             // Re-register at TTL/2 interval
             let interval = std::time::Duration::from_secs(((ttl as u64) / 2).max(30));
@@ -736,6 +674,9 @@ impl TransportPort for Bip6Transport {
             let _ = task.await;
         }
         self.socket = None;
+        self.local_mac = [0; 18];
+        self.source_vmac = [0; 3];
+        self.vmac_table = VmacTable::new();
         Ok(())
     }
 
@@ -796,7 +737,12 @@ impl TransportPort for Bip6Transport {
             return Ok(());
         }
 
-        let dest = SocketAddrV6::new(self.broadcast_scope.multicast_addr(), self.port, 0, 0);
+        let dest = SocketAddrV6::new(
+            self.broadcast_scope.multicast_addr(),
+            socket.local_port().map_err(Error::Transport)?,
+            0,
+            0,
+        );
         let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + npdu.len());
         encode_bvlc6_original_broadcast(&mut buf, &source_vmac, npdu)?;
 
@@ -823,5 +769,18 @@ impl TransportPort for Bip6Transport {
         ]
         .iter()
         .any(|group| mac[..16] == group.octets())
+    }
+}
+
+impl Drop for Bip6Transport {
+    fn drop(&mut self) {
+        // The tasks own socket clones. Abort them so dropping the transport
+        // cannot detach a receive/registration lifetime from its owner.
+        if let Some(task) = self.registration_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.recv_task.take() {
+            task.abort();
+        }
     }
 }

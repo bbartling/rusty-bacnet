@@ -958,7 +958,7 @@ BACnetLIST, which the service decoder delivers as an empty `PropertyValue::List`
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-U-IPV6-BVLL` | Annex U | P2 | `implementation-present-needs-conformance-tests` | B/IP6 codec and benchmark paths exist. |
+| `BACNET-U-IPV6-BVLL` | Annex U | P2 | `implementation-present-needs-conformance-tests` | B/IP6 codec and benchmark paths exist. Current selected-link startup and source/destination/interface ownership have isolated Linux ULA wire tests (auto/explicit, three group scopes, two-link rejection, collision/lifecycle and foreign BBMD source/trust) plus fresh installed Python Who-Is/I-Am/client discovery. macOS lo0 qualifies multicast intake and unicast/control source only; Windows is compile-checked, not runtime-qualified. Unique link-local/zone selection has unit evidence only. External fixtures are explicitly opt-in; full Annex U conformance remains unqualified. See `crates/bacnet-transport/tests/ipv6_selected_link/README.md`. |
 
 ## Annex AB BACnet/SC
 
