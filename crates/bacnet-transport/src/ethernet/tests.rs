@@ -18,9 +18,9 @@ fn encode_decode_round_trip() {
 }
 
 #[test]
-fn ieee_group_bit_covers_multicast_and_broadcast_destinations() {
+fn ethernet_local_policy_marks_only_all_ff_as_group() {
     assert!(!is_ethernet_group(&[0x02, 0, 0, 0, 0, 1]));
-    assert!(is_ethernet_group(&[0x01, 0, 0x5e, 0, 0, 1]));
+    assert!(!is_ethernet_group(&[0x01, 0, 0x5e, 0, 0, 1]));
     assert!(is_ethernet_group(&ETHERNET_BROADCAST));
 }
 
@@ -151,4 +151,35 @@ fn padded_frame_decodes_correctly() {
 fn ethernet_transport_new() {
     let t = EthernetTransport::new("eth0");
     assert_eq!(t.local_mac(), &[0; 6]); // not started yet
+}
+
+#[test]
+fn ethernet_destination_policy_precedes_all_llc_controls() {
+    let local = [2, 0, 0, 0, 0, 1];
+    for control in [LLC_CONTROL_UI, LLC_CONTROL_XID_CMD, LLC_CONTROL_TEST_CMD] {
+        for (destination, admitted) in [
+            (local, true),
+            (ETHERNET_BROADCAST, true),
+            ([2, 0, 0, 0, 0, 2], false),
+            ([1, 0, 0x5e, 0, 0, 1], false),
+        ] {
+            let mut frame = destination.to_vec();
+            frame.extend_from_slice(&[2, 0, 0, 0, 0, 3, 0, 3, 0x82, 0x82, control]);
+            assert_eq!(accepts_ethernet_destination(&frame, &local), admitted);
+        }
+    }
+    for length in 0..6 {
+        assert!(!accepts_ethernet_destination(&local[..length], &local));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ethernet_number_capability_delegates_without_configured_authority() {
+    use crate::{any::AnyTransport, mstp::LoopbackSerial};
+    let transport = EthernetTransport::new("unused");
+    assert!(transport.supports_local_nonrouter_number_controls());
+    let any: AnyTransport<LoopbackSerial> = AnyTransport::Ethernet(transport);
+    assert!(any.supports_local_nonrouter_number_controls());
+    assert!(any.normal_bip_endpoint().is_none());
 }

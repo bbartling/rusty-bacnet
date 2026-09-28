@@ -45,7 +45,15 @@ pub const ETHERNET_BROADCAST: [u8; 6] = [0xFF; 6];
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_ethernet_group(destination: &[u8; 6]) -> bool {
-    destination[0] & 0x01 != 0
+    *destination == ETHERNET_BROADCAST
+}
+
+// Local single-link policy: only our unicast or BACnet all-FF broadcast.
+// Keep this before all LLC handling; kernel/BPF delivery is not admission.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn accepts_ethernet_destination(data: &[u8], local_mac: &[u8; 6]) -> bool {
+    data.get(..6)
+        .is_some_and(|destination| destination == local_mac || destination == ETHERNET_BROADCAST)
 }
 
 /// A decoded BACnet Ethernet LLC frame.
@@ -519,7 +527,24 @@ mod transport {
         }
     }
 
+    impl Drop for EthernetTransport {
+        fn drop(&mut self) {
+            self.abort();
+        }
+    }
+
     impl TransportPort for EthernetTransport {
+        fn supports_local_nonrouter_number_controls(&self) -> bool {
+            true
+        }
+
+        fn abort(&mut self) {
+            if let Some(task) = &self.recv_task {
+                task.abort();
+            }
+            self.raw_fd = None;
+        }
+
         #[allow(unsafe_code)]
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
             if self.recv_task.is_some() {
@@ -645,6 +670,9 @@ mod transport {
                     }) {
                         Ok(Ok(len)) => {
                             let data = &recv_buf[..len];
+                            if !accepts_ethernet_destination(data, &local_mac) {
+                                continue;
+                            }
 
                             // Handle XID/TEST commands before UI decode (Clause 7.1)
                             if let Some(control) = check_llc_control(data) {
@@ -740,11 +768,13 @@ mod transport {
         }
 
         async fn stop(&mut self) -> Result<(), Error> {
-            if let Some(task) = self.recv_task.take() {
-                task.abort();
+            self.abort();
+            // Retain the join across cancellation so a resumed stop waits for
+            // every receive-task raw-fd reference before reporting completion.
+            if let Some(task) = self.recv_task.as_mut() {
                 let _ = task.await;
             }
-            self.raw_fd = None;
+            self.recv_task = None;
             debug!("Ethernet transport stopped");
             Ok(())
         }
