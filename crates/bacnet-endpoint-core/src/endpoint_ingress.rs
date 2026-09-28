@@ -91,7 +91,8 @@ pub struct PolicyOutcome {
 
 /// Single-consumer queues produced when endpoint ingress starts.
 pub struct IngressReceivers {
-    /// The NORMAL B/IP local control stream; other links retain discard behavior.
+    /// Opted-in single-link local controls, currently NORMAL B/IP and SC;
+    /// other links retain discard behavior.
     #[doc(hidden)]
     pub network_controls: Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
     /// Post-bind registration capability and independently supported port capacity.
