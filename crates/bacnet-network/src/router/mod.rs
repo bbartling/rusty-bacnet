@@ -55,6 +55,8 @@
 //!   rejects never extend busy deadlines. [`RouterTable::claim_snapshot`]
 //!   stays count-only saturating and never affects decisions.
 
+mod local_delivery;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -597,17 +599,12 @@ impl BACnetRouter {
                                     );
 
                                     // Deliver locally as well
-                                    let apdu = ReceivedApdu {
-                                        apdu: npdu.payload,
-                                        source_mac: received.source_mac,
-                                        ingress_network: Some(port_network),
-                                        source_network: npdu.source,
-                                        link_layer_group: received.link_layer_group,
-                                        is_group: true,
-                                        data_attributes: received.data_attributes,
-                                        provenance: received.provenance,
-                                        reply_tx: received.reply_tx,
-                                    };
+                                    let apdu = local_delivery::application(
+                                        received,
+                                        npdu,
+                                        port_network,
+                                        true,
+                                    );
                                     let _ = local_tx.try_send_apdu(apdu);
                                     continue;
                                 }
@@ -656,35 +653,23 @@ impl BACnetRouter {
                                             .unwrap_or(&[]);
                                         if dest_mac == &local_mac[..] {
                                             // DADR matches our MAC: deliver locally
-                                            let apdu = ReceivedApdu {
-                                                apdu: npdu.payload,
-                                                source_mac: received.source_mac,
-                                                ingress_network: Some(port_network),
-                                                source_network: npdu.source,
-                                                link_layer_group: received.link_layer_group,
-                                                is_group: false,
-                                                data_attributes: received.data_attributes,
-                                                provenance: received.provenance,
-                                                reply_tx: received.reply_tx,
-                                            };
+                                            let apdu = local_delivery::application(
+                                                received,
+                                                npdu,
+                                                port_network,
+                                                false,
+                                            );
                                             let _ = local_tx.try_send_apdu(apdu);
                                         } else {
                                             // Remote broadcast to our network (DLEN=0):
                                             // deliver locally AND forward
                                             if dest_mac.is_empty() {
-                                                let apdu = ReceivedApdu {
-                                                    apdu: npdu.payload.clone(),
-                                                    source_mac: received.source_mac.clone(),
-                                                    ingress_network: Some(port_network),
-                                                    source_network: npdu.source.clone(),
-                                                    link_layer_group: received.link_layer_group,
-                                                    is_group: true,
-                                                    data_attributes: received
-                                                        .data_attributes
-                                                        .clone(),
-                                                    provenance: received.provenance,
-                                                    reply_tx: None,
-                                                };
+                                                let apdu = local_delivery::application(
+                                                    received.clone(),
+                                                    npdu.clone(),
+                                                    port_network,
+                                                    true,
+                                                );
                                                 let _ = local_tx.try_send_apdu(apdu);
                                             }
                                             forward_unicast(
@@ -733,17 +718,13 @@ impl BACnetRouter {
                                     );
                                 }
                             } else {
-                                let apdu = ReceivedApdu {
-                                    apdu: npdu.payload,
-                                    source_mac: received.source_mac,
-                                    ingress_network: Some(port_network),
-                                    source_network: npdu.source,
-                                    link_layer_group: received.link_layer_group,
-                                    is_group: is_group_delivery(received.link_layer_group, None),
-                                    data_attributes: received.data_attributes,
-                                    provenance: received.provenance,
-                                    reply_tx: received.reply_tx,
-                                };
+                                let is_group = is_group_delivery(received.link_layer_group, None);
+                                let apdu = local_delivery::application(
+                                    received,
+                                    npdu,
+                                    port_network,
+                                    is_group,
+                                );
                                 let _ = local_tx.try_send_apdu(apdu);
                             }
                         }

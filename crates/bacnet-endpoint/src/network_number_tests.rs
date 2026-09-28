@@ -577,6 +577,7 @@ async fn network_number_endpoint_input_closed_keeps_admitted_control_lease_until
     let guard = db.read().await;
     input
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: bytes::Bytes::from_static(&[1, 0x80, 0x12]),
             source_mac: bacnet_types::MacAddr::from_slice(&[127, 0, 0, 1, 0xba, 0xc0]),
             link_layer_group: false,

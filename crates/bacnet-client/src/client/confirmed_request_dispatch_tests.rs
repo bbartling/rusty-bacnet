@@ -445,6 +445,7 @@ async fn unsupported_confirmed_request_uses_immediate_reply_channel() {
 
     inbound_tx
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: request.freeze(),
             source_mac: router_mac,
             link_layer_group: false,

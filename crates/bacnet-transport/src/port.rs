@@ -5,6 +5,7 @@
 //! - BACnet/Ethernet (Clause 7): 6 bytes (IEEE 802 MAC)
 //! - MS/TP (Clause 9): 1 byte (station address 0-254)
 
+pub use crate::direct_response::{DirectResponse, DirectResponseScope};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
@@ -213,6 +214,9 @@ pub struct ReceivedNpdu {
     /// Honest transport + origin provenance, immutable by value. Cloning
     /// preserves the meaning; it never upgrades or downgrades trust.
     pub provenance: TransportProvenance,
+    /// Optional sealed original-connection response capability. A verified
+    /// direct server reply must fail closed if this is missing or mismatched.
+    pub direct_response: Option<DirectResponse>,
     /// Optional reply channel for MS/TP DataExpectingReply frames.
     /// When present, the application layer should send the reply NPDU bytes
     /// through this channel instead of via normal send_unicast.
@@ -238,6 +242,7 @@ impl ReceivedNpdu {
             link_layer_group,
             data_attributes,
             provenance: TransportProvenance::unverified(),
+            direct_response: None,
             reply_tx,
         }
     }
@@ -251,6 +256,7 @@ impl Clone for ReceivedNpdu {
             link_layer_group: self.link_layer_group,
             data_attributes: self.data_attributes.clone(),
             provenance: self.provenance,
+            direct_response: self.direct_response.clone(),
             reply_tx: None, // oneshot::Sender is not Clone; clones lose the reply channel
         }
     }

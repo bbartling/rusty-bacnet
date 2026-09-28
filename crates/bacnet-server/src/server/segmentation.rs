@@ -19,6 +19,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
         source_network: Option<NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
         service_ack_data: Bytes,
@@ -26,6 +27,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         client_max_segments: Option<u8>,
         pending: Option<PendingConfirmedRequest>,
     ) {
+        let route = route.clone();
         let network = Arc::clone(network);
         let seg_ack_senders = Arc::clone(seg_ack_senders);
         let seg_send_permits = Arc::clone(seg_send_permits);
@@ -37,6 +39,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &seg_send_permits,
                 &source_mac,
                 source_network.as_ref(),
+                &route,
                 invoke_id,
                 service_choice,
                 &service_ack_data,
@@ -60,6 +63,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         seg_send_permits: &Arc<Semaphore>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
         service_ack_data: &[u8],
@@ -73,6 +77,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_send_permits,
             source_mac,
             source_network,
+            route,
             invoke_id,
             service_choice,
             service_ack_data,
@@ -91,6 +96,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         seg_send_permits: &Arc<Semaphore>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
         service_ack_data: &[u8],
@@ -116,6 +122,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &buf,
                     source_mac,
                     source_network,
+                    route,
                     pending.take(),
                 )
                 .await;
@@ -142,6 +149,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &buf,
                     source_mac,
                     source_network,
+                    route,
                     pending.take(),
                 )
                 .await;
@@ -166,6 +174,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &buf,
                 source_mac,
                 source_network,
+                route,
                 pending.take(),
             )
             .await;
@@ -192,6 +201,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &buf,
                     source_mac,
                     source_network,
+                    route,
                     pending.take(),
                 )
                 .await;
@@ -214,7 +224,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             control_tx,
             total_segments,
         ));
-        let key = segmented_transaction_key(source_mac, source_network, invoke_id);
+        let key =
+            segmented_transaction_key(source_mac, source_network, invoke_id, route.provenance());
         let insert_result = {
             let mut senders = seg_ack_senders.lock();
             if !senders.contains_key(&key) && senders.len() >= MAX_SEG_SENDERS {
@@ -243,6 +254,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &buf,
                     source_mac,
                     source_network,
+                    route,
                     pending.take(),
                 )
                 .await;
@@ -292,6 +304,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &buf,
                 source_mac,
                 source_network,
+                route,
                 true,
             )
             .await
@@ -405,6 +418,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     &abort_buf,
                                     source_mac,
                                     source_network,
+                                    route,
                                     pending.take(),
                                 )
                                 .await;

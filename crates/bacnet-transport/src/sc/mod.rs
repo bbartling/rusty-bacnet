@@ -94,6 +94,8 @@ pub struct ScTransport<W: WebSocketPort> {
     /// Advertised direct-connection URIs answered in Address-Resolution-ACKs.
     advertised_uris: Vec<String>,
     direct_intake: advertisement::DirectIntake,
+    #[cfg(feature = "sc-tls")]
+    direct_listener_shutdown: Option<watch::Sender<bool>>,
     connection: Option<Arc<Mutex<ScConnection>>>,
     effective_max_apdu_length: Arc<AtomicU16>,
     state_tx: watch::Sender<ScConnectionState>,
@@ -127,6 +129,8 @@ impl<W: WebSocketPort> ScTransport<W> {
             device_uuid: [0u8; 16],
             advertised_uris: Vec::new(),
             direct_intake: advertisement::DirectIntake::default(),
+            #[cfg(feature = "sc-tls")]
+            direct_listener_shutdown: None,
             connection: None,
             effective_max_apdu_length: Arc::new(AtomicU16::new(DEFAULT_MAX_APDU_LENGTH)),
             state_tx,
@@ -743,45 +747,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
-        self.direct_intake = advertisement::DirectIntake::default();
-        // Attempt clean disconnect: send DisconnectRequest via the WebSocket
-        if let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) {
-            let (ws, disconnect_msg) = {
-                let ws = ws.lock().await;
-                let mut c = conn.lock().await;
-                let disconnect_msg = c.build_disconnect_request().ok();
-                if disconnect_msg.is_some() {
-                    self.state_tx.send_replace(c.state);
-                }
-                (ws.clone(), disconnect_msg)
-            };
-            if let Some(msg) = disconnect_msg {
-                let mut buf = BytesMut::new();
-                encode_sc_message(&mut buf, &msg);
-                // Best-effort send — don't block indefinitely
-                let _ =
-                    tokio::time::timeout(std::time::Duration::from_secs(2), ws.send(&buf)).await;
-            }
-        }
-
-        let conn_for_state = self.connection.clone();
-        let (recv_task, restore_task) = self.abort_background_task_and_drop_sockets();
-        if let Some(task) = recv_task {
-            let _ = task.await;
-        }
-        if let Some(task) = restore_task {
-            let _ = task.await;
-        }
-
-        if let Some(conn) = conn_for_state {
-            let mut c = conn.lock().await;
-            c.state = ScConnectionState::Disconnected;
-            self.state_tx.send_replace(c.state);
-        }
-        Ok(())
+        self.stop_owned().await
     }
 
     fn abort(&mut self) {
+        self.seal_direct_listener();
         self.direct_intake = advertisement::DirectIntake::default();
         let _ = self.abort_background_task_and_drop_sockets();
     }

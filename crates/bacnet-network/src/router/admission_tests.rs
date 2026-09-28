@@ -130,6 +130,7 @@ fn incoming(destination: Option<NpduAddress>, id: u16) -> ReceivedNpdu {
     let mut bytes = BytesMut::new();
     encode_npdu(&mut bytes, &npdu).unwrap();
     ReceivedNpdu {
+        direct_response: None,
         npdu: bytes.freeze(),
         // Capacity tests use at most 16 APDUs per key, so Full attribution
         // remains independent of the tracked receiver's per-source quota.

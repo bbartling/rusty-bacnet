@@ -201,6 +201,7 @@ impl Fixture {
                 service_request: data,
             },
             &bacnet_network::layer::ReceivedApdu {
+                direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(&[3]),
                 ingress_network: None,

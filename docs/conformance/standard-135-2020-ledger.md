@@ -1069,9 +1069,11 @@ exact DER hashing, absent-chain refusal, TLS resumption, redaction, and sealed
 construction. Independent negative controls omit the duplicate identity partition
 or restore address-wide Abort sweeping and fail the corresponding regressions.
 
-The response observer is a transport send boundary. This evidence does not
-qualify #524 reply socket affinity, replay delivery, segmented-response ACK/Abort
-confinement, #886 bidirectional/outbound application NPDU intake, Hub-relayed
+The original #803 response observer was a transport send boundary. #888 updates
+these fixtures to decode live replies on their actual TLS socket while retaining
+identity/state assertions; stale A completion has no address fallback. The
+separate server-response row below supplies the bounded confinement evidence.
+This identity row does not qualify #886 bidirectional/outbound application NPDU intake, Hub-relayed
 end-to-end identity, full Annex AB conformance, BTL certification, or external
 interoperability. #876 removes generic completed retention: completed same-socket
 WP reauthorizes, while completed LSO still replays without reauthorization.
@@ -1113,3 +1115,67 @@ Evidence: `confirmed_issuance_tests.rs`, `confirmed_response_lifetime_tests.rs`,
 These observations establish local issuance and ownership, not physical send,
 peer receipt, reply-socket affinity, segmented-response control confinement,
 full TSM conformance, external interoperability or BTL certification.
+
+
+## Accepted direct server responses
+
+`BACNET-AB-SC-SERVER-RESPONSE` records #888, a bounded child of #524.
+Annex AB.4.2/AB.6 supplies direct-connection and current-membership context;
+Clauses 5.2.1.1–3 supply response sizing and Clause 5 supplies confirmed
+response/segmentation state. Confinement to an
+original accepted socket is selected local policy, not a normative promise of
+historical-socket delivery or an exhaustive Annex AB claim.
+
+The sealed response capability travels separately from Copy/Eq/Hash provenance
+through listener, network/router local delivery, queued server dispatch and
+segment-zero reassembly. Every native server confirmed terminal response, overload Abort,
+LSO replay, segmented response/retry/terminal Abort, and receive SegmentACK/Abort
+uses that original writer. Direct missing/mismatched/stale authority fails
+closed without mutable-address, replacement, Hub or dial fallback. Complete
+admitted execution retains its old authorization snapshot. Segmented-send
+controls include direct principal/incarnation while non-direct canonical keys,
+MS/TP handoff and #876 pending-only ownership remain unchanged.
+
+Real TLS evidence in `direct_response_tests.rs`, `direct_response_segment_tests.rs`,
+`direct_response_owner_tests.rs` and `direct_principal_segment_tests.rs` covers
+live terminal responses, held A/replacement B with distinct same-CA leaves,
+same-leaf reconnect, exact LSO replay/fresh reauthorization, missing/mismatched
+capabilities, overload, retry/terminal Abort, peer ACK/Abort isolation, receive
+NAK/ACK and saved segment-zero route. Baseline red observed a data-bearing reply
+at generic egress, not proven disclosure to another peer. Green tests decode A
+or B TLS data and use a generic-egress spy plus deterministic completion barriers.
+
+`direct_response_budget_tests.rs` adds Clause 5.2.1.2 (printed 30–31/PDF 32–33)
+evidence: response selection includes the original peer's independent NPDU/BVLC
+limits, the encoded local/routed header, requester APDU acceptance and local cap.
+A 479-byte ComplexACK over a 480-byte NPDU/484-byte BVLC path becomes two fitting
+segments; an exactly fitting 478-byte ACK stays unsegmented. Independent BVLC
+and six-byte routed-DADR limits, exact payload reassembly, final ACK cleanup and
+identical InvokeID reuse are checked over real TLS. No-segmentation, segment-count,
+segment-header and Abort-too-small controls preserve bounded failure with no
+fallback. Tiny positive receive limits are admitted-input robustness cases, not
+certification of every such endpoint advertisement. Sizing snapshots survive
+retirement but confer no send authority; admitted authorization remains intact.
+
+`direct_response_tests.rs` in transport checks queue capacity 64, weak membership,
+negotiated NPDU/complete BVLC limits, cancellation and bounded waiting.
+`direct_response_worker_tests.rs` exercises production writer scheduling,
+blocked-write timeout and queued owner-seal rejection independently of future
+destruction. Its deterministic ready-control stream enqueues a response during
+the first Ping/Pong poll: the adapter returns after one frame, then selects the
+queued write. The pre-repair control consumed all eight controls and a binary
+frame in one turn; this proves a bound violation, not an indefinite network
+stall. Paused-clock controls preserve Connect and binary-activity idle deadlines.
+The real TLS lifecycle fixture verifies Ping/Pong handling before Connect and
+before an NPDU response. Already-started writes may complete and cannot be recalled.
+`direct_response_lifecycle_tests.rs` uses real TLS to prove registered transport
+stop/abort/drop seals a retained listener handle and joins zero physical sockets.
+Network/server scopes seal irreversibly before shutdown waits; the retained
+listener remains a cleanup handle, not authority to keep accepting or replying.
+
+Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside
+this row. This row excludes inbound client/shared-endpoint consumers (#889),
+outgoing client transaction ownership, ordinary bidirectional direct application traffic
+(#886), Hub-relayed end-to-end identity, Python direct-entry support, full Annex
+AB/PICS/BTL and external interoperability. Global evidence pins and broad row
+statuses remain unchanged. [Public API and lifecycle break](../rust-api.md#accepted-direct-server-responses).

@@ -139,6 +139,8 @@ pub struct ReceivedApdu {
     /// preserves the meaning and never duplicates reply authority. Compat
     /// mode: forwarding/learning/admission decisions ignore it.
     pub provenance: TransportProvenance,
+    /// Sealed route back to this envelope's original accepted direct socket.
+    pub direct_response: Option<bacnet_transport::port::DirectResponse>,
     /// Optional reply channel for MS/TP DataExpectingReply flows.
     /// The application layer can send NPDU-wrapped reply bytes through this channel.
     /// An APDU dropped at queue admission releases this sender without sending
@@ -211,6 +213,7 @@ impl ReceivedApdu {
             is_group,
             data_attributes,
             provenance: TransportProvenance::unverified(),
+            direct_response: None,
             reply_tx,
         }
     }
@@ -227,6 +230,7 @@ impl Clone for ReceivedApdu {
             is_group: self.is_group,
             data_attributes: self.data_attributes.clone(),
             provenance: self.provenance,
+            direct_response: self.direct_response.clone(),
             reply_tx: None,
         }
     }
@@ -272,6 +276,7 @@ pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&Npd
 /// receiver choices, admission limits, drop attribution and lifecycle.
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
+    response_scope: bacnet_transport::port::DirectResponseScope,
     dispatch_task: Option<JoinHandle<()>>,
     network_control_tx: Option<AdmissionSender<ReceivedNetworkControl>>,
     network_control_ingress_sequence: Arc<AtomicU64>,
@@ -282,6 +287,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     pub fn new(transport: T) -> Self {
         Self {
             transport,
+            response_scope: Default::default(),
             dispatch_task: None,
             network_control_tx: None,
             network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
@@ -618,6 +624,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// drop or clear depth/high-water/drop totals. See the
     /// [receive-queue contract](self#receive-queue-admission).
     pub async fn stop(&mut self) -> Result<(), Error> {
+        self.seal_responses();
         if let Some(task) = self.abort_dispatch_task() {
             let _ = task.await;
         }
@@ -644,6 +651,7 @@ impl<T: TransportPort> NetworkLayer<T> {
 
 impl<T: TransportPort> Drop for NetworkLayer<T> {
     fn drop(&mut self) {
+        self.response_scope.seal();
         let _ = self.abort_dispatch_task();
         self.transport.abort();
     }

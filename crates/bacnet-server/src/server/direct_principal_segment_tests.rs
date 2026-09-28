@@ -89,9 +89,10 @@ async fn isolated_segments(same_leaf: bool, cancel_a: bool) {
     let (winner, expected) = if cancel_a {
         f.feed(a_abort).await;
         f.feed(a1).await;
-        assert!(
-            matches!(f.response().await, Apdu::Abort(a) if a.abort_reason == AbortReason::INVALID_APDU_IN_THIS_STATE)
-        );
+        // The queued old-A continuation now has no receive context. Its
+        // generated Abort is confined to retired A and cannot reach B.
+        f.dispatch_barrier(&mut b, 239).await;
+        assert!(f.responses.try_recv().is_err());
         let b1 = f
             .capture(&mut b, &segment(31, 1, b_payload.slice(cut..)))
             .await;
@@ -110,9 +111,16 @@ async fn isolated_segments(same_leaf: bool, cancel_a: bool) {
         f.feed(a1).await;
         (identity_a, "A segmented")
     };
-    ack(&mut f, 1).await;
-    assert!(matches!(f.response().await, Apdu::SimpleAck(_)));
+    if cancel_a {
+        ack(&mut f, 1).await;
+        assert!(matches!(f.response().await, Apdu::SimpleAck(_)));
+    } else {
+        // A's already-admitted final segment executes under A's snapshot;
+        // neither its SegmentACK nor terminal ACK may use B's live socket.
+        f.dispatch_barrier(&mut b, 240).await;
+    }
     f.active(0).await;
+    assert!(f.responses.try_recv().is_err());
     assert_eq!(*seen.lock().unwrap(), vec![winner]);
     assert_eq!(
         f.server
@@ -183,8 +191,10 @@ async fn direct_principal_two_admitted_contexts_finish_without_merging() {
     f.feed(b0).await;
     ack(&mut f, 0).await;
     f.feed(a1).await;
-    ack(&mut f, 1).await;
-    assert!(matches!(f.response().await, Apdu::SimpleAck(_)));
+    f.dispatch_barrier(&mut b, 240).await;
+    f.active(0).await;
+    assert_eq!(*seen.lock().unwrap(), vec![id_a]);
+    assert!(f.responses.try_recv().is_err());
     let b1 = f
         .capture(&mut b, &segment(33, 1, payload.slice(cut..)))
         .await;
@@ -244,5 +254,98 @@ async fn direct_principal_reconnect_does_not_expand_reassembly_peer_capacity() {
     f.feed(b0).await;
     ack(&mut f, 0).await;
     // Global stop also owns the remaining partial contexts.
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn direct_response_reassembly_uses_segment_zero_capability_not_final_metadata() {
+    let ca = TestCa::new();
+    let mut f = Fixture::new(
+        &ca,
+        ServerConfig {
+            segmentation_supported: Segmentation::BOTH,
+            ..Default::default()
+        },
+        database(Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+    let mut a = f.peer(ca.tls("a")).await;
+    let payload = write_payload("saved route");
+    let cut = payload.len() / 2;
+    let first = f
+        .capture(&mut a, &segment(61, 0, payload.slice(..cut)))
+        .await;
+    f.feed(first).await;
+    ack(&mut f, 0).await;
+    let mut final_segment = f
+        .capture(&mut a, &segment(61, 1, payload.slice(cut..)))
+        .await;
+    // Model a downstream metadata loss on the final envelope. Its immediate
+    // SegmentACK fails closed; the completed request must use segment zero's
+    // saved capability instead of copying this absent field.
+    final_segment.direct_response = None;
+    f.feed(final_segment).await;
+    assert!(matches!(f.response().await, Apdu::SimpleAck(ack) if ack.invoke_id == 61));
+    f.active(0).await;
+    assert_eq!(
+        f.server
+            .db
+            .read()
+            .await
+            .get(&csv_oid())
+            .unwrap()
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::CharacterString("saved route".into())
+    );
+    assert!(f.responses.try_recv().is_err());
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn direct_response_receive_segment_gap_nak_and_final_ack_use_original_socket() {
+    let ca = TestCa::new();
+    let mut f = Fixture::new(
+        &ca,
+        ServerConfig {
+            segmentation_supported: Segmentation::BOTH,
+            ..Default::default()
+        },
+        database(Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+    let mut a = f.peer(ca.tls("a")).await;
+    let payload = write_payload("after gap");
+    let cut = payload.len() / 2;
+    let first = f
+        .capture(&mut a, &segment(62, 0, payload.slice(..cut)))
+        .await;
+    f.feed(first).await;
+    ack(&mut f, 0).await;
+    let gap = f
+        .capture(&mut a, &segment(62, 2, payload.slice(cut..)))
+        .await;
+    f.feed(gap).await;
+    assert!(
+        matches!(f.response().await, Apdu::SegmentAck(a) if a.sent_by_server && a.invoke_id == 62 && a.sequence_number == 0 && a.negative_ack)
+    );
+    let last = f
+        .capture(&mut a, &segment(62, 1, payload.slice(cut..)))
+        .await;
+    f.feed(last).await;
+    ack(&mut f, 1).await;
+    assert!(matches!(f.response().await, Apdu::SimpleAck(a) if a.invoke_id == 62));
+    f.active(0).await;
+    assert_eq!(
+        f.server
+            .db
+            .read()
+            .await
+            .get(&csv_oid())
+            .unwrap()
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::CharacterString("after gap".into())
+    );
     f.stop().await;
 }

@@ -179,6 +179,7 @@ fn spawn_segmented_complex_ack_from_network_with_options(
             &seg_send_permits,
             request.source_mac.as_slice(),
             request.source_network.as_ref(),
+            &bacnet_network::response_route::ResponseRoute::unverified(),
             request.invoke_id,
             ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
             &request.service_ack_data,
@@ -303,6 +304,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         source_mac.as_slice(),
         apdu,
         bacnet_network::layer::ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: source_mac.clone(),
             ingress_network: None,

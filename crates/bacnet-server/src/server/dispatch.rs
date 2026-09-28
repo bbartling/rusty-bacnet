@@ -118,7 +118,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // diagnostic views (SourceKey, DiscoveryLimiter, TimeSyncSource,
         // DccSource, MutationDecisions, NotificationTransactions/ServerTsm,
         // DccOutcomes, audit contexts); decisions unchanged, RB-09 consumes.
-        let _ = received.provenance;
+        let route = received.response_route();
         match apdu {
             Apdu::ConfirmedRequest(req) => {
                 // LSO-only replay path (server level, separate budget).
@@ -147,6 +147,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &bytes,
                                 &replay_mac,
                                 replay_network.as_ref(),
+                                &route,
                                 reply_tx,
                             )
                             .await;
@@ -161,6 +162,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let abort_network = Arc::clone(network);
                     let abort_mac = MacAddr::from_slice(source_mac);
                     let abort_source = received.source_network.clone();
+                    let abort_route = route.clone();
                     let mut reply_tx = received.reply_tx.take();
                     let db = Arc::clone(db);
                     let network = Arc::clone(network);
@@ -178,7 +180,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let config = Arc::clone(config);
                     let source_mac = MacAddr::from_slice(source_mac);
                     let source_network = received.source_network.clone();
-                    let provenance = received.provenance;
                     let descendants = request_tasks.spawner();
                     let peer = super::request_peer::canonical_requester(
                         &source_mac,
@@ -209,7 +210,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &descendants,
                                 &source_mac,
                                 source_network,
-                                provenance,
+                                route,
                                 req,
                                 reply_tx,
                                 Some(ConfirmedRequestOwnership::LifeSafety(lso_pending)),
@@ -235,6 +236,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 }),
                                 &abort_mac,
                                 abort_source.as_ref(),
+                                &abort_route,
                                 reply_tx,
                             )
                             .await;
@@ -265,6 +267,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let abort_network = Arc::clone(network);
                 let abort_mac = MacAddr::from_slice(source_mac);
                 let abort_source = received.source_network.clone();
+                let abort_route = route.clone();
                 let mut reply_tx = received.reply_tx.take();
                 let db = Arc::clone(db);
                 let network = Arc::clone(network);
@@ -282,7 +285,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let config = Arc::clone(config);
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
-                let provenance = received.provenance;
                 let descendants = request_tasks.spawner();
                 let peer =
                     super::request_peer::canonical_requester(&source_mac, source_network.as_ref());
@@ -311,7 +313,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             &descendants,
                             &source_mac,
                             source_network,
-                            provenance,
+                            route,
                             req,
                             reply_tx,
                             Some(ConfirmedRequestOwnership::Generic(pending)),
@@ -343,6 +345,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }),
                             &abort_mac,
                             abort_source.as_ref(),
+                            &abort_route,
                             reply_tx,
                         )
                         .await;
@@ -492,6 +495,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         source_mac,
                         received.source_network.as_ref(),
                         invoke_id,
+                        route.provenance(),
                     );
                     Self::route_segmented_send_event(
                         seg_ack_senders,
@@ -530,6 +534,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     source_mac,
                     received.source_network.as_ref(),
                     invoke_id,
+                    route.provenance(),
                 );
                 if !Self::route_segmented_send_event(
                     seg_ack_senders,

@@ -14,7 +14,12 @@ use super::segmented_receive::RequestPayload;
 use super::{DEFAULT_APDU_SEGMENT_RETRIES, DEFAULT_APDU_SEGMENT_TIMEOUT};
 
 /// Key for tracking segmented transactions by peer and invoke ID.
-pub(crate) type SegKey = (MacAddr, Option<NpduAddress>, u8);
+pub(crate) type SegKey = (
+    MacAddr,
+    Option<NpduAddress>,
+    u8,
+    Option<bacnet_transport::port::DirectScIdentity>,
+);
 
 /// Key for tracking in-progress segmented request reassembly:
 /// (peer, routed identity, invoke ID, provenance snapshot).
@@ -63,17 +68,24 @@ pub(crate) fn segmented_transaction_key(
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     invoke_id: u8,
+    provenance: TransportProvenance,
 ) -> SegKey {
     match source_network {
         Some(address)
             if (1..=0xFFFE).contains(&address.network) && !address.mac_address.is_empty() =>
         {
-            (MacAddr::new(), Some(address.clone()), invoke_id)
+            (
+                MacAddr::new(),
+                Some(address.clone()),
+                invoke_id,
+                provenance.direct_sc_identity(),
+            )
         }
         _ => (
             MacAddr::from_slice(source_mac),
             source_network.cloned(),
             invoke_id,
+            provenance.direct_sc_identity(),
         ),
     }
 }
@@ -87,7 +99,8 @@ pub(crate) fn segmented_receive_key(
     invoke_id: u8,
     provenance: TransportProvenance,
 ) -> SegRecvKey {
-    let (mac, network, id) = segmented_transaction_key(source_mac, source_network, invoke_id);
+    let (mac, network, id, _) =
+        segmented_transaction_key(source_mac, source_network, invoke_id, provenance);
     (mac, network, id, provenance)
 }
 
@@ -201,6 +214,7 @@ pub(crate) struct SegmentedRequestState {
     /// Provenance snapshot at session open (RB-07). Compared by value on
     /// every later segment; conflicting contexts fail closed.
     pub(crate) provenance: TransportProvenance,
+    pub(crate) direct_response: Option<bacnet_transport::port::DirectResponse>,
     pub(crate) last_activity: Instant,
     /// Last successfully saved new in-order segment, independent of SegmentTimer.
     pub(crate) last_progress: Instant,

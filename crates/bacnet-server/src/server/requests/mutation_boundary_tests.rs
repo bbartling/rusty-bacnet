@@ -57,6 +57,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
             service_request: Bytes::new(),
         },
         &ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
             ingress_network: None,

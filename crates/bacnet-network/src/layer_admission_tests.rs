@@ -75,6 +75,7 @@ fn incoming(control: bool, id: u16) -> ReceivedNpdu {
     let mut bytes = BytesMut::new();
     encode_npdu(&mut bytes, &npdu).unwrap();
     ReceivedNpdu {
+        direct_response: None,
         npdu: bytes.freeze(),
         source_mac: MacAddr::from_slice(&[2]),
         link_layer_group: true,

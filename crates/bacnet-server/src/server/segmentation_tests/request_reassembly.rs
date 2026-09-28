@@ -112,6 +112,7 @@ async fn inject_routed_apdu(
     encode_npdu(&mut npdu_buf, &npdu).unwrap();
     incoming
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: npdu_buf.freeze(),
             source_mac: router_mac.clone(),
             link_layer_group: false,

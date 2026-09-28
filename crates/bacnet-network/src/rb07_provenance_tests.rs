@@ -66,6 +66,7 @@ fn received_apdu_preserves_provenance_through_clone() {
 #[test]
 fn received_apdu_debug_is_redacted() {
     let apdu = ReceivedApdu {
+        direct_response: None,
         apdu: Bytes::from_static(&[0xDE, 0xAD]),
         source_mac: MacAddr::from_slice(&[0xAA, 0xBB, 0xCC]),
         ingress_network: Some(1000),

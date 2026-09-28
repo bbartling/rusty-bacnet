@@ -256,6 +256,7 @@ pub(super) async fn exchange(
     .unwrap();
     let (reply_tx, reply_rx) = oneshot::channel();
     tx.send(ReceivedNpdu {
+        direct_response: None,
         npdu: npdu.freeze(),
         source_mac: MacAddr::from_slice(&peer.mac),
         link_layer_group: false,

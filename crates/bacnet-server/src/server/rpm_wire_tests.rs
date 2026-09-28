@@ -157,6 +157,7 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                     .unwrap();
                     let (reply_tx, reply_rx) = oneshot::channel();
                     tx.send(ReceivedNpdu {
+                        direct_response: None,
                         npdu: npdu.freeze(),
                         source_mac: MacAddr::from_slice(&[1]),
                         link_layer_group: false,

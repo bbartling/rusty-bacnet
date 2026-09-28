@@ -16,6 +16,7 @@ pub mod bip;
 #[cfg(feature = "ipv6")]
 pub mod bip6;
 pub mod bvll;
+mod direct_response;
 #[cfg(feature = "ethernet")]
 pub mod ethernet;
 mod local_addresses;

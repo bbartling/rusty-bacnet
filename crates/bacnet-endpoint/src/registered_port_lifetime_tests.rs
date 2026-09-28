@@ -277,6 +277,7 @@ async fn registered_port_admitted_read_survives_independent_ingress_end() {
             Some(tokio::spawn(async move {
                 handle
                     .handle_inbound(ReceivedApdu {
+                        direct_response: None,
                         apdu: npdu.slice(2..),
                         source_mac: mac,
                         ingress_network: None,

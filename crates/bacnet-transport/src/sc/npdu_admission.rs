@@ -305,6 +305,7 @@ impl ScNpduAdmission {
     ) {
         let source_mac = MacAddr::from_slice(&source);
         let item = ReceivedNpdu {
+            direct_response: None,
             npdu,
             source_mac: source_mac.clone(),
             link_layer_group: msg.destination_vmac == Some(BROADCAST_VMAC),
@@ -362,6 +363,7 @@ impl ScNpduAdmission {
         peer: Vmac,
         peer_addr: SocketAddr,
         identity: crate::port::DirectScIdentity,
+        direct_response: Option<crate::port::DirectResponse>,
     ) {
         let source_mac = MacAddr::from_slice(&peer);
         let item = ReceivedNpdu {
@@ -370,6 +372,7 @@ impl ScNpduAdmission {
             link_layer_group: false,
             data_attributes: data_attributes::from_data_options(msg),
             provenance: TransportProvenance::verified_direct_peer(identity),
+            direct_response,
             reply_tx: None,
         };
         match self.admit(tx, ScIngressPath::Direct, &source_mac, item) {
@@ -443,6 +446,7 @@ mod tests {
 
     fn item(source: &MacAddr) -> ReceivedNpdu {
         ReceivedNpdu {
+            direct_response: None,
             npdu: Bytes::from_static(&[0x01, 0x00, 0x30]),
             source_mac: source.clone(),
             link_layer_group: false,
@@ -612,6 +616,7 @@ mod tests {
             source,
             peer_addr,
             crate::port::DirectScIdentity::verified([1; 32], 1),
+            None,
         );
         admission.admit_direct_peer(
             &tx,
@@ -620,6 +625,7 @@ mod tests {
             source,
             peer_addr,
             crate::port::DirectScIdentity::verified([1; 32], 1),
+            None,
         );
         assert_eq!(rx.len(), 6);
         assert_eq!(admission.drop_counts().fairness_drops, 2);

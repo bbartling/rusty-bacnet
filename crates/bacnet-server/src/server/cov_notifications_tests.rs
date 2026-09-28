@@ -222,6 +222,7 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
                 &seg_send_permits,
                 router_mac.as_slice(),
                 Some(&remote),
+                &bacnet_network::response_route::ResponseRoute::unverified(),
                 0x44,
                 ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
                 &service_ack_data,

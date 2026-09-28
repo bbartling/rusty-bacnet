@@ -92,6 +92,7 @@ async fn request_payload_detachment_first_and_later_real_inputs_release_while_in
         .unwrap();
         incoming
             .send(ReceivedNpdu {
+                direct_response: None,
                 npdu: large_backing_view(&frame, &drops),
                 source_mac: router.clone(),
                 link_layer_group: false,

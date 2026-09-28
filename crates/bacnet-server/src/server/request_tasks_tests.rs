@@ -164,6 +164,7 @@ async fn inject(tx: &mpsc::Sender<ReceivedNpdu>, apdu: Apdu) {
     )
     .unwrap();
     tx.send(ReceivedNpdu {
+        direct_response: None,
         npdu: npdu.freeze(),
         source_mac: MacAddr::from_slice(&[1]),
         link_layer_group: false,

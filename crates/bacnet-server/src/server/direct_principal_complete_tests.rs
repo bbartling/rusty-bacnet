@@ -76,7 +76,7 @@ async fn complete_replacement(lso: bool, same_leaf: bool) {
         4
     );
     drop(held);
-    while outcomes.len() < 2 {
+    while outcomes.is_empty() {
         outcomes.push(f.response().await);
     }
     assert_eq!(
@@ -84,10 +84,11 @@ async fn complete_replacement(lso: bool, same_leaf: bool) {
             .iter()
             .filter(|a| matches!(a, Apdu::SimpleAck(_)))
             .count(),
-        1
+        0 // retired A finishes, but its ACK cannot be delivered to B
     );
     assert_eq!(outcomes.iter().filter(|a| denied(a)).count(), 1);
     f.active(0).await;
+    assert!(f.responses.try_recv().is_err());
     let identities: Vec<_> = observed.lock().unwrap().iter().map(|(id, _)| *id).collect();
     assert_eq!(identities.len(), 2);
     assert!(identities.contains(&a_identity) && identities.contains(&b_identity));
@@ -210,8 +211,9 @@ async fn direct_principal_wpm_elements_keep_admitted_snapshot_and_order() {
         b_envelope.provenance.direct_sc_identity().unwrap()
     );
     drop(held);
-    assert!(matches!(f.response().await, Apdu::Error(_)));
+    f.dispatch_barrier(&mut b, 241).await;
     f.active(0).await;
+    assert!(f.responses.try_recv().is_err());
     let seen = observed.lock().unwrap().clone();
     assert_eq!(seen.len(), 2);
     for (index, context) in seen.iter().enumerate() {

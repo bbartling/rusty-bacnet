@@ -366,13 +366,10 @@ async fn registered_listener_membership_survives_discovery_toggles() {
     );
     assert_eq!(listener.membership.counts(), (1, 0));
     drop(transport);
-    // The application-owned standalone listener retains its identity owner.
-    let (_new, refusal) = connect_claim(&listener, &ca, DIAL_VMAC, [8; 16]).await;
-    assert_nak(
-        &refusal,
-        ErrorClass::COMMUNICATION,
-        ErrorCode::NODE_DUPLICATE_VMAC,
-    );
-    drop(old);
+    // Discovery toggles preserve membership; dropping the registered transport
+    // now seals its listener too. The retained handle joins that shared teardown.
     listener.stop().await;
+    assert_eq!(listener.membership.counts(), (0, 0));
+    assert_eq!(listener.active_connections(), 0);
+    assert!(old.recv().await.is_err());
 }

@@ -1,12 +1,12 @@
 //! Deterministic write failure/cancellation seam with a real TLS incumbent.
-use super::super::super::{serve_handshake, DirectWs, DirectWsRead};
+use super::super::super::{serve_handshake, DirectFrame, DirectWs, DirectWsRead};
 use super::*;
 use tokio::sync::oneshot;
 
 struct Read(Option<Vec<u8>>);
 impl DirectWsRead for Read {
-    async fn next_data(&mut self) -> Option<Result<Vec<u8>, String>> {
-        self.0.take().map(Ok)
+    async fn next_frame(&mut self) -> Option<Result<DirectFrame, String>> {
+        self.0.take().map(|data| Ok(DirectFrame::Binary(data)))
     }
 }
 struct Write {

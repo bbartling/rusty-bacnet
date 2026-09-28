@@ -10,6 +10,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         source_mac: &MacAddr,
         source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
         invoke_id: u8,
         abort_reason: AbortReason,
     ) {
@@ -20,9 +21,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         });
         let mut abort_buf = BytesMut::new();
         encode_apdu(&mut abort_buf, &abort_pdu).expect("valid APDU encoding");
-        if let Err(e) =
-            Self::send_confirmed_response_apdu(network, &abort_buf, source_mac, source_network)
-                .await
+        if let Err(e) = Self::send_confirmed_response_apdu(
+            network,
+            &abort_buf,
+            source_mac,
+            source_network,
+            route,
+        )
+        .await
         {
             warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
         }
@@ -272,4 +278,37 @@ pub(super) fn classify_non_next_segment(
         sequence_number: state.last_acked_seq,
         actual_window_size: state.actual_window_size,
     })
+}
+
+/// Segment zero owns the immutable authorization and response snapshots.
+pub(super) fn initial_state(
+    payload: RequestPayload,
+    provenance: bacnet_transport::port::TransportProvenance,
+    direct_response: Option<bacnet_transport::port::DirectResponse>,
+    request: &ConfirmedRequestPdu,
+) -> (SegmentedRequestState, Option<SegmentAckPdu>) {
+    let actual_window_size = request.proposed_window_size.unwrap_or(0);
+    let should_ack = !request.more_follows || actual_window_size <= 1;
+    let state = SegmentedRequestState {
+        payload,
+        provenance,
+        direct_response,
+        last_activity: Instant::now(),
+        last_progress: Instant::now(),
+        expected_seq: 1,
+        initial_sequence_number: 0,
+        duplicate_count: 0,
+        last_acked_seq: 0,
+        window_pos: if should_ack { 0 } else { 1 },
+        actual_window_size,
+        accepted_segments: 1,
+    };
+    let ack = should_ack.then_some(SegmentAckPdu {
+        negative_ack: false,
+        sent_by_server: true,
+        invoke_id: request.invoke_id,
+        sequence_number: request.sequence_number.unwrap_or(0),
+        actual_window_size,
+    });
+    (state, ack)
 }

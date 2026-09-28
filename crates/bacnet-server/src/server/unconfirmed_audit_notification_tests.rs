@@ -46,6 +46,7 @@ fn received(
     source_network: Option<NpduAddress>,
 ) -> bacnet_network::layer::ReceivedApdu {
     bacnet_network::layer::ReceivedApdu {
+        direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),
         ingress_network: None,

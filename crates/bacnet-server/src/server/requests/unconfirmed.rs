@@ -439,6 +439,7 @@ mod time_sync_tests {
     }
     fn received(kind: u8) -> ReceivedApdu {
         ReceivedApdu {
+            direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(if kind == 2 { &[2, 3, 4, 5, 6, 7] } else { &[1] }),
             ingress_network: None,
@@ -682,6 +683,7 @@ mod time_sync_tests {
             )
             .unwrap();
             tx.send(ReceivedNpdu {
+                direct_response: None,
                 npdu: npdu.freeze(),
                 source_mac: MacAddr::from_slice(&[2, 3, 4, 5, 6, 7]),
                 link_layer_group: false,

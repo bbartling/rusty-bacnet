@@ -167,6 +167,7 @@ pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'sta
     response: &Apdu,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     pending: Option<PendingConfirmedRequest>,
 ) {
@@ -175,6 +176,7 @@ pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'sta
         response,
         source_mac,
         source_network,
+        route,
         reply_tx,
         true,
         pending,
@@ -189,6 +191,7 @@ pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static
     response: &Apdu,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
 ) {
     send_response(
@@ -196,6 +199,7 @@ pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static
         response,
         source_mac,
         source_network,
+        route,
         reply_tx,
         false,
         None,
@@ -214,9 +218,18 @@ pub(in crate::server) async fn send_replay_bytes<T: TransportPort + 'static>(
     apdu_bytes: &Bytes,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
 ) {
-    send_raw_response(network, apdu_bytes, source_mac, source_network, reply_tx).await;
+    send_raw_response(
+        network,
+        apdu_bytes,
+        source_mac,
+        source_network,
+        route,
+        reply_tx,
+    )
+    .await;
 }
 
 async fn send_raw_response<T: TransportPort + 'static>(
@@ -224,8 +237,14 @@ async fn send_raw_response<T: TransportPort + 'static>(
     apdu_bytes: &Bytes,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
 ) {
+    let reply_tx = if route.provenance().is_direct_peer() {
+        None
+    } else {
+        reply_tx
+    };
     if let Some(tx) = reply_tx {
         use bacnet_encoding::npdu::{encode_npdu, Npdu};
         let npdu = Npdu {
@@ -249,6 +268,7 @@ async fn send_raw_response<T: TransportPort + 'static>(
                     apdu_bytes,
                     source_mac,
                     source_network,
+                    route,
                 )
                 .await
                 {
@@ -261,6 +281,7 @@ async fn send_raw_response<T: TransportPort + 'static>(
         apdu_bytes,
         source_mac,
         source_network,
+        route,
     )
     .await
     {
@@ -273,6 +294,7 @@ async fn send_response<T: TransportPort + 'static>(
     response: &Apdu,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     log_errors: bool,
     pending: Option<PendingConfirmedRequest>,
@@ -280,6 +302,11 @@ async fn send_response<T: TransportPort + 'static>(
     let mut buf = BytesMut::new();
     encode_apdu(&mut buf, response).expect("valid APDU encoding");
 
+    let reply_tx = if route.provenance().is_direct_peer() {
+        None
+    } else {
+        reply_tx
+    };
     if let Some(tx) = reply_tx {
         use bacnet_encoding::npdu::{encode_npdu, Npdu};
         let apdu_bytes = buf.freeze();
@@ -313,6 +340,7 @@ async fn send_response<T: TransportPort + 'static>(
                     &apdu_bytes,
                     source_mac,
                     source_network,
+                    route,
                     pending,
                 )
                 .await
@@ -328,6 +356,7 @@ async fn send_response<T: TransportPort + 'static>(
         &buf,
         source_mac,
         source_network,
+        route,
         pending,
     )
     .await

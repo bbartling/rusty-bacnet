@@ -543,30 +543,73 @@ fn segmented_transaction_key_identity_matrix() {
         mac_address: remote_a.mac_address.clone(),
     };
 
-    let routed_a = segmented_transaction_key(&router_a, Some(&remote_a), 7);
+    let routed_a = segmented_transaction_key(
+        &router_a,
+        Some(&remote_a),
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     assert_eq!(
         routed_a,
-        segmented_transaction_key(&router_b, Some(&remote_a), 7)
+        segmented_transaction_key(
+            &router_b,
+            Some(&remote_a),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
     assert_eq!(routed_a.0, MacAddr::new());
     assert_ne!(
         routed_a,
-        segmented_transaction_key(&router_a, Some(&remote_b), 7)
+        segmented_transaction_key(
+            &router_a,
+            Some(&remote_b),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
     assert_ne!(
         routed_a,
-        segmented_transaction_key(&router_a, Some(&other_network), 7)
+        segmented_transaction_key(
+            &router_a,
+            Some(&other_network),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
     assert_ne!(
         routed_a,
-        segmented_transaction_key(&router_a, Some(&remote_a), 8)
+        segmented_transaction_key(
+            &router_a,
+            Some(&remote_a),
+            8,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
 
-    let local_a = segmented_transaction_key(&router_a, None, 7);
-    let local_b = segmented_transaction_key(&router_b, None, 7);
+    let local_a = segmented_transaction_key(
+        &router_a,
+        None,
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
+    let local_b = segmented_transaction_key(
+        &router_b,
+        None,
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     assert_ne!(local_a, local_b);
     assert_ne!(local_a, routed_a);
-    assert_ne!(local_a, segmented_transaction_key(&router_a, None, 8));
+    assert_ne!(
+        local_a,
+        segmented_transaction_key(
+            &router_a,
+            None,
+            8,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
+    );
 
     for invalid in [
         NpduAddress {
@@ -582,8 +625,18 @@ fn segmented_transaction_key_identity_matrix() {
             mac_address: MacAddr::new(),
         },
     ] {
-        let key_a = segmented_transaction_key(&router_a, Some(&invalid), 7);
-        let key_b = segmented_transaction_key(&router_b, Some(&invalid), 7);
+        let key_a = segmented_transaction_key(
+            &router_a,
+            Some(&invalid),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified(),
+        );
+        let key_b = segmented_transaction_key(
+            &router_b,
+            Some(&invalid),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified(),
+        );
         assert_ne!(key_a, key_b);
         assert_eq!(key_a.0, router_a);
         assert_eq!(key_a.1.as_ref(), Some(&invalid));

@@ -4232,6 +4232,53 @@
     "docs/python-api.md"
    ],
    "notes": "Refs #803. Local identity is SHA-256 of exact verified leaf DER plus the existing checked process-wide membership generation; captured before upgrade and admitted under with_current. Same-cert reconnect changes incarnation. Complete admitted work retains its original snapshot after retirement. Real TLS listener-to-network-to-server tests use deterministic queued envelopes and DB barriers; old A segment controls are admitted before replacement, never freshly accepted from retired A. Generic duplicate and LSO replay entries retain direct identity with existing bounds and non-direct canonical keys. #876 makes generic detection pending-only: pending same-socket WP remains suppressed, completed same-socket WP reauthorizes, and completed LSO still replays without reauthorization. Direct partial contexts and Abort cancellation isolate incarnations; non-direct address sweeps cannot remove direct contexts. Hub admission migrates to a distinct scope-only channel with no downstream direct leaf identity. Copy/Eq/Hash and redacted Debug are retained. No mandatory or enabled direct certificate-to-claimed-ID binding, Hub-relayed end-to-end identity, Python principal callback, #524 response socket/replay delivery/segmented-response control confinement, #886 outbound application NPDU intake, broader security-profile promotion or external certification. Source APIs postdate published0.11.0. Independent duplicate-partition and Abort-sweep negative controls are recorded in the scoped evidence narrative."
+  },
+  {
+    "id": "BACNET-AB-SC-SERVER-RESPONSE",
+    "standard_anchor": "135-2020 Annex AB.4.2/AB.6 and Clause 5 (including 5.2.1.1-3); local confirmed server response confinement policy",
+    "priority": "P0",
+    "requirement_summary": "Confine BACnetServer accepted-direct confirmed terminal responses, LSO replay and segmented-request controls to the original accepted connection and its owner lifetime.",
+    "status": "supported-with-clause-evidence",
+    "code_anchors": [
+      "crates/bacnet-transport/src/direct_response.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_response_loop.rs",
+      "crates/bacnet-network/src/response_route.rs",
+      "crates/bacnet-network/src/layer_issuance.rs",
+      "crates/bacnet-network/src/router/local_delivery.rs",
+      "crates/bacnet-server/src/server/responses.rs",
+      "crates/bacnet-server/src/server/dispatch.rs",
+      "crates/bacnet-server/src/server/segmentation.rs",
+      "crates/bacnet-server/src/server/segmented_send.rs",
+      "crates/bacnet-server/src/server/segmented_receive.rs",
+      "crates/bacnet-server/src/server/shutdown.rs"
+    ],
+    "positive_tests": [
+      "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_same_socket_read_property",
+      "crates/bacnet-server/src/server/direct_response_budget_tests.rs",
+      "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_success_error_reject_and_oversize_abort_use_original_socket",
+      "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_lso_replay_and_same_leaf_reconnect_keep_original_route",
+      "crates/bacnet-server/src/server/direct_response_segment_tests.rs::direct_response_segments_retry_and_final_ack_stay_on_original_socket",
+      "crates/bacnet-server/src/server/direct_response_owner_tests.rs::direct_response_router_local_delivery_preserves_matching_capability",
+      "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_response_receive_segment_gap_nak_and_final_ack_use_original_socket"
+    ],
+    "negative_tests": [
+      "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_held_read_replacement_has_no_address_fallback",
+      "crates/bacnet-server/src/server/direct_response_tests.rs::direct_response_missing_and_mismatched_capabilities_never_fall_back",
+      "crates/bacnet-server/src/server/direct_response_segment_tests.rs::direct_response_replacement_ack_abort_cannot_control_old_segment_sender",
+      "crates/bacnet-server/src/server/direct_response_segment_tests.rs::direct_response_same_leaf_reconnect_cannot_control_old_segment_sender",
+      "crates/bacnet-server/src/server/direct_principal_segment_tests.rs::direct_response_reassembly_uses_segment_zero_capability_not_final_metadata",
+      "crates/bacnet-server/src/server/direct_response_owner_tests.rs::direct_response_network_stop_and_server_drop_seal_retained_routes",
+      "crates/bacnet-transport/src/direct_response_tests.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_response_worker_tests.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_response_lifecycle_tests.rs"
+    ],
+    "benchmarks": [],
+    "public_claims": [
+      "README.md",
+      "docs/rust-api.md#accepted-direct-server-responses",
+      "docs/python-api.md"
+    ],
+    "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Clause 5.2.1.2 response selection uses framing-derived path capacity as well as local/requester APDU limits; real TLS exact-boundary, local/routed, independent BVLC, segment-count and too-small cases cover fitting delivery or bounded failure. Sizing metadata is immutable and independent of current membership. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
   }
  ]
 }

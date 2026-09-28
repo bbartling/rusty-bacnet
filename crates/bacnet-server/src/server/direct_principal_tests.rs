@@ -1,8 +1,8 @@
 //! Real accepted TLS -> queued transport -> NetworkLayer -> live dispatch.
 //!
 //! The queue is a deterministic scheduling seam: every direct envelope comes
-//! unchanged from the actual listener. Responses are observed at the transport
-//! send boundary; these tests make no claim about direct response socket routing.
+//! unchanged from the actual listener. Live replies are decoded from the exact
+//! accepted TLS socket; a separate generic-egress spy detects fallback.
 use super::*;
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyPointResetCommit};
@@ -20,6 +20,8 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 #[path = "direct_principal_complete_tests.rs"]
 mod complete;
+#[path = "direct_response_tests.rs"]
+mod responses;
 #[path = "direct_principal_segment_tests.rs"]
 mod segments;
 
@@ -86,6 +88,7 @@ struct Fixture {
     admitted: mpsc::Receiver<ReceivedNpdu>,
     incoming: mpsc::Sender<ReceivedNpdu>,
     responses: mpsc::UnboundedReceiver<Apdu>,
+    current_peer: Option<Arc<TlsWebSocket>>,
 }
 impl Fixture {
     async fn new(ca: &TestCa, config: ServerConfig, db: ObjectDatabase) -> Self {
@@ -118,9 +121,17 @@ impl Fixture {
             admitted,
             incoming,
             responses: observed,
+            current_peer: None,
         }
     }
-    async fn peer(&self, tls: ScNodeTlsConfig) -> Peer {
+    async fn peer(&mut self, tls: ScNodeTlsConfig) -> Peer {
+        self.peer_config(tls, |_| {}).await
+    }
+    async fn peer_config(
+        &mut self,
+        tls: ScNodeTlsConfig,
+        configure: impl FnOnce(&mut ScConnection),
+    ) -> Peer {
         let url = format!(
             "wss://localhost:{}/.bacnet/sc",
             self.listener.local_addr().port()
@@ -129,25 +140,40 @@ impl Fixture {
             .await
             .unwrap();
         let mut connection = ScConnection::new(PEER_MAC, PEER_UUID);
+        configure(&mut connection);
         let mut wire = BytesMut::new();
         encode_sc_message(&mut wire, &connection.build_connect_request());
         ws.send(&wire).await.unwrap();
         let accept = decode_sc_message(&bounded(ws.recv()).await.unwrap()).unwrap();
         assert!(connection.handle_connect_accept(&accept));
+        let ws = Arc::new(ws);
+        self.current_peer = Some(ws.clone());
         Peer { ws, connection }
     }
     async fn capture(&mut self, peer: &mut Peer, request: &Apdu) -> ReceivedNpdu {
+        self.capture_from(
+            peer,
+            request,
+            Some(NpduAddress {
+                network: 123,
+                mac_address: MacAddr::from_slice(&[3]),
+            }),
+        )
+        .await
+    }
+    async fn capture_from(
+        &mut self,
+        peer: &mut Peer,
+        request: &Apdu,
+        source: Option<NpduAddress>,
+    ) -> ReceivedNpdu {
         let mut payload = BytesMut::new();
         encode_apdu(&mut payload, request).unwrap();
         let mut npdu = BytesMut::new();
         encode_npdu(
             &mut npdu,
             &Npdu {
-                // Exercise routed-claim canonicalization too: identical for every peer.
-                source: Some(NpduAddress {
-                    network: 123,
-                    mac_address: MacAddr::from_slice(&[3]),
-                }),
+                source,
                 payload: payload.freeze(),
                 ..Npdu::default()
             },
@@ -171,7 +197,22 @@ impl Fixture {
         self.incoming.send(admitted).await.unwrap();
     }
     async fn response(&mut self) -> Apdu {
-        bounded(self.responses.recv()).await.unwrap()
+        let ws = self.current_peer.as_ref().unwrap().clone();
+        let wire = bounded(async {
+            tokio::select! {
+                wire = ws.recv() => wire.unwrap(),
+                fallback = self.responses.recv() => panic!("direct response used generic egress: {fallback:?}"),
+            }
+        }).await;
+        let frame = decode_sc_message(&wire).unwrap();
+        assert_eq!(
+            frame.function,
+            bacnet_transport::sc_frame::ScFunction::EncapsulatedNpdu
+        );
+        assert_eq!(frame.originating_vmac, None);
+        assert_eq!(frame.destination_vmac, None);
+        let npdu = decode_npdu(frame.payload).unwrap();
+        apdu::decode_apdu(npdu.payload).unwrap()
     }
     async fn dispatch_barrier(&mut self, peer: &mut Peer, invoke: u8) {
         assert!(self.barrier_responses(peer, invoke).await.is_empty());
@@ -203,7 +244,7 @@ impl Fixture {
     }
 }
 struct Peer {
-    ws: TlsWebSocket,
+    ws: Arc<TlsWebSocket>,
     connection: ScConnection,
 }
 

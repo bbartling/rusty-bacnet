@@ -169,6 +169,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // senders and records server-TSM results (#377).
                         // Provenance snapshot for this ingress (RB-07, by value).
                         let provenance = received.provenance;
+                        let route = received.response_route();
                         if let Apdu::Abort(ref abt) = decoded {
                             if !abt.sent_by_server {
                                 let abort_key = segmented_receive_key(
@@ -209,6 +210,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &network_dispatch,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                         req.invoke_id,
                                         AbortReason::INVALID_APDU_IN_THIS_STATE,
                                     )
@@ -233,6 +235,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &network_dispatch,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                         req.invoke_id,
                                         AbortReason::SEGMENTATION_NOT_SUPPORTED,
                                     )
@@ -296,6 +299,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 &network_dispatch,
                                                 &source_mac,
                                                 source_network.as_ref(),
+                                                &route,
                                                 req.invoke_id,
                                                 AbortReason::BUFFER_OVERFLOW,
                                             )
@@ -318,6 +322,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 &network_dispatch,
                                                 &source_mac,
                                                 source_network.as_ref(),
+                                                &route,
                                                 req.invoke_id,
                                                 AbortReason::BUFFER_OVERFLOW,
                                             )
@@ -365,6 +370,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
+                                            &route,
                                             req.invoke_id,
                                             AbortReason::WINDOW_SIZE_OUT_OF_RANGE,
                                         )
@@ -383,6 +389,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
+                                            &route,
                                             req.invoke_id,
                                             reason,
                                         )
@@ -406,40 +413,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
+                                            &route,
                                             req.invoke_id,
                                             AbortReason::BUFFER_OVERFLOW,
                                         )
                                         .await;
                                         continue;
                                     }
-                                    let actual_window_size = proposed_window_size;
-                                    let mut state = SegmentedRequestState {
-                                        payload,
-                                        provenance,
-                                        last_activity: Instant::now(),
-                                        last_progress: Instant::now(),
-                                        expected_seq: 1,
-                                        initial_sequence_number: 0,
-                                        duplicate_count: 0,
-                                        last_acked_seq: 0,
-                                        window_pos: 1,
-                                        actual_window_size,
-                                        accepted_segments: 1,
-                                    };
-                                    let should_ack =
-                                        !req.more_follows || state.window_pos >= actual_window_size;
-                                    if should_ack {
-                                        state.window_pos = 0;
-                                        state.initial_sequence_number = state.last_acked_seq;
-                                        state.duplicate_count = 0;
-                                        ack_to_send = Some(SegmentAckPdu {
-                                            negative_ack: false,
-                                            sent_by_server: true,
-                                            invoke_id: req.invoke_id,
-                                            sequence_number: seq,
-                                            actual_window_size,
-                                        });
-                                    }
+                                    let (state, initial_ack) =
+                                        super::segmented_receive::initial_state(
+                                            payload,
+                                            provenance,
+                                            received
+                                                .as_ref()
+                                                .and_then(|r| r.direct_response.clone()),
+                                            req,
+                                        );
+                                    ack_to_send = initial_ack;
                                     if !req.more_follows {
                                         final_total = Some(1);
                                     }
@@ -454,6 +444,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &network_dispatch,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                         req.invoke_id,
                                         AbortReason::INVALID_APDU_IN_THIS_STATE,
                                     )
@@ -471,6 +462,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &ack_buf,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                     )
                                     .await
                                     {
@@ -483,6 +475,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                                 if let Some(total) = final_total {
                                     if let Some(state) = seg_receivers.remove(&key) {
+                                        if let Some(envelope) = received.as_mut() {
+                                            envelope.provenance = state.provenance;
+                                            envelope.direct_response = state.direct_response;
+                                        }
                                         match state.payload.complete(total) {
                                             Ok(reassembled) => {
                                                 debug!(
@@ -516,6 +512,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     received.take().unwrap_or_else(|| {
                                                         warn!("received consumed twice - using empty fallback");
                                                         bacnet_network::layer::ReceivedApdu {
+                                                            direct_response: None,
                                                             apdu: bytes::Bytes::new(),
                                                             source_mac: bacnet_types::MacAddr::new(),
                                                             ingress_network: None,
@@ -574,6 +571,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 received.take().unwrap_or_else(|| {
                                     warn!("received consumed twice — using empty fallback");
                                     bacnet_network::layer::ReceivedApdu {
+                                        direct_response: None,
                                         apdu: bytes::Bytes::new(),
                                         source_mac: bacnet_types::MacAddr::new(),
                                         ingress_network: None,

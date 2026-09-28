@@ -198,6 +198,10 @@ impl Drop for ListenerStopped {
 }
 
 impl DirectListener {
+    pub(crate) fn shutdown_signal(&self) -> watch::Sender<bool> {
+        self.shutdown.clone()
+    }
+
     pub(crate) fn shutdown_status(&self) -> watch::Receiver<bool> {
         self.shutdown.subscribe()
     }
@@ -430,7 +434,8 @@ async fn accept_loop(
             let _guard = guard;
             let _active = peer_active;
             tokio::select! {
-                _ = peer_shutdown.changed() => {},
+                biased;
+                _ = async { if !*peer_shutdown.borrow_and_update() { let _ = peer_shutdown.changed().await; } } => {},
                 _ = serve_connection(tcp, peer_addr, peer_config, peer_tx, peer_admission, peer_membership, pending_guard) => {},
             }
         });
@@ -499,7 +504,7 @@ async fn serve_connection(
         }
     };
     let (mut write, mut read) = ws_stream.split();
-    let member = match tokio::time::timeout(
+    let (member, limits) = match tokio::time::timeout(
         config.connect_timeout,
         serve_handshake(&mut write, &mut read, &config, peer_addr, &membership),
     )
@@ -509,6 +514,12 @@ async fn serve_connection(
         _ => return,
     };
     drop(pending);
+    let identity = crate::port::DirectScIdentity::verified(leaf_sha256, member.generation);
+    // Socket task owns retirement even if a short-lived send admission holds
+    // another strong reference. Capabilities themselves keep only a Weak.
+    let _retire = RetireMember(&member);
+    let (response, mut responses) =
+        crate::port::DirectResponse::new(&member, identity, limits, config.connect_timeout);
     serve_npdu_loop(
         &mut write,
         &mut read,
@@ -516,10 +527,12 @@ async fn serve_connection(
         AdmittedDirectPeer {
             address: peer_addr,
             member: &member,
-            identity: crate::port::DirectScIdentity::verified(leaf_sha256, member.generation),
+            identity,
+            response,
         },
         &npdu_tx,
         &npdu_admission,
+        &mut responses,
     )
     .await;
 }
@@ -530,7 +543,7 @@ async fn serve_handshake<W>(
     config: &DirectAcceptConfig,
     peer_addr: SocketAddr,
     membership: &Arc<DirectMembership>,
-) -> Option<Arc<Membership>>
+) -> Option<(Arc<Membership>, (u16, u16))>
 where
     W: DirectWs,
 {
@@ -599,7 +612,13 @@ where
     debug!("direct handshake accepted {peer_addr} vmac={peer_vmac:02x?}");
     // No await between successful Accept and publication: cancellation cannot
     // expose a successful but unregistered contender at this boundary.
-    Some(reservation.commit())
+    Some((
+        reservation.commit(),
+        (
+            u16::from_be_bytes([msg.payload[22], msg.payload[23]]),
+            u16::from_be_bytes([msg.payload[24], msg.payload[25]]),
+        ),
+    ))
 }
 
 fn build_connect_accept(message_id: u16, config: &DirectAcceptConfig) -> ScMessage {
@@ -651,115 +670,13 @@ struct AdmittedDirectPeer<'a> {
     address: SocketAddr,
     member: &'a Membership,
     identity: crate::port::DirectScIdentity,
+    response: crate::port::DirectResponse,
 }
 
-async fn serve_npdu_loop<W>(
-    write: &mut W,
-    read: &mut W::Read,
-    config: &DirectAcceptConfig,
-    peer: AdmittedDirectPeer<'_>,
-    npdu_tx: &mpsc::Sender<ReceivedNpdu>,
-    npdu_admission: &Arc<ScNpduAdmission>,
-) where
-    W: DirectWs,
-{
-    let AdmittedDirectPeer {
-        address: peer_addr,
-        member,
-        identity,
-    } = peer;
-    let mut retired = member.retirement();
-    loop {
-        let next = tokio::select! {
-            biased;
-            _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => {
-                let mut buf = BytesMut::new();
-                encode_sc_message(&mut buf, &crate::sc::direct_membership::disconnect_request());
-                let _ = tokio::time::timeout(config.connect_timeout, async {
-                    let _ = write.send_data(&buf).await;
-                    let _ = write.send_close().await;
-                }).await;
-                return;
-            }
-            next = tokio::time::timeout(config.idle_timeout, read.next_data()) => next,
-        };
-        let data = match next {
-            Ok(Some(Ok(data))) => data,
-            Ok(Some(Err(e))) => {
-                warn!("direct recv error from {peer_addr}: {e}");
-                return;
-            }
-            Ok(None) => return,
-            Err(_) => {
-                debug!("direct idle timeout, closing {peer_addr}");
-                let _ = tokio::time::timeout(config.connect_timeout, write.send_close()).await;
-                return;
-            }
-        };
-        if data.len() > config.max_bvlc_length as usize {
-            warn!("direct frame exceeds local Max-BVLC-Length, dropping from {peer_addr}");
-            continue;
-        }
-        let msg = match decode_sc_message(&data) {
-            Ok(msg) => msg,
-            Err(e) => {
-                warn!("direct decode error from {peer_addr}: {e}");
-                continue;
-            }
-        };
-        match msg.function {
-            ScFunction::EncapsulatedNpdu => {
-                match direct_must_understand_decision(&msg, &data) {
-                    DirectMuDecision::Pass => {}
-                    DirectMuDecision::Drop => continue,
-                    DirectMuDecision::Nak(nak) => {
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &nak);
-                        if !matches!(
-                            tokio::time::timeout(config.connect_timeout, write.send_data(&buf))
-                                .await,
-                            Ok(Ok(()))
-                        ) {
-                            warn!("direct destination-option NAK send error for {peer_addr}");
-                        }
-                        continue;
-                    }
-                }
-                if let Some(npdu) = direct_npdu(&msg, config) {
-                    // Verified direct peer: TLS handshake with operational cert
-                    // verified + Connect-Request/Accept completed on this
-                    // connection; source_mac is that peer's VMAC. Post-handshake
-                    // only; direct connections carry unicast only.
-                    member.with_current(|| {
-                        npdu_admission.admit_direct_peer(
-                            npdu_tx,
-                            &msg,
-                            npdu,
-                            member.vmac,
-                            peer_addr,
-                            identity,
-                        )
-                    });
-                }
-            }
-            ScFunction::DisconnectRequest => {
-                let ack = ScMessage {
-                    function: ScFunction::DisconnectAck,
-                    message_id: msg.message_id,
-                    originating_vmac: None,
-                    destination_vmac: None,
-                    dest_options: Vec::new(),
-                    data_options: Vec::new(),
-                    payload: Bytes::new(),
-                };
-                let mut buf = BytesMut::new();
-                encode_sc_message(&mut buf, &ack);
-                let _ = tokio::time::timeout(config.connect_timeout, write.send_data(&buf)).await;
-                return;
-            }
-            ScFunction::DisconnectAck => return,
-            _ => continue,
-        }
+struct RetireMember<'a>(&'a Membership);
+impl Drop for RetireMember<'_> {
+    fn drop(&mut self) {
+        self.0.retire();
     }
 }
 
@@ -861,9 +778,13 @@ fn direct_npdu(msg: &ScMessage, config: &DirectAcceptConfig) -> Option<Bytes> {
     Some(msg.payload.clone())
 }
 
+#[path = "direct_response_loop.rs"]
+mod response_loop;
+use response_loop::serve_npdu_loop;
+
 #[path = "direct_socket.rs"]
 mod socket;
-use socket::{DirectWs, DirectWsRead};
+use socket::{DirectFrame, DirectWs, DirectWsRead};
 
 #[cfg(test)]
 #[path = "direct_accept_tests.rs"]

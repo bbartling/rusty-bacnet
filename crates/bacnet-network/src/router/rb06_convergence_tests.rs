@@ -359,6 +359,7 @@ fn apdu_to(net: u16) -> Bytes {
 
 fn ingress(npdu: Bytes) -> ReceivedNpdu {
     ReceivedNpdu {
+        direct_response: None,
         npdu,
         source_mac: MacAddr::from_slice(&[7]),
         link_layer_group: true,

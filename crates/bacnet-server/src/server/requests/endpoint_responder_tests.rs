@@ -50,6 +50,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     };
     let (reply_tx, reply_rx) = oneshot::channel();
     let received = ReceivedApdu {
+        direct_response: None,
         apdu: read_property_request(0x31),
         source_mac: MacAddr::from_slice(&[0x02]),
         ingress_network: None,
@@ -85,6 +86,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     assert!(matches!(
         responder
             .handle(ReceivedApdu {
+                direct_response: None,
                 apdu: read_property_request(0x32),
                 source_mac: MacAddr::from_slice(&[0x02]),
                 ingress_network: None,
@@ -121,6 +123,7 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
 
     assert!(responder
         .handle(ReceivedApdu {
+            direct_response: None,
             apdu: read_property_request(0x41),
             source_mac: MacAddr::from_slice(&[0x02]),
             ingress_network: None,

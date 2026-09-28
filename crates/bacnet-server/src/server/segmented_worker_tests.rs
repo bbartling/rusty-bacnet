@@ -33,6 +33,7 @@ fn direct_worker(server: &BACnetServer<HeldTransport>) -> JoinHandle<()> {
             &permits,
             &[1],
             None,
+            &bacnet_network::response_route::ResponseRoute::unverified(),
             7,
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0; 100],
@@ -109,7 +110,12 @@ async fn segmented_worker_stop_joins_production_descendant() {
 #[tokio::test]
 async fn segmented_worker_old_cancel_preserves_same_key_replacement() {
     let (mut server, _tx, mut started) = fixture().await;
-    let key = segmented_transaction_key(&[1], None, 7);
+    let key = segmented_transaction_key(
+        &[1],
+        None,
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     let old = direct_worker(&server);
     let mut old_resource = started_send(&mut started).await;
     let old_sender = server.seg_ack_senders.lock().get(&key).unwrap().clone();
@@ -186,7 +192,12 @@ async fn segmented_worker_blocked_send_does_not_block_inline_ack_or_abort() {
     let handle = server
         .seg_ack_senders
         .lock()
-        .get(&segmented_transaction_key(&[1], None, 7))
+        .get(&segmented_transaction_key(
+            &[1],
+            None,
+            7,
+            bacnet_transport::port::TransportProvenance::unverified(),
+        ))
         .unwrap()
         .clone();
     assert_eq!(
