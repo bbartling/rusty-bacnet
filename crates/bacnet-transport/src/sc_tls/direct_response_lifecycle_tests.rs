@@ -71,3 +71,99 @@ async fn direct_response_registered_transport_stop_abort_drop_seal_retained_list
         listener.stop().await;
     }
 }
+
+#[tokio::test]
+async fn direct_response_real_tls_ping_pong_preserves_handshake_and_response() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let ca = TestCa::generate();
+    let (mut listener, mut rx) = start_listener(&ca, |c| c).await;
+    let peer = crate::sc_tls::TlsWebSocket::connect_direct(
+        &direct_url(&listener.local_addr()),
+        ca.node_config(vec!["peer".into()]),
+    )
+    .await
+    .unwrap();
+    let mut connection = ScConnection::new(DIAL_VMAC, DIAL_UUID);
+    let mut bytes = BytesMut::new();
+    encode_sc_message(&mut bytes, &connection.build_connect_request());
+    for message in [
+        Message::Ping(vec![1].into()),
+        Message::Pong(vec![2].into()),
+        Message::Binary(bytes.to_vec().into()),
+    ] {
+        peer.write.lock().await.send(message).await.unwrap();
+    }
+    // Actual tungstenite TLS frames establish that Ping handling still emits
+    // Pong and that controls before Connect do not become handshake data.
+    let mut got_pong = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match peer.read.lock().await.next().await.unwrap().unwrap() {
+                Message::Pong(data) => {
+                    assert_eq!(data.as_ref(), &[1]);
+                    got_pong = true;
+                }
+                Message::Binary(data) => {
+                    assert_eq!(
+                        decode_sc_message(&data).unwrap().function,
+                        ScFunction::ConnectAccept
+                    );
+                    break;
+                }
+                other => panic!("unexpected handshake frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(got_pong);
+    bytes.clear();
+    encode_sc_message(
+        &mut bytes,
+        &connection
+            .build_direct_encapsulated_npdu(NPDU, &[])
+            .unwrap(),
+    );
+    for message in [
+        Message::Ping(vec![3].into()),
+        Message::Pong(vec![4].into()),
+        Message::Binary(bytes.to_vec().into()),
+    ] {
+        peer.write.lock().await.send(message).await.unwrap();
+    }
+    let received = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.npdu.as_ref(), NPDU);
+    let scope = DirectResponseScope::default();
+    received
+        .direct_response
+        .unwrap()
+        .send(NPDU, &scope)
+        .await
+        .unwrap();
+    let mut got_pong = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match peer.read.lock().await.next().await.unwrap().unwrap() {
+                Message::Pong(data) => {
+                    assert_eq!(data.as_ref(), &[3]);
+                    got_pong = true;
+                }
+                Message::Binary(data) => {
+                    let response = decode_sc_message(&data).unwrap();
+                    assert_eq!(response.function, ScFunction::EncapsulatedNpdu);
+                    assert_eq!(response.payload.as_ref(), NPDU);
+                    break;
+                }
+                other => panic!("unexpected response frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(got_pong);
+    listener.stop().await;
+}

@@ -123,7 +123,7 @@
 | `BACNET-AB-HUB-CERTIFICATE-BINDINGS` | 135-2020 Annex AB.7.4 printed1406/PDF1408: additional checks only when installation-enabled | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-AB-SC-DIRECT-MEMBERSHIP` | 135-2020 Annex AB.4.2/AB.4.2.1, AB.6.2.1/AB.6.2.3 and AB.2.4.1 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-AB-SC-DIRECT-PRINCIPAL` | 135-2020 Annex AB.7.4 connection authentication; local request ownership policy | P0 | supported-with-clause-evidence | 3 |
-| `BACNET-AB-SC-SERVER-RESPONSE` | 135-2020 Annex AB.4.2/AB.6 and Clause 5; local server response confinement policy | P0 | supported-with-clause-evidence | 3 |
+| `BACNET-AB-SC-SERVER-RESPONSE` | 135-2020 Annex AB.4.2/AB.6 and Clause 5; local confirmed server response confinement policy | P0 | supported-with-clause-evidence | 3 |
 
 ## Follow-Up Source
 

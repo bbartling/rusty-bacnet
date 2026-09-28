@@ -1,7 +1,13 @@
 use super::*;
 use crate::sc::direct_membership::{DirectMembership, DirectRole};
 use crate::sc_frame::decode_sc_message;
-use std::task::Poll;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+
+fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+    future.poll(&mut Context::from_waker(Waker::noop()))
+}
 
 fn route(
     limits: (u16, u16),
@@ -29,11 +35,11 @@ async fn direct_response_queue_bound_cancellation_and_weak_membership() {
         .map(|_| Box::pin(route.send(&[1, 0], &scope)))
         .collect();
     for future in &mut pending {
-        assert!(futures_util::poll!(future).is_pending());
+        assert!(poll_once(future.as_mut()).is_pending());
     }
     assert_eq!(recv.len(), RESPONSE_QUEUE_CAPACITY);
     assert!(matches!(
-        futures_util::poll!(Box::pin(route.send(&[1, 0], &scope))),
+        poll_once(Box::pin(route.send(&[1, 0], &scope)).as_mut()),
         Poll::Ready(Err(_))
     ));
     drop(pending);
@@ -60,7 +66,7 @@ async fn direct_response_negotiated_npdu_and_complete_bvlc_limits() {
     ));
     assert!(recv.try_recv().is_err());
     let mut send = Box::pin(route.send(&[1, 0], &scope));
-    assert!(futures_util::poll!(&mut send).is_pending());
+    assert!(poll_once(send.as_mut()).is_pending());
     let write = recv.recv().await.unwrap();
     assert_eq!(write.bytes.len(), 6);
     let frame = decode_sc_message(&write.bytes).unwrap();
@@ -84,7 +90,7 @@ async fn direct_response_queue_wait_deadline_and_retirement_are_bounded() {
     let (_, member, route, mut recv) = route((100, 96));
     let send = route.send(&[1, 0], &scope);
     tokio::pin!(send);
-    assert!(futures_util::poll!(&mut send).is_pending());
+    assert!(poll_once(send.as_mut()).is_pending());
     let write = recv.recv().await.unwrap();
     tokio::time::advance(Duration::from_secs(5)).await;
     assert!(
@@ -103,7 +109,7 @@ async fn direct_response_owner_seal_and_drop_cancel_queued_work_irreversibly() {
     let (_, _member, route, mut recv) = route((100, 96));
     let scope = DirectResponseScope::default();
     let mut send = Box::pin(route.send(&[1, 0], &scope));
-    assert!(futures_util::poll!(&mut send).is_pending());
+    assert!(poll_once(send.as_mut()).is_pending());
     let write = recv.recv().await.unwrap();
     assert!(write.can_start());
     scope.seal();
@@ -117,7 +123,7 @@ async fn direct_response_owner_seal_and_drop_cancel_queued_work_irreversibly() {
     assert!(send.await.is_err());
     let next_owner = DirectResponseScope::default();
     let mut send = Box::pin(route.send(&[1, 0], &next_owner));
-    assert!(futures_util::poll!(&mut send).is_pending());
+    assert!(poll_once(send.as_mut()).is_pending());
     let write = recv.recv().await.unwrap();
     assert!(
         write.can_start(),

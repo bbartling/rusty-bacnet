@@ -617,13 +617,15 @@ capability below is separate from authentication provenance.
 
 ### Accepted direct server responses
 
-Current native `BACnetServer` replies to accepted-direct requests only through
-their original accepted TLS connection. This covers SimpleACK, ComplexACK,
+Current native `BACnetServer` replies to accepted-direct confirmed requests only
+through their original accepted TLS connection. This covers SimpleACK, ComplexACK,
 Error, Reject, server/overload Abort, LSO replay, segmented responses and retries,
 and segmented-request SegmentACK/Abort. Replacement, closure or missing/mismatched
 capability fails closed: there is no current-VMAC, replacement-socket, Hub or
 new-dial fallback. Complete admitted work may still execute under its original
 authorization; failure to reply does not roll it back or prove remote receipt.
+Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing and are
+outside this confinement guarantee.
 
 **Pre-1.0 API change:** `ReceivedNpdu` and `ReceivedApdu` add
 `direct_response: Option<DirectResponse>`; custom constructors use `None` for
@@ -647,8 +649,11 @@ capability callers must retain a scope for their owner and seal it at shutdown;
 a sealed scope never reopens. Cancelled queued work is skipped. Already-started
 writes cannot be recalled; timeout or a failed/retired write closes the worker.
 The peer's negotiated Max-NPDU-Length and complete Max-BVLC-Length are checked.
-Response and received BVLC processing alternate preference to prevent a ready
-binary-frame stream or full response queue from starving the other direction.
+Response and received WebSocket frames alternate preference: a ready binary,
+Ping or Pong frame can precede a queued response by at most one read turn, and
+a full response queue can precede input by at most one bounded write. Ignored
+controls yield a scheduling turn without extending the binary-activity idle
+deadline; handshake control filtering retains the absolute Connect timeout.
 
 Segmented-response ACK/Abort admission includes the original direct leaf and
 incarnation. A reconnect cannot advance or cancel an old response child.

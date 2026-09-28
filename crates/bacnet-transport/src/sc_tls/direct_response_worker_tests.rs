@@ -4,13 +4,20 @@ use crate::port::{DirectResponse, DirectResponseScope, DirectScIdentity};
 use std::sync::atomic::AtomicUsize;
 use tokio::sync::oneshot;
 
-struct Read(bool);
+enum Read {
+    Binary,
+    Pending,
+    Controls(Arc<AtomicUsize>),
+}
 impl DirectWsRead for Read {
-    async fn next_data(&mut self) -> Option<Result<Vec<u8>, String>> {
-        if self.0 {
-            Some(Ok(vec![0xff]))
-        } else {
-            std::future::pending().await
+    async fn next_frame(&mut self) -> Option<Result<DirectFrame, String>> {
+        match self {
+            Self::Binary => Some(Ok(DirectFrame::Binary(vec![0xff]))),
+            Self::Pending => std::future::pending().await,
+            Self::Controls(count) => {
+                count.fetch_add(1, Ordering::AcqRel);
+                Some(Ok(DirectFrame::Control))
+            }
         }
     }
 }
@@ -57,14 +64,13 @@ async fn direct_response_ready_read_and_queue_have_bounded_alternating_progress(
     let scope = DirectResponseScope::default();
     let mut send = Box::pin(route.send(&[1, 0], &scope));
     assert!(futures_util::poll!(&mut send).is_pending());
-    let mut read = Read(true);
+    let mut read = Read::Binary;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     assert!(matches!(
-        next_event::<Write>(&mut read, &mut recv, false, deadline).await,
+        next_event(&mut read, &mut recv, false, deadline).await,
         Event::Read(_)
     ));
-    let Event::Write(Some(write)) = next_event::<Write>(&mut read, &mut recv, true, deadline).await
-    else {
+    let Event::Write(Some(write)) = next_event(&mut read, &mut recv, true, deadline).await else {
         panic!("ready read starved queued send")
     };
     write.done.send(Ok(())).unwrap();
@@ -73,7 +79,7 @@ async fn direct_response_ready_read_and_queue_have_bounded_alternating_progress(
     assert!(futures_util::poll!(&mut send).is_pending());
     assert!(
         matches!(
-            next_event::<Write>(&mut read, &mut recv, false, deadline).await,
+            next_event(&mut read, &mut recv, false, deadline).await,
             Event::Read(_)
         ),
         "ready queue must not starve control"
@@ -85,6 +91,7 @@ async fn worker(
     route: DirectResponse,
     mut recv: mpsc::Receiver<crate::direct_response::ResponseWrite>,
     mut write: Write,
+    mut read: Read,
 ) {
     let ca = super::super::direct_accept_tests::TestCa::generate();
     let config = DirectAcceptConfig::new(
@@ -93,13 +100,14 @@ async fn worker(
         [2; 16],
         ca.node_config(vec!["localhost".into()]),
     )
-    .with_connect_timeout(Duration::from_secs(5));
+    .with_connect_timeout(Duration::from_secs(5))
+    .with_idle_timeout(Duration::from_secs(10));
     let _retire = RetireMember(&member);
     let (tx, _rx) = mpsc::channel(4);
     let admission = Arc::new(ScNpduAdmission::new(ScNpduAdmissionPolicy::default()));
     serve_npdu_loop(
         &mut write,
-        &mut Read(false),
+        &mut read,
         &config,
         AdmittedDirectPeer {
             address: "127.0.0.1:1".parse().unwrap(),
@@ -130,6 +138,7 @@ async fn direct_response_started_write_may_finish_but_sealed_queued_write_cannot
             entered: Some(entered),
             release: Some(gate),
         },
+        Read::Pending,
     ));
     let mut first = Box::pin(route.send(&[1, 0], &scope));
     assert!(futures_util::poll!(&mut first).is_pending());
@@ -161,6 +170,7 @@ async fn direct_response_blocked_write_deadline_retires_socket_and_drops_queued_
             entered: Some(entered),
             release: Some(gate),
         },
+        Read::Pending,
     ));
     let mut first = Box::pin(route.send(&[1, 0], &scope));
     assert!(futures_util::poll!(&mut first).is_pending());
@@ -173,4 +183,83 @@ async fn direct_response_blocked_write_deadline_retires_socket_and_drops_queued_
     assert!(second.await.is_err());
     assert!(!member.is_current());
     assert_eq!(writes.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn direct_response_ready_websocket_controls_return_a_scheduling_turn() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let (_member, route, mut recv) = route();
+    let scope = DirectResponseScope::default();
+    let mut send = Box::pin(route.send(&[1, 0], &scope));
+    let consumed = Arc::new(AtomicUsize::new(0));
+    let count = consumed.clone();
+    let controls = (0..8).map(|i| {
+        Ok::<_, String>(if i % 2 == 0 {
+            Message::Ping(vec![i].into())
+        } else {
+            Message::Pong(vec![i].into())
+        })
+    });
+    let frames = controls.chain([Ok(Message::Binary(vec![0xff].into()))]);
+    let mut read = futures_util::stream::iter(frames).inspect(|_| {
+        if count.fetch_add(1, Ordering::AcqRel) == 0 {
+            // Enqueue while the adapter is already polling its ready input.
+            assert!(std::future::Future::poll(
+                send.as_mut(),
+                &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            )
+            .is_pending());
+        }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    assert!(matches!(
+        next_event(&mut read, &mut recv, false, deadline).await,
+        Event::Read(Ok(Some(Ok(_))))
+    ));
+    assert_eq!(consumed.load(Ordering::Acquire), 1, "one control per turn");
+    let Event::Write(Some(write)) = next_event(&mut read, &mut recv, true, deadline).await else {
+        panic!("ready controls starved a response queued during input polling")
+    };
+    assert_eq!(consumed.load(Ordering::Acquire), 1);
+    write.done.send(Ok(())).unwrap();
+    drop(read);
+    send.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn direct_response_websocket_controls_preserve_connect_and_idle_deadlines() {
+    use tokio_tungstenite::tungstenite::Message;
+    let mut ready = futures_util::stream::repeat(Ok::<_, String>(Message::Ping(vec![1].into())));
+    let handshake = tokio::time::timeout(Duration::from_secs(5), ready.next_data());
+    tokio::pin!(handshake);
+    assert!(futures_util::poll!(&mut handshake).is_pending());
+    tokio::time::advance(Duration::from_secs(5)).await;
+    assert!(
+        handshake.await.is_err(),
+        "controls cannot extend Connect deadline"
+    );
+
+    let (member, route, recv) = route();
+    let consumed = Arc::new(AtomicUsize::new(0));
+    let worker = tokio::spawn(worker(
+        member.clone(),
+        route,
+        recv,
+        Write {
+            writes: Arc::new(AtomicUsize::new(0)),
+            entered: None,
+            release: None,
+        },
+        Read::Controls(consumed.clone()),
+    ));
+    while consumed.load(Ordering::Acquire) == 0 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    worker.await.unwrap();
+    assert!(
+        !member.is_current(),
+        "controls cannot extend binary-activity idle deadline"
+    );
 }

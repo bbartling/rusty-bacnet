@@ -784,7 +784,7 @@ use response_loop::serve_npdu_loop;
 
 #[path = "direct_socket.rs"]
 mod socket;
-use socket::{DirectWs, DirectWsRead};
+use socket::{DirectFrame, DirectWs, DirectWsRead};
 
 #[cfg(test)]
 #[path = "direct_accept_tests.rs"]

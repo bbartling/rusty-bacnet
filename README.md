@@ -385,9 +385,10 @@ and connection incarnation into native server authorization and receive
 reassembly. Queued work retains its admitting identity across replacement;
 different incarnations cannot share duplicate/replay or partial request state.
 See the [Rust identity API and limits](docs/rust-api.md#accepted-direct-tls-identity).
-These APIs postdate published 0.11.0. Native `BACnetServer` accepted-direct replies,
-LSO replay, and both segmentation directions now stay on the original socket;
-stale or missing response authority fails closed. Registered transport teardown
+These APIs postdate published 0.11.0. Native `BACnetServer` accepted-direct
+confirmed replies, LSO replay, and segmented-request controls now stay on the
+original socket; stale or missing response authority fails closed. Unconfirmed
+Who-Is/Who-Has discovery replies retain ordinary routing. Registered transport teardown
 also seals its listener, even when the application retains the listener handle.
 See [server response confinement and limits](docs/rust-api.md#accepted-direct-server-responses).
 Client/shared-endpoint reply consumers and ordinary bidirectional direct routing

@@ -1127,7 +1127,7 @@ historical-socket delivery or an exhaustive Annex AB claim.
 
 The sealed response capability travels separately from Copy/Eq/Hash provenance
 through listener, network/router local delivery, queued server dispatch and
-segment-zero reassembly. Every native server terminal response, overload Abort,
+segment-zero reassembly. Every native server confirmed terminal response, overload Abort,
 LSO replay, segmented response/retry/terminal Abort, and receive SegmentACK/Abort
 uses that original writer. Direct missing/mismatched/stale authority fails
 closed without mutable-address, replacement, Hub or dial fallback. Complete
@@ -1148,14 +1148,21 @@ or B TLS data and use a generic-egress spy plus deterministic completion barrier
 negotiated NPDU/complete BVLC limits, cancellation and bounded waiting.
 `direct_response_worker_tests.rs` exercises production writer scheduling,
 blocked-write timeout and queued owner-seal rejection independently of future
-destruction. Already-started writes may complete and cannot be recalled.
+destruction. Its deterministic ready-control stream enqueues a response during
+the first Ping/Pong poll: the adapter returns after one frame, then selects the
+queued write. The pre-repair control consumed all eight controls and a binary
+frame in one turn; this proves a bound violation, not an indefinite network
+stall. Paused-clock controls preserve Connect and binary-activity idle deadlines.
+The real TLS lifecycle fixture verifies Ping/Pong handling before Connect and
+before an NPDU response. Already-started writes may complete and cannot be recalled.
 `direct_response_lifecycle_tests.rs` uses real TLS to prove registered transport
 stop/abort/drop seals a retained listener handle and joins zero physical sockets.
 Network/server scopes seal irreversibly before shutdown waits; the retained
 listener remains a cleanup handle, not authority to keep accepting or replying.
 
-This row excludes inbound client/shared-endpoint consumers (#889), outgoing
-client transaction ownership, ordinary bidirectional direct application traffic
+Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside
+this row. This row excludes inbound client/shared-endpoint consumers (#889),
+outgoing client transaction ownership, ordinary bidirectional direct application traffic
 (#886), Hub-relayed end-to-end identity, Python direct-entry support, full Annex
 AB/PICS/BTL and external interoperability. Global evidence pins and broad row
 statuses remain unchanged. [Public API and lifecycle break](../rust-api.md#accepted-direct-server-responses).

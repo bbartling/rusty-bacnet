@@ -2776,9 +2776,10 @@ static `permissive`/`deny_all` choice. The Rust identity APIs postdate published
 0.11.0. Hub admission's scope-only channel assertion and Hub-relayed application
 traffic never become downstream direct leaf identities. See the
 [Rust identity contract](rust-api.md#accepted-direct-tls-identity). Native
-`BACnetServer` now confines accepted-direct replies/replay and segmented controls
-to the original socket, but Python still exposes neither direct-listener setup
-nor this response capability. This adds no Python direct-connection entry point
+`BACnetServer` now confines accepted-direct confirmed replies, LSO replay and
+segmented-request controls to the original socket. Unconfirmed Who-Is/Who-Has
+discovery replies retain ordinary routing. Python still exposes neither
+direct-listener setup nor this response capability. This adds no Python direct-connection entry point
 or client/shared-endpoint response guarantee; see the
 [server response scope](rust-api.md#accepted-direct-server-responses).
 

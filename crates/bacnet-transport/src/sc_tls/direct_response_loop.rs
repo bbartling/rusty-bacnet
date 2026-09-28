@@ -22,6 +22,11 @@ pub(super) async fn serve_npdu_loop<W>(
     let mut prefer_send = false;
     let mut idle_deadline = tokio::time::Instant::now() + config.idle_timeout;
     loop {
+        if tokio::time::Instant::now() >= idle_deadline {
+            debug!("direct idle timeout, closing {peer_addr}");
+            let _ = tokio::time::timeout(config.connect_timeout, write.send_close()).await;
+            return;
+        }
         let next = tokio::select! {
             biased;
             _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => {
@@ -33,7 +38,7 @@ pub(super) async fn serve_npdu_loop<W>(
                 }).await;
                 return;
             }
-            next = next_event::<W>(read, responses, prefer_send, idle_deadline) => next,
+            next = next_event(read, responses, prefer_send, idle_deadline) => next,
         };
         let received = match next {
             Event::Write(Some(request)) => {
@@ -66,7 +71,12 @@ pub(super) async fn serve_npdu_loop<W>(
             }
         };
         let data = match received {
-            Ok(Some(Ok(data))) => data,
+            Ok(Some(Ok(DirectFrame::Binary(data)))) => data,
+            // WebSocket controls are scheduling turns, not BVLC activity.
+            Ok(Some(Ok(DirectFrame::Control))) => {
+                tokio::task::yield_now().await;
+                continue;
+            }
             Ok(Some(Err(e))) => {
                 warn!("direct recv error from {peer_addr}: {e}");
                 return;
@@ -150,14 +160,15 @@ pub(super) async fn serve_npdu_loop<W>(
 }
 
 enum Event {
-    Read(Result<Option<Result<Vec<u8>, String>>, tokio::time::error::Elapsed>),
+    Read(Result<Option<Result<DirectFrame, String>>, tokio::time::error::Elapsed>),
     Write(Option<crate::direct_response::ResponseWrite>),
 }
 
 // A continuously ready input can precede a queued response by at most one
-// frame; a full response queue can precede control by at most one bounded write.
-async fn next_event<W: DirectWs>(
-    read: &mut W::Read,
+// WebSocket frame (including Ping/Pong); a full response queue can precede
+// control by at most one bounded write.
+async fn next_event<R: DirectWsRead>(
+    read: &mut R,
     responses: &mut mpsc::Receiver<crate::direct_response::ResponseWrite>,
     prefer_send: bool,
     idle_deadline: tokio::time::Instant,
@@ -166,12 +177,12 @@ async fn next_event<W: DirectWs>(
         tokio::select! {
             biased;
             send = responses.recv() => Event::Write(send),
-            read = tokio::time::timeout_at(idle_deadline, read.next_data()) => Event::Read(read),
+            read = tokio::time::timeout_at(idle_deadline, read.next_frame()) => Event::Read(read),
         }
     } else {
         tokio::select! {
             biased;
-            read = tokio::time::timeout_at(idle_deadline, read.next_data()) => Event::Read(read),
+            read = tokio::time::timeout_at(idle_deadline, read.next_frame()) => Event::Read(read),
             send = responses.recv() => Event::Write(send),
         }
     }

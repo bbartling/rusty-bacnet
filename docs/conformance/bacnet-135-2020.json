@@ -4235,9 +4235,9 @@
   },
   {
     "id": "BACNET-AB-SC-SERVER-RESPONSE",
-    "standard_anchor": "135-2020 Annex AB.4.2/AB.6 and Clause 5; local server response confinement policy",
+    "standard_anchor": "135-2020 Annex AB.4.2/AB.6 and Clause 5; local confirmed server response confinement policy",
     "priority": "P0",
-    "requirement_summary": "Confine BACnetServer accepted-direct terminal responses, replay and both segmentation directions to the original accepted connection and its owner lifetime.",
+    "requirement_summary": "Confine BACnetServer accepted-direct confirmed terminal responses, LSO replay and segmented-request controls to the original accepted connection and its owner lifetime.",
     "status": "supported-with-clause-evidence",
     "code_anchors": [
       "crates/bacnet-transport/src/direct_response.rs",
@@ -4277,7 +4277,7 @@
       "docs/rust-api.md#accepted-direct-server-responses",
       "docs/python-api.md"
     ],
-    "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
+    "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
   }
  ]
 }
