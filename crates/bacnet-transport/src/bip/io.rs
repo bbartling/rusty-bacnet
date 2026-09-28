@@ -216,6 +216,11 @@ pub(super) async fn handle_bvll_message(
 
             // BBMD mode: only accept FORWARDED_NPDU from BDT peers
             if let Some(bbmd) = &ctx.bbmd {
+                // A local rebroadcast retains the remote embedded origin. The
+                // self BDT row must not turn its UDP echo into peer traffic.
+                if encode_bip_mac(sender.0, sender.1) == ctx.local_mac {
+                    return;
+                }
                 let (is_bdt_peer, needs_local_broadcast) = {
                     let state = bbmd.lock().await;
                     (
