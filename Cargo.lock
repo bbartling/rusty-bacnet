@@ -324,6 +324,7 @@ dependencies = [
  "futures-util",
  "rcgen",
  "rustls",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
