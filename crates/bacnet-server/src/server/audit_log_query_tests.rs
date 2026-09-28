@@ -106,7 +106,7 @@ async fn audit_log_query_dispatch_returns_a_typed_complex_ack() {
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let notification_transactions = NotificationTransactions::new();
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
@@ -139,7 +139,7 @@ async fn audit_log_query_dispatch_returns_a_typed_complex_ack() {
         &seg_ack_senders,
         &seg_send_permits,
         &cov_in_flight,
-        &server_tsm,
+        &learned_routers,
         &notification_transactions,
         &confirmed_request_tracker,
         &device_bindings,
@@ -224,7 +224,7 @@ async fn audit_log_query_dispatch_applies_three_state_filter_to_typed_complex_ac
             let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
             let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
             let cov_in_flight = Arc::new(Semaphore::new(1));
-            let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+            let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
             let notification_transactions = NotificationTransactions::new();
             let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
             let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
@@ -253,7 +253,7 @@ async fn audit_log_query_dispatch_applies_three_state_filter_to_typed_complex_ac
                 &seg_ack_senders,
                 &seg_send_permits,
                 &cov_in_flight,
-                &server_tsm,
+                &learned_routers,
                 &notification_transactions,
                 &confirmed_request_tracker,
                 &device_bindings,

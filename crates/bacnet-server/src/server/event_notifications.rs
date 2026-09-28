@@ -209,7 +209,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
@@ -218,7 +218,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db,
             network,
             comm_state,
-            server_tsm,
+            learned_routers,
             notification_transactions,
             &Arc::new(RwLock::new(DeviceBindingTable::new())),
             oid,
@@ -231,7 +231,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         oid: &ObjectIdentifier,
@@ -253,7 +253,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db,
                     network,
                     comm_state,
-                    server_tsm,
+                    learned_routers,
                     notification_transactions,
                     device_bindings,
                     oid,
@@ -278,7 +278,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
@@ -288,7 +288,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db,
             network,
             comm_state,
-            server_tsm,
+            learned_routers,
             notification_transactions,
             &Arc::new(RwLock::new(DeviceBindingTable::new())),
             oid,
@@ -302,7 +302,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         oid: &ObjectIdentifier,
@@ -536,7 +536,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                 let network = Arc::clone(network);
-                let tsm = Arc::clone(server_tsm);
+                let learned_routers = Arc::clone(learned_routers);
                 let timeout = Duration::from_millis(retry_timeout_ms);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
                 notification_transactions.spawn(async move {
@@ -547,7 +547,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         apdu_retries,
                         |attempt| {
                             let network = Arc::clone(&network);
-                            let tsm = Arc::clone(&tsm);
+                            let learned_routers = Arc::clone(&learned_routers);
                             let buf = buf.clone();
                             let local_target = local_target.clone();
                             let remote = remote.clone();
@@ -575,7 +575,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         let router = match configured_router {
                                             Some(router) => Some(router),
                                             None if attempt == 0 => {
-                                                tsm.lock().await.cached_router(dnet)
+                                                learned_routers.lock().await.cached_router(dnet)
                                             }
                                             None => None,
                                         };
@@ -717,7 +717,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         accepted: handlers::AcceptedAcknowledgeAlarm,
@@ -733,7 +733,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db,
             network,
             comm_state,
-            server_tsm,
+            learned_routers,
             notification_transactions,
             device_bindings,
             &accepted.event_object_identifier,

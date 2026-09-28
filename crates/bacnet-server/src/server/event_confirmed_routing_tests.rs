@@ -29,6 +29,8 @@ use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 
+mod learned_router_cache;
+
 #[derive(Clone, Default)]
 struct RecordingTransport {
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
@@ -64,12 +66,12 @@ impl TransportPort for RecordingTransport {
     }
 }
 
-/// A live distribution fixture: the same database, network and TSM across
+/// A live distribution fixture: the same database, network and router cache across
 /// multiple distributions, so router learning is observable between them.
 struct Harness {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<RecordingTransport>>,
-    server_tsm: Arc<Mutex<ServerTsm>>,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
     notification_transactions: Arc<NotificationTransactions>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
@@ -93,7 +95,7 @@ impl Harness {
         let unicasts = StdArc::clone(&transport.unicasts);
         let network = Arc::new(NetworkLayer::new(transport));
         let comm_state = Arc::new(AtomicU8::new(0));
-        let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+        let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
         let notification_transactions = NotificationTransactions::new();
 
         let mut db = clocked_test_database();
@@ -125,7 +127,7 @@ impl Harness {
         Self {
             db: Arc::new(RwLock::new(db)),
             network,
-            server_tsm,
+            learned_routers,
             notification_transactions,
             device_bindings: Arc::new(RwLock::new(device_bindings)),
             comm_state,
@@ -141,7 +143,7 @@ impl Harness {
             &self.db,
             &self.network,
             &self.comm_state,
-            &self.server_tsm,
+            &self.learned_routers,
             &self.notification_transactions,
             &self.device_bindings,
             &oid,
@@ -190,7 +192,7 @@ impl Harness {
             &self.db,
             &self.network,
             &self.comm_state,
-            &self.server_tsm,
+            &self.learned_routers,
             &self.notification_transactions,
             &self.device_bindings,
             &oid,
@@ -212,8 +214,8 @@ impl Harness {
         self.unicasts.lock().unwrap().clone()
     }
 
-    /// Deliver an ack the way the dispatch loop would: through the tiered
-    /// correlation, carrying the delivering router's MAC and the recipient's
+    /// Deliver an ack through the live notification owner, carrying
+    /// the delivering router's MAC and the recipient's
     /// routed identity.
     async fn ack_routed(
         &self,
@@ -250,7 +252,7 @@ impl Harness {
             &Arc::new(segmented_send::SegmentedSendRegistry::default()),
             &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
             &Arc::new(Semaphore::new(255)),
-            &self.server_tsm,
+            &self.learned_routers,
             &self.notification_transactions,
             &Arc::new(ConfirmedRequestTracker::default()),
             &self.device_bindings,
@@ -582,7 +584,7 @@ async fn two_routed_recipients_correlate_independently() {
 }
 
 /// An ack naming a different routed identity must not complete the
-/// transaction — the tiers are exact lookups, not a wildcard.
+/// transaction — terminal admission requires the exact routed identity.
 #[tokio::test]
 async fn ack_with_wrong_routed_identity_does_not_complete() {
     let harness = Harness::new(
@@ -606,7 +608,7 @@ async fn ack_with_wrong_routed_identity_does_not_complete() {
         "wrong DADR must miss"
     );
     assert_eq!(
-        harness.server_tsm.lock().await.cached_router(1000),
+        harness.learned_routers.lock().await.cached_router(1000),
         None,
         "mismatched routed traffic must not teach the router cache"
     );
@@ -626,7 +628,10 @@ async fn ack_with_wrong_routed_identity_does_not_complete() {
             .await,
         "wrong service must not complete"
     );
-    assert_eq!(harness.server_tsm.lock().await.cached_router(1000), None);
+    assert_eq!(
+        harness.learned_routers.lock().await.cached_router(1000),
+        None
+    );
     assert!(
         harness
             .ack_routed(ROUTER_A, 1000, RECIPIENT, req.invoke_id)

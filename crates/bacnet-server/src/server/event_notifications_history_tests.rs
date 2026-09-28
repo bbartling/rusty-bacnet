@@ -230,7 +230,7 @@ async fn commit_and_capture_history_notification(
             &db,
             &network,
             &Arc::new(AtomicU8::new(0)),
-            &Arc::new(Mutex::new(ServerTsm::new())),
+            &Arc::new(Mutex::new(LearnedRouterCache::new())),
             &NotificationTransactions::new(),
             &oid,
             committed,

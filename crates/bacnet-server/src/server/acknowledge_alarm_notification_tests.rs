@@ -260,7 +260,7 @@ impl Harness {
             &Arc::new(segmented_send::SegmentedSendRegistry::default()),
             &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
             &Arc::new(Semaphore::new(1)),
-            &Arc::new(Mutex::new(ServerTsm::new())),
+            &Arc::new(Mutex::new(LearnedRouterCache::new())),
             &self.transactions,
             &self.tracker,
             &self.bindings,

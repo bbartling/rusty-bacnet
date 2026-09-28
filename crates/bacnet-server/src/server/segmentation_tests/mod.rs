@@ -273,7 +273,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
     let cov_in_flight = Arc::new(Semaphore::new(255));
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let notification_transactions = NotificationTransactions::new();
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
@@ -288,7 +288,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         seg_ack_senders,
         &seg_send_permits,
         &cov_in_flight,
-        &server_tsm,
+        &learned_routers,
         &notification_transactions,
         &confirmed_request_tracker,
         &device_bindings,

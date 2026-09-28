@@ -141,7 +141,7 @@ pub(super) async fn distribute_from_database_with_bindings(
     let unicasts = StdArc::clone(&transport.unicasts);
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -169,7 +169,7 @@ pub(super) async fn distribute_from_database_with_bindings(
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &notifications,
         &device_bindings,
         &oid,

@@ -328,7 +328,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             lock_probe: StdArc::default(),
         })),
         &Arc::new(AtomicU8::new(0)),
-        &Arc::new(Mutex::new(ServerTsm::new())),
+        &Arc::new(Mutex::new(LearnedRouterCache::new())),
         &NotificationTransactions::new(),
         &enrollment_oid,
         transition,

@@ -2325,8 +2325,17 @@ The server automatically dispatches:
 - UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)
 
 **Outgoing (server-initiated):**
-- COV notifications (confirmed and unconfirmed, with ServerTsm retry for confirmed)
+- COV notifications (confirmed and unconfirmed, with `NotificationTransactions` retries for confirmed)
 - Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients)
+
+Confirmed notification invoke IDs, terminal admission and retries belong to
+`NotificationTransactions`. A separate private learned-router cache stores up to
+64 DNET next hops from admitted, nonempty routed terminal responses. Routed Address
+recipients use a learned router on the first attempt and local broadcast on
+later retries; a configured Device binding keeps its fixed next hop. The former
+public `ServerTsm` type and its unused transaction methods have been removed
+without a compatibility alias. `CovAckResult` remains available at its existing
+`bacnet_server::server` path.
 
 ### Concurrency
 

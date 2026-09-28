@@ -3,7 +3,7 @@ use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     async fn admit_notification_terminal(
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
@@ -14,7 +14,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         if let Some(source) = source_network.filter(|source| !source.mac_address.is_empty()) {
-            server_tsm
+            learned_routers
                 .lock()
                 .await
                 .learn_router(source.network, &MacAddr::from_slice(source_mac));
@@ -87,7 +87,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
         seg_send_permits: &Arc<Semaphore>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
@@ -114,10 +114,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         {
             return;
         }
-        // Ingress provenance: provenance threaded via `received` to all
-        // diagnostic views (SourceKey, DiscoveryLimiter, TimeSyncSource,
-        // DccSource, MutationDecisions, NotificationTransactions/ServerTsm,
-        // DccOutcomes, audit contexts); decisions unchanged, RB-09 consumes.
+        // Ingress provenance travels with `received` into request diagnostics
+        // and authorization. NotificationTransactions owns outgoing terminal
+        // admission; learned_routers stores only next hops from admitted replies.
         let route = received.response_route();
         match apdu {
             Apdu::ConfirmedRequest(req) => {
@@ -170,7 +169,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let seg_ack_senders = Arc::clone(seg_ack_senders);
                     let seg_send_permits = Arc::clone(seg_send_permits);
                     let cov_in_flight = Arc::clone(cov_in_flight);
-                    let server_tsm = Arc::clone(server_tsm);
+                    let learned_routers = Arc::clone(learned_routers);
                     let notification_transactions = Arc::clone(notification_transactions);
                     let device_bindings = Arc::clone(device_bindings);
                     let comm_state = Arc::clone(comm_state);
@@ -199,7 +198,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &seg_ack_senders,
                                 &seg_send_permits,
                                 &cov_in_flight,
-                                &server_tsm,
+                                &learned_routers,
                                 &notification_transactions,
                                 &device_bindings,
                                 &comm_state,
@@ -275,7 +274,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let seg_ack_senders = Arc::clone(seg_ack_senders);
                 let seg_send_permits = Arc::clone(seg_send_permits);
                 let cov_in_flight = Arc::clone(cov_in_flight);
-                let server_tsm = Arc::clone(server_tsm);
+                let learned_routers = Arc::clone(learned_routers);
                 let notification_transactions = Arc::clone(notification_transactions);
                 let device_bindings = Arc::clone(device_bindings);
                 let comm_state = Arc::clone(comm_state);
@@ -302,7 +301,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             &seg_ack_senders,
                             &seg_send_permits,
                             &cov_in_flight,
-                            &server_tsm,
+                            &learned_routers,
                             &notification_transactions,
                             &device_bindings,
                             &comm_state,
@@ -439,7 +438,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::SimpleAck(sa) => {
                 let invoke_id = sa.invoke_id;
                 let admitted = Self::admit_notification_terminal(
-                    server_tsm,
+                    learned_routers,
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
@@ -456,7 +455,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let error_class = err.error_class.to_raw();
                 let error_code = err.error_code.to_raw();
                 let admitted = Self::admit_notification_terminal(
-                    server_tsm,
+                    learned_routers,
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
@@ -474,7 +473,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::Reject(rej) => {
                 let invoke_id = rej.invoke_id;
                 let admitted = Self::admit_notification_terminal(
-                    server_tsm,
+                    learned_routers,
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
@@ -505,7 +504,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await
                 };
                 let admitted = Self::admit_notification_terminal(
-                    server_tsm,
+                    learned_routers,
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
@@ -552,7 +551,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::ComplexAck(ack) => {
                 let invoke_id = ack.invoke_id;
                 let admitted = Self::admit_notification_terminal(
-                    server_tsm,
+                    learned_routers,
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),

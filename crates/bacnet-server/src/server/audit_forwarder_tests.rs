@@ -165,7 +165,7 @@ impl Fixture {
             &s.seg_ack_senders,
             &s.seg_send_permits,
             &s.cov_in_flight,
-            &s.server_tsm,
+            &s.learned_routers,
             &s.notification_transactions,
             &s.confirmed_request_tracker,
             &s.device_bindings,

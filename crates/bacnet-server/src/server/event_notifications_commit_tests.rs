@@ -242,7 +242,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
         &db,
         &network,
         &Arc::new(AtomicU8::new(0)),
-        &Arc::new(Mutex::new(ServerTsm::new())),
+        &Arc::new(Mutex::new(LearnedRouterCache::new())),
         &NotificationTransactions::new(),
         &oid,
         committed,
