@@ -44,7 +44,7 @@ async fn audit_reporter_read_duplicate_admission_is_silent() {
         settle().await;
         assert_eq!(reads.load(Ordering::Acquire), 0);
         assert!(records(&fixture).is_empty());
-        pending.complete();
+        drop(pending);
         fixture.server.stop().await.unwrap();
     }
 }

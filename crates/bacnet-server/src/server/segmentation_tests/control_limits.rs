@@ -43,6 +43,7 @@ async fn non_rung_request_header_conservatively_bounds_server_response() {
         &[0xA5; 256],
         50,
         client_max_segments,
+        None,
     )
     .await;
 
@@ -136,6 +137,7 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
@@ -196,6 +198,7 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
@@ -274,6 +277,7 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
@@ -311,6 +315,7 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
@@ -369,6 +374,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
@@ -393,6 +399,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
             segment_timeout: Duration::from_millis(500),
             max_retries: 0,
         },
+        None,
     )
     .await;
 
@@ -454,6 +461,7 @@ async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reach
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
         &[0xF6; 128],
         50,
+        None,
         None,
     )
     .await;

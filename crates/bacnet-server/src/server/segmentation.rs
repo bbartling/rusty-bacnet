@@ -24,6 +24,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         service_ack_data: Bytes,
         client_max_apdu: u16,
         client_max_segments: Option<u8>,
+        pending: Option<PendingConfirmedRequest>,
     ) {
         let network = Arc::clone(network);
         let seg_ack_senders = Arc::clone(seg_ack_senders);
@@ -41,6 +42,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &service_ack_data,
                 client_max_apdu,
                 client_max_segments,
+                pending,
             )
             .await;
         });
@@ -63,6 +65,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         service_ack_data: &[u8],
         client_max_apdu: u16,
         client_max_segments: Option<u8>,
+        pending: Option<PendingConfirmedRequest>,
     ) {
         Self::send_segmented_complex_ack_with_options(
             network,
@@ -76,6 +79,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             client_max_apdu,
             client_max_segments,
             SegmentedSendOptions::default(),
+            pending,
         )
         .await;
     }
@@ -93,6 +97,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         client_max_apdu: u16,
         client_max_segments: Option<u8>,
         options: SegmentedSendOptions,
+        mut pending: Option<PendingConfirmedRequest>,
     ) {
         let max_seg_size = max_segment_payload(client_max_apdu, SegmentedPduType::ComplexAck);
         let segments = match split_payload(service_ack_data, max_seg_size) {
@@ -106,9 +111,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                let _ =
-                    Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network)
-                        .await;
+                let _ = Self::issue_terminal_response(
+                    network,
+                    &buf,
+                    source_mac,
+                    source_network,
+                    pending.take(),
+                )
+                .await;
                 return;
             }
         };
@@ -127,9 +137,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                let _ =
-                    Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network)
-                        .await;
+                let _ = Self::issue_terminal_response(
+                    network,
+                    &buf,
+                    source_mac,
+                    source_network,
+                    pending.take(),
+                )
+                .await;
                 return;
             }
         }
@@ -146,8 +161,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             });
             let mut buf = BytesMut::new();
             encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-            let _ =
-                Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network).await;
+            let _ = Self::issue_terminal_response(
+                network,
+                &buf,
+                source_mac,
+                source_network,
+                pending.take(),
+            )
+            .await;
             return;
         }
 
@@ -166,9 +187,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                let _ =
-                    Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network)
-                        .await;
+                let _ = Self::issue_terminal_response(
+                    network,
+                    &buf,
+                    source_mac,
+                    source_network,
+                    pending.take(),
+                )
+                .await;
                 return;
             }
         };
@@ -212,9 +238,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                let _ =
-                    Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network)
-                        .await;
+                let _ = Self::issue_terminal_response(
+                    network,
+                    &buf,
+                    source_mac,
+                    source_network,
+                    pending.take(),
+                )
+                .await;
                 return;
             }
         };
@@ -369,11 +400,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 });
                                 let mut abort_buf = BytesMut::new();
                                 encode_apdu(&mut abort_buf, &abort).expect("valid APDU encoding");
-                                let _ = Self::send_confirmed_response_apdu(
+                                let _ = Self::issue_terminal_response(
                                     network,
                                     &abort_buf,
                                     source_mac,
                                     source_network,
+                                    pending.take(),
                                 )
                                 .await;
                                 break 'send_segments;

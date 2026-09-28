@@ -547,18 +547,36 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
 // Keep the worker's 20 ms retry deadline ahead of the 30 ms observation without
 // depending on platform timer granularity or a fixed number of scheduler yields.
 #[tokio::test(start_paused = true)]
-async fn duplicate_is_silent_new_invoke_notifies_again_and_confirmed_retry_is_immutable() {
+async fn pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_immutable() {
     let duplicate = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 17, false)],
         0x07,
         1_000,
     );
-    assert_ack(duplicate.dispatch_with_reply(0x60).await.unwrap(), 0x60);
-    assert_eq!(duplicate.frames().len(), 1);
+    // Poll the real handler into its database wait. Before response issuance,
+    // an exact duplicate neither acknowledges nor starts another notification.
+    let gate = duplicate.db.write().await;
+    let first = duplicate.dispatch_with_reply(0x60);
+    tokio::pin!(first);
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(first.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
     assert!(duplicate.dispatch_with_reply(0x60).await.is_err());
+    assert!(duplicate.frames().is_empty());
+    drop(gate);
+    assert_ack(first.await.unwrap(), 0x60);
     assert_eq!(duplicate.frames().len(), 1);
-    assert_ack(duplicate.dispatch_with_reply(0x61).await.unwrap(), 0x61);
+    assert!(duplicate.acknowledged().await);
+    // After reply handoff, reusing the Invoke ID matches the existing new-ID
+    // behavior: idempotent acknowledgment state, but another ACK_NOTIFICATION.
+    assert_ack(duplicate.dispatch_with_reply(0x60).await.unwrap(), 0x60);
     assert_eq!(duplicate.frames().len(), 2);
+    assert!(duplicate.acknowledged().await);
+    assert_ack(duplicate.dispatch_with_reply(0x61).await.unwrap(), 0x61);
+    assert_eq!(duplicate.frames().len(), 3);
+    assert!(duplicate.acknowledged().await);
 
     let retry = Harness::new(
         vec![local_recipient(CONFIRMED_RECIPIENT, 18, true)],

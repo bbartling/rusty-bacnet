@@ -92,6 +92,9 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+#[path = "layer_issuance.rs"]
+mod issuance;
+
 #[path = "layer_admission.rs"]
 mod admission;
 use admission::AdmissionSender;
@@ -645,6 +648,10 @@ impl<T: TransportPort> Drop for NetworkLayer<T> {
         self.transport.abort();
     }
 }
+
+#[cfg(test)]
+#[path = "issuance_tests.rs"]
+mod issuance_tests;
 
 #[cfg(test)]
 mod tests {

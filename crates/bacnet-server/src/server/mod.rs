@@ -62,7 +62,9 @@ use crate::cov::{
 };
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
-use confirmed_request_tracker::{ConfirmedRequestAdmission, ConfirmedRequestTracker};
+use confirmed_request_tracker::{
+    ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
+};
 pub use device_bindings::DeviceBinding;
 use device_bindings::{register_configured_binding, DeviceBindingTable};
 use lso_replay::{LsoAdmission, PendingLsoReplay};
@@ -70,6 +72,7 @@ use notification_transactions::{
     canonical_direct_peer, canonical_routed_peer, run_notification_worker,
     NotificationTransactions, NotificationWorkerResult,
 };
+use requests::ConfirmedRequestOwnership;
 
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
@@ -685,6 +688,8 @@ pub use time_sync_policy::{
     TimeSyncPolicy, TimeSyncRateLimit, TimeSyncSource, TimeSyncSourceRestriction,
 };
 mod binary_lighting_lifecycle;
+#[cfg(test)]
+mod confirmed_issuance_tests;
 mod confirmed_request_tracker;
 mod cov_clock;
 mod cov_encoding;

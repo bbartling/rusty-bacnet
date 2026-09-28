@@ -81,6 +81,11 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
         "lost scoped subscriber before dispatch"
     );
     dispatch(&server, dcc(2), None, None).await;
+    dispatch(&server, dcc(2), None, None).await; // pending before its first poll
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
+        2
+    );
     let recovery = observed(&mut started).await;
     assert_eq!(server.dcc_outcome_counters().policy_denied_total, 1);
     assert_eq!(
@@ -89,7 +94,10 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
     );
     assert_eq!(capture.0.lock().unwrap().len(), 1);
     assert_eq!(capture.0.lock().unwrap()[0]["outcome"], "policy_denied");
-    dispatch(&server, dcc(2), None, None).await; // in-flight duplicate
+    // Its response has now issued, although the transport Result is held.
+    // Reuse is a new operation and the independent recovery task quota is full.
+    dispatch(&server, dcc(2), None, None).await;
+    let reused_abort = observed(&mut started).await;
     assert_eq!(
         server.request_admission_counters().confirmed_admitted_total,
         2
@@ -100,7 +108,7 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
         server
             .request_admission_counters()
             .recovery_overloaded_total,
-        1
+        2
     );
     assert_eq!(server.dcc_outcome_counters().policy_denied_total, 1);
     assert_eq!(capture.0.lock().unwrap().len(), 1);
@@ -108,6 +116,7 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
     ordinary.await.unwrap();
     recovery.await.unwrap();
     abort.await.unwrap();
+    reused_abort.await.unwrap();
     dispatch(&server, dcc(4), None, None).await;
     assert_eq!(
         server
@@ -117,5 +126,110 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
     );
     assert_eq!(server.dcc_outcome_counters().policy_denied_total, 1);
     assert_eq!(capture.0.lock().unwrap().len(), 1);
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn admission_dcc_prechecks_and_duplicate_before_first_poll() {
+    let (mut server, _tx, mut started) = small_fixture().await;
+    dispatch(&server, request(1), None, None).await;
+    dispatch(&server, request(1), None, None).await;
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
+        1
+    );
+    assert_eq!(
+        server
+            .request_admission_counters()
+            .confirmed_overloaded_total,
+        0
+    );
+    observed(&mut started).await;
+    server.comm_state.store(1, Ordering::Release);
+    dispatch(&server, request(2), None, None).await;
+    dispatch(&server, who_is(), None, None).await;
+    assert_eq!(
+        server
+            .request_admission_counters()
+            .confirmed_overloaded_total,
+        0
+    );
+    assert_eq!(
+        server
+            .request_admission_counters()
+            .unconfirmed_admitted_total,
+        0
+    );
+    assert_eq!(server.request_admission_counters().abort_active, 0);
+    // A no-response DCC discard does not leave a completed duplicate ghost.
+    let Apdu::ConfirmedRequest(req) = request(2) else {
+        unreachable!()
+    };
+    assert!(matches!(
+        server
+            .confirmed_request_tracker
+            .begin(&[1], None, TransportProvenance::unverified(), req),
+        ConfirmedRequestAdmission::New(_)
+    ));
+    server.comm_state.store(0, Ordering::Release);
+    server.test_network().transport().release.notify_waiters();
+    wait_reaped(&server).await;
+    dispatch(&server, request(2), None, None).await;
+    observed(&mut started).await;
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
+        2
+    );
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn admission_abort_rechecks_dcc_when_first_polled() {
+    let (mut server, _tx, mut started) = small_fixture().await;
+    dispatch(&server, request(1), None, None).await;
+    observed(&mut started).await;
+    dispatch(&server, request(2), None, None).await;
+    server.comm_state.store(1, Ordering::Release);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.request_admission_counters().abort_active != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(started.try_recv().is_err());
+    assert_eq!(server.request_admission_counters().abort_admitted_total, 1);
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn admission_dcc_first_poll_discard_drops_pending_for_reuse() {
+    let (mut server, _, mut started) = small_fixture().await;
+    dispatch(&server, request(1), None, None).await;
+    server.comm_state.store(1, Ordering::Release);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.request_admission_counters().confirmed_active != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(started.try_recv().is_err());
+    let Apdu::ConfirmedRequest(req) = request(1) else {
+        unreachable!()
+    };
+    assert!(matches!(
+        server
+            .confirmed_request_tracker
+            .begin(&[1], None, TransportProvenance::unverified(), req),
+        ConfirmedRequestAdmission::New(_)
+    ));
+    server.comm_state.store(0, Ordering::Release);
+    dispatch(&server, request(1), None, None).await;
+    observed(&mut started).await;
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
+        2
+    );
     server.stop().await.unwrap();
 }

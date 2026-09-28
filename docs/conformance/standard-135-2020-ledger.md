@@ -1061,8 +1061,8 @@ ingress do not gain a downstream direct principal.
 Real TLS tests use different same-CA leaves and same-leaf reconnects claiming
 identical UUID/VMAC and routed addresses. Listener-produced envelopes pass through
 the actual network/server loop with explicit queue/database barriers. They prove
-fresh authorization for byte-identical WP/LSO requests across pending/completed
-entries, preserved same-socket behavior, WPM order and old snapshot retention,
+fresh authorization for byte-identical WP/LSO requests across direct incarnations,
+pending same-socket suppression, WPM order and old snapshot retention,
 independent segment completion/cancellation, and unchanged reassembly capacity.
 Queued-A segment controls were admitted before retirement. Separate tests cover
 exact DER hashing, absent-chain refusal, TLS resumption, redaction, and sealed
@@ -1073,6 +1073,43 @@ The response observer is a transport send boundary. This evidence does not
 qualify #524 reply socket affinity, replay delivery, segmented-response ACK/Abort
 confinement, #886 bidirectional/outbound application NPDU intake, Hub-relayed
 end-to-end identity, full Annex AB conformance, BTL certification, or external
-interoperability. Generic completed retention remains changeable local policy.
+interoperability. #876 removes generic completed retention: completed same-socket
+WP reauthorizes, while completed LSO still replays without reauthorization.
 Global evidence pins and broad security-row status are unchanged. See the
 [Rust API and public breaks](../rust-api.md#accepted-direct-tls-identity).
+
+
+## Ordinary confirmed transaction lifetimes
+
+`BACNET-5-TSM-SERVER` adds #876 evidence for Clauses 5.3.5.1–3 and
+5.4.5.3–4 without promoting the broad server TSM row. Ordinary exact duplicate
+detection has bounded pending-only ownership: 256 tracked entries and a 64 KiB
+service-request limit, with normal admission when detection is unavailable.
+Local and routed canonical keys and #803's accepted-direct leaf/incarnation
+partition remain intact. LSO completed replay and Audit receipt policies remain
+separate.
+
+Full-server tests count actual object execution and hold transport futures after
+observing encoded NPDU issuance. Pending WP duplicates remain suppressed; after
+local issuance, byte-identical WP and a fresh Invoke ID execute while the old
+send and request-task permit remain held. Direct and routed controls cover
+SimpleACK, ComplexACK, Error, Reject and oversize Abort. MS/TP tests distinguish
+successful encoded handoff from a closed receiver; encoding failure, transport
+failure, cancellation and task-capacity rejection release ownership without
+inventing successful delivery. Network tests distinguish lazy future creation,
+encoding failure and first-poll issuance.
+
+A full-server segmented RP test lets the parent finish, retains duplicate
+ownership through the final ACK wait, then proves immediate reuse after the
+final ACK. Isolated tests exercise send failure, remote Abort, cancellation,
+virtual-clock timeout, rejected child spawn and generated terminal Abort with a
+held transport result. Reused ownership survives late cleanup of the old child.
+Real TLS #803 tests retain A/B/C leaf/incarnation assertions and WPM/reassembly
+isolation; completed same-socket WP now reauthorizes while completed LSO replays.
+
+Evidence: `confirmed_issuance_tests.rs`, `confirmed_response_lifetime_tests.rs`,
+`confirmed_segmented_lifetime_tests.rs`, `confirmed_tracker_tests.rs` under
+`crates/bacnet-server/src/server/`, and `crates/bacnet-network/src/issuance_tests.rs`.
+These observations establish local issuance and ownership, not physical send,
+peer receipt, reply-socket affinity, segmented-response control confinement,
+full TSM conformance, external interoperability or BTL certification.

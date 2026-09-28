@@ -38,6 +38,7 @@ fn direct_worker(server: &BACnetServer<HeldTransport>) -> JoinHandle<()> {
             &[0; 100],
             50,
             None,
+            None,
         )
         .await;
     })

@@ -5,6 +5,7 @@ mod alarm_summary;
 mod atomic_read_file;
 mod atomic_write_file;
 mod audit_notification;
+#[cfg(test)]
 mod confirmed;
 pub(super) mod confirmed_response;
 mod dcc;
@@ -38,16 +39,17 @@ mod unconfirmed_tests;
 #[cfg(test)]
 pub(crate) use self::{executed::EXECUTED_CONFIRMED, unconfirmed::EXECUTED_UNCONFIRMED};
 
+/// Distinct lifetimes: ordinary transaction ownership versus LSO's local replay.
+pub(super) enum ConfirmedRequestOwnership {
+    Generic(PendingConfirmedRequest),
+    LifeSafety(PendingLsoReplay),
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Handle one admitted confirmed request with LSO replay ownership.
-    ///
-    /// `lso_pending` is `Some` for LSO requests admitted through the LSO
-    /// replay cache (tracked or untracked fallback) and `None` otherwise.
-    /// The LSO arm stores the exact encoded response bytes before sending so
-    /// a retransmitted already-executed request replays byte-identically with
-    /// zero side effects. Untracked/`None` completions are no-ops.
+    /// Execute admitted work with its single response owner. Direct handler
+    /// tests may omit ownership; production dispatch always supplies it.
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::server) async fn handle_admitted_confirmed_request_with_lso(
+    pub(in crate::server) async fn handle_admitted_confirmed_request(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
@@ -68,8 +70,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         provenance: bacnet_transport::port::TransportProvenance,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
-        lso_pending: Option<PendingLsoReplay>,
+        ownership: Option<ConfirmedRequestOwnership>,
     ) {
+        let (pending, lso_pending) = match ownership {
+            Some(ConfirmedRequestOwnership::Generic(pending)) => (Some(pending), None),
+            Some(ConfirmedRequestOwnership::LifeSafety(pending)) => (None, Some(pending)),
+            None => (None, None),
+        };
         let invoke_id = req.invoke_id;
         let service_choice = req.service_choice;
         let client_max_apdu = req.max_apdu_length;
@@ -534,11 +541,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                    if let Err(e) = Self::send_confirmed_response_apdu(
+                    if let Err(e) = Self::issue_terminal_response(
                         network,
                         &buf,
                         source_mac,
                         source_network.as_ref(),
+                        pending,
                     )
                     .await
                     {
@@ -557,6 +565,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         ack.service_ack.clone(),
                         effective_max_apdu,
                         client_max_segments,
+                        pending,
                     );
                 }
 
@@ -629,6 +638,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             source_mac,
             source_network.as_ref(),
             reply_tx,
+            pending,
         )
         .await;
 

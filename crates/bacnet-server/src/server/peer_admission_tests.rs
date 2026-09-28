@@ -253,8 +253,8 @@ async fn peer_admission_duplicates_denied_retry_and_shared_eight_abort_workers()
     )
     .await;
     dispatch(&server, request(1), None, None).await;
+    dispatch(&server, request(1), None, None).await; // pending before first poll
     observed(&mut started).await;
-    dispatch(&server, request(1), None, None).await;
     assert_eq!(
         server
             .request_admission_counters()
@@ -286,7 +286,7 @@ async fn peer_admission_duplicates_denied_retry_and_shared_eight_abort_workers()
     assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
     dispatch(&server, request(10), None, None).await;
     observed(&mut started).await;
-    dispatch(&server, request(1), None, None).await; // completed duplicate at peer cap
+    dispatch(&server, request(1), None, None).await; // new post-issuance operation at peer cap
     assert_eq!(
         server.request_admission_counters().confirmed_admitted_total,
         2
@@ -295,7 +295,7 @@ async fn peer_admission_duplicates_denied_retry_and_shared_eight_abort_workers()
         server
             .request_admission_counters()
             .confirmed_overloaded_total,
-        9
+        10
     );
     server.stop().await.unwrap();
     assert_eq!(server.request_tasks.peer_entries(), [0; 3]);

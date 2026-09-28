@@ -147,10 +147,9 @@ async fn audit_forwarding_full_ring_evicts_atomically_without_delivery_rollback(
         assert_eq!(f.requests().len(), sends);
         f.store.fail.store(false, Ordering::Release);
         f.wire.fail.store(false, Ordering::Release);
-        assert!(f.confirmed(210, &[3], data.clone()).await.is_none());
-        // The existing server-lifetime guard also remembers error responses.
-        // Isolate durable receipt behavior using a fresh guard, as after restart.
-        f.server.confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
+        // Failed storage committed no receipt. The Error was already issued,
+        // so identical retry succeeds on this same live server/tracker.
+        // Successful receipt duplicates above remain silent and never forward.
         assert!(
             matches!(f.confirmed(210, &[3], data).await, Some(Apdu::SimpleAck(_))),
             "failed commit retained no receipt"
@@ -191,10 +190,8 @@ async fn audit_forwarding_partial_batch_is_one_commit_and_one_complete_wire_requ
     assert_eq!(f.store.commits.load(Ordering::Acquire), commits);
 
     f.store.fail.store(false, Ordering::Release);
-    assert!(f.confirmed(201, &[3], data.clone()).await.is_none());
-    // Preserve transient error-request suppression; a fresh runtime guard
-    // demonstrates that the failed batch wrote no durable receipt.
-    f.server.confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
+    // Retrying after the issued storage Error uses the existing live tracker.
+    // No durable receipt exists until this successful atomic batch commits.
     assert!(matches!(
         f.confirmed(201, &[3], data.clone()).await,
         Some(Apdu::SimpleAck(_))
