@@ -104,7 +104,7 @@ async fn start_sender(
         .with_device_uuid(SENDER_UUID)
         .with_connect_timeout_ms(connect_timeout_ms)
         .with_direct_discovery(true)
-        .with_direct_dialer(move |uri: String| {
+        .with_custom_direct_dialer(move |uri: String| {
             let attempted = attempted_clone.clone();
             let peer_tx = peer_tx.clone();
             async move {

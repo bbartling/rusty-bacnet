@@ -326,6 +326,7 @@ dependencies = [
  "rustls",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "tracing",
 ]
 

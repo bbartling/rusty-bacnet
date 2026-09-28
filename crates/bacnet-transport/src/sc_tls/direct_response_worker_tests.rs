@@ -53,9 +53,10 @@ fn route() -> (
     let member = registry
         .reserve([1; 16], [1; 6], [2; 16], [2; 6], DirectRole::Accepted, 1)
         .unwrap()
-        .commit();
+        .commit_with_limits((100, 96), Duration::from_secs(10));
     let identity = DirectScIdentity::verified([3; 32], member.generation);
-    let (route, recv) = DirectResponse::new(&member, identity, (100, 96), Duration::from_secs(10));
+    let route = DirectResponse::new(&member, identity);
+    let recv = member.take_writes();
     (member, route, recv)
 }
 #[tokio::test]

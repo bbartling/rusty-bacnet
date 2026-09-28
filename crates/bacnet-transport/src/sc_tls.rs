@@ -30,11 +30,21 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// Created via [`TlsWebSocket::connect`], which performs the TLS handshake and
 /// WebSocket upgrade in one step.
 pub struct TlsWebSocket {
+    pub(crate) verified_leaf: [u8; 32],
+    pub(crate) peer_address: std::net::SocketAddr,
     write: Mutex<futures_util::stream::SplitSink<WsStream, Message>>,
     read: Mutex<futures_util::stream::SplitStream<WsStream>>,
 }
 
 impl TlsWebSocket {
+    // One physical WebSocket frame per worker turn, including controls. The
+    // worker owns application/control writes; this adapter never takes write.
+    pub(crate) async fn direct_frame(
+        &self,
+    ) -> Result<crate::sc::direct_socket::DirectFrame, Error> {
+        direct_frame(&mut *self.read.lock().await).await
+    }
+
     /// Connect to a WebSocket endpoint with TLS.
     ///
     /// `url` must be a `wss://` URL. The validated local policy supplies explicit
@@ -94,6 +104,7 @@ impl TlsWebSocket {
             .into_bacnet_error_with_io_kind(e.kind())
         })?;
 
+        let peer_address = socket.peer_addr().map_err(Error::Transport)?;
         let tls_stream = tls_config
             .into_connector()
             .connect(server_name, socket)
@@ -106,6 +117,11 @@ impl TlsWebSocket {
                 .into_bacnet_error()
             })?;
 
+        let verified_leaf =
+            direct_accept::verified_leaf_sha256(tls_stream.get_ref().1.peer_certificates())
+                .ok_or_else(|| {
+                    Error::Encoding("verified TLS peer has no leaf certificate".into())
+                })?;
         let stream = MaybeTlsStream::Rustls(tls_stream);
         let (ws_stream, response) = tokio_tungstenite::client_async_with_config(
             request,
@@ -124,9 +140,29 @@ impl TlsWebSocket {
 
         let (write, read) = ws_stream.split();
         Ok(Self {
+            verified_leaf,
+            peer_address,
             write: Mutex::new(write),
             read: Mutex::new(read),
         })
+    }
+}
+
+// A finite unit of receive scheduling, shared with deterministic frame tests.
+async fn direct_frame<S, E>(read: &mut S) -> Result<crate::sc::direct_socket::DirectFrame, Error>
+where
+    S: futures_util::Stream<Item = Result<Message, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    use crate::sc::direct_socket::DirectFrame;
+    match read.next().await {
+        Some(Ok(Message::Binary(data))) => Ok(DirectFrame::Binary(data.to_vec())),
+        Some(Ok(Message::Ping(_) | Message::Pong(_))) => Ok(DirectFrame::Control),
+        Some(Err(error)) => Err(Error::Transport(std::io::Error::other(error.to_string()))),
+        _ => Err(Error::Transport(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "direct WebSocket ended or carried non-binary data",
+        ))),
     }
 }
 

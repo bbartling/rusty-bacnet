@@ -698,3 +698,6 @@ impl TestCa {
 
 #[path = "direct_response_lifecycle_tests.rs"]
 mod direct_response_lifecycle_tests;
+
+#[path = "direct_bidirectional_tests.rs"]
+mod direct_bidirectional_tests;

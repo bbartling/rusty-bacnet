@@ -380,7 +380,7 @@ established accepted peers separately from pending handshakes and physical
 sockets. See [direct peer limits and migration](docs/rust-api.md#direct-peer-membership-and-limits)
 and the [scoped evidence](docs/conformance/standard-135-2020-ledger.md#direct-peer-membership).
 
-Current source also carries the verified accepted-direct TLS leaf fingerprint
+Current source also carries the verified direct TLS leaf fingerprint
 and connection incarnation into native server authorization and receive
 reassembly. Queued work retains its admitting identity across replacement;
 different incarnations cannot share duplicate/replay or partial request state.
@@ -398,8 +398,15 @@ endpoint responder also use this original route, checked before any MS/TP prompt
 channel. The endpoint retains its bounded response queue and unsegmented service
 scope; an oversized read response selects its existing Abort. See the
 [client/endpoint reply scope](docs/rust-api.md#accepted-direct-client-and-endpoint-replies).
-Outgoing client transaction policy, native notification traffic, ordinary
-bidirectional direct routing and Hub-relayed end-to-end identity remain separate. Ordinary confirmed duplicate detection now
+Established accepted/outbound direct sockets now carry ordinary unicast traffic.
+The built-in `with_direct_tls` dialer supplies verified outbound intake and original
+reply authority; custom dialers remain send-only. The shared socket queue is bounded,
+and uncertain writes are never retried through a fallback route. Outgoing client and
+native notification transactions retain standard address/Invoke-ID correlation,
+including Hub/direct path switching and matching replacement-peer responses.
+See [bidirectional direct behavior and limits](docs/rust-api.md#bidirectional-direct-traffic).
+Hub-relayed end-to-end identity and optional strict historical-route filtering
+remain separate. Ordinary confirmed duplicate detection now
 ends at local encoded reply issuance (or the segmented response's terminal
 outcome), allowing immediate Invoke ID reuse; LSO completed replay remains a
 separate policy. See [transaction lifetimes](docs/rust-api.md#confirmed-transaction-lifetimes).

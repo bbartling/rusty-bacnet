@@ -352,7 +352,7 @@ impl ScNpduAdmission {
         }
     }
 
-    /// Listener hand-off: build the verified-direct envelope and admit under
+    /// Direct socket hand-off: build the verified-direct envelope and admit under
     /// the direct-path key. Never touches the rejection NAK budget.
     #[cfg(any(test, feature = "sc-tls"))]
     pub(crate) fn admit_direct_peer(

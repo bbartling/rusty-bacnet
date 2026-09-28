@@ -3,12 +3,14 @@
 //! Reservations protect both identities while Accept is in flight. No network
 //! I/O runs under this lock. Only commit retires an incumbent; dropping an
 //! uncommitted reservation is rollback. Generations never repeat in this process.
+use super::direct_egress::{DirectEgress, DirectWrite};
 use crate::sc_frame::Vmac;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
+use std::time::Duration;
 use tokio::sync::watch;
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -33,10 +35,12 @@ struct Entry {
     vmac: Vmac,
     role: DirectRole,
     retired: watch::Sender<bool>,
+    route: Option<DirectEgress>,
 }
 
 #[derive(Default)]
 struct State {
+    sealed: bool,
     established: HashMap<u64, Entry>,
     reserved: HashMap<u64, Entry>,
 }
@@ -58,6 +62,9 @@ impl DirectMembership {
         cap: usize,
     ) -> Result<Reservation, Refusal> {
         let mut state = self.state.lock().unwrap();
+        if state.sealed {
+            return Err(Refusal::Resources);
+        }
         if uuid == local_uuid
             || vmac == local_vmac
             || state
@@ -102,12 +109,30 @@ impl DirectMembership {
                 vmac,
                 role,
                 retired,
+                route: None,
             },
         );
         Ok(Reservation {
             owner: Arc::clone(self),
             generation,
         })
+    }
+
+    pub(crate) fn route(&self, vmac: &Vmac) -> Option<DirectEgress> {
+        self.state
+            .lock()
+            .unwrap()
+            .established
+            .values()
+            .find(|entry| &entry.vmac == vmac)
+            .and_then(|entry| entry.route.clone())
+    }
+    pub(crate) fn retire_all(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.sealed = true;
+        for (_, entry) in state.established.drain() {
+            entry.retired.send_replace(true);
+        }
     }
 
     #[cfg(test)]
@@ -141,9 +166,13 @@ pub(crate) struct Reservation {
 }
 
 impl Reservation {
+    #[cfg(test)]
     pub(crate) fn commit(self) -> Arc<Membership> {
+        self.commit_with_limits((1476, 1476), Duration::from_secs(1))
+    }
+    pub(crate) fn commit_with_limits(self, limits: (u16, u16), wait: Duration) -> Arc<Membership> {
         let mut state = self.owner.state.lock().unwrap();
-        let entry = state
+        let mut entry = state
             .reserved
             .remove(&self.generation)
             .expect("owned reservation");
@@ -156,13 +185,23 @@ impl Reservation {
             let old = state.established.remove(&previous).unwrap();
             old.retired.send_replace(true);
         }
-        let member = Arc::new(Membership {
-            owner: Arc::clone(&self.owner),
-            generation: self.generation,
-            vmac: entry.vmac,
-            retired: entry.retired.clone(),
+        let member = Arc::new_cyclic(|weak| {
+            let (egress, writes) = DirectEgress::new(weak.clone(), limits, wait);
+            Membership {
+                owner: Arc::clone(&self.owner),
+                generation: self.generation,
+                vmac: entry.vmac,
+                retired: entry.retired.clone(),
+                egress,
+                writes: Mutex::new(Some(writes)),
+            }
         });
-        state.established.insert(self.generation, entry);
+        entry.route = Some(member.egress.clone());
+        if state.sealed {
+            member.retired.send_replace(true);
+        } else {
+            state.established.insert(self.generation, entry);
+        }
         drop(state);
         member
     }
@@ -183,10 +222,19 @@ pub(crate) struct Membership {
     owner: Arc<DirectMembership>,
     pub(crate) generation: u64,
     pub(crate) vmac: Vmac,
+    pub(crate) egress: DirectEgress,
+    writes: Mutex<Option<tokio::sync::mpsc::Receiver<DirectWrite>>>,
     retired: watch::Sender<bool>,
 }
 
 impl Membership {
+    pub(crate) fn take_writes(&self) -> tokio::sync::mpsc::Receiver<DirectWrite> {
+        self.writes
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one socket writer")
+    }
     pub(crate) fn retirement(&self) -> watch::Receiver<bool> {
         self.retired.subscribe()
     }

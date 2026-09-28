@@ -48,3 +48,6 @@ mod execution;
 mod lifecycle;
 #[path = "direct_replies/notifications.rs"]
 mod notifications;
+
+#[path = "direct_replies/bidirectional.rs"]
+mod bidirectional;

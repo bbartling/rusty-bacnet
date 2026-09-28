@@ -4316,6 +4316,46 @@
       "crates/bacnet-endpoint/src/lib.rs"
     ],
     "notes": "Refs GitLab #889 under #524. Selected original-socket policy for inbound confirmed request consumers, not a BACnet requirement against response path switching. Direct provenance OR any capability selects checked issuance before reply_tx; malformed mixed envelopes cannot bypass through a one-shot or generic address send. Existing ordinary client failed-prompt fallback and endpoint failed-prompt completion remain distinct. Saved route crosses the existing bounded endpoint command queue with caller-owned cancellation; queue-full/closed and stop/drop remain bounded. Clause 5.2.1.2 local/routed NPDU and BVLC limits select the existing endpoint SEGMENTATION_NOT_SUPPORTED Abort for oversized ComplexACKs, without adding segmentation; even an unfit Abort fails without fallback. Admitted notification delivery/Device writes retain original execution authority after retirement or missing reply capability. Direct responses have empty Data Options; ordinary endpoint attributes remain unchanged. Real TLS baseline red proves generic egress, not cross-peer disclosure. A/B replacement, prompt-channel attacks, live session teardown, queue cancellation and exact sizing controls require explicit bacnet-endpoint/sc-tls; the standard hosted transport-only feature list does not select these integration cases. Excludes outgoing client transaction/retry policy and controls (#890), native notification traffic (#891), ordinary direct intake/routing (#886), Hub end-to-end identity, Python direct-entry support and full Annex AB/certification. Postdates published0.11.0."
+  },
+  {
+    "id": "BACNET-AB-SC-BIDIRECTIONAL-DIRECT",
+    "standard_anchor": "135-2020 Annex AB.4.2.1-2, AB.6.2, AB.7.4 and Clause 5.4",
+    "priority": "P0",
+    "requirement_summary": "Prefer current accepted or outbound direct peers for ordinary unicast and admit built-in authenticated outbound application NPDUs with matching original-response authority; retain standard outgoing transaction correlation.",
+    "status": "supported-with-clause-evidence",
+    "code_anchors": [
+      "crates/bacnet-transport/src/sc/send.rs",
+      "crates/bacnet-transport/src/sc/direct_membership.rs",
+      "crates/bacnet-transport/src/sc/direct_egress.rs",
+      "crates/bacnet-transport/src/sc/direct_pool.rs",
+      "crates/bacnet-transport/src/sc/direct_socket.rs",
+      "crates/bacnet-transport/src/sc/direct_receive.rs",
+      "crates/bacnet-transport/src/sc_tls.rs",
+      "crates/bacnet-transport/src/direct_response.rs"
+    ],
+    "positive_tests": [
+      "crates/bacnet-transport/src/sc_tls/direct_bidirectional_tests.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_outbound_identity_tests.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/bidirectional.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/outbound_segments.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/outbound_notifications.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/outbound_replacement.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_outbound_intake_tests.rs"
+    ],
+    "negative_tests": [
+      "crates/bacnet-transport/src/sc/direct_egress_tests.rs",
+      "crates/bacnet-transport/src/sc/direct_send_disposition_tests.rs",
+      "crates/bacnet-transport/src/sc/direct_worker_tests.rs",
+      "crates/bacnet-transport/src/sc_tls/direct_outbound_identity_tests.rs",
+      "crates/bacnet-endpoint/tests/direct_replies/outbound_budget.rs"
+    ],
+    "benchmarks": [],
+    "public_claims": [
+      "README.md",
+      "docs/rust-api.md#bidirectional-direct-traffic",
+      "docs/python-api.md"
+    ],
+    "notes": "Refs GitLab #886. Established direct selection includes accepted peers with discovery disabled; broadcast remains Hub-only. The private built-in TLS path couples verified leaf DER SHA-256, committed incarnation and original reply capability; full/resumed real TLS retains authenticated session identity without claiming certificate retransmission or remote client-certificate policy. Custom factories stay application send-only. Shared FIFO64 plus at most one active write, fair read/control turns, finite I/O and current-generation admission preserve bounded ownership. Saturation and uncertain started writes do not replay via Hub; only definitely unstarted retired work permits a fresh route decision. Retained admitted envelopes keep original authority. Real TLS baseline red observes Hub routing and missing outbound intake, not cross-peer disclosure. Public client, server and EndpointSession controls cover actual bidirectional replies and both server segmentation directions; explicit bacnet-endpoint/sc-tls is required for these integration tests. Separate native NotificationTransactions worker controls feed actual network envelopes through its production admission API, not a full subscription-emission lifecycle. Existing canonical peer/Invoke/service/direction/phase correlation remains: Hub/direct path switching and matching replacement-peer terminals are accepted, not same-leaf continuity. Optional strict outgoing route policy, Hub end-to-end identity, Python direct-entry support, full Annex AB and certification remain outside scope. Source APIs postdate published0.11.0; no global evidence pins advanced."
   }
  ]
 }

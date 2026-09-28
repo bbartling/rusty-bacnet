@@ -524,7 +524,7 @@ existing rejection deadline and retirement behavior. See the
 
 `DirectListener::start(config)` creates a standalone direct listener.
 `ScTransport::with_direct_listener(config)` registers its intake and shares one
-UUID/VMAC owner with opt-in `with_direct_discovery` / `with_direct_dialer`.
+UUID/VMAC owner with opt-in `with_direct_discovery` / `with_direct_tls`.
 The returned listener handle may stop the listener independently; transport
 stop/abort/drop also seals that registered listener and its response writers.
 Retaining the handle permits explicit cleanup/join, not continued acceptance or
@@ -558,7 +558,7 @@ The outbound pool retains at most 16 peers, with 16 pending dials and 32 physica
 sockets per enabled discovery owner; expiry, eviction and disable retire only
 their own generation. An idle worker observes remote EOF/Close and answers a valid Disconnect request
 before closing. Malformed Disconnect requests use the existing control validator.
-Disable/stop forcefully cancels its owned socket workers.
+Disable/drop cancels owned outbound socket workers; asynchronous stop also joins them.
 
 Simultaneous replacements can select opposite sockets at the two endpoints and
 leave no live direct connection. Membership guarantees at most one current
@@ -570,14 +570,55 @@ cleanup. Already queued complete NPDUs retain their original values, including
 the [direct TLS identity snapshot](#accepted-direct-tls-identity). UUID claims
 are not certificate bindings. The bounded
 [server response policy](#accepted-direct-server-responses) is separate from
-ordinary routing. Ordinary
-bidirectional application NPDU routing over established direct sockets remains
-a pre-existing gap tracked in [GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
+[ordinary bidirectional routing](#bidirectional-direct-traffic).
+
+### Bidirectional direct traffic
+
+Current native source selects an established matching accepted or outbound direct
+connection before optional URI discovery, even when discovery is disabled.
+Broadcasts continue through the Hub. Configure `with_direct_tls(ScNodeTlsConfig)`
+before start for built-in TLS dial-out with application intake and matching
+original-response authority. This works independently of the Hub adapter type.
+A valid Connect and membership publication precede application use. Ordinary
+direct frames omit both VMAC fields, retain Data Options, and obey the peer's
+independent NPDU and complete BVLC limits. The existing bounded intake applies to
+both direct roles; stale generations cannot admit new frames, while already
+admitted immutable envelopes retain their original identity and reply capability.
+
+**Pre-1.0 API break:** `with_direct_dialer` is replaced by
+`with_custom_direct_dialer`, with no alias. Arbitrary factories remain application
+send-only, including closures returning `TlsWebSocket`; they cannot attest a TLS
+leaf or mint a direct identity/capability. Use the built-in `with_direct_tls` path
+for authenticated bidirectional intake. Verified leaf capture also works on TLS
+resumption using rustls's authenticated session identity; a resumed handshake need
+not retransmit the certificate. This does not attest that a remote server requested
+or verified the local certificate, or bind its certificate to its UUID/VMAC claims.
+
+The current direct queue is shared by ordinary and original-response writes:
+64 queued operations plus at most one active write. Saturation returns an error
+without Hub fallback. Queue cancellation, owner shutdown and retirement are checked
+before writing, and reads (including Ping/Pong) alternate with bounded writes.
+Only definitely unstarted work on a retired route permits a fresh route decision;
+an uncertain started write is never duplicated through the Hub or another dial.
+The existing original-response capability always fails closed after retirement.
+Disabling discovery retires outbound workers but keeps accepted membership; stop,
+abort and drop seal the transport lifetime irreversibly.
+
+Outgoing client and native confirmed-notification transactions retain BACnet's
+canonical peer-address/Invoke-ID correlation, with existing service, direction
+and segment-phase checks. Responses may switch Hub/direct paths. A replacement
+peer claiming the same address can complete or control an old pending outgoing
+transaction; this is not proof of same-leaf continuity. Optional historical-route
+filtering is separate from the selected original-socket policy for incoming replies.
+No outgoing transaction/retry policy changes here. This source behavior postdates
+published 0.11.0 and adds no Python direct-entry API, Hub-relayed end-to-end identity,
+full Annex AB or certification claim. See the
+[scoped evidence](conformance/standard-135-2020-ledger.md#bidirectional-direct-traffic).
 
 ### Accepted direct TLS identity
 
 Current source carries `TransportProvenance::direct_sc_identity()` through
-accepted-direct ingress, the network queue, and server dispatch. It returns a
+accepted-direct and built-in outbound TLS ingress, the network queue, and server dispatch. It returns a
 sealed, immutable `DirectScIdentity` with read-only `leaf_sha256()` and
 `incarnation()` accessors. The fingerprint hashes the exact verified TLS leaf
 DER; it does not hash PEM text, a public key, or claimed UUID/VMAC/SNET/SADR.
@@ -586,7 +627,7 @@ changes the fingerprint. Incarnations are process-lifetime identifiers, not
 persisted identity or an ordering API. Both values are `Copy + Eq + Hash`;
 their `Debug` output omits fingerprint and incarnation.
 
-The listener captures the verified leaf before WebSocket upgrade and admits
+Both built-in direct TLS roles capture the verified leaf before WebSocket upgrade and admit
 NPDUs under the committed membership generation's fence. A missing verified
 chain fails closed. Already admitted complete work may finish after close or
 replacement under its original snapshot; it is not revoked or reinterpreted
@@ -612,13 +653,13 @@ Hub-relayed ingress, and unverified transports return no direct identity.
 
 These source APIs postdate published 0.11.0. This does not provide a Python
 principal callback, certificate-to-claim binding, Hub-relayed end-to-end identity,
-or outbound application NPDU intake (#886). The narrower server response
+or a Python direct connection entry point. The narrower server response
 capability below is separate from authentication provenance.
 
 ### Accepted direct server responses
 
-Current native `BACnetServer` replies to accepted-direct confirmed requests only
-through their original accepted TLS connection. This covers SimpleACK, ComplexACK,
+Current native `BACnetServer` replies to verified direct confirmed requests only
+through their original TLS connection, for accepted and built-in outbound peers. This covers SimpleACK, ComplexACK,
 Error, Reject, server/overload Abort, LSO replay, segmented responses and retries,
 and segmented-request SegmentACK/Abort. Replacement, closure or missing/mismatched
 capability fails closed: there is no current-VMAC, replacement-socket, Hub or
@@ -640,7 +681,8 @@ provenance without matching capability is an error; non-direct requests retain
 ordinary routing and MS/TP reply handoff. Generic pending ownership still ends
 at local encoded operation issuance, not the eventual send result.
 
-Each accepted connection has one socket writer and a 64-item response queue.
+Each direct connection has one socket writer and a shared 64-item ordinary/reply
+queue, plus at most one active write. Ordinary saturation can reject a reply.
 Queue saturation fails immediately; queue wait and each write are bounded by
 the configured Connect timeout. The writer checks original membership and the
 network/server's irreversible `DirectResponseScope` before starting queued work.
@@ -673,8 +715,7 @@ This is selected local confinement policy, not a Standard requirement to deliver
 on a historical socket. It postdates published 0.11.0 and qualifies only the
 native server consumer described here. The [client and endpoint supplement](#accepted-direct-client-and-endpoint-replies)
 qualifies those additional inbound reply consumers. Outgoing client transaction
-policy and [#886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886)
-ordinary bidirectional traffic remain separate outcomes. No full
+correlation retains the [standard path-switching behavior](#bidirectional-direct-traffic). No full
 Annex AB, external interoperability or certification claim follows. See the
 [scoped response evidence](conformance/standard-135-2020-ledger.md#accepted-direct-server-responses).
 
@@ -685,8 +726,8 @@ Current source extends the selected original-socket response policy to standalon
 or segmented confirmed requests, and to `EndpointSession`'s existing narrow
 ReadProperty/authorized Device WriteProperty responder. This postdates published
 0.11.0. It does not change outgoing client transactions, their retries or their
-terminal/segment-control admission, native server notification traffic, or ordinary
-bidirectional direct routing. BACnet permits response path switching; this is a
+terminal/segment-control admission. Ordinary direct routing now applies as
+described [above](#bidirectional-direct-traffic). BACnet permits response path switching; this is a
 local confinement policy for these incoming-request consumers, not a universal
 protocol correlation requirement.
 
@@ -703,8 +744,8 @@ The endpoint carries the saved `ResponseRoute` through its existing bounded
 egress queue (`SessionConfig.queue_capacity`). The hidden composition method
 `EndpointEgress::admit_response_apdu` returns caller-owned completion: dropping
 it retracts queued work. Stop/drop closes admission and cancels queued work;
-retained role handles cannot extend that lifetime. The accepted socket still has
-the separate 64-item writer queue and its existing bounded I/O. An already-started
+retained role handles cannot extend that lifetime. The direct socket still has
+the shared 64-item ordinary/reply writer queue and its existing bounded I/O. An already-started
 write cannot be recalled, and local completion does not prove peer receipt.
 
 After service execution, the endpoint caps a ComplexACK by the requester APDU

@@ -1,4 +1,4 @@
-//! A bounded response capability for one accepted direct connection.
+//! A bounded response capability for one verified direct connection.
 use crate::port::DirectScIdentity;
 use crate::sc::direct_membership::Membership;
 use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage};
@@ -11,25 +11,9 @@ use std::sync::{
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
-pub(crate) const RESPONSE_QUEUE_CAPACITY: usize = 64;
-
-pub(crate) struct ResponseWrite {
-    pub(crate) bytes: Bytes,
-    pub(crate) done: oneshot::Sender<Result<(), Error>>,
-    scope: Weak<AtomicBool>,
-    deadline: tokio::time::Instant,
-}
-
-impl ResponseWrite {
-    pub(crate) fn can_start(&self) -> bool {
-        tokio::time::Instant::now() < self.deadline
-            && !self.done.is_closed()
-            && self
-                .scope
-                .upgrade()
-                .is_some_and(|scope| !scope.load(Ordering::Acquire))
-    }
-}
+#[cfg(test)]
+pub(crate) const RESPONSE_QUEUE_CAPACITY: usize = crate::sc::direct_egress::WRITE_CAPACITY;
+pub(crate) use crate::sc::direct_egress::DirectWrite as ResponseWrite;
 
 /// Lifetime of direct response writes owned by one network/server instance.
 ///
@@ -52,9 +36,10 @@ impl Drop for DirectResponseScope {
     }
 }
 
-/// Sealed authority to reply only on the original accepted direct-SC socket.
+/// Sealed authority to reply only on the original verified direct-SC socket.
 ///
-/// Clones share one bounded queue; they own neither the socket nor its membership.
+/// Clones share the socket's bounded ordinary/reply queue; they own neither the
+/// socket nor its membership.
 /// Retirement, close, a full queue or a bounded write failure returns an error.
 /// There is no address lookup, replacement/Hub fallback or redial. Success is a
 /// local write result, not proof of peer receipt. Already-started writes cannot
@@ -82,25 +67,17 @@ impl std::fmt::Debug for DirectResponse {
 }
 
 impl DirectResponse {
-    pub(crate) fn new(
-        member: &Arc<Membership>,
-        identity: DirectScIdentity,
-        limits: (u16, u16),
-        wait: Duration,
-    ) -> (Self, mpsc::Receiver<ResponseWrite>) {
-        let (send, recv) = mpsc::channel(RESPONSE_QUEUE_CAPACITY);
-        (
-            Self {
-                member: Arc::downgrade(member),
-                identity,
-                send,
-                next_message: Arc::new(AtomicU16::new(1)),
-                peer_max_bvlc: limits.0,
-                peer_max_npdu: limits.1,
-                wait,
-            },
-            recv,
-        )
+    #[cfg(any(test, feature = "sc-tls"))]
+    pub(crate) fn new(member: &Arc<Membership>, identity: DirectScIdentity) -> Self {
+        Self {
+            member: Arc::downgrade(member),
+            identity,
+            send: member.egress.send.clone(),
+            next_message: member.egress.next_message.clone(),
+            peer_max_bvlc: member.egress.limits.0,
+            peer_max_npdu: member.egress.limits.1,
+            wait: member.egress.wait,
+        }
     }
 
     /// Immutable peer/incarnation associated with this exact writer.
@@ -161,7 +138,8 @@ impl DirectResponse {
                     self.send.try_send(ResponseWrite {
                         bytes: bytes.freeze(),
                         done,
-                        scope: Arc::downgrade(&scope.0),
+                        scope: Some(Arc::downgrade(&scope.0)),
+                        started: Arc::new(AtomicBool::new(false)),
                         deadline,
                     })
                 })

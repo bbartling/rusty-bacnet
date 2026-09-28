@@ -1030,8 +1030,8 @@ This row does not promote the broader connection-state audit or claim the
 separate request-principal isolation row below, #524 response confinement, BTL certification,
 external interoperability or hardware qualification. Idle outbound workers observe
 remote EOF/Close and handle Disconnect control with generation-specific cleanup.
-Ordinary bidirectional application NPDU routing remains a pre-existing gap in
-[GitLab #886 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/886).
+Ordinary bidirectional application NPDU routing is qualified by the narrower
+[direct traffic row](#bidirectional-direct-traffic) below.
 
 The direct-membership race evidence distinguishes a locally unique winner while
 peer sockets remain open from deterministic crossed replacement at two endpoints.
@@ -1245,3 +1245,50 @@ recorded separately. Outgoing client transaction/retry policy and controls
 (#886), Hub-relayed end-to-end identity, Python direct entry, full Annex AB/PICS/BTL
 and external interoperability remain excluded. These source changes postdate
 published 0.11.0. See the [public scope](../rust-api.md#accepted-direct-client-and-endpoint-replies).
+
+
+## Bidirectional direct traffic
+
+`BACNET-AB-SC-BIDIRECTIONAL-DIRECT` records #886 against Annex AB.4.2.1–2
+(established direct preference), AB.6.2 (direct connection behavior), AB.7.4
+(TLS authentication), and Clause 5.4 (permitted response path switching).
+Established accepted and outbound membership supplies one current ordinary-send
+route. Discovery can be disabled while accepted peers remain routable. Broadcast
+stays Hub-only. The private built-in TLS dialer captures the verified exact leaf
+before WebSocket upgrade, then joins it to the committed membership incarnation
+and matching original-response capability. Full and resumed TLS tests verify the
+same authenticated leaf and distinct incarnations; resumption need not resend
+certificates. Custom factories remain application send-only and cannot mint identity.
+
+One socket worker owns a shared 64-item ordinary/reply FIFO plus at most one
+active write. Ready reads, including Ping/Pong, alternate with bounded writes.
+Queue saturation returns an error rather than duplicating through the Hub;
+uncertain started writes cannot fall back. Definitely unstarted retired work may
+make a fresh route decision. Peer NPDU and encoded BVLC limits apply to both
+write classes; the existing original-response sizing includes local/routed headers.
+Stop/abort/drop and discovery disable retire outbound owners, with stop joining
+workers. Accepted membership survives discovery disable. Already admitted work
+retains immutable authority, while new retired-generation intake is fenced.
+
+Real TLS baseline controls failed for accepted ordinary route selection and
+outbound application intake. Green tests observe actual TLS replies through public
+client, BACnetServer and EndpointSession paths, both server segmentation directions,
+negotiated direct limits, shared queue saturation, cancellation, teardown,
+replacement, resumed identity, custom-factory non-admission and uncertain-write
+non-replay. The public consumer fixture advertises current Hub5705/1497 capacities;
+small direct-peer capacity cases are separate. The endpoint integration binary
+requires explicit `bacnet-endpoint/sc-tls`, which the lean hosted feature list does
+not enable by itself.
+
+Standalone client and native NotificationTransactions controls accept matching
+Hub/direct path switches under unchanged peer-address/Invoke-ID correlation,
+reject wrong-service terminals and release the exact owner. The native notification
+fixture runs its real worker with actual network envelopes and production admission
+API; it does not qualify a complete COV subscription lifecycle. Replacement B with
+the same claimed address may complete A's pending outgoing transaction. Existing
+service/direction/phase checks remain, without a same-leaf continuity assertion.
+Original replies to incoming confirmed requests keep the selected #888/#889
+confinement policy; optional strict outgoing route filtering is a separate choice.
+No full Annex AB, Hub-relayed end-to-end identity, Python direct-entry, external
+interoperability or certification claim follows. Published0.11.0 predates these APIs.
+See [Rust routing and migration](../rust-api.md#bidirectional-direct-traffic).

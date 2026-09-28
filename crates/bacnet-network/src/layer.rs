@@ -139,7 +139,7 @@ pub struct ReceivedApdu {
     /// preserves the meaning and never duplicates reply authority. Compat
     /// mode: forwarding/learning/admission decisions ignore it.
     pub provenance: TransportProvenance,
-    /// Sealed route back to this envelope's original accepted direct socket.
+    /// Sealed route back to this envelope's original verified direct socket.
     pub direct_response: Option<bacnet_transport::port::DirectResponse>,
     /// Optional reply channel for MS/TP DataExpectingReply flows.
     /// The application layer can send NPDU-wrapped reply bytes through this channel.

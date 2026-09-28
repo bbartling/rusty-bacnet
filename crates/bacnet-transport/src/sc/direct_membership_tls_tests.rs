@@ -49,10 +49,10 @@ impl Fixture {
         let uri = url(&remote);
         let direct = DirectShared::new(membership);
         let client_tls = ca.node_config(vec!["node".into()]);
-        *direct.dialer.lock().await = Some(Arc::new(move |uri| {
+        *direct.dialer.lock().await = Some(DirectDialer::Custom(Arc::new(move |uri| {
             let tls = client_tls.clone();
             Box::pin(async move { TlsWebSocket::connect_direct(&uri, tls).await })
-        }));
+        })));
         let mut conn = ScConnection::new(LOCAL, [1; 16]);
         conn.state = ScConnectionState::Connected;
         Self {
@@ -74,10 +74,10 @@ impl Fixture {
                 NPDU,
                 &[],
                 &self.conn,
-                1476,
                 1000,
             )
             .await
+            .map_err(|_| ())
     }
     async fn stop(&mut self) {
         self.direct.disable();
@@ -153,11 +153,8 @@ async fn accepted_replaces_outbound_and_old_pool_cleanup_cannot_erase_successor(
     assert_eq!(accept.function, ScFunction::ConnectAccept);
     assert!(!old.member.is_current());
     assert!(old.send(NPDU).await.is_err());
-    f.direct
-        .pool
-        .lock()
-        .unwrap()
-        .remove_generation(&REMOTE, old.member.generation);
+    old.member.retire(); // Actual generation-specific worker/drop cleanup.
+    f.direct.pool.lock().unwrap().prune(Instant::now());
     assert_eq!(f.direct.membership.counts(), (1, 0));
     send_accepted(&incoming, REMOTE).await;
     receive(&mut f.local_rx, REMOTE).await;
@@ -202,7 +199,7 @@ async fn accepted_publication_while_outbound_dial_waits_then_outbound_replaces()
     let release = Arc::new(tokio::sync::Notify::new());
     let tls = f.ca.node_config(vec!["node".into()]);
     let gate = release.clone();
-    *f.direct.dialer.lock().await = Some(Arc::new(move |uri| {
+    *f.direct.dialer.lock().await = Some(DirectDialer::Custom(Arc::new(move |uri| {
         let tls = tls.clone();
         let entered = entered.clone();
         let gate = gate.clone();
@@ -212,7 +209,7 @@ async fn accepted_publication_while_outbound_dial_waits_then_outbound_replaces()
             gate.notified().await;
             Ok(ws)
         })
-    }));
+    })));
     let incoming = {
         let send = f.send();
         tokio::pin!(send);
@@ -251,11 +248,8 @@ async fn expiry_eviction_disable_release_membership_and_close_workers() {
     f.send().await.unwrap();
     receive(&mut f.remote_rx, LOCAL).await;
     let current = f.direct.pooled_get(&REMOTE, Instant::now()).unwrap();
-    f.direct
-        .pool
-        .lock()
-        .unwrap()
-        .remove_generation(&REMOTE, old.member.generation);
+    old.member.retire(); // Actual generation-specific worker/drop cleanup.
+    f.direct.pool.lock().unwrap().prune(Instant::now());
     assert!(current.member.is_current());
     f.direct.pool.lock().unwrap().evict_oldest();
     assert!(!current.member.is_current());

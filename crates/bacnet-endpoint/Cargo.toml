@@ -26,6 +26,7 @@ tokio-rustls = { workspace = true, optional = true }
 sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls", "bacnet-server/sc-tls", "tokio-rustls"]
 
 [dev-dependencies]
+tokio-tungstenite.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util", "net"] }
 rcgen.workspace = true
 futures-util.workspace = true

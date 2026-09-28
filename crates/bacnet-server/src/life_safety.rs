@@ -27,7 +27,7 @@ pub struct LifeSafetyOperationAuthorizationContext {
 }
 
 impl LifeSafetyOperationAuthorizationContext {
-    /// Original accepted direct-SC leaf and incarnation, separate from claims.
+    /// Original verified direct-SC leaf and incarnation, separate from claims.
     pub fn direct_sc_identity(&self) -> Option<bacnet_transport::port::DirectScIdentity> {
         self.provenance.direct_sc_identity()
     }
