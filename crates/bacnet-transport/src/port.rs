@@ -296,7 +296,7 @@ pub trait TransportPort: Send + Sync {
     /// Network-Number-Is must be classified as logical broadcast to teach state.
     /// `send_broadcast` must emit the reply on this same local link. This grants
     /// neither configured Network Port authority nor router/control-origin trust.
-    /// Built-in NORMAL B/IP, B/IPv6 (normal or foreign), and SC opt in. Other
+    /// Built-in NORMAL B/IP, B/IPv6 (normal or foreign), SC, and MS/TP opt in. Other
     /// links default to false until qualified. Wrappers must delegate.
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         false

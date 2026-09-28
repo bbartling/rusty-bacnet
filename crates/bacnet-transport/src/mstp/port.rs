@@ -192,6 +192,10 @@ impl<S: SerialPort> MstpTransport<S> {
 }
 
 impl<S: SerialPort> TransportPort for MstpTransport<S> {
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        true
+    }
+
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         /// NPDU receive channel capacity — smaller than BIP/Ethernet for low-bandwidth serial.
         const NPDU_CHANNEL_CAPACITY: usize = 64;
