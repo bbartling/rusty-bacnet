@@ -119,7 +119,7 @@ async fn fire_event(server: &BACnetServer<HeldTransport>) {
         &Arc::new(RwLock::new(db)),
         server.test_network(),
         &server.comm_state,
-        &server.server_tsm,
+        &server.learned_routers,
         &server.notification_transactions,
         &server.device_bindings,
         &ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),

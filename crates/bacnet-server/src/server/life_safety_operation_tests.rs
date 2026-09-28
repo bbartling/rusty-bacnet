@@ -64,7 +64,7 @@ async fn dispatch_life_safety_operation_with_tracker(
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let notification_transactions = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
@@ -92,7 +92,7 @@ async fn dispatch_life_safety_operation_with_tracker(
         &seg_ack_senders,
         &seg_send_permits,
         &cov_in_flight,
-        &server_tsm,
+        &learned_routers,
         &notification_transactions,
         confirmed_request_tracker,
         &device_bindings,
@@ -166,7 +166,7 @@ async fn dispatch_confirmed_raw_with_tracker(
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let notification_transactions = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
@@ -180,7 +180,7 @@ async fn dispatch_confirmed_raw_with_tracker(
         &seg_ack_senders,
         &seg_send_permits,
         &cov_in_flight,
-        &server_tsm,
+        &learned_routers,
         &notification_transactions,
         confirmed_request_tracker,
         &device_bindings,

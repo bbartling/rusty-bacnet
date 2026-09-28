@@ -50,7 +50,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
         let cov_in_flight = Arc::new(Semaphore::new(255));
-        let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+        let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
         let notification_transactions = NotificationTransactions::new();
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
@@ -96,7 +96,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let seg_ack_dispatch = Arc::clone(&seg_ack_senders);
         let seg_send_permits_dispatch = Arc::clone(&seg_send_permits);
         let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
-        let server_tsm_dispatch = Arc::clone(&server_tsm);
+        let learned_routers_dispatch = Arc::clone(&learned_routers);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
         let confirmed_request_tracker_dispatch = Arc::clone(&confirmed_request_tracker);
         let device_bindings_dispatch = Arc::clone(&device_bindings);
@@ -494,7 +494,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     &seg_ack_dispatch,
                                                     &seg_send_permits_dispatch,
                                                     &cov_in_flight_dispatch,
-                                                    &server_tsm_dispatch,
+                                                    &learned_routers_dispatch,
                                                     &notification_transactions_dispatch,
                                                     &confirmed_request_tracker_dispatch,
                                                     &device_bindings_dispatch,
@@ -553,7 +553,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &seg_ack_dispatch,
                                 &seg_send_permits_dispatch,
                                 &cov_in_flight_dispatch,
-                                &server_tsm_dispatch,
+                                &learned_routers_dispatch,
                                 &notification_transactions_dispatch,
                                 &confirmed_request_tracker_dispatch,
                                 &device_bindings_dispatch,
@@ -642,7 +642,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Arc::clone(&db),
                     Arc::clone(&network),
                     Arc::clone(&comm_state),
-                    Arc::clone(&server_tsm),
+                    Arc::clone(&learned_routers),
                     Arc::clone(&notification_transactions),
                     Arc::clone(&device_bindings),
                     ee_period,
@@ -712,7 +712,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db_intrinsic = Arc::clone(&db);
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
-        let server_tsm_intrinsic = Arc::clone(&server_tsm);
+        let learned_routers_intrinsic = Arc::clone(&learned_routers);
         let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
         let device_bindings_intrinsic = Arc::clone(&device_bindings);
         let intrinsic_retry_ms = config.cov_retry_timeout_ms;
@@ -758,7 +758,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &db_intrinsic,
                         &network_intrinsic,
                         &comm_state_intrinsic,
-                        &server_tsm_intrinsic,
+                        &learned_routers_intrinsic,
                         &notification_transactions_intrinsic,
                         &device_bindings_intrinsic,
                         &oid,
@@ -802,7 +802,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_ack_senders,
             seg_send_permits,
             cov_in_flight,
-            server_tsm,
+            learned_routers,
             notification_transactions,
             confirmed_request_tracker,
             device_bindings,

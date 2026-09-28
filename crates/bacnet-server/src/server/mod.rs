@@ -67,6 +67,7 @@ use confirmed_request_tracker::{
 };
 pub use device_bindings::DeviceBinding;
 use device_bindings::{register_configured_binding, DeviceBindingTable};
+use learned_router_cache::LearnedRouterCache;
 use lso_replay::{LsoAdmission, PendingLsoReplay};
 use notification_transactions::{
     canonical_direct_peer, canonical_routed_peer, run_notification_worker,
@@ -110,13 +111,6 @@ const DEFAULT_APDU_SEGMENT_RETRIES: u8 = MAX_NEG_SEGMENT_ACK_RETRIES;
 /// Default number of APDU retries for confirmed COV notifications.
 const DEFAULT_APDU_RETRIES: u8 = 3;
 
-type TsmPeer = (MacAddr, Option<NpduAddress>);
-type TsmKey = (MacAddr, Option<NpduAddress>, u8);
-
-// ---------------------------------------------------------------------------
-// Server-side Transaction State Machine (TSM) for outgoing confirmed requests
-// ---------------------------------------------------------------------------
-
 /// Result of a confirmed COV notification from the subscriber's perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CovAckResult {
@@ -124,145 +118,6 @@ pub enum CovAckResult {
     Ack,
     /// Error or Reject/Abort received — subscriber rejected the notification.
     Error,
-}
-
-/// Legacy server transaction state and learned-router cache.
-///
-/// The allocation and pending-result methods remain available to existing
-/// server internals and tests. Standalone confirmed notification paths use the
-/// private endpoint-core adapter instead.
-pub struct ServerTsm {
-    #[allow(dead_code)]
-    next_invoke_id: u8,
-    /// Oneshot senders keyed by peer MAC and invoke ID. When a result arrives
-    /// from the dispatch loop, we send it directly — no polling needed.
-    #[allow(dead_code)]
-    pending: HashMap<TsmKey, oneshot::Sender<CovAckResult>>,
-    /// Router MACs learned per remote network, Clause 6.5.3 method 4: first
-    /// send to a device on the remote DNET using a local link broadcast, then
-    /// learn the router from the link SA of a response (#375). Consulted so later confirmed
-    /// sends to that DNET can unicast to the router instead of broadcasting.
-    routers: HashMap<u16, MacAddr>,
-}
-
-/// Cap on learned router entries; a full cache just means later networks keep
-/// using the (always-correct) broadcast form of Clause 6.5.3.
-const MAX_LEARNED_ROUTERS: usize = 64;
-
-impl ServerTsm {
-    fn new() -> Self {
-        Self {
-            next_invoke_id: 0,
-            pending: HashMap::new(),
-            routers: HashMap::new(),
-        }
-    }
-
-    /// Allocate the next invoke ID and register a oneshot channel for the result.
-    /// Returns (invoke_id, receiver).
-    #[allow(dead_code)]
-    fn allocate(&mut self, peer: TsmPeer) -> Option<(u8, oneshot::Receiver<CovAckResult>)> {
-        for offset in 0..=u8::MAX {
-            let id = self.next_invoke_id.wrapping_add(offset);
-            if !self
-                .pending
-                .contains_key(&(peer.0.clone(), peer.1.clone(), id))
-            {
-                self.next_invoke_id = id.wrapping_add(1);
-                let rx = self.register(peer, id);
-                return Some((id, rx));
-            }
-        }
-        None
-    }
-
-    /// Register or replace the pending receiver for a peer/invoke-id pair.
-    #[allow(dead_code)]
-    fn register(&mut self, peer: TsmPeer, invoke_id: u8) -> oneshot::Receiver<CovAckResult> {
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert((peer.0, peer.1, invoke_id), tx);
-        rx
-    }
-
-    /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
-    /// Sends immediately through the oneshot channel.
-    #[allow(dead_code)]
-    fn record_result(
-        &mut self,
-        peer: &MacAddr,
-        network: Option<&NpduAddress>,
-        invoke_id: u8,
-        result: CovAckResult,
-    ) -> bool {
-        if let Some(tx) = self
-            .pending
-            .remove(&(peer.clone(), network.cloned(), invoke_id))
-        {
-            let _ = tx.send(result);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Remove a pending entry (cleanup on completion or exhaustion).
-    #[allow(dead_code)]
-    fn remove(&mut self, peer: &TsmPeer, invoke_id: u8) {
-        self.pending
-            .remove(&(peer.0.clone(), peer.1.clone(), invoke_id));
-    }
-
-    /// Correlate an inbound response with the transaction awaiting it (#375).
-    ///
-    /// Three key shapes are tried, most specific first:
-    /// 1. exactly as the sender registered it — the immediate MAC plus any
-    ///    routed identity;
-    /// 2. the router-unknown form — an empty local half with the routed
-    ///    identity, used when the request went out via the Clause 6.5.3
-    ///    broadcast DA and the delivering router's MAC was unknowable at
-    ///    registration;
-    /// 3. the legacy wildcard `(empty, None)`, which nothing registers today
-    ///    but which older callers may still expect.
-    ///
-    /// A hit that carries a routed identity also teaches the router cache:
-    /// the response's immediate MAC supplies the router's link SA
-    /// for that remote device (Clause 6.5.3 method 4).
-    #[allow(dead_code)]
-    fn record_result_correlated(
-        &mut self,
-        source_mac: &MacAddr,
-        source_network: Option<&NpduAddress>,
-        invoke_id: u8,
-        result: CovAckResult,
-    ) -> bool {
-        let hit = self.record_result(source_mac, source_network, invoke_id, result)
-            || (source_network.is_some()
-                && self.record_result(&MacAddr::new(), source_network, invoke_id, result))
-            || self.record_result(&MacAddr::new(), None, invoke_id, result);
-        if hit {
-            if let Some(address) = source_network {
-                self.learn_router(address.network, source_mac);
-            }
-        }
-        hit
-    }
-
-    /// Cache `router` as the way to reach `network`, bounded by
-    /// [`MAX_LEARNED_ROUTERS`].
-    fn learn_router(&mut self, network: u16, router: &MacAddr) {
-        if router.is_empty() {
-            return;
-        }
-        if self.routers.len() >= MAX_LEARNED_ROUTERS && !self.routers.contains_key(&network) {
-            return;
-        }
-        self.routers.insert(network, router.clone());
-    }
-
-    /// The learned router MAC for `network`, if any.
-    fn cached_router(&self, network: u16) -> Option<MacAddr> {
-        self.routers.get(&network).cloned()
-    }
 }
 
 /// Data from a TimeSynchronization request.
@@ -618,8 +473,8 @@ pub struct BACnetServer<T: TransportPort> {
     /// Operational cap of 255 concurrent confirmed COV notification workers.
     /// Invoke-ID ownership is handled by `notification_transactions`.
     cov_in_flight: Arc<Semaphore>,
-    /// Legacy public TSM state and the learned DNET-to-router cache.
-    server_tsm: Arc<Mutex<ServerTsm>>,
+    /// Bounded DNET-to-router cache learned from admitted notification terminals.
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
     /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
@@ -717,6 +572,7 @@ mod event_notifications;
 mod event_recipient_route;
 pub(crate) mod event_timestamp;
 mod handles;
+mod learned_router_cache;
 mod lifecycle;
 mod local_writes;
 mod network_port;

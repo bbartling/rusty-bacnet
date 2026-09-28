@@ -219,7 +219,7 @@ async fn dispatch_wire(
         &Arc::new(segmented_send::SegmentedSendRegistry::default()),
         &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
         &Arc::new(Semaphore::new(1)),
-        &Arc::new(Mutex::new(ServerTsm::new())),
+        &Arc::new(Mutex::new(LearnedRouterCache::new())),
         &NotificationTransactions::new(),
         &Arc::new(ConfirmedRequestTracker::default()),
         &Arc::new(RwLock::new(DeviceBindingTable::new())),

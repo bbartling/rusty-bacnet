@@ -94,7 +94,7 @@ mod tests {
     use super::super::event_notifications_tests::{
         local_broadcast_destination, RecordingTransport,
     };
-    use super::super::{BACnetServer, NotificationTransactions, ServerTsm};
+    use super::super::{BACnetServer, LearnedRouterCache, NotificationTransactions};
     use super::*;
 
     struct FixedClock(ClockFrame);
@@ -236,7 +236,7 @@ mod tests {
             db,
             network,
             &Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            &Arc::new(Mutex::new(ServerTsm::new())),
+            &Arc::new(Mutex::new(LearnedRouterCache::new())),
             &NotificationTransactions::new(),
             &bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             (

@@ -65,7 +65,7 @@ async fn dcc_suppresses_periodic_event_send() {
     };
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(1)); // DCC disabled
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
@@ -95,7 +95,7 @@ async fn dcc_suppresses_periodic_event_send() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::OUT_OF_RANGE),
@@ -198,7 +198,7 @@ async fn fixture_with_commanded_nc(
     Arc<RwLock<ObjectDatabase>>,
     Arc<NetworkLayer<RecordingTransport>>,
     Arc<AtomicU8>,
-    Arc<Mutex<ServerTsm>>,
+    Arc<Mutex<LearnedRouterCache>>,
     Arc<StdMutex<Vec<Bytes>>>,
     ObjectIdentifier,
 ) {
@@ -209,7 +209,7 @@ async fn fixture_with_commanded_nc(
     };
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(0)); // DCC enabled
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
     // NotificationClass with the configured per-transition arrays and a single
@@ -251,7 +251,7 @@ async fn fixture_with_commanded_nc(
 
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    (db, network, comm_state, server_tsm, sent, oid)
+    (db, network, comm_state, learned_routers, sent, oid)
 }
 
 /// Per-transition `Priority` from the NotificationClass is projected into
@@ -259,7 +259,7 @@ async fn fixture_with_commanded_nc(
 /// not the legacy hardcoded 100.
 #[tokio::test]
 async fn event_notification_projects_offnormal_priority_from_class() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
+    let (db, network, comm_state, learned_routers, sent, oid) =
         fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
 
     let change = EventStateChange {
@@ -270,7 +270,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::OUT_OF_RANGE),
@@ -289,7 +289,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
 /// TO_FAULT projects PRIORITY[1] and ACK_REQUIRED bit 1.
 #[tokio::test]
 async fn event_notification_projects_fault_priority_from_class() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
+    let (db, network, comm_state, learned_routers, sent, oid) =
         fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
 
     let change = EventStateChange {
@@ -300,7 +300,7 @@ async fn event_notification_projects_fault_priority_from_class() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::CHANGE_OF_RELIABILITY),
@@ -335,7 +335,7 @@ async fn event_notification_projects_fault_priority_from_class() {
 /// off the transition category rather than the states would get this wrong.
 #[tokio::test]
 async fn event_notification_from_fault_is_change_of_reliability() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
+    let (db, network, comm_state, learned_routers, sent, oid) =
         fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
 
     let change = EventStateChange {
@@ -346,7 +346,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::CHANGE_OF_RELIABILITY),
@@ -367,7 +367,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
 /// TO_NORMAL projects PRIORITY[2] (250), not the legacy hardcoded 200.
 #[tokio::test]
 async fn event_notification_projects_normal_priority_from_class() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
+    let (db, network, comm_state, learned_routers, sent, oid) =
         fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
 
     let change = EventStateChange {
@@ -378,7 +378,7 @@ async fn event_notification_projects_normal_priority_from_class() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::OUT_OF_RANGE),
@@ -416,7 +416,7 @@ async fn event_notification_missing_class_distributes_nothing() {
     };
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
     db.add(Box::new(
@@ -456,7 +456,7 @@ async fn event_notification_missing_class_distributes_nothing() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::OUT_OF_RANGE),
@@ -476,7 +476,7 @@ async fn event_notification_missing_class_distributes_nothing() {
 /// `Notify_Type == ALARM`, so an EVENT notification would wrongly clear it.
 #[tokio::test]
 async fn event_notification_event_notify_type_honors_class_ack_required() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
+    let (db, network, comm_state, learned_routers, sent, oid) =
         fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
     // Reconfigure the AI to Notify_Type = EVENT.
     {
@@ -499,7 +499,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
         &db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         (change, EventType::OUT_OF_RANGE),
@@ -588,14 +588,14 @@ pub(super) async fn broadcasts_from_per_write_path(
     };
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(comm_state_value));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     BACnetServer::<RecordingTransport>::fire_event_notifications(
         db,
         &network,
         &comm_state,
-        &server_tsm,
+        &learned_routers,
         &NotificationTransactions::new(),
         &oid,
         1000,
