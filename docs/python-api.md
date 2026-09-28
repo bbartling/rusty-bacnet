@@ -2768,7 +2768,7 @@ and compatible; a trusted server with no CertificateRequest can complete without
 receiving the node certificate. Local configuration does not attest an arbitrary
 remote hub's verification policy (#513 remains open/partial).
 
-Current native source also retains a verified accepted-direct leaf fingerprint
+Current native source also retains a verified direct leaf fingerprint
 and connection incarnation through queued server work, duplicate/replay admission,
 and partial request reassembly. Python does not expose a principal authorizer or
 the direct listener through this API; its mutation policy remains the existing
@@ -2785,6 +2785,13 @@ client's inbound confirmed replies and the shared endpoint's narrow responder;
 that does not change outgoing client transaction/retry policy or expose a Python
 response capability. See the [server response scope](rust-api.md#accepted-direct-server-responses)
 and [native client/endpoint scope](rust-api.md#accepted-direct-client-and-endpoint-replies).
+Native `ScTransport::with_direct_tls` now admits bidirectional application traffic
+with matching verified identity and original reply authority; established accepted
+peers also serve ordinary unicast with discovery disabled. Arbitrary custom dialers
+remain send-only. Outgoing transactions retain standard address/Invoke-ID correlation
+and Hub/direct path switching, not a same-leaf continuity guarantee. These source
+APIs postdate 0.11.0 and add no Python direct-connection entry point. See the
+[native routing contract](rust-api.md#bidirectional-direct-traffic).
 
 ```python
 # Client connecting to a hub

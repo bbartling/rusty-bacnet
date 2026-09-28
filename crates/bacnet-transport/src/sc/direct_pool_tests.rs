@@ -121,7 +121,7 @@ async fn start_pooled(
         .with_device_uuid([1; 16])
         .with_connect_timeout_ms(connect_timeout_ms)
         .with_direct_discovery(true)
-        .with_direct_dialer(dialer);
+        .with_custom_direct_dialer(dialer);
     let hub_task = tokio::spawn(async move {
         data_attribute_tests::hub_accept(&hub, [0x10; 6]).await;
         hub
@@ -267,7 +267,7 @@ async fn failing_uri_records_backoff_and_falls_back_to_hub() {
         .with_device_uuid([1; 16])
         .with_connect_timeout_ms(300)
         .with_direct_discovery(true)
-        .with_direct_dialer(move |_uri: String| {
+        .with_custom_direct_dialer(move |_uri: String| {
             let dials = dials_clone.clone();
             async move {
                 dials.fetch_add(1, Ordering::SeqCst);

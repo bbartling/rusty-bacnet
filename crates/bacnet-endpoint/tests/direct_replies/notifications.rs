@@ -8,7 +8,7 @@ use bacnet_types::{
 };
 use bytes::{Bytes, BytesMut};
 
-fn cov(process: u32) -> Apdu {
+pub(super) fn cov(process: u32) -> Apdu {
     let mut payload = BytesMut::new();
     COVNotificationRequest {
         subscriber_process_identifier: process,

@@ -63,7 +63,7 @@ impl Dials {
         let tls = ca.node_config(vec!["client".into()]);
         let dial_gates = gates.clone();
         let next = AtomicUsize::new(0);
-        *direct.dialer.lock().await = Some(Arc::new(move |uri| {
+        *direct.dialer.lock().await = Some(DirectDialer::Custom(Arc::new(move |uri| {
             let id = next.fetch_add(1, Ordering::SeqCst);
             let gate = dial_gates.get(id).cloned();
             let events = events.clone();
@@ -78,7 +78,7 @@ impl Dials {
                     events,
                 })
             })
-        }));
+        })));
         let mut conn = ScConnection::new(LOCAL, [1; 16]);
         conn.state = ScConnectionState::Connected;
         Self {
@@ -95,8 +95,9 @@ impl Dials {
         let uri = self.uri.clone();
         tokio::spawn(async move {
             direct
-                .try_direct_uris(&[uri], REMOTE, NPDU, &[], &conn, 1476, 3000)
+                .try_direct_uris(&[uri], REMOTE, NPDU, &[], &conn, 3000)
                 .await
+                .map_err(|_| ())
         })
     }
     async fn event(&mut self, id: usize, kind: &'static str) {

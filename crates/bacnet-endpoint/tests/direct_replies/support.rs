@@ -40,6 +40,27 @@ impl TestCa {
         let der = params.self_signed(&key).unwrap().der().clone();
         Self { params, key, der }
     }
+    pub fn server_tls(&self) -> Arc<rustls::ServerConfig> {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
+            .unwrap()
+            .signed_by(&key, &rcgen::Issuer::from_params(&self.params, &self.key))
+            .unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(self.der.clone()).unwrap();
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .build()
+            .unwrap();
+        Arc::new(
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_client_cert_verifier(verifier)
+                .with_single_cert(
+                    vec![cert.der().clone()],
+                    PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+                )
+                .unwrap(),
+        )
+    }
     pub fn tls(&self, name: &str) -> ScNodeTlsConfig {
         let key = rcgen::KeyPair::generate().unwrap();
         let cert = rcgen::CertificateParams::new(vec![name.into()])

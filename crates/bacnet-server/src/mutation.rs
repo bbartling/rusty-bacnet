@@ -150,7 +150,7 @@ pub struct MutationAuthorizationContext {
 }
 
 impl MutationAuthorizationContext {
-    /// Original accepted direct-SC leaf and incarnation; absent on other ingress.
+    /// Original verified direct-SC leaf and incarnation; absent on other ingress.
     pub fn direct_sc_identity(&self) -> Option<bacnet_transport::port::DirectScIdentity> {
         self.provenance.direct_sc_identity()
     }

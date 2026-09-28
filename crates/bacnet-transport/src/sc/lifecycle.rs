@@ -18,7 +18,11 @@ use bytes::BytesMut;
 
 impl<W: WebSocketPort> ScTransport<W> {
     pub(super) async fn stop_owned(&mut self) -> Result<(), Error> {
+        self.direct_membership.retire_all();
         self.seal_direct_listener();
+        if let Some(shared) = self.direct.take() {
+            shared.shutdown().await;
+        }
         self.direct_intake = advertisement::DirectIntake::default();
         // Attempt clean disconnect: send DisconnectRequest via the WebSocket
         if let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) {
@@ -67,6 +71,7 @@ impl<W: WebSocketPort> ScTransport<W> {
     pub(super) fn abort_background_task_and_drop_sockets(
         &mut self,
     ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
+        self.direct_membership.retire_all();
         let task = self.recv_task.take();
         if let Some(task) = &task {
             task.abort();

@@ -112,7 +112,7 @@ impl TransportProvenance {
         }
     }
 
-    /// Only accepted direct TLS ingress may mint this principal-bearing value.
+    /// Only built-in verified direct TLS ingress may mint this principal-bearing value.
     pub(crate) fn verified_direct_peer(identity: DirectScIdentity) -> Self {
         Self {
             kind: ProvenanceKind::DirectPeer(identity),
@@ -146,7 +146,7 @@ impl TransportProvenance {
         self.kind == ProvenanceKind::Unverified
     }
 
-    /// True only for accepted direct-SC ingress with a verified identity.
+    /// True only for direct-SC ingress with a verified identity.
     pub fn is_direct_peer(self) -> bool {
         matches!(self.kind, ProvenanceKind::DirectPeer(_))
     }

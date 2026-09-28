@@ -46,7 +46,7 @@ pub(super) async fn serve_npdu_loop<W>(
                 if !request.can_start() {
                     continue;
                 }
-                if !member.is_current() {
+                if member.with_current(|| request.mark_started()).is_none() {
                     return;
                 }
                 let result = tokio::select! {

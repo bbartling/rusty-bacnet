@@ -1,64 +1,31 @@
-//! Opt-in direct-connection discovery and NPDU-over-direct with hub fallback.
+//! Optional URI discovery; established direct routes are selected independently.
 //!
-//! When enabled, unicast sends consult a bounded URI cache keyed by
-//! destination VMAC. On a miss the transport issues one Address-Resolution
-//! request through the hub, waits for the matching Address-Resolution-ACK
-//! by message ID, caches the returned URIs, dials a direct peer, runs the
-//! Connect-Request into Connect-Accept handshake with the existing hub
-//! validation, and sends the NPDU over the direct WebSocket with both
-//! address parameters omitted. Any failure at any stage falls back to the
-//! existing hub send path.
-//! Disabled (the default) leaves the hub send path byte-identical.
+//! A unicast first uses current UUID/VMAC membership, including accepted peers
+//! when discovery is disabled. Without an established route, enabled discovery
+//! consults the bounded URI cache or sends Address-Resolution through the Hub.
+//! Built-in TLS dials authenticate the peer and admit application traffic in
+//! both directions. Custom factories are send-only and cannot mint identity.
+//! Connect completes before publication; direct frames omit both VMAC fields.
+//! Broadcast always uses the Hub.
 //!
-//! Source grounding paraphrases the local Standard 135-2020 Annex AB: a
-//! node may request a peer's direct URIs with an Address-Resolution message
-//! sent through the hub, the peer answers with its URIs or an empty list
-//! when it accepts direct connections but knows none, and a node that does
-//! not accept direct connections answers with an unsupported-function NAK;
-//! direct URIs may otherwise be statically configured, and when none are
-//! configured they may be requested through the hub. Only unicast addressed
-//! to the direct peer travels over a direct connection; all other traffic
-//! uses the hub. Direct sends omit both address parameters while hub sends
-//! carry both. A direct WebSocket carries NPDUs only after its Connect
-//! handshake completes; strict peers that require the handshake otherwise
-//! fall back to hub delivery. When a node initiates direct connections, the timing of
-//! initiation and re-initiation is a local matter, and a failed URI attempt
-//! still leaves hub delivery available. Response messages copy the causing
-//! message ID so an ACK can be matched to its request, and the wait budget
-//! is a local matter. This module reuses the transport's existing connect
-//! timeout for that wait and introduces no new global deadline type.
+//! Predial/connect failure leaves Hub routing available. A full current-direct
+//! queue returns a capacity error. A possibly started write never retries via
+//! another socket. Only definitely unstarted work on a retired route permits a
+//! fresh routing decision. Original-response capabilities never use fallback.
 //!
-//! Discovery enables dial-out only. Without a separately registered live
-//! direct listener, solicited Advertisements report accept-direct 0.
-//! Listener registration is independent of discovery; hub, failover,
-//! reconnect, and dial-out behavior are unchanged.
+//! Local bounds: 32 URI-cache entries, five-minute insertion TTL, FIFO eviction;
+//! empty URI results are cached, transport failure/timeouts are not. Up to 32
+//! URI backoffs grow from 200ms to 5s. The outbound owner permits 16 established
+//! peers, 16 pending dials and 32 physical sockets including retirement. Socket
+//! workers expire after 60s binary/write inactivity and observe remote close.
+//! Each socket has one writer, 64 shared ordinary/reply queue slots and at most
+//! one active bounded write. Ready reads and writes alternate; TLS Ping/Pong
+//! consume one read turn without renewing the idle deadline. Stop aborts and
+//! joins owned workers; disable/drop abort them. Accepted listener lifetime is
+//! independent of discovery, but registered transport teardown seals it too.
 //!
-//! Cache policy (owner-local): at most [`DIRECT_URI_CACHE_MAX_ENTRIES`]
-//! VMAC entries; each entry lives [`DIRECT_URI_CACHE_TTL`] from insertion.
-//! Reads lazily expire entries. Inserts evict the oldest inserted VMAC first
-//! (FIFO) while over cap. Empty URI lists (peer accepts direct but knows no
-//! URIs, or an unsupported-function NAK) are cached as empty so later sends
-//! within TTL go straight to the hub without another request. Timeouts and
-//! transport failures are not cached.
-//!
-//! Redial backoff (owner-local): each dial/handshake/send failure on a URI
-//! records exponential backoff (`200ms, 400ms, 800ms, ...` capped at 5s via
-//! [`redial_backoff_delay`]). Sends skip URIs still inside their backoff
-//! window and fall back to hub delivery. Success clears the URI entry. At
-//! most [`DIRECT_REDIAL_MAX_ENTRIES`] URIs are tracked (FIFO eviction).
-//! Annex AB leaves initiation/re-initiation timing to the local node, so
-//! these bounds are local policy, not wire conformance.
-//!
-//! Connection reuse (owner-local): at most [`DIRECT_POOL_MAX_ENTRIES`]
-//! handshaked direct connections are pooled, one per destination VMAC
-//! (FIFO eviction while over cap). Each pooled entry lives
-//! [`DIRECT_POOL_IDLE_TTL`] from last successful use; reads lazily expire.
-//! A single reusable connection per VMAC covers the need — discovery already
-//! yields one URI list per VMAC and sends are per-VMAC — so no general pool
-//! is introduced. Pool teardown is dropping `DirectShared` with the
-//! transport (lifecycle precedent); no background task or new timer type is
-//! added. All waits reuse `connect_timeout_ms`; expiry uses `Instant` checks
-//! like the URI cache.
+//! These discovery/cache/idle deadlines are local policy. Annex AB.4.2 and
+//! AB.6.2 ground established direct selection and the handshake/address shape.
 
 use super::direct_membership::{DirectMembership, DirectRole, Refusal};
 pub(crate) use super::direct_pool::DirectPool;
@@ -265,20 +232,12 @@ impl DirectUriCache {
     }
 }
 
-/// Dial-one-URI factory supplied by the owner.
-///
-/// Production wiring captures an [`crate::sc_tls::ScNodeTlsConfig`] clone and
-/// calls `TlsWebSocket::connect_direct`; tests supply a loopback peer.
-/// The factory must be cancellation-safe: a dropped future must not leave a
-/// half-published connection behind.
-pub(crate) type DirectDialer<W> =
-    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<W, Error>> + Send>> + Send + Sync>;
+pub(crate) use super::direct_socket::DirectDialer;
 
 /// Shared opt-in direct discovery state.
 ///
-/// `Some` in the transport means enabled; `None` (the default) means the hub
-/// path runs unchanged. The dialer is optional: enabled without a dialer
-/// always falls back to the hub path.
+/// This optional owner does not own accepted membership. Without a dialer,
+/// discovery cannot establish a new outbound route; existing routes still work.
 pub(crate) struct DirectShared<W: WebSocketPort> {
     cache: Mutex<DirectUriCache>,
     pending: Mutex<HashMap<u16, oneshot::Sender<Vec<String>>>>,
@@ -290,6 +249,8 @@ pub(crate) struct DirectShared<W: WebSocketPort> {
     membership: Arc<DirectMembership>,
     pending_dials: Arc<Semaphore>,
     physical: Arc<Semaphore>,
+    #[cfg(feature = "sc-tls")]
+    intake: StdMutex<Option<super::direct_pool::DirectIntake>>,
 }
 
 impl<W: WebSocketPort> DirectShared<W> {
@@ -305,25 +266,21 @@ impl<W: WebSocketPort> DirectShared<W> {
             membership,
             pending_dials: Arc::new(Semaphore::new(DIRECT_POOL_MAX_ENTRIES)),
             physical: Arc::new(Semaphore::new(DIRECT_POOL_MAX_ENTRIES * 2)),
+            #[cfg(feature = "sc-tls")]
+            intake: StdMutex::new(None),
         }
     }
 }
 
 impl<W: WebSocketPort> super::ScTransport<W> {
-    /// Opt in to on-demand direct discovery for unicast sends (default OFF).
+    /// Configure on-demand URI discovery before start (default OFF).
     ///
-    /// Disabled (the default) leaves the hub send path byte-identical: no
-    /// cache consult, no Address-Resolution request, no direct dial. Enabled
-    /// consults the bounded URI cache on each unicast; on a miss it issues
-    /// one Address-Resolution request through the hub, caches the ACK URIs,
-    /// dials direct, and sends the NPDU over direct with both address
-    /// parameters omitted. Any direct-stage failure falls back to hub
-    /// delivery. Broadcasts always use the hub path.
-    ///
-    /// Dial-out only: this flag never enables inbound direct acceptance.
-    /// Without a separately registered listener, accept-direct stays 0. Hub, failover, and
-    /// reconnect behavior are unchanged. The ACK wait reuses the configured
-    /// connect timeout; no new global deadline type is introduced.
+    /// Established matching direct peers are used even when disabled. Without
+    /// one, enabled discovery may query the Hub and dial; broadcasts stay on
+    /// the Hub. Failed discovery/Connect permits Hub fallback, but saturation
+    /// or an uncertain started write returns an error without duplicate send.
+    /// This never starts a listener. Disabling a running transport retires its
+    /// outbound workers and discards the cache/dialer, preserving accepted peers.
     pub fn with_direct_discovery(mut self, enabled: bool) -> Self {
         if enabled {
             if self.direct.is_none() {
@@ -337,16 +294,15 @@ impl<W: WebSocketPort> super::ScTransport<W> {
         self
     }
 
-    /// Supply the direct-dial factory used after discovery (implies opt-in).
+    /// Configure an untrusted, send-only direct factory before start.
     ///
-    /// The closure receives one candidate URI string and returns a connected
-    /// direct WebSocket. It is tried in ACK order until one dial and send
-    /// succeeds; every failure falls back to hub delivery. Calling this
-    /// enables discovery; call [`Self::with_direct_discovery`] with `false`
-    /// afterwards to disable again (which drops the dialer and cache).
-    /// Production callers capture a TLS config clone and call
-    /// `TlsWebSocket::connect_direct` inside the closure.
-    pub fn with_direct_dialer<F, Fut>(mut self, dialer: F) -> Self
+    /// Implies discovery. Candidate URIs are tried in ACK order until Connect
+    /// succeeds. Application NPDUs received from this adapter are discarded;
+    /// even a closure returning `TlsWebSocket` cannot manufacture verified
+    /// ingress identity or response authority. Use `with_direct_tls`
+    /// with `sc-tls` for the built-in authenticated bidirectional path.
+    /// Disabling discovery discards this factory and its current connections.
+    pub fn with_custom_direct_dialer<F, Fut>(mut self, dialer: F) -> Self
     where
         F: Fn(String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<W, Error>> + Send + 'static,
@@ -356,12 +312,35 @@ impl<W: WebSocketPort> super::ScTransport<W> {
             None => Arc::new(DirectShared::new(self.direct_membership.clone())),
         };
         if let Ok(mut slot) = shared.dialer.try_lock() {
-            *slot = Some(Arc::new(move |uri: String| {
+            *slot = Some(DirectDialer::Custom(Arc::new(move |uri: String| {
                 Box::pin(dialer(uri)) as Pin<Box<dyn Future<Output = Result<W, Error>> + Send>>
-            }));
+            })));
         }
         self.direct = Some(shared);
         self
+    }
+
+    /// Before start, enable direct discovery using the built-in authenticated TLS
+    /// adapter. Only this path admits outbound application NPDUs with verified
+    /// leaf/incarnation evidence and an original-socket response capability.
+    #[cfg(feature = "sc-tls")]
+    pub fn with_direct_tls(mut self, config: crate::sc_tls::ScNodeTlsConfig) -> Self {
+        self = self.with_direct_discovery(true);
+        if let Some(shared) = &self.direct {
+            *shared
+                .dialer
+                .try_lock()
+                .expect("builder has no active dial") = Some(DirectDialer::Tls(config));
+        }
+        self
+    }
+
+    #[cfg(all(test, feature = "sc-tls"))]
+    pub(crate) fn direct_route_for_test(
+        &self,
+        vmac: &Vmac,
+    ) -> Option<super::direct_egress::DirectEgress> {
+        self.direct_membership.route(vmac)
     }
 
     pub(super) fn direct_shared(&self) -> Option<Arc<DirectShared<W>>> {
@@ -414,9 +393,28 @@ impl<W: WebSocketPort> DirectShared<W> {
         self.enabled.store(false, Ordering::Release);
         self.pending_dials.close();
         pool.clear();
-        for task in self.workers.lock().unwrap().drain(..) {
+        for task in self.workers.lock().unwrap().iter() {
             task.abort();
         }
+    }
+
+    pub(super) async fn shutdown(&self) {
+        self.disable();
+        let workers = std::mem::take(&mut *self.workers.lock().unwrap());
+        for worker in workers {
+            let _ = worker.await;
+        }
+        #[cfg(feature = "sc-tls")]
+        self.intake.lock().unwrap().take();
+    }
+
+    #[cfg(feature = "sc-tls")]
+    pub(crate) fn set_intake(
+        &self,
+        tx: tokio::sync::mpsc::Sender<crate::port::ReceivedNpdu>,
+        admission: Arc<super::npdu_admission::ScNpduAdmission>,
+    ) {
+        *self.intake.lock().unwrap() = Some(super::direct_pool::DirectIntake { tx, admission });
     }
 
     pub(super) async fn cached_uris(&self, vmac: &Vmac) -> Option<Vec<String>> {
@@ -429,6 +427,7 @@ impl<W: WebSocketPort> DirectShared<W> {
         self.cache.lock().await.insert(vmac, uris, now);
     }
 
+    #[cfg(test)]
     fn pooled_get(&self, vmac: &Vmac, now: Instant) -> Option<PooledDirect> {
         self.pool.lock().unwrap().get(vmac, now)
     }
@@ -573,173 +572,85 @@ impl<W: WebSocketPort> DirectShared<W> {
         Some(uris)
     }
 
-    /// Send over a pooled handshaked connection or dial each eligible URI in
-    /// order, run the Connect handshake, pool the success, and send the NPDU
-    /// over direct with both address parameters omitted.
-    ///
-    /// Pooled reuse is attempted first: a fresh idle entry for `dest` sends
-    /// one direct frame bounded by the stored peer limits. Pool hit refreshes
-    /// the idle deadline; pool send failure evicts without recording redial
-    /// backoff (a broken reuse is not URI health) and falls through to
-    /// redial. URIs inside their backoff window are skipped; every skipped
-    /// or failed attempt must fall back to hub delivery.
-    ///
-    /// Returns `Ok(())` on the first successful direct send (pooled or fresh
-    /// dial). Returns `Err` when no dialer is configured, the pool misses and
-    /// every eligible URI fails or is backed off, the handshake is rejected
-    /// or times out, or the hub connection is no longer usable for ID
-    /// allocation; the caller must fall back to hub delivery. Never mutates
-    /// hub connection state besides consuming fresh message IDs, and never
-    /// touches hub failover or reconnect state. Locks are never held across
-    /// dial/handshake/send awaits. Concurrent dials publish through the shared
-    /// UUID/VMAC owner; only the committed generation admits new direct work.
-    #[allow(clippy::too_many_arguments)]
+    /// Establish a bounded direct route when no established peer is usable.
+    /// After queue admission, uncertain writes never trigger another attempt.
     pub(super) async fn try_direct_uris(
         &self,
         uris: &[String],
         dest: Vmac,
         npdu: &[u8],
-        data_attributes: &[DataAttribute],
+        attributes: &[DataAttribute],
         conn: &Arc<Mutex<ScConnection>>,
-        hub_max_apdu_length: u16,
         connect_timeout_ms: u64,
-    ) -> Result<(), ()> {
-        if !self.enabled.load(Ordering::Acquire) {
-            return Err(());
+    ) -> Result<(), super::direct_egress::DirectSendError> {
+        use super::direct_egress::DirectSendError as Failure;
+        if !self.enabled.load(Ordering::Acquire) || dest == BROADCAST_VMAC {
+            return Err(Failure::Unavailable);
         }
-        let dialer = self.dialer.lock().await.clone().ok_or(())?;
-        if uris.is_empty() || dest == BROADCAST_VMAC {
-            return Err(());
+        if let Some(route) = self.membership.route(&dest) {
+            return route.send_npdu(npdu, attributes).await;
         }
-        if npdu.len() > hub_max_apdu_length as usize {
-            return Err(());
-        }
-        // Pooled reuse: one handshaked connection per destination VMAC.
-        // Snapshot under the pool lock, then release before any await.
-        let now = Instant::now();
-        if let Some(pooled) = self.pooled_get(&dest, now) {
-            if npdu.len() <= pooled.peer_max_apdu_length as usize {
-                let direct_msg = {
-                    let mut c = conn.lock().await;
-                    if c.state != ScConnectionState::Connected {
-                        return Err(());
-                    }
-                    c.build_direct_encapsulated_npdu(npdu, data_attributes).ok()
-                };
-                if let Some(direct_msg) = direct_msg {
-                    let mut buf = BytesMut::new();
-                    encode_sc_message(&mut buf, &direct_msg);
-                    if buf.len() <= pooled.peer_max_bvlc_length as usize {
-                        let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
-                        match tokio::time::timeout(send_wait, pooled.send(&buf)).await {
-                            Ok(Ok(())) => {
-                                let refresh_now = Instant::now();
-                                self.pool.lock().unwrap().refresh(
-                                    &dest,
-                                    pooled.member.generation,
-                                    refresh_now,
-                                );
-                                self.note_direct_success(&pooled.uri).await;
-                                return Ok(());
-                            }
-                            _ => {
-                                self.pool
-                                    .lock()
-                                    .unwrap()
-                                    .remove_generation(&dest, pooled.member.generation);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Redial with per-URI backoff: skip URIs still inside their window,
-        // preserving ACK order. All-backed-off means immediate hub fallback.
+        let dialer = self
+            .dialer
+            .lock()
+            .await
+            .clone()
+            .ok_or(Failure::Unavailable)?;
         let candidates = self.eligible_uris(uris, Instant::now()).await;
-        if candidates.is_empty() {
-            return Err(());
-        }
-        // Materialize one direct frame per attempt under the hub ID counter
-        // so direct and hub messages share unique IDs. The hub state itself
-        // is only read, never transitioned, here. Each attempt first runs
-        // the shared Connect-Request into Connect-Accept handshake on an
-        // ephemeral probe carrying the hub connection's node identity; any
-        // handshake failure records backoff, drops the dialed socket, and
-        // tries the next eligible URI. Size mismatches against freshly
-        // learned peer limits are per-NPDU, not URI health, so they skip
-        // without recording backoff.
         let _pending = self
             .pending_dials
             .clone()
             .try_acquire_owned()
-            .map_err(|_| ())?;
-        for uri in &candidates {
-            let physical = self.physical.clone().try_acquire_owned().map_err(|_| ())?;
-            let dial_wait = Duration::from_millis(connect_timeout_ms.max(1));
-            let direct_ws = match tokio::time::timeout(dial_wait, dialer(uri.clone())).await {
+            .map_err(|_| Failure::Unavailable)?;
+        let wait = Duration::from_millis(connect_timeout_ms.max(1));
+        for uri in candidates {
+            let physical = self
+                .physical
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| Failure::Unavailable)?;
+            let ws = match tokio::time::timeout(wait, dialer.dial(uri.clone())).await {
                 Ok(Ok(ws)) => ws,
                 _ => {
-                    self.note_direct_failure(uri).await;
+                    self.note_direct_failure(&uri).await;
                     continue;
                 }
             };
             let probe = {
                 let c = conn.lock().await;
                 if c.state != ScConnectionState::Connected {
-                    return Err(());
+                    return Err(Failure::Unavailable);
                 }
                 Arc::new(Mutex::new(c.connect_probe()))
             };
-            let handshake_wait = connect_timeout_ms.max(1);
-            if super::handshake::perform_handshake(&direct_ws, &probe, None, handshake_wait)
+            if super::handshake::perform_handshake(&ws, &probe, None, connect_timeout_ms.max(1))
                 .await
                 .is_err()
             {
-                self.note_direct_failure(uri).await;
+                self.note_direct_failure(&uri).await;
                 continue;
             }
-            let (peer_max_bvlc_length, peer_max_apdu_length, peer_uuid, local_uuid, local_vmac) = {
+            let (limits, local_limits, uuid, local_uuid, local_vmac) = {
                 let p = probe.lock().await;
-                // An AR/cache destination is a routing hint. The peer's Connect
-                // identity must match it before this socket can carry its NPDU.
                 if p.hub_vmac != Some(dest) {
                     continue;
                 }
                 (
-                    p.hub_max_bvlc_length,
-                    p.hub_max_apdu_length,
-                    p.hub_device_uuid.ok_or(())?,
+                    (p.hub_max_bvlc_length, p.hub_max_apdu_length),
+                    (p.max_bvlc_length, p.max_apdu_length),
+                    p.hub_device_uuid.ok_or(Failure::Unavailable)?,
                     p.device_uuid,
                     p.local_vmac,
                 )
             };
-            if npdu.len() > peer_max_apdu_length as usize {
-                continue;
-            }
-            let direct_msg = {
-                let mut c = conn.lock().await;
-                if c.state != ScConnectionState::Connected {
-                    return Err(());
-                }
-                match c.build_direct_encapsulated_npdu(npdu, data_attributes) {
-                    Ok(msg) => msg,
-                    Err(_) => return Err(()),
-                }
-            };
-            let mut buf = BytesMut::new();
-            encode_sc_message(&mut buf, &direct_msg);
-            if buf.len() > peer_max_bvlc_length as usize {
-                continue;
-            }
-            let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
             let pooled = {
                 let mut pool = self.pool.lock().unwrap();
                 if !self.enabled.load(Ordering::Acquire) {
-                    return Err(());
+                    return Err(Failure::Unavailable);
                 }
                 pool.prune(Instant::now());
                 let mut reservation = self.membership.reserve(
-                    peer_uuid,
+                    uuid,
                     dest,
                     local_uuid,
                     local_vmac,
@@ -749,7 +660,7 @@ impl<W: WebSocketPort> DirectShared<W> {
                 if matches!(reservation, Err(Refusal::Resources)) {
                     pool.evict_oldest();
                     reservation = self.membership.reserve(
-                        peer_uuid,
+                        uuid,
                         dest,
                         local_uuid,
                         local_vmac,
@@ -757,15 +668,17 @@ impl<W: WebSocketPort> DirectShared<W> {
                         DIRECT_POOL_MAX_ENTRIES,
                     );
                 }
-                let member = reservation.map_err(|_| ())?.commit();
+                let member = reservation
+                    .map_err(|_| Failure::Unavailable)?
+                    .commit_with_limits(limits, wait);
                 pool.prune(Instant::now());
                 let (pooled, worker) = PooledDirect::start(
-                    direct_ws,
+                    ws,
                     member,
-                    uri.clone(),
-                    (peer_max_bvlc_length, peer_max_apdu_length),
-                    send_wait,
                     physical,
+                    #[cfg(feature = "sc-tls")]
+                    self.intake.lock().unwrap().clone(),
+                    local_limits,
                 );
                 let mut workers = self.workers.lock().unwrap();
                 workers.retain(|task| !task.is_finished());
@@ -773,21 +686,13 @@ impl<W: WebSocketPort> DirectShared<W> {
                 pool.insert(dest, pooled.clone());
                 pooled
             };
-            match tokio::time::timeout(send_wait, pooled.send(&buf)).await {
-                Ok(Ok(())) => {
-                    self.note_direct_success(uri).await;
-                    return Ok(());
-                }
-                _ => {
-                    self.pool
-                        .lock()
-                        .unwrap()
-                        .remove_generation(&dest, pooled.member.generation);
-                    self.note_direct_failure(uri).await;
-                }
+            let result = pooled.member.egress.send_npdu(npdu, attributes).await;
+            if result.is_ok() {
+                self.note_direct_success(&uri).await;
             }
+            return result;
         }
-        Err(())
+        Err(Failure::Unavailable)
     }
 }
 

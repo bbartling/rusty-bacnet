@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{oneshot, Semaphore};
 
 struct ReadyPeer {
     incoming: Vec<u8>,
@@ -56,16 +56,16 @@ async fn direct_worker_ready_receive_stream_cannot_starve_queued_sends() {
     );
     let permits = Arc::new(Semaphore::new(1));
     let (pooled, worker) = PooledDirect::start(
-        ReadyPeer {
+        DirectSocket::Custom(ReadyPeer {
             incoming: incoming.to_vec(),
             reads,
             writes: writes.clone(),
-        },
+        }),
         member,
-        "wss://unused.example/sc".into(),
-        (1476, 1476),
-        Duration::from_secs(1),
         permits.clone().try_acquire_owned().unwrap(),
+        #[cfg(feature = "sc-tls")]
+        None,
+        (1476, 1476),
     );
     // Enqueue both sends synchronously before the spawned worker's first poll.
     // The peer's receive is also continuously ready. Its finite sentinel ends
@@ -73,22 +73,32 @@ async fn direct_worker_ready_receive_stream_cannot_starve_queued_sends() {
     let (a, a_rx) = oneshot::channel();
     let (b, b_rx) = oneshot::channel();
     pooled
+        .member
+        .egress
         .send
-        .try_send(SendRequest {
-            bytes: incoming.to_vec(),
+        .try_send(DirectWrite {
+            bytes: incoming.clone().freeze(),
+            scope: None,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(1),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             done: a,
         })
         .unwrap();
     pooled
+        .member
+        .egress
         .send
-        .try_send(SendRequest {
-            bytes: incoming.to_vec(),
+        .try_send(DirectWrite {
+            bytes: incoming.clone().freeze(),
+            scope: None,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(1),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             done: b,
         })
         .unwrap();
     worker.await.unwrap();
-    assert_eq!(a_rx.await.unwrap(), Ok(()));
-    assert_eq!(b_rx.await.unwrap(), Ok(()));
+    assert!(a_rx.await.unwrap().is_ok());
+    assert!(b_rx.await.unwrap().is_ok());
     let observed = writes.lock().unwrap();
     assert_eq!(observed.len(), 2);
     assert!(

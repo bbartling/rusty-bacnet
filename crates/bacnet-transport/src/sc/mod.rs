@@ -30,8 +30,11 @@ mod control_admission;
 mod data_attributes;
 pub(crate) mod diagnostic_throttle;
 pub(crate) mod direct_discovery;
+pub(crate) mod direct_egress;
 pub(crate) mod direct_membership;
 mod direct_pool;
+pub(crate) mod direct_receive;
+pub(crate) mod direct_socket;
 mod empty_npdu;
 mod errors;
 mod failover;
@@ -380,6 +383,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             publish_effective_max_apdu_length(&self.effective_max_apdu_length, &c);
         }
 
+        #[cfg(feature = "sc-tls")]
+        if let Some(direct) = &self.direct {
+            direct.set_intake(npdu_tx.clone(), npdu_admission.clone());
+        }
         let active_ws = Arc::new(Mutex::new(ws.clone()));
         self.ws_shared = Some(active_ws.clone());
 

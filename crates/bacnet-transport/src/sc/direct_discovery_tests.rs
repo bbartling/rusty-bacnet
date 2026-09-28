@@ -109,7 +109,7 @@ async fn start_direct(
         .with_device_uuid([1; 16])
         .with_connect_timeout_ms(connect_timeout_ms)
         .with_direct_discovery(true)
-        .with_direct_dialer(dialer);
+        .with_custom_direct_dialer(dialer);
     let hub_task = tokio::spawn(async move {
         data_attribute_tests::hub_accept(&hub, [0x10; 6]).await;
         hub
@@ -351,9 +351,9 @@ async fn ack_timeout_falls_back_to_hub_without_dial() {
         .with_device_uuid([1; 16])
         .with_connect_timeout_ms(60)
         .with_direct_discovery(true)
-        .with_direct_dialer(
-            |_uri: String| async move { panic!("no ACK means no dial must occur") },
-        );
+        .with_custom_direct_dialer(|_uri: String| async move {
+            panic!("no ACK means no dial must occur")
+        });
     let hub_task = tokio::spawn(async move {
         data_attribute_tests::hub_accept(&hub, [0x10; 6]).await;
         hub
@@ -469,7 +469,7 @@ async fn direct_dial_failure_falls_back_to_hub() {
         .with_device_uuid([1; 16])
         .with_connect_timeout_ms(300)
         .with_direct_discovery(true)
-        .with_direct_dialer(|uri: String| async move {
+        .with_custom_direct_dialer(|uri: String| async move {
             assert_eq!(uri, "wss://peer.example/sc");
             Err::<LoopbackWebSocket, Error>(Error::Encoding("dial refused".into()))
         });
@@ -496,13 +496,13 @@ async fn direct_dial_failure_falls_back_to_hub() {
 }
 
 #[tokio::test]
-async fn direct_send_failure_falls_back_to_hub() {
+async fn direct_connect_write_failure_falls_back_to_hub() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
         .with_device_uuid([1; 16])
         .with_connect_timeout_ms(300)
         .with_direct_discovery(true)
-        .with_direct_dialer(|_uri: String| async move {
+        .with_custom_direct_dialer(|_uri: String| async move {
             let (direct_client, direct_peer) = LoopbackWebSocket::pair();
             drop(direct_peer);
             Ok(direct_client)
@@ -656,3 +656,6 @@ async fn interop_repeated_send_uses_cache_without_stall() {
     listener.stop().await;
     responder.stop().await.unwrap();
 }
+
+#[path = "direct_send_disposition_tests.rs"]
+mod disposition;

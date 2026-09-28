@@ -21,9 +21,10 @@ fn route(
     let member = registry
         .reserve([1; 16], [1; 6], [2; 16], [2; 6], DirectRole::Accepted, 1)
         .unwrap()
-        .commit();
+        .commit_with_limits(limits, Duration::from_secs(5));
     let identity = DirectScIdentity::verified([3; 32], member.generation);
-    let (route, recv) = DirectResponse::new(&member, identity, limits, Duration::from_secs(5));
+    let route = DirectResponse::new(&member, identity);
+    let recv = member.take_writes();
     (registry, member, route, recv)
 }
 
@@ -59,7 +60,7 @@ async fn direct_response_queue_bound_cancellation_and_weak_membership() {
 #[tokio::test]
 async fn direct_response_negotiated_npdu_and_complete_bvlc_limits() {
     let scope = DirectResponseScope::default();
-    let (_, member, route, mut recv) = route((6, 2));
+    let (_, _member, route, mut recv) = route((6, 2));
     assert!(matches!(
         route.send(&[1, 0, 0], &scope).await,
         Err(Error::Encoding(_))
@@ -75,8 +76,7 @@ async fn direct_response_negotiated_npdu_and_complete_bvlc_limits() {
     assert!(frame.data_options.is_empty());
     write.done.send(Ok(())).unwrap();
     send.await.unwrap();
-    let (small, mut receiver) =
-        DirectResponse::new(&member, route.identity(), (5, 2), Duration::from_secs(5));
+    let (_registry, _small_member, small, mut receiver) = self::route((5, 2));
     assert!(matches!(
         small.send(&[1, 0], &scope).await,
         Err(Error::Encoding(_))

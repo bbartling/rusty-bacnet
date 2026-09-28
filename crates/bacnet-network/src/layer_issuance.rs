@@ -44,7 +44,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
     /// Encode and issue a response using its immutable ingress route.
     ///
-    /// Direct responses use only the matching original accepted socket. A
+    /// Direct responses use only the matching original direct socket. A
     /// missing, invalid or stale capability cannot fall back to ordinary unicast.
     /// The callback has the same local issuance contract as
     /// [`Self::send_apdu_on_issuance`]; neither issuance nor success proves receipt.
