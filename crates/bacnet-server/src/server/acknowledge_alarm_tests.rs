@@ -178,7 +178,7 @@ async fn binary_and_multistate_families_return_simple_ack() {
 }
 
 #[tokio::test]
-async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
+async fn post_issuance_reused_and_new_invoke_ids_are_idempotent_success() {
     let mut ai = AnalogInputObject::new(1, "AI-ack", 62).unwrap();
     let oid = ai.object_identifier();
     ai.commit_event_transition_internal(EventTransitionCommit {
@@ -214,7 +214,7 @@ async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
     assert_eq!(acked(&*db.read().await, oid), 0b111);
     assert_eq!(notification_transactions.active_count(), 0);
 
-    assert!(dispatch(
+    let reused = dispatch(
         &db,
         &tracker,
         &notification_transactions,
@@ -223,7 +223,8 @@ async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
         &request,
     )
     .await
-    .is_err());
+    .unwrap();
+    assert_simple_ack(reused, 0x51);
     assert_eq!(acked(&*db.read().await, oid), 0b111);
 
     let new_transaction = dispatch(

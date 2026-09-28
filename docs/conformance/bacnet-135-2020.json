@@ -173,7 +173,7 @@
     "crates/rusty-bacnet/src/server/server_methods/lifecycle.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-server/src/server/requests/mutation_policy_tests.rs::mutation_policy_matrix_all_ten_decisions_tracking_and_retention",
+    "crates/bacnet-server/src/server/requests/mutation_policy_tests.rs::mutation_policy_matrix_all_ten_decisions_and_post_issuance_reauthorization",
     "crates/rusty-bacnet/tests/test_mutation_policy.py::MutationPolicyWireTests::test_default_and_explicit_permissive_write_controls"
    ],
    "negative_tests": [
@@ -3706,7 +3706,7 @@
     "crates/bacnet-server/src/handlers/tests/acknowledge_alarm_ee.rs::ee_acknowledge_alarm_round_trip_over_services",
     "crates/bacnet-server/src/handlers/tests/acknowledge_alarm.rs::supported_families_acknowledge_only_the_correlated_transition",
     "crates/bacnet-server/src/handlers/tests/acknowledge_alarm.rs::fault_recovery_acknowledgment_uses_historical_change_of_reliability",
-    "crates/bacnet-server/src/server/acknowledge_alarm_notification_tests.rs::{simple_ack_precedes_fresh_exact_unconfirmed_ack_notification,recipient_policy_selects_confirmed_and_unconfirmed_services_with_process_ids,duplicate_is_silent_new_invoke_notifies_again_and_confirmed_retry_is_immutable}",
+    "crates/bacnet-server/src/server/acknowledge_alarm_notification_tests.rs::{simple_ack_precedes_fresh_exact_unconfirmed_ack_notification,recipient_policy_selects_confirmed_and_unconfirmed_services_with_process_ids,pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_immutable}",
     "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_disabling_detection_resets_event_history",
     "crates/bacnet-objects/src/event_enrollment/tests/detection_enable.rs::disabled_detection_reports_initial_acked_transitions"
    ],

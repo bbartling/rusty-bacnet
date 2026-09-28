@@ -154,7 +154,7 @@ fn expected(
 }
 
 #[tokio::test]
-async fn mutation_policy_matrix_all_ten_decisions_tracking_and_retention() {
+async fn mutation_policy_matrix_all_ten_decisions_and_post_issuance_reauthorization() {
     assert_eq!(
         ServerConfig::default().mutation_policy,
         MutationPolicy::Permissive
@@ -205,15 +205,57 @@ async fn mutation_policy_matrix_all_ten_decisions_tracking_and_retention() {
                     },
                 );
                 assert_eq!(server.mutation_decision_counters(), counters, "{service:?}");
-                // Completed exact retries do not make another decision, even on denial.
-                assert!(dispatch(&server, service, bytes, 1).await.is_none());
-                assert_eq!(server.mutation_decision_counters(), counters);
+                // The first encoded reply handoff ended ordinary transaction
+                // ownership. Reuse runs the same policy again against current state.
+                let after_first = snapshot(&server).await;
+                let reused = dispatch(&server, service, bytes, 1).await.unwrap();
+                if !allowed {
+                    assert_denied(reused, service, 1);
+                    assert_eq!(snapshot(&server).await, before, "{service:?}");
+                } else if matches!(
+                    service,
+                    ConfirmedServiceChoice::CREATE_OBJECT | ConfirmedServiceChoice::DELETE_OBJECT
+                ) {
+                    let Apdu::Error(error) = apdu(reused) else {
+                        panic!("repeated object operation must see current state")
+                    };
+                    assert_eq!(error.error_class, ErrorClass::OBJECT);
+                    assert_eq!(
+                        error.error_code,
+                        if service == ConfirmedServiceChoice::CREATE_OBJECT {
+                            ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS
+                        } else {
+                            ErrorCode::UNKNOWN_OBJECT
+                        }
+                    );
+                    assert_eq!(snapshot(&server).await, after_first);
+                } else {
+                    assert!(
+                        matches!(apdu(reused), Apdu::SimpleAck(_) | Apdu::ComplexAck(_)),
+                        "{service:?}"
+                    );
+                    if service == ConfirmedServiceChoice::ATOMIC_WRITE_FILE {
+                        assert_eq!(
+                            snapshot(&server).await.1,
+                            [after_first.1.as_slice(), b"changed"].concat()
+                        );
+                    }
+                }
+                let twice = expected(
+                    service,
+                    MutationServiceCounters {
+                        allow_total: 2 * u64::from(allowed),
+                        deny_total: 2 * u64::from(!allowed),
+                        policy_deny_total: 2 * u64::from(policy == MutationPolicy::DenyAll),
+                    },
+                );
+                assert_eq!(server.mutation_decision_counters(), twice, "{service:?}");
                 assert_eq!(
                     calls.load(Ordering::Relaxed),
-                    usize::from(policy == MutationPolicy::Permissive && callback != 0)
+                    2 * usize::from(policy == MutationPolicy::Permissive && callback != 0)
                 );
                 server.stop().await.unwrap();
-                assert_eq!(server.mutation_decision_counters(), counters);
+                assert_eq!(server.mutation_decision_counters(), twice);
             }
         }
     }

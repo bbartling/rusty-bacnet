@@ -407,15 +407,26 @@ async fn denial_case(index: usize) {
             target,
         }]
     );
-    // Denial completed the normal tracker path; exact retries do not reauthorize.
-    assert!(fixture.dispatch(service, bytes.clone(), 51).await.is_none());
-    assert_eq!(observed.lock().unwrap().len(), 1);
+    // The denial reply was handed off. Same peer/Invoke ID/bytes now execute
+    // as a fresh transaction and must reauthorize without changing denied state.
+    assert_denied(
+        fixture.dispatch(service, bytes.clone(), 51).await.unwrap(),
+        service,
+        51,
+    );
+    assert_eq!(fixture.snapshot().await, before);
+    {
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[1], observed[0]);
+    }
     assert_denied(
         fixture.dispatch(service, bytes, 52).await.unwrap(),
         service,
         52,
     );
-    assert_eq!(observed.lock().unwrap().len(), 2);
+    assert_eq!(observed.lock().unwrap().len(), 3);
+    assert_eq!(fixture.snapshot().await, before);
 }
 
 macro_rules! denial_test {
