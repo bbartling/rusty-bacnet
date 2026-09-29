@@ -46,7 +46,7 @@ Standalone clients use the same learning rules without a Device object, registra
 
 ## Know which owner and link were exercised
 
-Full servers and shared endpoints cover NORMAL B/IP, SC and MS/TP; B/IP BBMD/foreign Number controls also have bounded shared-endpoint wire evidence. Standalone Rust clients have independent Number wire evidence for NORMAL B/IP, SC, Linux Ethernet and normal/configured-foreign B/IPv6. Full B/IPv6 servers cover both modes. These are Number-specific claims; broader BBMD/foreign endpoint administration remains experimental.
+Full servers and shared endpoints cover NORMAL B/IP, SC and MS/TP; B/IP BBMD/foreign Number controls also have bounded shared-endpoint wire evidence. Standalone Rust clients have independent Number wire evidence for NORMAL/BBMD/foreign B/IP, SC, Linux Ethernet and normal/configured-foreign B/IPv6. Full B/IPv6 servers cover both modes. The standalone B/IP client cases independently capture BBMD Original-Broadcast and configured-foreign DBTN through admission/refusal, alternate forwarding and registration NAK/retry, with requester progress and stopped-socket release. Independent standalone-client MS/TP frame evidence remains under #879. These are Number-specific claims; broader BBMD/foreign endpoint administration remains experimental.
 
 Each owner has a bounded serial Number worker separate from APDU dispatch. Holding that producer does not stop independent incoming request/ACK processing, but a shared physical writer still serializes outgoing bytes. Stop cancels and joins owned control work. Already transmitted bytes cannot be retracted.
 
