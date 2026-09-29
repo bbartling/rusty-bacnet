@@ -73,14 +73,16 @@ The guides use `bacnet` for readability. Rename the executable to `bacnet` / `ba
 With Rust **1.93 or later** and the toolchain's platform prerequisites installed:
 
 ```sh
-cargo install bacnet-cli --version 0.11.0 --locked
+git clone --branch v0.11.0 https://github.com/jscott3201/rusty-bacnet.git rusty-bacnet-v0.11
+cd rusty-bacnet-v0.11
+cargo install --path crates/bacnet-cli --locked
 bacnet --version
 ```
 
 That basic build does not enable packet capture. To include BACnet/SC without adding packet capture:
 
 ```sh
-cargo install bacnet-cli --version 0.11.0 --locked --features sc-tls
+cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
 
 `pcap` is a separate optional Cargo feature and needs native development dependencies when building. Add it only when packet capture is needed.

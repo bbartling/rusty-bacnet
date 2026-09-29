@@ -3,7 +3,7 @@
 Rusty BACnet is a workspace of 8 published crates implementing the BACnet protocol stack (ASHRAE 135-2020).
 
 This reference describes current development-source APIs, including unreleased
-changes. Published crates and hosted guides target **0.11.0**; use the
+changes. Published crates and the site’s release tutorials target **0.11.0**; use the
 [versioned Rust API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/) and
 [installation guidance](../README.md#installation) for that release. To use the
 checkout APIs described here, follow [Build from source](../README.md#build-from-source).

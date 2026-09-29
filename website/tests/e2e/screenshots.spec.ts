@@ -33,5 +33,9 @@ test('capture actual production reading and installation states', async ({ page 
     await page.keyboard.press('Escape');
     await page.goto(base + 'guides/configuration/');
     await capture('article');
+    for (const route of ['overview', 'shared-endpoints', 'network-number']) {
+      await page.goto(base + 'development/' + route + '/');
+      await capture('development-' + route);
+    }
   }
 });
