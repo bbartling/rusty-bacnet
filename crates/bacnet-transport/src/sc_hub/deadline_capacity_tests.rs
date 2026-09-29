@@ -125,6 +125,9 @@ impl CountedHub {
 
 #[tokio::test]
 async fn hub_actual_512_stalled_slots_expire_and_legitimate_mtls_recovers() {
+    // Both ends of every stalled connection are open in this process, which
+    // exceeds the common 1024 soft limit.
+    reserve_descriptors(2 * 512 + 64);
     let tls = TestTls::new();
     let timeouts = ScHubHandshakeTimeouts::new(
         Duration::from_secs(300),
