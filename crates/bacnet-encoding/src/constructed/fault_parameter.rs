@@ -12,14 +12,19 @@
 //! | `[1]` | `fault-characterstring` | `[0]` | `list-of-fault-values` | list of CharacterString |
 //! | `[2]` | `fault-extended` | `[0]` | `vendor-id` | Unsigned16 |
 //! | | | `[1]` | `extended-fault-type` | Unsigned |
-//! | | | `[2]` | `parameters` | list of application-tagged primitives or `[0]`-framed `BACnetDeviceObjectPropertyReference` values |
-//! | `[3]` | `fault-life-safety` | `[0]` | `list-of-fault-values` | list of `BACnetLifeSafetyState` |
+//! | | | `[2]` | `parameters` | list of extended values, see below |
+//! | `[3]` | `fault-life-safety` | `[0]` | `list-of-fault-values` | list of life-safety states |
 //! | | | `[1]` | `mode-property-reference` | `BACnetDeviceObjectPropertyReference` |
 //! | `[4]` | `fault-state` | `[0]` | `list-of-fault-values` | list of `BACnetPropertyStates` |
-//! | `[5]` | `fault-status-flags` | `[0]` | `status-flags-reference` | `BACnetDeviceObjectPropertyReference` |
-//! | `[6]` | `fault-out-of-range` | `[0]` | `min-normal-value` | one of REAL, Unsigned, Double or INTEGER |
+//! | `[5]` | `fault-status-flags` | `[0]` | `status-flags-reference` | device property reference |
+//! | `[6]` | `fault-out-of-range` | `[0]` | `min-normal-value` | numeric choice, see below |
 //! | | | `[1]` | `max-normal-value` | the same four-way choice |
-//! | `[7]` | `fault-listed` | `[0]` | `fault-list-reference` | `BACnetDeviceObjectPropertyReference` |
+//! | `[7]` | `fault-listed` | `[0]` | `fault-list-reference` | device property reference |
+//!
+//! Each "device property reference" is a `BACnetDeviceObjectPropertyReference`,
+//! and the life-safety list holds `BACnetLifeSafetyState` values. Each extended
+//! `parameters` entry is an application-tagged primitive or a `[0]`-framed
+//! `BACnetDeviceObjectPropertyReference`.
 //!
 //! The min/max inner CHOICE alternatives are untagged — discovered by their
 //! APPLICATION tag (REAL=4, Unsigned=2, Double=5, INTEGER=3). The Rust type

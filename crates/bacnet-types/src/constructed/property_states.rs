@@ -176,8 +176,11 @@ impl BACnetProprietaryPropertyState {
 /// | `[58]` | `protocol-level` | `BACnetProtocolLevel` |
 /// | `[59]` | `audit-level` | `BACnetAuditLevel` |
 /// | `[60]` | `audit-operation` | `BACnetAuditOperation` |
-/// | `[63]` | `extended-value` | Unsigned32 packing a choice tag above 254 as tag × 100000 + value |
+/// | `[63]` | `extended-value` | Unsigned32, packed as described below |
 /// | `[64]` to `[254]` | vendor-defined | primitive or constructed, kept as raw contents |
+///
+/// `extended-value` carries a choice tag above 254 packed into one Unsigned32
+/// as tag × 100000 + value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetPropertyStates {
     /// Tag 0: a BOOLEAN.

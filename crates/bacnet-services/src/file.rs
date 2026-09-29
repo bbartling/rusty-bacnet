@@ -109,13 +109,14 @@ pub enum FileAccessMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWriteAccessMethod {
     /// Stream access: `file_data` is written beginning at octet offset
-    /// `file_start_position`.
+    /// `file_start_position`, or appended when that offset is -1.
     Stream {
         file_start_position: i32,
         file_data: Vec<u8>,
     },
     /// Record access: `record_count` records taken from `file_record_data` are
-    /// written beginning at record number `file_start_record`.
+    /// written beginning at record number `file_start_record`, or appended when
+    /// that record number is -1.
     Record {
         file_start_record: i32,
         record_count: u32,

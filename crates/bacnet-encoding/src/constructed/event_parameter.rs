@@ -13,7 +13,7 @@
 //! | `[1]` | `change-of-state` | `[0]` | `time-delay` | Unsigned |
 //! | | | `[1]` | `list-of-values` | list of `BACnetPropertyStates` |
 //! | `[2]` | `change-of-value` | `[0]` | `time-delay` | Unsigned |
-//! | | | `[1]` | `cov-criteria` | one of `[0]` `bitmask` (bit string) or `[1]` `referenced-property-increment` (REAL) |
+//! | | | `[1]` | `cov-criteria` | `[0]` bit string or `[1]` REAL, see below |
 //! | `[4]` | `floating-limit` | `[0]` | `time-delay` | Unsigned |
 //! | | | `[1]` | `setpoint-reference` | `BACnetDeviceObjectPropertyReference` |
 //! | | | `[2]` | `low-diff-limit` | REAL |
@@ -25,7 +25,12 @@
 //! | | | `[3]` | `deadband` | REAL |
 //! | `[9]` | `extended` | `[0]` | `vendor-id` | Unsigned16 |
 //! | | | `[1]` | `extended-event-type` | Unsigned |
-//! | | | `[2]` | `parameters` | list of application-tagged primitives or `[0]`-framed `BACnetDeviceObjectPropertyReference` values |
+//! | | | `[2]` | `parameters` | list of extended values, see below |
+//!
+//! `cov-criteria` is either `[0]` `bitmask` (a bit string) or `[1]`
+//! `referenced-property-increment` (a REAL). Each extended `parameters` entry
+//! is an application-tagged primitive or a `[0]`-framed
+//! `BACnetDeviceObjectPropertyReference`.
 //!
 //! Four tags carry no alternative here. Tag 6 is skipped because it would
 //! mirror the proprietary complex-event-type notification alternative, and

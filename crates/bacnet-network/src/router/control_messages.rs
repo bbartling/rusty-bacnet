@@ -19,8 +19,8 @@ use super::{IngressContext, SendRequest};
 /// entry: DNET(2) + Port ID(1) + Port Info Length(1) + Port Info(N).
 /// Port Info octets are envelope-checked but not retained: this router holds
 /// no PTP/modem dial information (135-2020 6.4.7 treats the optional Port Info
-/// as opaque octets, meant chiefly for carrying modem setup and dialing data
-/// used to reach a remote network over a switched PTP link).
+/// as opaque octets, commonly used for modem setup and dialing data needed
+/// to reach a remote network over a switched PTP link).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutingTableEntry {
     network: u16,
@@ -556,7 +556,8 @@ pub(super) async fn handle_network_message(
 
         // Update: each network listed in the NPDU has its port mapping rewritten
         // from the entry supplied for it, then the sender is answered with an
-        // Initialize-Routing-Table-Ack carrying no table entries (6.6.3.8). Entries
+        // Initialize-Routing-Table-Ack whose data portion is empty, not even a
+        // count octet (6.6.3.8). Entries
         // apply in wire order (last wins); an unknown wire Port ID names no
         // local port, so that entry is skipped while the rest still apply.
         // RB-09 protected: deny drops silently with no empty ACK. Direct
