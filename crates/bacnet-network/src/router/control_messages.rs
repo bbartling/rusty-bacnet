@@ -18,10 +18,9 @@ use super::{IngressContext, SendRequest};
 /// One validated Initialize-Routing-Table / Initialize-Routing-Table-Ack
 /// entry: DNET(2) + Port ID(1) + Port Info Length(1) + Port Info(N).
 /// Port Info octets are envelope-checked but not retained: this router holds
-/// no PTP/modem dial information (135-2020 6.4.7: "The Port Info field, if
-/// present, shall contain an octet string. A typical use would be to convey
-/// modem control and dial information for accessing a remote network via a
-/// dial-up PTP connection").
+/// no PTP/modem dial information (135-2020 6.4.7 treats the optional Port Info
+/// as opaque octets, commonly used for modem setup and dialing data needed
+/// to reach a remote network over a switched PTP link).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutingTableEntry {
     network: u16,
@@ -63,9 +62,9 @@ fn parse_routing_table_entries(data: &[u8]) -> Option<Vec<RoutingTableEntry>> {
 /// Bound for an encoded Initialize-Routing-Table-Ack reply NPDU (RB-05).
 ///
 /// Query replies must fit the smallest standard link so the answer is
-/// receivable anywhere: "For non-encoded frames, the Length field specifies
-/// the length in octets of the Data field and shall be between 0 and 501
-/// octets" (135-2020 9.3), and the NPDU envelope rides in that Data field. This octet bound and the 1-octet entry-count field (6.4.7,
+/// receivable anywhere: an MS/TP frame sent without COBS encoding may carry
+/// at most 501 Data octets (135-2020 9.3), and the NPDU envelope rides inside
+/// that Data field. This octet bound and the 1-octet entry-count field (6.4.7,
 /// Fig. 6-11) apply independently when chunking a complete table.
 const MAX_ROUTER_CONTROL_REPLY_NPDU: usize = 501;
 /// Encoded NPDU overhead of a link-local Init-Ack: version + control +
@@ -353,10 +352,10 @@ pub(super) async fn handle_network_message(
             }
         }
     } else if msg_type == NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw() {
-        // Clauses 6.4.5/6.6.3.6: an optional list of 2-octet networks. "If the
-        // 2-octet network numbers are omitted, it means the router wishes to
-        // stop the flow of messages to all the networks it normally serves":
-        // the omitted scope is the via-peer set (learned routes egressing
+        // Clauses 6.4.5/6.6.3.6: an optional list of 2-octet networks. When
+        // the list is absent, the router is asking that traffic be held back
+        // for every network it ordinarily serves. We read that omitted scope
+        // as the via-peer set (learned routes egressing
         // this ingress port toward the immediate source MAC), never every
         // route and never none. Explicit lists intersect with that set, and
         // directly-attached paths are never overridden (see
@@ -423,10 +422,10 @@ pub(super) async fn handle_network_message(
             }
         }
     } else if msg_type == NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK.to_raw() {
-        // Clauses 6.4.6/6.6.3.7: same scope rule as Router-Busy. "If the
-        // 2-octet network numbers are omitted, the router wishes to re-enable
-        // the flow of messages to all the networks it serves": the omitted
-        // scope is the via-peer set, and explicit lists intersect with it.
+        // Clauses 6.4.6/6.6.3.7: same scope rule as Router-Busy. A missing
+        // list means the router is lifting its hold on traffic toward every
+        // network it serves. As with Busy, the omitted scope is the via-peer
+        // set, and explicit lists intersect with it.
         let data = &npdu.payload;
         if data.len() % 2 != 0 {
             return;
@@ -487,13 +486,11 @@ pub(super) async fn handle_network_message(
         };
 
         if data[0] == 0 {
-            // Query: "the responding device shall return its complete routing
-            // table in an Initialize-Routing-Table-Ack message without
-            // updating its routing table" (6.4.7). "If a complete copy of
-            // the table cannot be returned in a single acknowledgment, the
-            // router shall send multiple acknowledgments, each containing a
-            // portion of the routing table until the entire table has been
-            // sent" (6.6.3.9). Entries ascend by DNET for determinism; every
+            // Query: the receiving router answers with its entire routing
+            // table in Initialize-Routing-Table-Ack form and leaves that table
+            // as it was (6.4.7). A table too large for one ACK is split across
+            // several ACKs, each carrying the next slice, until all entries
+            // have gone out (6.6.3.9). Entries ascend by DNET for determinism; every
             // ACK is bounded by the egress-octet limit and the count field
             // independently. A full queue drops the remaining ACKs (bounded,
             // no retry); the table itself is never mutated here. This arm
@@ -557,10 +554,10 @@ pub(super) async fn handle_network_message(
             return;
         }
 
-        // Update: "it shall update its current port-to-network-number mappings
-        // for each network specified in the NPDU with the information contained
-        // in the NPDU and return an Initialize-Routing-Table-Ack message
-        // without any routing table data to the source" (6.6.3.8). Entries
+        // Update: each network listed in the NPDU has its port mapping rewritten
+        // from the entry supplied for it, then the sender is answered with an
+        // Initialize-Routing-Table-Ack whose data portion is empty, not even a
+        // count octet (6.6.3.8). Entries
         // apply in wire order (last wins); an unknown wire Port ID names no
         // local port, so that entry is skipped while the rest still apply.
         // RB-09 protected: deny drops silently with no empty ACK. Direct
@@ -580,9 +577,9 @@ pub(super) async fn handle_network_message(
                 if entry.network == 0 || entry.network == 0xFFFF {
                     continue;
                 }
-                // Port ID 0 purges: "all table entries for the specified DNET
-                // shall be purged from the table" (6.4.7), scoped to learned
-                // entries by direct-route safety (see the apply helper).
+                // Port ID 0 purges: every row held for that DNET is deleted
+                // (6.4.7), here scoped to learned entries by direct-route
+                // safety (see the apply helper).
                 if entry.port_id == 0 {
                     if tbl.apply_management_removal(entry.network) {
                         debug!(
@@ -606,10 +603,9 @@ pub(super) async fn handle_network_message(
                     warn!("Init-Routing-Table: route cap reached, ignoring further entries");
                     break;
                 }
-                // Non-zero Port ID replaces or appends: "the routing
-                // information for this DNET shall either replace any previous
-                // entry for this DNET in the routing table or, if no such
-                // entry exists, be appended to the routing table" (6.4.7).
+                // Non-zero Port ID replaces or appends: the supplied route
+                // overwrites whatever row already exists for that DNET, or is
+                // added as a new row when there is none (6.4.7).
                 if tbl.apply_management_update(
                     entry.network,
                     mapped,
@@ -624,10 +620,10 @@ pub(super) async fn handle_network_message(
             }
         }
 
-        // Update ACK carries no data at all (6.6.3.9: "it shall return an
-        // Initialize-Routing-Table-Ack without data"; 6.4.8: the data portion
-        // is "returned only in response to a routing table query"). An empty
-        // payload is not interchangeable with a zero count octet.
+        // Update ACK carries no data at all: 6.6.3.9 answers an update with a
+        // data-less Initialize-Routing-Table-Ack, and 6.4.8 reserves the data
+        // portion for replies to a table query. An empty payload is not
+        // interchangeable with a zero count octet.
         let response = Npdu {
             is_network_message: true,
             message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw()),

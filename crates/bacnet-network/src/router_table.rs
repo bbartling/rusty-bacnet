@@ -442,11 +442,11 @@ impl RouterTable {
 
     /// Wire Port ID for a dispatch port index (135-2020 6.4.7, Fig. 6-11).
     ///
-    /// "If the Port ID field has a value of zero, then all table entries for
-    /// the specified DNET shall be purged from the table" — so 0 is a removal
-    /// trigger, never a real port. The stable mapping is `port_index + 1`;
-    /// `None` when the index cannot fit the 1-octet field (unreachable for a
-    /// bounded port vector, handled by skipping the entry on encode).
+    /// A zero Port ID instructs the receiver to delete every row it holds for
+    /// that DNET, so 0 is a removal trigger, never a real port. The stable
+    /// mapping is `port_index + 1`; `None` when the index cannot fit the
+    /// 1-octet field (unreachable for a bounded port vector, handled by
+    /// skipping the entry on encode).
     pub fn wire_port_id(port_index: usize) -> Option<u8> {
         u8::try_from(port_index.checked_add(1)?).ok()
     }
@@ -471,10 +471,9 @@ impl RouterTable {
 
     /// Apply one Initialize-Routing-Table update entry (135-2020 6.6.3.8).
     ///
-    /// "It shall update its current port-to-network-number mappings for each
-    /// network specified in the NPDU": "the routing information for this DNET
-    /// shall either replace any previous entry ... or, if no such entry
-    /// exists, be appended". Management writes install learned routes and
+    /// Every network named in the NPDU has its port mapping rewritten: the
+    /// supplied route overwrites the current row for that DNET, or becomes a
+    /// new row if the table has none. Management writes install learned routes and
     /// never direct ones — direct attachments stay locally configured until
     /// RB-09 authorization — so an existing direct entry is left untouched
     /// and reports `false`. Reserved networks are skipped. Replacement clears
@@ -501,8 +500,8 @@ impl RouterTable {
 
     /// Apply one Initialize-Routing-Table purge entry (Port ID 0, 6.4.7).
     ///
-    /// "All table entries for the specified DNET shall be purged from the
-    /// table" — scoped to learned entries here for the same direct-safety
+    /// Port ID 0 asks for every row naming that DNET to be deleted; here that
+    /// is scoped to learned entries only, for the same direct-safety
     /// reason as [`Self::apply_management_update`]. Returns `true` only when
     /// a learned entry was actually removed.
     pub(crate) fn apply_management_removal(&mut self, network: u16) -> bool {
@@ -625,12 +624,11 @@ impl RouterTable {
     /// Whether `network` is served via the announcing peer on this ingress
     /// path: a learned (never directly-connected) route whose egress port and
     /// next-hop MAC match the immediate link peer — not the routed SNET/SADR.
-    /// RB-04 locks this predicate to 135-2020 Clauses 6.6.3.6/6.6.3.7: "If the
-    /// 2-octet network numbers are omitted, it means the router wishes to
-    /// stop the flow of messages to all the networks it normally serves"
-    /// (Busy; Available re-enables "the flow of messages to all the networks
-    /// it serves"). Explicit lists intersect with the same set: listed nets
-    /// outside the announcing path are not marked.
+    /// RB-04 locks this predicate to 135-2020 Clauses 6.6.3.6/6.6.3.7: a Busy
+    /// that omits its network list asks that traffic be held back for every
+    /// network the router normally serves, and an Available without a list
+    /// lifts that hold for all of them. Explicit lists intersect with the
+    /// same set: listed nets outside the announcing path are not marked.
     pub fn is_served_via_peer(&self, network: u16, port_index: usize, next_hop: &MacAddr) -> bool {
         self.routes.get(&network).is_some_and(|entry| {
             !entry.directly_connected

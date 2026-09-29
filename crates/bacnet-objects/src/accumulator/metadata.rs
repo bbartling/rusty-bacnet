@@ -35,40 +35,38 @@ use crate::property_metadata::{
 // with arms, so Optional/Always; Prescale, Reliability, Value_Before_Change,
 // and Value_Set have no arm, so Optional/ReadOnly).
 // Accumulator Present_Value is the one deliberate dispatch-first deviation:
-// Table 12-79 codes it R with footnote 1 ("required to be writable when
-// Out_Of_Service is TRUE") and §12.61 states it "shall be writable when
-// Out_Of_Service is TRUE", but the write arm unconditionally denies it and
-// no Value_Set mechanism advances it, so the metadata mirrors dispatch as
-// RequiredRead/ReadOnly rather than advertising a route that does not exist.
-// Pulse_Rate is served as Real while Table 12-79 types it Unsigned, and
-// Status_Flags is computed with event_state=0 by the shared common arm even
-// though the object owns an Event_State field; both quirks are preserved, not
-// fixed, by this migration.
-// Pulse Converter Present_Value carries the table R code with footnote 1 and
-// §12.23 states it "shall be writable when Out_Of_Service is TRUE"; dispatch
-// gates it behind Out_Of_Service (in-service writes are denied before value
-// validation), so RequiredRead/WhenOutOfService (D5 clause-backed, preserved
-// exactly). Adjust_Value carries the table W code with a routed Real arm, so
+// Table 12-79 codes it R with footnote 1, and both that footnote and §12.61
+// require it to accept writes while Out_Of_Service is TRUE, but the write arm
+// unconditionally denies it and no Value_Set mechanism advances it, so the
+// metadata mirrors dispatch as RequiredRead/ReadOnly rather than advertising
+// a route that does not exist. Pulse_Rate is served as Real while Table 12-79
+// types it Unsigned, and Status_Flags is computed with event_state=0 by the
+// shared common arm even though the object owns an Event_State field; both
+// quirks are preserved, not fixed, by this migration. Pulse Converter
+// Present_Value carries the table R code with footnote 1 and §12.23 requires
+// it to accept writes while Out_Of_Service is TRUE; dispatch gates it behind
+// Out_Of_Service (in-service writes are denied before value validation), so
+// RequiredRead/WhenOutOfService (D5 clause-backed, preserved exactly).
+// Adjust_Value carries the table W code with a routed Real arm, so
 // RequiredWrite/Always. Scale_Factor is table R with an arm
 // (RequiredRead/Always); Input_Reference and COV_Increment are table O with
 // arms (Optional/Always; COV_Increment footnote 2 ties it to COV reporting,
-// which the object provides via supports_cov and cov_increment).
-// Writability otherwise mirrors dispatch exactly: the Pulse Converter
-// is_writable override ({PV, SCALE_FACTOR, ADJUST_VALUE, INPUT_REFERENCE,
-// DESCRIPTION, OUT_OF_SERVICE, COV_INCREMENT}) translated one row at a time
-// and then deleted, so PICS writable flags are unchanged. Presence is None
-// throughout: the implementation models no commandable, intrinsic-reporting,
-// or paired-text gating on this family.
-// The pair is not createable at runtime (the network factory builds only the
-// eight analog/binary/multi-state input/output/value types, so the
-// is_createable=false default holds) and remains deleteable (delete denies
-// only Device and NetworkPort, so the is_deleteable=true default holds);
-// neither needs an override. Array gating keeps the default: Property_List
-// admits an index (BACnetARRAY per Tables 12-79/12-27) while every other
-// served row rejects one. COV keeps its overrides: supports_cov=true on both
-// objects plus cov_increment()=Some on Pulse Converter, and the COV gating
-// path (read_property plus supports_cov_property to supports_cov) never
-// consults metadata.
+// which the object provides via supports_cov and cov_increment). Writability
+// otherwise mirrors dispatch exactly: the Pulse Converter is_writable
+// override ({PV, SCALE_FACTOR, ADJUST_VALUE, INPUT_REFERENCE, DESCRIPTION,
+// OUT_OF_SERVICE, COV_INCREMENT}) translated one row at a time and then
+// deleted, so PICS writable flags are unchanged. Presence is None throughout:
+// the implementation models no commandable, intrinsic-reporting, or
+// paired-text gating on this family. The pair is not createable at runtime
+// (the network factory builds only the eight analog/binary/multi-state
+// input/output/value types, so the is_createable=false default holds) and
+// remains deleteable (delete denies only Device and NetworkPort, so the
+// is_deleteable=true default holds); neither needs an override. Array gating
+// keeps the default: Property_List admits an index (BACnetARRAY per Tables
+// 12-79/12-27) while every other served row rejects one. COV keeps its
+// overrides: supports_cov=true on both objects plus cov_increment()=Some on
+// Pulse Converter, and the COV gating path (read_property plus
+// supports_cov_property to supports_cov) never consults metadata.
 const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),

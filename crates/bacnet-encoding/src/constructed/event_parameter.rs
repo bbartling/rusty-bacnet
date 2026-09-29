@@ -1,33 +1,41 @@
 //! `BACnetEventParameter` full ASN.1 framing.
 //!
-//! Production (ASHRAE 135-2020 Clause 21), alternatives modeled by
-//! [`BACnetEventParameter`]:
+//! `BACnetEventParameter` (ASHRAE 135-2020 Clause 21) selects one event
+//! algorithm by context tag and carries that algorithm's settings. Each
+//! alternative that [`BACnetEventParameter`] models is a constructed value
+//! under its own tag, holding context-tagged members that are all required:
 //!
-//! ```text
-//! BACnetEventParameter ::= CHOICE {
-//!     change-of-bitstring [0]  SEQUENCE { time-delay [0] Unsigned,
-//!                                         bitmask [1] BIT STRING,
-//!                                         list-of-bitstring-values [2] SEQUENCE OF BIT STRING },
-//!     change-of-state     [1]  SEQUENCE { time-delay [0] Unsigned,
-//!                                         list-of-values [1] SEQUENCE OF BACnetPropertyStates },
-//!     change-of-value     [2]  SEQUENCE { time-delay [0] Unsigned,
-//!                                         cov-criteria [1] CHOICE { bitmask [0] BIT STRING,
-//!                                                     referenced-property-increment [1] REAL } },
-//!     floating-limit      [4]  SEQUENCE { time-delay [0] Unsigned,
-//!                                         setpoint-reference [1] BACnetDeviceObjectPropertyReference,
-//!                                         low-diff-limit [2] REAL, high-diff-limit [3] REAL,
-//!                                         deadband [4] REAL },
-//!     out-of-range        [5]  SEQUENCE { time-delay [0] Unsigned,
-//!                                         low-limit [1] REAL, high-limit [2] REAL,
-//!                                         deadband [3] REAL },
-//!     /* [6] omitted: proprietary parallel of the notification CHOICE [6] */
-//!     /* [7] deprecated */    /* [12] reserved */  /* [19] omitted: change-of-reliability */
-//!     extended            [9]  SEQUENCE { vendor-id [0] Unsigned16,
-//!                                         extended-event-type [1] Unsigned,
-//!                                         parameters [2] SEQUENCE OF CHOICE { ... } },
-//!     none                [20] NULL,
-//!     ... }
-//! ```
+//! | Tag | Alternative | Member tag | Member | Type |
+//! |---|---|---|---|---|
+//! | `[0]` | `change-of-bitstring` | `[0]` | `time-delay` | Unsigned |
+//! | | | `[1]` | `bitmask` | bit string |
+//! | | | `[2]` | `list-of-bitstring-values` | list of bit strings |
+//! | `[1]` | `change-of-state` | `[0]` | `time-delay` | Unsigned |
+//! | | | `[1]` | `list-of-values` | list of `BACnetPropertyStates` |
+//! | `[2]` | `change-of-value` | `[0]` | `time-delay` | Unsigned |
+//! | | | `[1]` | `cov-criteria` | `[0]` bit string or `[1]` REAL, see below |
+//! | `[4]` | `floating-limit` | `[0]` | `time-delay` | Unsigned |
+//! | | | `[1]` | `setpoint-reference` | `BACnetDeviceObjectPropertyReference` |
+//! | | | `[2]` | `low-diff-limit` | REAL |
+//! | | | `[3]` | `high-diff-limit` | REAL |
+//! | | | `[4]` | `deadband` | REAL |
+//! | `[5]` | `out-of-range` | `[0]` | `time-delay` | Unsigned |
+//! | | | `[1]` | `low-limit` | REAL |
+//! | | | `[2]` | `high-limit` | REAL |
+//! | | | `[3]` | `deadband` | REAL |
+//! | `[9]` | `extended` | `[0]` | `vendor-id` | Unsigned16 |
+//! | | | `[1]` | `extended-event-type` | Unsigned |
+//! | | | `[2]` | `parameters` | list of extended values, see below |
+//!
+//! `cov-criteria` is either `[0]` `bitmask` (a bit string) or `[1]`
+//! `referenced-property-increment` (a REAL). Each extended `parameters` entry
+//! is an application-tagged primitive or a `[0]`-framed
+//! `BACnetDeviceObjectPropertyReference`.
+//!
+//! Four tags carry no alternative here. Tag 6 is skipped because it would
+//! mirror the proprietary complex-event-type notification alternative, and
+//! tag 19 is skipped because change-of-reliability has no event parameters.
+//! Tag 7 is deprecated and tag 12 is reserved.
 //!
 //! Alternatives with no Rust model (`command-failure [3]`,
 //! `change-of-life-safety [8]`, `buffer-ready [10]`, `unsigned-range [11]`,

@@ -403,8 +403,8 @@ pub trait TransportPort: Send + Sync {
     ///
     /// A destination can spell a broadcast two ways: the network-layer form
     /// (a zero-length MAC) or the medium's literal broadcast MAC — Clause 6.3
-    /// names `X'FFFFFFFFFFFF'` for Ethernet, `X'FF'` for MS/TP, an IP address
-    /// with all ones in the host portion for BACnet/IP. Only the transport
+    /// names `X'FFFFFFFFFFFF'` for Ethernet, `X'FF'` for MS/TP, and for BACnet/IP
+    /// an address whose host bits are all set (a directed broadcast). Only the transport
     /// knows its own literal spelling, so senders that must not unicast to a
     /// broadcast (Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs)
     /// ask here. The default recognizes nothing, which leaves such a MAC

@@ -1,23 +1,30 @@
 //! `BACnetFaultParameter` full ASN.1 framing.
 //!
-//! Production (ASHRAE 135-2020 Clause 21), modeled by [`FaultParameters`]:
+//! `BACnetFaultParameter` (ASHRAE 135-2020 Clause 21) selects one fault
+//! algorithm by context tag and carries its settings; [`FaultParameters`]
+//! models every alternative. `none` is a primitive NULL. Every other
+//! alternative is a constructed value holding context-tagged members, all
+//! required:
 //!
-//! ```text
-//! BACnetFaultParameter ::= CHOICE {
-//!     none                 [0] NULL,
-//!     fault-characterstring [1] SEQUENCE { list-of-fault-values [0] SEQUENCE OF CharacterString },
-//!     fault-extended       [2] SEQUENCE { vendor-id [0] Unsigned16,
-//!                                         extended-fault-type [1] Unsigned,
-//!                                         parameters [2] SEQUENCE OF CHOICE { ... } },
-//!     fault-life-safety    [3] SEQUENCE { list-of-fault-values [0] SEQUENCE OF BACnetLifeSafetyState,
-//!                                         mode-property-reference [1] BACnetDeviceObjectPropertyReference },
-//!     fault-state          [4] SEQUENCE { list-of-fault-values [0] SEQUENCE OF BACnetPropertyStates },
-//!     fault-status-flags   [5] SEQUENCE { status-flags-reference [0] BACnetDeviceObjectPropertyReference },
-//!     fault-out-of-range   [6] SEQUENCE { min-normal-value [0] CHOICE { real REAL, unsigned Unsigned,
-//!                                                                         double Double, integer INTEGER },
-//!                                         max-normal-value [1] CHOICE { ... same ... } },
-//!     fault-listed         [7] SEQUENCE { fault-list-reference [0] BACnetDeviceObjectPropertyReference } }
-//! ```
+//! | Tag | Alternative | Member tag | Member | Type |
+//! |---|---|---|---|---|
+//! | `[0]` | `none` | | | NULL, no members |
+//! | `[1]` | `fault-characterstring` | `[0]` | `list-of-fault-values` | list of CharacterString |
+//! | `[2]` | `fault-extended` | `[0]` | `vendor-id` | Unsigned16 |
+//! | | | `[1]` | `extended-fault-type` | Unsigned |
+//! | | | `[2]` | `parameters` | list of extended values, see below |
+//! | `[3]` | `fault-life-safety` | `[0]` | `list-of-fault-values` | list of life-safety states |
+//! | | | `[1]` | `mode-property-reference` | `BACnetDeviceObjectPropertyReference` |
+//! | `[4]` | `fault-state` | `[0]` | `list-of-fault-values` | list of `BACnetPropertyStates` |
+//! | `[5]` | `fault-status-flags` | `[0]` | `status-flags-reference` | device property reference |
+//! | `[6]` | `fault-out-of-range` | `[0]` | `min-normal-value` | numeric choice, see below |
+//! | | | `[1]` | `max-normal-value` | the same four-way choice |
+//! | `[7]` | `fault-listed` | `[0]` | `fault-list-reference` | device property reference |
+//!
+//! Each "device property reference" is a `BACnetDeviceObjectPropertyReference`,
+//! and the life-safety list holds `BACnetLifeSafetyState` values. Each extended
+//! `parameters` entry is an application-tagged primitive or a `[0]`-framed
+//! `BACnetDeviceObjectPropertyReference`.
 //!
 //! The min/max inner CHOICE alternatives are untagged — discovered by their
 //! APPLICATION tag (REAL=4, Unsigned=2, Double=5, INTEGER=3). The Rust type

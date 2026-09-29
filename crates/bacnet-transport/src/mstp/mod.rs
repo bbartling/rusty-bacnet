@@ -130,7 +130,7 @@ const T_NO_TOKEN_MS: u64 = 500;
 const T_REPLY_TIMEOUT_MS: u64 = 255;
 /// Time to wait for another node to begin using the token after it was passed (ms).
 const T_USAGE_TIMEOUT_MS: u64 = 20;
-/// The width of the time slot within which a node may generate a token (ms).
+/// Length of each station's turn for regenerating a lost token (T_slot, ms).
 fn calculate_t_slot_ms(_baud_rate: u32) -> u64 {
     10
 }

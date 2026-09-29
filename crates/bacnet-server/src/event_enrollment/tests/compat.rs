@@ -131,11 +131,11 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    // access-event [13] SEQUENCE { list-of-access-events [0] SEQUENCE OF
-    // BACnetAccessEvent, access-event-time-reference [1]
-    // BACnetDeviceObjectPropertyReference } — a TLV body whose first 12
-    // bytes, if misread as little-endian f32s, are all 0.0 (a band that
-    // 85.0 exceeds, so misrouting WOULD fire HIGH_LIMIT).
+    // Hand-built access-event alternative (tag 13): member [0] is the event
+    // list (twelve NULL octets here) and member [1] the time-reference
+    // property reference. The TLV body's first 12 bytes, if misread as
+    // little-endian f32s, are all 0.0 (a band that 85.0 exceeds, so
+    // misrouting WOULD fire HIGH_LIMIT).
     let framed: Vec<u8> = vec![
         0xDE, // opening tag [13]
         0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

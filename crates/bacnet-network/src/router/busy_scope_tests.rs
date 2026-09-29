@@ -1,9 +1,9 @@
 //! RB-04 Busy/Available routing semantics: via-peer scope for explicit and
 //! omitted network lists (Clauses 6.4.5/6.4.6, 6.6.3.6/6.6.3.7).
 //!
-//! "If the 2-octet network numbers are omitted, it means the router wishes to
-//! stop the flow of messages to all the networks it normally serves" (Busy;
-//! Available re-enables "the flow of messages to all the networks it serves").
+//! A Busy with no network list asks that traffic be held back for every
+//! network the router normally serves; an Available with no list releases
+//! that hold for every network it serves.
 //! The omitted scope is the via-peer set — learned routes egressing the
 //! ingress port toward the immediate source MAC, never every route and never
 //! none — shared by both arms through [`RouterTable::is_served_via_peer`].

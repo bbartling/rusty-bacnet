@@ -55,8 +55,8 @@ async fn busy_available_empty_valid_and_odd_payloads() {
         );
     }
 
-    // RB-04 corrected omitted-list meaning (Clauses 6.6.3.6/6.6.3.7: "all the
-    // networks it normally serves"): an empty Busy from peer [2] on port 1
+    // RB-04 corrected omitted-list meaning (Clauses 6.6.3.6/6.6.3.7: every
+    // network the announcing router serves): an empty Busy from peer [2] on port 1
     // marks only the via-peer set (3001) while 3000 — served via port 0 peer
     // [1] — stays Reachable. Propagation still rebroadcasts verbatim.
     h.handle(h.ctx(
