@@ -1,19 +1,12 @@
 # CI and merge evidence
 
-Development happens on the project's self-hosted Forgejo instance (reachable
-on the maintainers' tailnet only). Branches, pull requests, issues and CI live
-there; `origin` points to it. [GitHub](https://github.com/jscott3201/rusty-bacnet)
-is a public, read-only push mirror: Forgejo pushes every branch and tag to it
-on each commit, so never push to GitHub directly, because the next sync
-overwrites it.
-
 | Platform | Where it is checked |
 | --- | --- |
-| Linux amd64 | Forgejo Actions, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml) |
+| Linux amd64 | CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml) |
 | macOS | Locally, [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh) |
 | Windows | Not currently tested |
 
-## Forgejo pipeline
+## Pipeline
 
 | Job | PR to `dev` | PR to `main` | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- |
@@ -40,12 +33,12 @@ cargo test --workspace --exclude rusty-bacnet --locked --features bacnet-types/s
 
 ### Runner
 
-Jobs run on a single self-hosted runner: a Spot `c3-standard-8` VM (8 vCPU,
-32 GB) running `forgejo-runner` with up to three concurrent Docker jobs in
-`ghcr.io/catthehacker/ubuntu:act-24.04`. Each job installs its pinned Rust
-toolchain through `dtolnay/rust-toolchain`; `Swatinem/rust-cache` keeps Cargo
-state in the runner's cache. The cache lives on the VM, so a Spot preemption
-starts the next run cold, and a preempted job must be re-run.
+Jobs run on a self-hosted Linux runner (8 vCPU, 32 GB, up to three concurrent
+Docker jobs in `ghcr.io/catthehacker/ubuntu:act-24.04`) on a preemptible VM.
+Each job installs its pinned Rust toolchain through `dtolnay/rust-toolchain`;
+`Swatinem/rust-cache` keeps Cargo state in the runner's cache. The cache lives
+on the VM, so a preemption starts the next run cold, and a preempted job must
+be re-run.
 
 The workflow sets `CARGO_INCREMENTAL=0` and drops native debug info from dev and
 test builds (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`) to cut codegen, link time and
@@ -83,13 +76,13 @@ Run the file-size gate in its default strict mode, without `CHECK_FILE_SIZE_WARN
 `scripts/ci/check-msrv.sh --linux-native` needs a native Linux GNU host with
 Rust 1.93 installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,
 `cmake`, `perl`, `file` and `ldd`. It never installs tools or skips features.
-Forgejo runs it on PRs to `main`; on a Mac, rely on that job.
+CI runs it on PRs to `main`; on a Mac, rely on that job.
 
 ## Merge evidence
 
 Before merging a PR:
 
-- `CI OK` is green on Forgejo for the exact head being merged;
+- `CI OK` is green for the exact head being merged;
 - when the change can affect macOS, a `local-macos.sh` pass on that head, or
   on an earlier head with a stated reason the intervening diff cannot affect
   it, is recorded in the PR with the revision, toolchain and macOS version it
@@ -104,13 +97,11 @@ merge comes from that PR's run, not an older one.
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) publishes
 crates, wheels, the sdist, CLI binaries and the GitHub release when a `v*` tag
-reaches GitHub through the mirror. It stays on GitHub because it needs
-GitHub-hosted macOS/Windows/arm64 runners, the `release` environment secrets and
-PyPI trusted publishing. Tag only a commit whose Forgejo `CI OK` passed on
-`main`. GitHub Pages publication remains the manual
+reaches GitHub. It runs on GitHub because it needs GitHub-hosted
+macOS/Windows/arm64 runners, the `release` environment secrets and PyPI trusted
+publishing. Tag only a commit whose `CI OK` passed on `main`. GitHub Pages publication remains the manual
 [`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch. Both require
-GitHub Actions to be enabled on the mirror. It is currently disabled, so release
-publication is paused.
+GitHub Actions to be enabled on the GitHub repository.
 
 These checks do not establish Windows support, hardware qualification, installed
 Python-extension behavior or release readiness.
