@@ -282,12 +282,8 @@ impl BACnetObject for AnalogValueObject {
                         Self::checked_present_value
                     )
                 }
-                PresentValueAccess::ReadOnly if !self.out_of_service => {
-                    Err(common::write_access_denied_error())
-                }
                 PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                    self.present_value = Self::checked_present_value(value)?;
-                    Ok(())
+                    self.write_property(property, array_index, value, priority)
                 }
             };
         }
@@ -311,10 +307,24 @@ impl BACnetObject for AnalogValueObject {
             return result;
         }
 
-        if matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
-        ) {
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            if self.access == PresentValueAccess::Commandable {
+                return Err(common::write_access_denied_error());
+            }
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+            if value == PropertyValue::Null {
+                return Ok(());
+            }
+            self.present_value = Self::checked_present_value(value)?;
+            return Ok(());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
         }
         if let Some(result) = self.reliability_inhibit.write_inhibit(

@@ -12,8 +12,8 @@ mod staging_local_writes_tests;
 
 /// What a local mutation is, and on whose behalf.
 ///
-/// An Input gates `Present_Value` on `Out_Of_Service` in opposite directions
-/// for the two, so this decides which check applies.
+/// Inputs and noncommandable Values distinguish application updates from
+/// network-equivalent writes, including their Out_Of_Service ownership checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LocalWrite {
     /// A trusted local program performing a network-equivalent property write.
@@ -22,8 +22,8 @@ enum LocalWrite {
         array_index: Option<u32>,
         priority: Option<u8>,
     },
-    /// The application supplying a supported Input's logical `Present_Value`.
-    ApplicationInputPresentValue,
+    /// The application supplying a supported object's logical `Present_Value`.
+    ApplicationPresentValue,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -111,19 +111,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         .await
     }
 
-    /// Supply a supported Input's logical `Present_Value` from Rust application code.
+    /// Supply a supported object's logical `Present_Value` from Rust application code.
     ///
-    /// Analog Input, Binary Input, and Multi-state Input opt in. Binary values
-    /// are logical INACTIVE/ACTIVE states after Polarity, not raw physical
-    /// states. The update runs the existing post-write intrinsic-event and COV
-    /// processing after the database lock is released; configured delays and
-    /// distribution policy still determine when notifications are delivered.
+    /// Analog, Binary and Multi-state Inputs and noncommandable Values opt in.
+    /// Binary Input values are logical INACTIVE/ACTIVE states after Polarity,
+    /// not raw physical states. The update runs the existing post-write
+    /// intrinsic-event and COV processing after the database lock is released;
+    /// configured delays and distribution policy still control delivery.
     ///
     /// Applications are denied while `Out_Of_Service` is TRUE to protect a
-    /// client's simulation value. That ownership rule is local policy, not a
-    /// Standard mandate. Other object families fail closed; use
-    /// [`BACnetServer::write_local`] for ordinary network-equivalent writes and
-    /// commandable objects. Python exposure is tracked separately in #503.
+    /// client's simulation value. This is local policy for Inputs and required
+    /// by the object clauses for the supported Values. NULL is an invalid
+    /// application value. Other object families fail closed; use
+    /// [`BACnetServer::write_local`] for network-equivalent writes and sourced
+    /// commands on commandable objects. Python exposure is tracked in #503.
     ///
     /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
     pub async fn set_present_value_local(
@@ -131,7 +132,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        self.write_local_as(oid, LocalWrite::ApplicationInputPresentValue, value, None)
+        self.write_local_as(oid, LocalWrite::ApplicationPresentValue, value, None)
             .await
     }
 
@@ -205,7 +206,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         audit
                     }
                 }
-                LocalWrite::ApplicationInputPresentValue => None,
+                LocalWrite::ApplicationPresentValue => None,
             };
             let prepared = match write {
                 LocalWrite::Property {
@@ -228,7 +229,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         )
                     })
                 }
-                LocalWrite::ApplicationInputPresentValue => None,
+                LocalWrite::ApplicationPresentValue => None,
             };
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
@@ -250,9 +251,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             command_origin.as_ref(),
                         )
                     }
-                    LocalWrite::ApplicationInputPresentValue => {
-                        object.set_present_value_internal(value)
-                    }
+                    LocalWrite::ApplicationPresentValue => object.set_present_value_internal(value),
                 }
             });
             if let Err(error) = result {

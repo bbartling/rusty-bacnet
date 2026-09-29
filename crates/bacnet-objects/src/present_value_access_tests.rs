@@ -13,13 +13,14 @@ const LOWER_PRIORITY: u8 = 8;
 const HIGHER_PRIORITY: u8 = 4;
 
 /// The rows present only under Commandable access.
-const COMMANDABLE_ONLY: [P; 6] = [
+const COMMANDABLE_ONLY: [P; 7] = [
     P::PRIORITY_ARRAY,
     P::RELINQUISH_DEFAULT,
     P::CURRENT_COMMAND_PRIORITY,
     P::VALUE_SOURCE,
     P::VALUE_SOURCE_ARRAY,
     P::LAST_COMMAND_TIME,
+    P::AUDIT_PRIORITY_FILTER,
 ];
 
 /// One Value object per family, built with `access`, and two different Present_Values each
@@ -279,6 +280,132 @@ fn a_value_of_the_wrong_kind_is_refused() {
                 ErrorCode::INVALID_DATA_TYPE,
             );
             assert_eq!(present_value(object.as_ref()), before, "{access:?}");
+        }
+    }
+}
+
+fn property_write(
+    object: &mut dyn BACnetObject,
+    sourced: bool,
+    index: Option<u32>,
+    value: PropertyValue,
+    priority: Option<u8>,
+) -> Result<(), Error> {
+    if sourced {
+        object.write_property_from(P::PRESENT_VALUE, index, value, priority, &test_origin())
+    } else {
+        object.write_property(P::PRESENT_VALUE, index, value, priority)
+    }
+}
+
+#[test]
+fn noncommandable_network_null_is_a_successful_noop() {
+    for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
+        for sourced in [true, false] {
+            for (mut object, value, _) in values(access) {
+                object.set_present_value_internal(value.clone()).unwrap();
+                if access == PresentValueAccess::ReadOnly {
+                    take_out_of_service(object.as_mut());
+                }
+                for priority in [None, Some(1), Some(6), Some(16)] {
+                    property_write(
+                        object.as_mut(),
+                        sourced,
+                        None,
+                        PropertyValue::Null,
+                        priority,
+                    )
+                    .unwrap();
+                    assert_eq!(present_value(object.as_ref()), value);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn noncommandable_context_free_writes_match_sourced_writes() {
+    for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
+        for sourced in [false, true] {
+            for (mut object, first, second) in values(access) {
+                if access == PresentValueAccess::ReadOnly {
+                    let before = present_value(object.as_ref());
+                    for value in [first.clone(), PropertyValue::Null] {
+                        assert_protocol(
+                            property_write(object.as_mut(), sourced, None, value, None),
+                            ErrorClass::PROPERTY,
+                            ErrorCode::WRITE_ACCESS_DENIED,
+                        );
+                        assert_eq!(present_value(object.as_ref()), before);
+                    }
+                    take_out_of_service(object.as_mut());
+                }
+                for (value, priority) in [(first, None), (second, Some(6))] {
+                    property_write(object.as_mut(), sourced, None, value.clone(), priority)
+                        .unwrap();
+                    assert_eq!(present_value(object.as_ref()), value);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn noncommandable_write_errors_preserve_value_and_internal_null_is_invalid() {
+    for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
+        for sourced in [false, true] {
+            for ((mut object, value, _), invalid_range) in values(access).into_iter().zip([
+                PropertyValue::Real(f32::NAN),
+                PropertyValue::Enumerated(2),
+                PropertyValue::Unsigned(4),
+            ]) {
+                object.set_present_value_internal(value.clone()).unwrap();
+                assert_protocol(
+                    object.set_present_value_internal(PropertyValue::Null),
+                    ErrorClass::PROPERTY,
+                    ErrorCode::INVALID_DATA_TYPE,
+                );
+                assert_eq!(present_value(object.as_ref()), value);
+                if access == PresentValueAccess::ReadOnly {
+                    take_out_of_service(object.as_mut());
+                }
+                for (index, invalid, code) in [
+                    (
+                        None,
+                        PropertyValue::Boolean(true),
+                        ErrorCode::INVALID_DATA_TYPE,
+                    ),
+                    (None, invalid_range, ErrorCode::VALUE_OUT_OF_RANGE),
+                    (
+                        Some(0),
+                        PropertyValue::Null,
+                        ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                    ),
+                    (Some(1), value.clone(), ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                ] {
+                    assert_protocol(
+                        property_write(object.as_mut(), sourced, index, invalid, Some(6)),
+                        ErrorClass::PROPERTY,
+                        code,
+                    );
+                    assert_eq!(present_value(object.as_ref()), value);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn commandable_context_free_present_value_still_requires_origin() {
+    for (mut object, value, _) in commandable_values() {
+        let before = present_value(object.as_ref());
+        for value in [value, PropertyValue::Null] {
+            assert_protocol(
+                object.write_property(P::PRESENT_VALUE, None, value, Some(8)),
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+            assert_eq!(present_value(object.as_ref()), before);
         }
     }
 }

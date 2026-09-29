@@ -345,11 +345,8 @@ impl BACnetObject for MultiStateValueObject {
                         |v| Self::checked_present_value(number_of_states, v)
                     )
                 }
-                PresentValueAccess::ReadOnly if !self.out_of_service => {
-                    Err(common::write_access_denied_error())
-                }
                 PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                    self.set_present_value_directly(value)
+                    self.write_property(property, array_index, value, priority)
                 }
             };
         }
@@ -366,10 +363,23 @@ impl BACnetObject for MultiStateValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
-        if matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
-        ) {
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            if self.access == PresentValueAccess::Commandable {
+                return Err(common::write_access_denied_error());
+            }
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+            if value == PropertyValue::Null {
+                return Ok(());
+            }
+            return self.set_present_value_directly(value);
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::STATE_TEXT {
