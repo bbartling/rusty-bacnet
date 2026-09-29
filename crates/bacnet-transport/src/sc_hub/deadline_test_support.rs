@@ -213,3 +213,37 @@ impl TestTls {
         }
     }
 }
+
+/// Raises this process's soft descriptor limit so a test can hold `needed`
+/// sockets at once. The limit is process-wide and libtest runs sibling tests
+/// in the same process, so headroom is reserved for them too. A hard limit
+/// that is too low fails here instead of as EMFILE in some later socket call.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub(super) fn reserve_descriptors(needed: libc::rlim_t) {
+    const SIBLING_HEADROOM: libc::rlim_t = 1024;
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit only writes the rlimit it is given.
+    let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+    assert_eq!(read, 0, "{}", std::io::Error::last_os_error());
+    let wanted = needed.saturating_add(SIBLING_HEADROOM);
+    if limit.rlim_cur >= wanted {
+        return;
+    }
+    limit.rlim_cur = wanted.min(limit.rlim_max);
+    // SAFETY: setrlimit only reads the rlimit it is given. Raising the soft
+    // limit up to the hard limit needs no privilege.
+    let raised = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+    assert_eq!(raised, 0, "{}", std::io::Error::last_os_error());
+    assert!(
+        limit.rlim_cur >= needed,
+        "test needs {needed} descriptors but the hard limit is {}",
+        limit.rlim_max
+    );
+}
+
+#[cfg(not(unix))]
+pub(super) fn reserve_descriptors(_needed: u64) {}
