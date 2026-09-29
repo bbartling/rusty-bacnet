@@ -38,8 +38,7 @@ async fn collide(observer: &UdpSocket, peer: &UdpSocket, expected: Option<[u8; 3
 #[ignore = "requires an explicitly supplied isolated IPv6 multicast link"]
 async fn explicit_random_collision_reseeds_and_configured_collision_is_transactional() {
     let (selected, index) = fixture();
-    let observer = udp(Ipv6Addr::UNSPECIFIED, 0, index, true);
-    let port = observer.local_addr().unwrap().port();
+    let (observer, port) = observer(index, true);
     let peer = udp(selected, 0, index, false);
     let mut random = Bip6Transport::new(selected, port, None);
     let exchange = async {
@@ -93,8 +92,7 @@ async fn explicit_random_collision_reseeds_and_configured_collision_is_transacti
 #[ignore = "requires an explicitly supplied isolated IPv6 multicast link"]
 async fn explicit_cancel_start_then_restart_stop_and_drop_reclaim_owner() {
     let (selected, index) = fixture();
-    let observer = udp(Ipv6Addr::UNSPECIFIED, 0, index, true);
-    let port = observer.local_addr().unwrap().port();
+    let (observer, port) = observer(index, true);
     let mut transport = Bip6Transport::new(selected, port, None);
     {
         let startup = transport.start();
@@ -129,10 +127,9 @@ async fn explicit_cancel_start_then_restart_stop_and_drop_reclaim_owner() {
 #[ignore = "requires an explicitly supplied isolated IPv6 multicast link"]
 async fn explicit_all_broadcast_scopes_have_selected_source_destination_and_ingress() {
     let (selected, index) = fixture();
-    let mut transport = Bip6Transport::new(selected, 0, None);
+    let (observer, port) = observer(index, false);
+    let mut transport = Bip6Transport::new(selected, port, None);
     let mut incoming = transport.start().await.unwrap();
-    let (_, port) = decode_bip6_mac(transport.local_mac()).unwrap();
-    let observer = udp(Ipv6Addr::UNSPECIFIED, port, index, false);
     let peer = udp(selected, 0, index, false);
     for (scope, nibble) in [
         (Bip6BroadcastScope::LinkLocal, 2),

@@ -19,6 +19,24 @@ pub(super) struct Bip6Socket {
     sender: Option<SelectedSender>,
 }
 
+/// The unbound B/IPv6 socket. Only an explicit port sets SO_REUSEADDR: Linux
+/// would otherwise hand an ephemeral bind a port another SO_REUSEADDR socket
+/// owns, and unicast to it would reach only one of them (#892).
+fn udp_socket(port: u16) -> io::Result<socket2::Socket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    socket.set_only_v6(true)?;
+    if port != 0 {
+        socket.set_reuse_address(true)?;
+    }
+    socket.set_nonblocking(true)?;
+    socket.set_multicast_loop_v6(true)?;
+    Ok(socket)
+}
+
 impl Bip6Socket {
     pub async fn bind(
         requested: Ipv6Addr,
@@ -30,15 +48,7 @@ impl Bip6Socket {
         } else {
             None
         };
-        let socket = socket2::Socket::new(
-            socket2::Domain::IPV6,
-            socket2::Type::DGRAM,
-            Some(socket2::Protocol::UDP),
-        )?;
-        socket.set_only_v6(true)?;
-        socket.set_reuse_address(true)?;
-        socket.set_nonblocking(true)?;
-        socket.set_multicast_loop_v6(true)?;
+        let socket = udp_socket(port)?;
         let bound = if let Some(bbmd) = foreign {
             foreign_bind_address(requested, port, bbmd)?
         } else {
@@ -148,6 +158,18 @@ fn admits(link: SelectedLink, datagram: &ReceivedDatagram) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn only_an_explicit_port_opts_into_address_reuse() {
+        assert!(!udp_socket(0).unwrap().reuse_address().unwrap());
+        assert!(udp_socket(0xBAC0).unwrap().reuse_address().unwrap());
+        let ephemeral = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+            .await
+            .unwrap();
+        assert!(!socket2::SockRef::from(&ephemeral.udp)
+            .reuse_address()
+            .unwrap());
+    }
 
     #[test]
     fn arrival_interface_and_selected_destination_are_required_before_learning() {

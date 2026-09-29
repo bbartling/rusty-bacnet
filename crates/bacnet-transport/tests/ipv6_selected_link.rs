@@ -31,14 +31,17 @@ async fn actual_transport_selected_link(automatic: bool) {
     };
     // Random startup exercises the production collision probe; no configured
     // Device instance or foreign-device mode is used to bypass that exchange.
-    let mut transport = Bip6Transport::new(requested, 0, None);
+    let (observer, port) = observer(index, true);
+    let mut transport = Bip6Transport::new(requested, port, None);
     let mut incoming = tokio::time::timeout(DEADLINE, transport.start())
         .await
         .expect("actual transport startup exceeded its bounded probe")
         .expect("actual transport random-VMAC startup must succeed");
-    let (announced, port) = decode_bip6_mac(transport.local_mac()).unwrap();
-    assert_ne!(port, 0, "port-zero bind must publish its actual bound port");
-    let observer = udp(Ipv6Addr::UNSPECIFIED, port, index, true);
+    let (announced, published) = decode_bip6_mac(transport.local_mac()).unwrap();
+    assert_eq!(
+        published, port,
+        "the transport must publish its actual bound port"
+    );
     let peer = udp(selected, 0, index, false);
     let peer_address = peer.local_addr().unwrap();
     let mut failures = Vec::new();

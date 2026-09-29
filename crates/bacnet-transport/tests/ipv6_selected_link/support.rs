@@ -30,10 +30,22 @@ pub(super) fn fixture() -> (Ipv6Addr, u32) {
 }
 
 pub(super) fn udp(address: Ipv6Addr, port: u16, index: u32, join: bool) -> UdpSocket {
+    bind(address, port, index, join, port != 0)
+}
+
+/// An observer bound before the transport, which then starts on the returned
+/// port. Only an explicit port sets SO_REUSEADDR (#892); both sockets need it.
+pub(super) fn observer(index: u32, join: bool) -> (UdpSocket, u16) {
+    let socket = bind(Ipv6Addr::UNSPECIFIED, 0, index, join, true);
+    let port = socket.local_addr().unwrap().port();
+    (socket, port)
+}
+
+fn bind(address: Ipv6Addr, port: u16, index: u32, join: bool, reuse: bool) -> UdpSocket {
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).unwrap();
     socket.set_only_v6(true).unwrap();
     wire::configure(&socket);
-    socket.set_reuse_address(true).unwrap();
+    socket.set_reuse_address(reuse).unwrap();
     socket.set_nonblocking(true).unwrap();
     socket.set_multicast_if_v6(index).unwrap();
     socket.set_multicast_loop_v6(true).unwrap();

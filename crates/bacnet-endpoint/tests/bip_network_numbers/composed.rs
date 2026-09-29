@@ -8,9 +8,9 @@ use bacnet_types::{
 #[tokio::test]
 async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
     for bare_drop in [false, true] {
+        let (observer, port) = observer();
         let (mut endpoint, local) =
-            start(builder().role(SessionRole::Both).enable_bbmd(vec![])).await;
-        let observer = observer(local.port());
+            start(builder_on(port).role(SessionRole::Both).enable_bbmd(vec![])).await;
         let query_peer = udp().await;
         let responder_peer = udp().await;
         let requester_peer = udp().await;

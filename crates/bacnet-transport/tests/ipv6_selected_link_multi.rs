@@ -36,11 +36,11 @@ async fn two_links_explicit_selection_rejects_other_interface_and_local_destinat
     );
     assert_eq!(ambiguous.local_mac(), &[0; 18]);
 
-    let mut transport = Bip6Transport::new(selected, 0, None);
+    let (observer, port) = observer(index, true);
+    let mut transport = Bip6Transport::new(selected, port, None);
     let mut incoming = transport.start().await.unwrap();
-    let (announced, port) = decode_bip6_mac(transport.local_mac()).unwrap();
-    assert_eq!(announced, selected);
-    let observer = udp(Ipv6Addr::UNSPECIFIED, port, index, true);
+    let (announced, published) = decode_bip6_mac(transport.local_mac()).unwrap();
+    assert_eq!((announced, published), (selected, port));
     observer.join_multicast_v6(&GROUP, other_index).unwrap();
     let peer = udp(selected, 0, index, false);
     let outsider = udp(other, 0, other_index, false);

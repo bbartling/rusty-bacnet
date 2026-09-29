@@ -498,6 +498,17 @@ let transport = BipTransport::new(
 );
 ```
 
+The socket binds the wildcard address so directed and limited broadcasts
+arrive. Port zero asks for a private ephemeral port and never sets
+`SO_REUSEADDR`: on Linux such a bind could otherwise be given a port another
+`SO_REUSEADDR` socket already holds, and unicast to that port then reaches only
+one of them. The choice is made at construction, so a restart that rebinds the
+remembered actual port keeps it private. An explicit port still sets
+`SO_REUSEADDR`, as before. On Linux that lets a second application bind the
+same port, with the same single-receiver unicast caveat; macOS and BSD refuse a
+second wildcard bind. B/IPv6 applies the same port-zero and explicit-port rule,
+but binds a fresh ephemeral port on each start instead of remembering one.
+
 ### BIP6 (IPv6)
 
 ```rust

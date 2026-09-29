@@ -33,17 +33,10 @@ async fn expect(observer: &UdpSocket, source: SocketAddrV4, number: u8) {
 }
 #[tokio::test]
 async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
-    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, BROADCAST);
-    let mut client = BACnetClient::start(ClientConfig::default(), transport)
-        .await
-        .unwrap();
-    let mac = client.local_mac();
-    assert_eq!(&mac[..4], &[127, 0, 0, 1]);
-    let port = u16::from_be_bytes([mac[4], mac[5]]);
-    let local = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    let group = SocketAddrV4::new(BROADCAST, port);
     // This exact SO_REUSEADDR wildcard/broadcast-specific pattern was separately
     // qualified with actual Linux UDP in the preceding B/IP full-server slice.
+    // The observer binds first: only an explicitly requested client port sets
+    // SO_REUSEADDR (#892), and both sockets need it to share the port.
     let raw = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
@@ -52,8 +45,18 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
     .unwrap();
     raw.set_reuse_address(true).unwrap();
     raw.set_nonblocking(true).unwrap();
-    raw.bind(&group.into()).unwrap();
+    raw.bind(&SocketAddrV4::new(BROADCAST, 0).into()).unwrap();
     let observer = UdpSocket::from_std(raw.into()).unwrap();
+    let port = observer.local_addr().unwrap().port();
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+    let mut client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    let mac = client.local_mac();
+    assert_eq!(&mac[..4], &[127, 0, 0, 1]);
+    assert_eq!(u16::from_be_bytes([mac[4], mac[5]]), port);
+    let local = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let group = SocketAddrV4::new(BROADCAST, port);
     let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     peer.set_broadcast(true).unwrap();
     peer.send_to(&frame(10, &[1, 0x80, 0x12]), local)

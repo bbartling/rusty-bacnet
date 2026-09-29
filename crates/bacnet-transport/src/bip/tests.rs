@@ -774,52 +774,6 @@ async fn bvlc_request_rejects_concurrent_calls() {
 }
 
 #[tokio::test]
-async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
-    // Regression for the "user-supplied interface IP" silently rejecting
-    // broadcast traffic.  Even when the caller passes a specific interface,
-    // the underlying socket must bind 0.0.0.0 so the kernel delivers
-    // subnet- and limited-broadcast packets to it.  The interface IP is
-    // still used for the announced local MAC.
-    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-    let _rx = transport.start().await.unwrap();
-
-    let local = transport
-        .socket
-        .as_ref()
-        .expect("socket exists after start")
-        .local_addr()
-        .expect("local_addr is queryable");
-
-    assert!(
-        local.ip().is_unspecified(),
-        "BIP socket must bind to 0.0.0.0 for broadcast reception; got {local}"
-    );
-    assert!(
-        socket2::SockRef::from(
-            &**transport
-                .socket
-                .as_ref()
-                .expect("socket exists after start")
-                .as_ref()
-        )
-        .broadcast()
-        .expect("SO_BROADCAST is queryable"),
-        "BIP socket must enable SO_BROADCAST for Original-Broadcast-NPDU sends"
-    );
-
-    // The announced local MAC must still reflect the user-supplied interface,
-    // not the bind address.
-    let mac = transport.local_mac();
-    assert_eq!(
-        &mac[..4],
-        &Ipv4Addr::LOCALHOST.octets(),
-        "announced IP must match interface"
-    );
-
-    transport.stop().await.unwrap();
-}
-
-#[tokio::test]
 async fn start_fails_on_nonlocal_interface() {
     // Now that we bind the real socket to 0.0.0.0, a typo'd interface IP
     // would otherwise succeed at bind and only fail silently later when

@@ -120,7 +120,8 @@ async fn bip_number_bbmd_full_server_wire_admission() {
     let foreign = udp().await;
     let peer = udp().await;
     let impostor = udp().await;
-    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, BROADCAST);
+    let (observer, port) = observer();
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
     transport.enable_bbmd(vec![BdtEntry {
         ip: Ipv4Addr::LOCALHOST.octets(),
         port: address(&bdt).port(),
@@ -128,7 +129,6 @@ async fn bip_number_bbmd_full_server_wire_admission() {
     }]);
     transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let (server, local) = start(transport, None).await;
-    let observer = observer(local.port());
     let group = SocketAddrV4::new(BROADCAST, local.port());
     // Before relying on shared capture, prove the real production wildcard
     // receives this broadcast (BDT fanout) and the independent observer sees it.
@@ -206,8 +206,14 @@ async fn bip_number_foreign_registration_loss_and_retry_wire() {
 async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) {
     let gates = Gates::new();
     let peer = udp().await;
+    #[cfg(target_os = "linux")]
+    let observed = bbmd_mode.then(observer);
+    #[cfg(target_os = "linux")]
+    let port = observed.as_ref().map_or(0, |(_, port)| *port);
+    #[cfg(not(target_os = "linux"))]
+    let port = 0;
     let (mut server, local, bbmd) = if bbmd_mode {
-        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, BROADCAST);
+        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
         transport.enable_bbmd(vec![]);
         let (server, local) = start(transport, Some(gates.clone())).await;
         (server, local, None)
@@ -216,7 +222,7 @@ async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) {
         (server, local, Some(bbmd))
     };
     #[cfg(target_os = "linux")]
-    let captured = bbmd_mode.then(|| observer(local.port()));
+    let captured = observed.map(|(socket, _)| socket);
     if let Some(bbmd) = &bbmd {
         forward(bbmd, local, &number(77, 1)).await;
         forward(bbmd, local, QUERY).await;
