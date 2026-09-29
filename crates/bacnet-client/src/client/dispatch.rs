@@ -560,9 +560,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // SEGMENTED_CONF (5.4.4.4) `UnexpectedPDU_Received` lists
                 // a server-side BACnet-SegmentACK-PDU among the inappropriate
                 // PDUs. The response has three parts: send a client-side
-                // BACnet-Abort-PDU (`server` = FALSE), deliver ABORT.indication
-                // locally with `server` = FALSE and `abort-reason` =
-                // INVALID_APDU_IN_THIS_STATE, and return to IDLE.
+                // BACnet-Abort-PDU (`server` = FALSE), raise ABORT.indication to
+                // the local user carrying `abort-reason` INVALID_APDU_IN_THIS_STATE
+                // (again `server` = FALSE), and go back to IDLE.
                 //
                 // Receive state is checked before the outgoing phase because
                 // SEGMENTED_CONF gives this PDU the opposite disposition.

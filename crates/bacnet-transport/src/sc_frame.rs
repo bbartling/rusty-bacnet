@@ -52,25 +52,25 @@ pub enum ScFunction {
     Result = 0x00,
     /// Encapsulated-NPDU — carries BACnet NPDU data.
     EncapsulatedNpdu = 0x01,
-    /// Address-Resolution
+    /// Address-Resolution — asks a node for its direct-connect WebSocket URIs.
     AddressResolution = 0x02,
-    /// Address-Resolution-ACK
+    /// Address-Resolution-ACK — reply listing those direct-connect URIs.
     AddressResolutionAck = 0x03,
-    /// Advertisement
+    /// Advertisement — reports hub status, direct-connect support and size limits.
     Advertisement = 0x04,
-    /// Advertisement-Solicitation
+    /// Advertisement-Solicitation — prompts a node to send an Advertisement.
     AdvertisementSolicitation = 0x05,
-    /// Connect-Request
+    /// Connect-Request — initiator's bid to open a hub or direct connection.
     ConnectRequest = 0x06,
-    /// Connect-Accept
+    /// Connect-Accept — the accepting peer's yes to a Connect-Request.
     ConnectAccept = 0x07,
-    /// Disconnect-Request
+    /// Disconnect-Request — asks the peer to close the connection cleanly.
     DisconnectRequest = 0x08,
-    /// Disconnect-ACK
+    /// Disconnect-ACK — confirms a Disconnect-Request.
     DisconnectAck = 0x09,
-    /// Heartbeat-Request
+    /// Heartbeat-Request — liveness probe for an otherwise idle connection.
     HeartbeatRequest = 0x0A,
-    /// Heartbeat-ACK
+    /// Heartbeat-ACK — answers a Heartbeat-Request to show the link is up.
     HeartbeatAck = 0x0B,
     /// Proprietary-Message
     ProprietaryMessage = 0x0C,

@@ -314,11 +314,15 @@ pub fn decode_special_event_period(
 // BACnetSpecialEvent
 // ---------------------------------------------------------------------------
 //
-// BACnetSpecialEvent ::= SEQUENCE {
-//     period CHOICE { calendar-entry [0] ..., calendar-reference [1] ... },
-//     list-of-time-values [2] SEQUENCE OF BACnetTimeValue,
-//     event-priority      [3] Unsigned (1..16)
-// }
+// BACnetSpecialEvent (Clause 21) is one exception-schedule entry: when it
+// applies, the time/value pairs to run then, and the priority it runs at.
+//
+//   Field                 Tag          Type                               Optional
+//   period                (untagged)   one of `[0]` calendar-entry or     no
+//                                      `[1]` calendar-reference (see
+//                                      SpecialEventPeriod above)
+//   list-of-time-values   `[2]`        list of `BACnetTimeValue`          no
+//   event-priority        `[3]`        Unsigned, 1 through 16             no
 
 /// Encode a `BACnetSpecialEvent` (period + list-of-time-values + priority).
 pub fn encode_special_event(buf: &mut BytesMut, e: &BACnetSpecialEvent) {

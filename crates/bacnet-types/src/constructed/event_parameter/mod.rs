@@ -23,19 +23,19 @@ use crate::primitives::PropertyValue;
 /// enrollment's parameters survive a complete property round trip without
 /// requiring ASN.1 context-tagged framing.
 pub mod event_parameter_tag {
-    /// `change-of-bitstring [0]`.
+    /// Tag 0: the change-of-bitstring algorithm.
     pub const CHANGE_OF_BITSTRING: u8 = 0;
-    /// `change-of-state [1]`.
+    /// Tag 1: the change-of-state algorithm.
     pub const CHANGE_OF_STATE: u8 = 1;
-    /// `change-of-value [2]`.
+    /// Tag 2: the change-of-value algorithm.
     pub const CHANGE_OF_VALUE: u8 = 2;
-    /// `command-failure [3]` (not modeled as a structured variant).
+    /// Tag 3: the command-failure algorithm, which has no structured variant.
     pub const COMMAND_FAILURE: u8 = 3;
-    /// `floating-limit [4]`.
+    /// Tag 4: the floating-limit algorithm.
     pub const FLOATING_LIMIT: u8 = 4;
-    /// `out-of-range [5]`.
+    /// Tag 5: the out-of-range algorithm.
     pub const OUT_OF_RANGE: u8 = 5;
-    /// `extended [9]`.
+    /// Tag 9: a vendor-defined algorithm (the `extended` alternative).
     pub const EXTENDED: u8 = 9;
 }
 
@@ -105,13 +105,16 @@ pub enum BACnetEventParameter {
     FloatingLimit {
         /// `time-delay [0] Unsigned` — debounce seconds.
         time_delay: u32,
-        /// `setpoint-reference [1] BACnetDeviceObjectPropertyReference`.
+        /// `setpoint-reference [1] BACnetDeviceObjectPropertyReference` — where
+        /// the moving setpoint is read.
         setpoint_reference: BACnetDeviceObjectPropertyReference,
-        /// `low-diff-limit [2] REAL`.
+        /// `low-diff-limit [2] REAL` — how far below the setpoint the value may
+        /// fall.
         low_diff_limit: f32,
-        /// `high-diff-limit [3] REAL`.
+        /// `high-diff-limit [3] REAL` — how far above the setpoint the value may
+        /// rise.
         high_diff_limit: f32,
-        /// `deadband [4] REAL`.
+        /// `deadband [4] REAL` — hysteresis applied on the return to normal.
         deadband: f32,
     },
     /// `out-of-range [5]`: report when the value leaves a fixed band.

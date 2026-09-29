@@ -110,127 +110,193 @@ impl BACnetProprietaryPropertyState {
 
 /// Discrete or enumerated property value used by event and fault parameters.
 ///
-/// The variants follow the `BACnetPropertyStates` CHOICE in Standard 135-2020
-/// Clause 21. Decoders use `Other` for proprietary context tags 64 through 254.
+/// Each variant is one alternative of the `BACnetPropertyStates` choice from
+/// Standard 135-2020 Clause 21. The standard alternatives are primitive values
+/// under their own context tag, listed below. Tags 26, 29, 35, 61 and 62 have
+/// no alternative and the decoder rejects them. Decoders use `Other` for
+/// proprietary context tags 64 through 254.
+///
+/// | Tag | Alternative | Type |
+/// |---|---|---|
+/// | `[0]` | `boolean-value` | BOOLEAN |
+/// | `[1]` | `binary-value` | `BACnetBinaryPV` |
+/// | `[2]` | `event-type` | `BACnetEventType` |
+/// | `[3]` | `polarity` | `BACnetPolarity` |
+/// | `[4]` | `program-change` | `BACnetProgramRequest` |
+/// | `[5]` | `program-state` | `BACnetProgramState` |
+/// | `[6]` | `reason-for-halt` | `BACnetProgramError` |
+/// | `[7]` | `reliability` | `BACnetReliability` |
+/// | `[8]` | `state` | `BACnetEventState` |
+/// | `[9]` | `system-status` | `BACnetDeviceStatus` |
+/// | `[10]` | `units` | `BACnetEngineeringUnits` |
+/// | `[11]` | `unsigned-value` | Unsigned |
+/// | `[12]` | `life-safety-mode` | `BACnetLifeSafetyMode` |
+/// | `[13]` | `life-safety-state` | `BACnetLifeSafetyState` |
+/// | `[14]` | `restart-reason` | `BACnetRestartReason` |
+/// | `[15]` | `door-alarm-state` | `BACnetDoorAlarmState` |
+/// | `[16]` | `action` | `BACnetAction` |
+/// | `[17]` | `door-secured-status` | `BACnetDoorSecuredStatus` |
+/// | `[18]` | `door-status` | `BACnetDoorStatus` |
+/// | `[19]` | `door-value` | `BACnetDoorValue` |
+/// | `[20]` | `file-access-method` | `BACnetFileAccessMethod` |
+/// | `[21]` | `lock-status` | `BACnetLockStatus` |
+/// | `[22]` | `life-safety-operation` | `BACnetLifeSafetyOperation` |
+/// | `[23]` | `maintenance` | `BACnetMaintenance` |
+/// | `[24]` | `node-type` | `BACnetNodeType` |
+/// | `[25]` | `notify-type` | `BACnetNotifyType` |
+/// | `[27]` | `shed-state` | `BACnetShedState` |
+/// | `[28]` | `silenced-state` | `BACnetSilencedState` |
+/// | `[30]` | `access-event` | `BACnetAccessEvent` |
+/// | `[31]` | `zone-occupancy-state` | `BACnetAccessZoneOccupancyState` |
+/// | `[32]` | `access-credential-disable-reason` | `BACnetAccessCredentialDisableReason` |
+/// | `[33]` | `access-credential-disable` | `BACnetAccessCredentialDisable` |
+/// | `[34]` | `authentication-status` | `BACnetAuthenticationStatus` |
+/// | `[36]` | `backup-state` | `BACnetBackupState` |
+/// | `[37]` | `write-status` | `BACnetWriteStatus` |
+/// | `[38]` | `lighting-in-progress` | `BACnetLightingInProgress` |
+/// | `[39]` | `lighting-operation` | `BACnetLightingOperation` |
+/// | `[40]` | `lighting-transition` | `BACnetLightingTransition` |
+/// | `[41]` | `integer-value` | INTEGER (signed) |
+/// | `[42]` | `binary-lighting-value` | `BACnetBinaryLightingPV` |
+/// | `[43]` | `timer-state` | `BACnetTimerState` |
+/// | `[44]` | `timer-transition` | `BACnetTimerTransition` |
+/// | `[45]` | `bacnet-ip-mode` | `BACnetIPMode` |
+/// | `[46]` | `network-port-command` | `BACnetNetworkPortCommand` |
+/// | `[47]` | `network-type` | `BACnetNetworkType` |
+/// | `[48]` | `network-number-quality` | `BACnetNetworkNumberQuality` |
+/// | `[49]` | `escalator-operation-direction` | `BACnetEscalatorOperationDirection` |
+/// | `[50]` | `escalator-fault` | `BACnetEscalatorFault` |
+/// | `[51]` | `escalator-mode` | `BACnetEscalatorMode` |
+/// | `[52]` | `lift-car-direction` | `BACnetLiftCarDirection` |
+/// | `[53]` | `lift-car-door-command` | `BACnetLiftCarDoorCommand` |
+/// | `[54]` | `lift-car-drive-status` | `BACnetLiftCarDriveStatus` |
+/// | `[55]` | `lift-car-mode` | `BACnetLiftCarMode` |
+/// | `[56]` | `lift-group-mode` | `BACnetLiftGroupMode` |
+/// | `[57]` | `lift-fault` | `BACnetLiftFault` |
+/// | `[58]` | `protocol-level` | `BACnetProtocolLevel` |
+/// | `[59]` | `audit-level` | `BACnetAuditLevel` |
+/// | `[60]` | `audit-operation` | `BACnetAuditOperation` |
+/// | `[63]` | `extended-value` | Unsigned32 packing a choice tag above 254 as tag × 100000 + value |
+/// | `[64]` to `[254]` | vendor-defined | primitive or constructed, kept as raw contents |
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetPropertyStates {
-    /// `boolean-value [0] BOOLEAN`.
+    /// Tag 0: a BOOLEAN.
     BooleanValue(bool),
-    /// `binary-value [1] BACnetBinaryPV`.
+    /// Tag 1: `BACnetBinaryPV`.
     BinaryValue(u32),
-    /// `event-type [2] BACnetEventType`.
+    /// Tag 2: `BACnetEventType`.
     EventType(u32),
-    /// `polarity [3] BACnetPolarity`.
+    /// Tag 3: `BACnetPolarity`.
     Polarity(u32),
-    /// `program-change [4] BACnetProgramRequest`.
+    /// Tag 4: `BACnetProgramRequest`.
     ProgramChange(u32),
-    /// `program-state [5] BACnetProgramState`.
+    /// Tag 5: `BACnetProgramState`.
     ProgramState(u32),
-    /// `reason-for-halt [6] BACnetProgramError`.
+    /// Tag 6: `BACnetProgramError`.
     ReasonForHalt(u32),
-    /// `reliability [7] BACnetReliability`.
+    /// Tag 7: `BACnetReliability`.
     Reliability(u32),
-    /// `state [8] BACnetEventState`.
+    /// Tag 8: `BACnetEventState`.
     State(u32),
-    /// `system-status [9] BACnetDeviceStatus`.
+    /// Tag 9: `BACnetDeviceStatus`.
     SystemStatus(u32),
-    /// `units [10] BACnetEngineeringUnits`.
+    /// Tag 10: `BACnetEngineeringUnits`.
     Units(u32),
-    /// `unsigned-value [11] Unsigned`.
+    /// Tag 11: an Unsigned.
     UnsignedValue(u32),
-    /// `life-safety-mode [12] BACnetLifeSafetyMode`.
+    /// Tag 12: `BACnetLifeSafetyMode`.
     LifeSafetyMode(u32),
-    /// `life-safety-state [13] BACnetLifeSafetyState`.
+    /// Tag 13: `BACnetLifeSafetyState`.
     LifeSafetyState(u32),
-    /// `restart-reason [14] BACnetRestartReason`.
+    /// Tag 14: `BACnetRestartReason`.
     RestartReason(u32),
-    /// `door-alarm-state [15] BACnetDoorAlarmState`.
+    /// Tag 15: `BACnetDoorAlarmState`.
     DoorAlarmState(u32),
-    /// `action [16] BACnetAction`.
+    /// Tag 16: `BACnetAction`.
     Action(u32),
-    /// `door-secured-status [17] BACnetDoorSecuredStatus`.
+    /// Tag 17: `BACnetDoorSecuredStatus`.
     DoorSecuredStatus(u32),
-    /// `door-status [18] BACnetDoorStatus`.
+    /// Tag 18: `BACnetDoorStatus`.
     DoorStatus(u32),
-    /// `door-value [19] BACnetDoorValue`.
+    /// Tag 19: `BACnetDoorValue`.
     DoorValue(u32),
-    /// `file-access-method [20] BACnetFileAccessMethod`.
+    /// Tag 20: `BACnetFileAccessMethod`.
     FileAccessMethod(u32),
-    /// `lock-status [21] BACnetLockStatus`.
+    /// Tag 21: `BACnetLockStatus`.
     LockStatus(u32),
-    /// `life-safety-operation [22] BACnetLifeSafetyOperation`.
+    /// Tag 22: `BACnetLifeSafetyOperation`.
     LifeSafetyOperation(u32),
-    /// `maintenance [23] BACnetMaintenance`.
+    /// Tag 23: `BACnetMaintenance`.
     Maintenance(u32),
-    /// `node-type [24] BACnetNodeType`.
+    /// Tag 24: `BACnetNodeType`.
     NodeType(u32),
-    /// `notify-type [25] BACnetNotifyType`.
+    /// Tag 25: `BACnetNotifyType`.
     NotifyType(u32),
-    /// `shed-state [27] BACnetShedState`.
+    /// Tag 27: `BACnetShedState`.
     ShedState(u32),
-    /// `silenced-state [28] BACnetSilencedState`.
+    /// Tag 28: `BACnetSilencedState`.
     SilencedState(u32),
-    /// `access-event [30] BACnetAccessEvent`.
+    /// Tag 30: `BACnetAccessEvent`.
     AccessEvent(u32),
-    /// `zone-occupancy-state [31] BACnetAccessZoneOccupancyState`.
+    /// Tag 31: `BACnetAccessZoneOccupancyState`.
     ZoneOccupancyState(u32),
-    /// `access-credential-disable-reason [32] BACnetAccessCredentialDisableReason`.
+    /// Tag 32: `BACnetAccessCredentialDisableReason`.
     AccessCredentialDisableReason(u32),
-    /// `access-credential-disable [33] BACnetAccessCredentialDisable`.
+    /// Tag 33: `BACnetAccessCredentialDisable`.
     AccessCredentialDisable(u32),
-    /// `authentication-status [34] BACnetAuthenticationStatus`.
+    /// Tag 34: `BACnetAuthenticationStatus`.
     AuthenticationStatus(u32),
-    /// `backup-state [36] BACnetBackupState`.
+    /// Tag 36: `BACnetBackupState`.
     BackupState(u32),
-    /// `write-status [37] BACnetWriteStatus`.
+    /// Tag 37: `BACnetWriteStatus`.
     WriteStatus(u32),
-    /// `lighting-in-progress [38] BACnetLightingInProgress`.
+    /// Tag 38: `BACnetLightingInProgress`.
     LightingInProgress(u32),
-    /// `lighting-operation [39] BACnetLightingOperation`.
+    /// Tag 39: `BACnetLightingOperation`.
     LightingOperation(u32),
-    /// `lighting-transition [40] BACnetLightingTransition`.
+    /// Tag 40: `BACnetLightingTransition`.
     LightingTransition(u32),
-    /// `integer-value [41] INTEGER`.
+    /// Tag 41: a signed INTEGER.
     IntegerValue(i32),
-    /// `binary-lighting-value [42] BACnetBinaryLightingPV`.
+    /// Tag 42: `BACnetBinaryLightingPV`.
     BinaryLightingValue(u32),
-    /// `timer-state [43] BACnetTimerState`.
+    /// Tag 43: `BACnetTimerState`.
     TimerState(u32),
-    /// `timer-transition [44] BACnetTimerTransition`.
+    /// Tag 44: `BACnetTimerTransition`.
     TimerTransition(u32),
-    /// `bacnet-ip-mode [45] BACnetIPMode`.
+    /// Tag 45: `BACnetIPMode`.
     BacnetIpMode(u32),
-    /// `network-port-command [46] BACnetNetworkPortCommand`.
+    /// Tag 46: `BACnetNetworkPortCommand`.
     NetworkPortCommand(u32),
-    /// `network-type [47] BACnetNetworkType`.
+    /// Tag 47: `BACnetNetworkType`.
     NetworkType(u32),
-    /// `network-number-quality [48] BACnetNetworkNumberQuality`.
+    /// Tag 48: `BACnetNetworkNumberQuality`.
     NetworkNumberQuality(u32),
-    /// `escalator-operation-direction [49] BACnetEscalatorOperationDirection`.
+    /// Tag 49: `BACnetEscalatorOperationDirection`.
     EscalatorOperationDirection(u32),
-    /// `escalator-fault [50] BACnetEscalatorFault`.
+    /// Tag 50: `BACnetEscalatorFault`.
     EscalatorFault(u32),
-    /// `escalator-mode [51] BACnetEscalatorMode`.
+    /// Tag 51: `BACnetEscalatorMode`.
     EscalatorMode(u32),
-    /// `lift-car-direction [52] BACnetLiftCarDirection`.
+    /// Tag 52: `BACnetLiftCarDirection`.
     LiftCarDirection(u32),
-    /// `lift-car-door-command [53] BACnetLiftCarDoorCommand`.
+    /// Tag 53: `BACnetLiftCarDoorCommand`.
     LiftCarDoorCommand(u32),
-    /// `lift-car-drive-status [54] BACnetLiftCarDriveStatus`.
+    /// Tag 54: `BACnetLiftCarDriveStatus`.
     LiftCarDriveStatus(u32),
-    /// `lift-car-mode [55] BACnetLiftCarMode`.
+    /// Tag 55: `BACnetLiftCarMode`.
     LiftCarMode(u32),
-    /// `lift-group-mode [56] BACnetLiftGroupMode`.
+    /// Tag 56: `BACnetLiftGroupMode`.
     LiftGroupMode(u32),
-    /// `lift-fault [57] BACnetLiftFault`.
+    /// Tag 57: `BACnetLiftFault`.
     LiftFault(u32),
-    /// `protocol-level [58] BACnetProtocolLevel`.
+    /// Tag 58: `BACnetProtocolLevel`.
     ProtocolLevel(u32),
-    /// `audit-level [59] BACnetAuditLevel`.
+    /// Tag 59: `BACnetAuditLevel`.
     AuditLevel(u32),
-    /// `audit-operation [60] BACnetAuditOperation`.
+    /// Tag 60: `BACnetAuditOperation`.
     AuditOperation(u32),
-    /// `extended-value [63] Unsigned32` with its unpacked tag and value.
+    /// Tag 63: a choice tag above 254 and its value, unpacked from one Unsigned32.
     ExtendedValue(BACnetExtendedPropertyState),
     /// Vendor-defined context tag 64 through 254.
     Other(BACnetProprietaryPropertyState),

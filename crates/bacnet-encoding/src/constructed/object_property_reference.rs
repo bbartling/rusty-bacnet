@@ -3,17 +3,20 @@
 //! properties of the Loop (Clause 12.17) and Pulse Converter (Clause 12.23)
 //! objects.
 //!
-//! ```text
-//! BACnetObjectPropertyReference ::= SEQUENCE {
-//!     object-identifier    [0] BACnetObjectIdentifier,
-//!     property-identifier  [1] BACnetPropertyIdentifier,
-//!     property-array-index [2] Unsigned OPTIONAL  -- used only with array datatype
-//! }
+//! `BACnetObjectPropertyReference` names one property of an object, and can
+//! narrow it to a single element when the property is an array:
 //!
-//! BACnetSetpointReference ::= SEQUENCE {
-//!     setpoint-reference [0] BACnetObjectPropertyReference OPTIONAL
-//! }
-//! ```
+//! | Field | Tag | Type | Optional |
+//! |---|---|---|---|
+//! | `object-identifier` | `[0]` | `BACnetObjectIdentifier` | no |
+//! | `property-identifier` | `[1]` | `BACnetPropertyIdentifier` | no |
+//! | `property-array-index` | `[2]` | Unsigned | yes; only meaningful for array properties |
+//!
+//! `BACnetSetpointReference` wraps at most one such reference:
+//!
+//! | Field | Tag | Type | Optional |
+//! |---|---|---|---|
+//! | `setpoint-reference` | `[0]` | `BACnetObjectPropertyReference` | yes |
 //!
 //! Every member is context-tagged, so a property *write* carries a reference
 //! as primitive context tags [0]/[1] (plus optional [2]) concatenated on the
