@@ -13,7 +13,7 @@ These documents describe the **current development checkout**, including unrelea
 | Should I use a shared endpoint or a standalone owner? | [Endpoint roles and scope](rust-api.md#bacnet-endpoint-forward-path-rb-18) |
 | Is a Network Port registered, or is its number passively learned? | [Registration and local Number controls](rust-api.md#registered-bip-network-port) |
 | Which clauses have bounded evidence? | [Support summary](conformance/support-summary.md), [detailed ledger](conformance/standard-135-2020-ledger.md) |
-| Which checks are required before merge? | [GitLab CI and local merge evidence](gitlab-ci.md) |
+| Which checks are required before merge? | [CI and merge evidence](ci.md) |
 
 ## Policy and resource contracts
 
@@ -31,6 +31,6 @@ The website explains tasks; these references define the engineering contracts. K
 
 ## Source, issues and contribution
 
-[GitLab](https://gitlab.com/justinscott-group/rusty-bacnet) is the primary source, issue, merge-request and CI host. [GitHub](https://github.com/jscott3201/rusty-bacnet) is the downstream mirror and retains historical release assets and provenance. Report current issues on [GitLab](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues), with a revision, transport, platform and sanitized reproduction.
+Source, releases and issues are on [GitHub](https://github.com/jscott3201/rusty-bacnet). Report issues on [GitHub](https://github.com/jscott3201/rusty-bacnet/issues) with a revision, transport, platform and sanitized reproduction.
 
 The [website maintenance guide](../website/README.md) covers Astro content, exports and local browser checks. Website validation, Rust runtime evidence, installed Python tests and publication are separate operations.

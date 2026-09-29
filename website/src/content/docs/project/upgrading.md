@@ -49,7 +49,7 @@ Build a separate [development environment](/rusty-bacnet/development/overview/#b
 | IPv6 | Select a concrete interface/address when automatic selection is ambiguous; no silent physical-selection fallback to loopback |
 | Python async calls | Native methods return Futures typed as Awaitable; await them or use `ensure_future`, not `create_task` directly on a native Future |
 
-The [shared endpoint guide](/rusty-bacnet/development/shared-endpoints/), [Network Port guide](/rusty-bacnet/development/network-number/) and [canonical APIs](/rusty-bacnet/reference/api/) explain the contracts. This is a navigation checklist, not an exhaustive changelog. Retest request errors, subscriptions, mutation authorization, persistence and shutdown relevant to your application. The [current changelog](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/CHANGELOG.md) and source references remain the detail authority.
+The [shared endpoint guide](/rusty-bacnet/development/shared-endpoints/), [Network Port guide](/rusty-bacnet/development/network-number/) and [canonical APIs](/rusty-bacnet/reference/api/) explain the contracts. This is a navigation checklist, not an exhaustive changelog. Retest request errors, subscriptions, mutation authorization, persistence and shutdown relevant to your application. The [current changelog](https://github.com/jscott3201/rusty-bacnet/blob/dev/CHANGELOG.md) and source references remain the detail authority.
 
 ## Sources and release scope
 

@@ -20,7 +20,7 @@ test('development navigation resolves marked task guides with canonical source l
     assert.ok(page.title && page.description, slug);
     const body = await plainBody(page.body, path, []);
     assert.match(body, /current development|unreleased source/i, slug);
-    assert.ok(body.includes('https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/'), slug);
+    assert.ok(body.includes('https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/'), slug);
     assert.ok(body.includes('## Next steps'), slug);
     assert.ok(!body.includes('cargo install bacnet-cli --version'), slug);
   }

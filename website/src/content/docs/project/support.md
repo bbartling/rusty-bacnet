@@ -13,7 +13,7 @@ Standalone client, full server, shared endpoint and language binding are differe
 
 ## Keep the evidence source authoritative
 
-The current [machine-readable conformance ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/bacnet-135-2020.json) owns clause status, notes and test links. The [support summary](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/support-summary.md), [detailed ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/standard-135-2020-ledger.md), draft PICS and BIBBs are generated views. This site helps readers navigate those records; it does not maintain a second support-status database.
+The current [machine-readable conformance ledger](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/conformance/bacnet-135-2020.json) owns clause status, notes and test links. The [support summary](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/conformance/support-summary.md), [detailed ledger](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/conformance/standard-135-2020-ledger.md), draft PICS and BIBBs are generated views. This site helps readers navigate those records; it does not maintain a second support-status database.
 
 For released behavior, read the [v0.11 ledger](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/conformance/standard-135-2020-ledger.md). Current evidence must not be projected backwards onto a release artifact.
 
@@ -31,6 +31,6 @@ A screenshot, test count or single-device demonstration does not establish all-d
 
 ## Report a current problem
 
-Start with [troubleshooting](/rusty-bacnet/help/troubleshooting/) for release tasks or the relevant development guide. Open a [GitLab issue](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues/new) with revision/artifact, transport, feature set, platform, minimal reproduction and sanitized evidence. Include the exact conflicting documentation link.
+Start with [troubleshooting](/rusty-bacnet/help/troubleshooting/) for release tasks or the relevant development guide. Open a [GitHub issue](https://github.com/jscott3201/rusty-bacnet/issues/new) with revision/artifact, transport, feature set, platform, minimal reproduction and sanitized evidence. Include the exact conflicting documentation link.
 
-GitLab is the primary project and CI host; GitHub is the downstream mirror and retains historical release assets. Never attach private keys, customer identifiers or unredacted operational captures. Use the project's security-reporting guidance for sensitive findings.
+Never attach private keys, customer identifiers or unredacted operational captures. Use the project's security-reporting guidance for sensitive findings.

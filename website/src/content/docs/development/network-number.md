@@ -26,7 +26,7 @@ Use registration when a full server or shared B/IP endpoint should expose its ac
 
 Mask, gateway and DNS stay explicit configuration. Port `APDU_Length` (399) describes local capacity independently of Device `Max_APDU_Length_Accepted` (62), remote requester limits and routed path limits. Do not copy one limit into all four roles.
 
-Registration rejects BBMD, configured foreign-device, wildcard-interface and non-B/IP profiles. It protects the selected object against replacement/removal and activation-dependent changes while admitted work and the socket remain owned. A declaration in a shared database cannot give an unregistered responder another owner's association. The [canonical registration contract](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/rust-api.md#registered-bip-network-port) covers alias resolution and cleanup details.
+Registration rejects BBMD, configured foreign-device, wildcard-interface and non-B/IP profiles. It protects the selected object against replacement/removal and activation-dependent changes while admitted work and the socket remain owned. A declaration in a shared database cannot give an unregistered responder another owner's association. The [canonical registration contract](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#registered-bip-network-port) covers alias resolution and cleanup details.
 
 ## Let passive Number learning do its work
 
@@ -52,4 +52,4 @@ Each owner has a bounded serial Number worker separate from APDU dispatch. Holdi
 
 ## Next steps
 
-Use the [transport and evidence matrix](/rusty-bacnet/development/transports/) to distinguish actual wire, simulated and platform coverage. For complete state, capacity and per-media rules, read [Local Network Number controls](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/rust-api.md#local-network-number-controls) and the `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [canonical ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/bacnet-135-2020.json).
+Use the [transport and evidence matrix](/rusty-bacnet/development/transports/) to distinguish actual wire, simulated and platform coverage. For complete state, capacity and per-media rules, read [Local Network Number controls](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#local-network-number-controls) and the `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [canonical ledger](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/conformance/bacnet-135-2020.json).

@@ -64,7 +64,7 @@ test('download, MDX source view, Markdown exports and llms are source-derived', 
     if (route === 'start/local-lab/') expect(body).toContain(source.trim());
     if (route.startsWith('development/')) {
       expect(body).toMatch(/current development|unreleased source/i);
-      expect(body).toContain('https://gitlab.com/justinscott-group/rusty-bacnet/');
+      expect(body).toContain('https://github.com/jscott3201/rusty-bacnet/');
       expect(index).toContain(`[Current development: `);
     }
   }
