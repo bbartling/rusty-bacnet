@@ -3,6 +3,7 @@ use crate::cov::{AtomicCovCounters, CovInFlightTracker, InFlightAcquireError};
 
 mod life_safety;
 mod multiple;
+mod multiple_items;
 
 #[derive(Debug)]
 pub(super) struct EventBudget {

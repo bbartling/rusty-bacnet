@@ -44,6 +44,18 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                             Some(next_deadline.map_or(deadline, |next| next.min(deadline)));
                     }
                 });
+                if !changed.is_empty() {
+                    let captures: Vec<_> = {
+                        let table = cov_table.read().await;
+                        changed
+                            .iter()
+                            .map(|(oid, _)| table.timed_capture(*oid))
+                            .collect()
+                    };
+                    for capture in captures {
+                        capture.run(&database);
+                    }
+                }
                 changed
             };
 

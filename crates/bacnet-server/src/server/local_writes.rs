@@ -267,6 +267,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 db.update_name_index(oid);
             }
             let staging_plans = Self::take_staging_plans(&mut db, std::slice::from_ref(oid));
+            let capture = self.cov_table.read().await.timed_capture(*oid);
+            capture.run(&db);
             (
                 snapshots.changes(&db, std::slice::from_ref(oid)),
                 staging_plans,
@@ -275,6 +277,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         Self::fire_event_notifications_with_bindings(
             &self.db,
+            &self.cov_table,
             self.network
                 .as_ref()
                 .expect("running local mutation owns network"),
@@ -438,6 +441,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     TargetResult::Applied => {
                         Self::fire_event_notifications_with_bindings(
                             db,
+                            cov_table,
                             network,
                             comm_state,
                             learned_routers,
@@ -472,6 +476,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             if reliability_changed {
                 Self::fire_event_notifications_with_bindings(
                     db,
+                    cov_table,
                     network,
                     comm_state,
                     learned_routers,

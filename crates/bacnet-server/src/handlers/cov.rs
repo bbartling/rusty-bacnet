@@ -379,11 +379,13 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         }
     }
 
-    table.subscribe_multiple(
+    let accepted = table.subscribe_multiple(
         &context,
         &route,
         expires_at,
         max_notification_delay,
         subscriptions,
-    )
+    )?;
+    table.initial_timed_capture(&accepted).run(db);
+    Ok(accepted)
 }

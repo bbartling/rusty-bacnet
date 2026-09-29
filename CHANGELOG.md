@@ -28,6 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Timestamped COV-multiple reports now carry each change's actual commit time
+  instead of the time the notification was prepared. Changes are kept until a
+  notification carrying them is transmitted.
+  - **Capture points:** network WriteProperty, `write_local`, Binary Lighting
+    terminal transitions and committed intrinsic transitions capture under the
+    database write guard.
+  - **Delivery:** any notification to a context also carries that context's other
+    pending timestamped changes, earlier changes first, per reference (for example
+    A→B→A). The header timestamp names the latest timestamped change conveyed.
+  - **Initial report:** the report after admission is stamped with the admission
+    time. A renewal keeps unconveyed changes.
+  - **Local bounds:** pending history is capped at an estimate of one notification
+    APDU per context, and queued history is trimmed, oldest first, to fit each
+    request into the local maximum APDU (latest changes are always sent). This deviates from the Standard's
+    additional-notification expectation until splitting lands. Drops are counted
+    in the new `CovCounters::timed_changes_dropped` field, which breaks exhaustive
+    struct literals.
+  - **Not yet captured:** WritePropertyMultiple, staging and Life Safety producers
+    still use preparation time.
+  - **API:** `CovSubscriptionTable::with_max_apdu_length` is new (#856).
+
 - Return `PROPERTY/UNKNOWN_PROPERTY` for absent unindexed properties at built-in
   object write fallbacks, including NULL values, unprovisioned Staging names and absent stream File
   `RECORD_COUNT`.

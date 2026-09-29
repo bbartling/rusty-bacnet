@@ -45,10 +45,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (discovery_limiter, time_sync_limiter) = request_limiters(&config, device_instance);
         let db = Arc::new(RwLock::new(db));
         let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());
-        let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
-            config.cov_policy.clone(),
-            Arc::clone(&cov_counters),
-        )));
+        let cov_table = Arc::new(RwLock::new(
+            CovSubscriptionTable::with_policy(config.cov_policy.clone(), Arc::clone(&cov_counters))
+                .with_max_apdu_length(config.max_apdu_length as usize),
+        ));
         let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
@@ -714,6 +714,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
         let db_intrinsic = Arc::clone(&db);
+        let cov_table_intrinsic = Arc::clone(&cov_table);
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
         let learned_routers_intrinsic = Arc::clone(&learned_routers);
@@ -725,6 +726,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             audit_owner.clone(),
             intrinsic::run(
                 db_intrinsic,
+                cov_table_intrinsic,
                 network_intrinsic,
                 comm_state_intrinsic,
                 learned_routers_intrinsic,

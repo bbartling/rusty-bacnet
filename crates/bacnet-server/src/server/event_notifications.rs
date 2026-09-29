@@ -217,6 +217,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) {
         Self::fire_event_notifications_with_bindings(
             db,
+            &Arc::new(RwLock::new(CovSubscriptionTable::new())),
             network,
             comm_state,
             learned_routers,
@@ -229,8 +230,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         .await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fire_event_notifications_with_bindings(
         db: &Arc<RwLock<ObjectDatabase>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
         learned_routers: &Arc<Mutex<LearnedRouterCache>>,
@@ -245,7 +248,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let outcome = db
                 .get_mut(oid)
                 .and_then(|object| object.evaluate_intrinsic_reporting());
-            outcome.and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome))
+            let resolved = outcome
+                .and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome));
+            // A committed transition changes Status_Flags: capture it at its
+            // own time for timestamped COV-multiple references.
+            if resolved.is_some() {
+                let capture = cov_table.read().await.timed_capture(*oid);
+                capture.run(&db);
+            }
+            resolved
         };
 
         // Local transition actions commit before Event_Enable or DCC can suppress

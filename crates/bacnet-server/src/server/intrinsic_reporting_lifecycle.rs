@@ -4,6 +4,7 @@ use super::*;
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run<T: TransportPort + 'static>(
     db_intrinsic: Arc<RwLock<ObjectDatabase>>,
+    cov_table_intrinsic: Arc<RwLock<CovSubscriptionTable>>,
     network_intrinsic: Arc<NetworkLayer<T>>,
     comm_state_intrinsic: Arc<AtomicU8>,
     learned_routers_intrinsic: Arc<Mutex<LearnedRouterCache>>,
@@ -33,6 +34,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let fired = {
             let mut db = db_intrinsic.write().await;
             let mut out = Vec::new();
+            let mut transitioned = Vec::new();
             for oid in db.list_objects() {
                 let outcome = db
                     .get_mut(&oid)
@@ -41,9 +43,24 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     BACnetServer::<T>::commit_intrinsic_transition(&mut db, &oid, outcome)
                 });
                 if let Some(resolved) = resolved {
+                    transitioned.push(oid);
                     if resolved.distribute && resolved.event_values.is_some() {
                         out.push((oid, resolved));
                     }
+                }
+            }
+            // Each committed transition changes Status_Flags: capture it at
+            // its own time for timestamped COV-multiple references.
+            if !transitioned.is_empty() {
+                let captures: Vec<_> = {
+                    let table = cov_table_intrinsic.read().await;
+                    transitioned
+                        .iter()
+                        .map(|oid| table.timed_capture(*oid))
+                        .collect()
+                };
+                for capture in captures {
+                    capture.run(&db);
                 }
             }
             out
