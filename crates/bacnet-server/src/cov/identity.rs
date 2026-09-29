@@ -168,6 +168,11 @@ impl CovSubscriptionSnapshot {
         &self.key
     }
 
+    /// Table generation of this accepted entry; renewal publishes a new one.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Maximum notification delay reported for a Multiple reference (`None`
     /// for ordinary and Single entries). A table-held entry follows every
     /// refresh of its context; a captured snapshot keeps its acceptance value.

@@ -137,6 +137,9 @@ pub struct CovCounters {
     pub notifications_throttled_fanout: u64,
     /// Total number of notifications throttled due to peer in-flight confirmed limit.
     pub notifications_throttled_peer: u64,
+    /// Total number of pending timestamped COV-multiple changes evicted because
+    /// their context exceeded the one-notification history bound.
+    pub timed_changes_dropped: u64,
 }
 
 /// Atomic storage for COV telemetry counters.
@@ -168,6 +171,9 @@ pub struct AtomicCovCounters {
     pub notifications_throttled_fanout: AtomicU64,
     /// Total number of notifications throttled due to peer in-flight confirmed limit.
     pub notifications_throttled_peer: AtomicU64,
+    /// Total number of pending timestamped COV-multiple changes evicted because
+    /// their context exceeded the one-notification history bound.
+    pub timed_changes_dropped: AtomicU64,
 }
 
 impl AtomicCovCounters {
@@ -193,6 +199,7 @@ impl AtomicCovCounters {
                 .notifications_throttled_fanout
                 .load(Ordering::Relaxed),
             notifications_throttled_peer: self.notifications_throttled_peer.load(Ordering::Relaxed),
+            timed_changes_dropped: self.timed_changes_dropped.load(Ordering::Relaxed),
         }
     }
 }

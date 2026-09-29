@@ -45,10 +45,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (discovery_limiter, time_sync_limiter) = request_limiters(&config, device_instance);
         let db = Arc::new(RwLock::new(db));
         let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());
-        let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
-            config.cov_policy.clone(),
-            Arc::clone(&cov_counters),
-        )));
+        let cov_table = Arc::new(RwLock::new(
+            CovSubscriptionTable::with_policy(config.cov_policy.clone(), Arc::clone(&cov_counters))
+                .with_max_apdu_length(config.max_apdu_length as usize),
+        ));
         let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 

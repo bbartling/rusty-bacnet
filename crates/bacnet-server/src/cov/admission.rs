@@ -173,6 +173,14 @@ impl CovSubscriptionTable {
             subscription: sub.clone(),
             max_notification_delay,
         };
+        {
+            let mut timed = self.timed.lock();
+            if sub.timestamped && snapshot.key.multiple_context().is_some() {
+                timed.reset(&snapshot.key, generation);
+            } else {
+                timed.remove(&snapshot.key);
+            }
+        }
         let peer = sub.recipient();
         let new_indefinite = sub.expires_at.is_none();
         if let Some(old) = self.subs.insert(snapshot.key.clone(), snapshot.clone()) {

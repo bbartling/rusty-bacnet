@@ -23,7 +23,10 @@ pub use observation::CovObservation;
 use observation_order::ObservationOwner;
 pub(crate) mod flags;
 mod lifetime;
+pub(crate) mod multiple_reads;
 pub(crate) mod prepare;
+pub(crate) mod timed;
+mod timed_capture;
 pub(crate) mod value_source;
 pub use lifetime::CovTimeRemaining;
 
@@ -34,6 +37,9 @@ pub use policy::*;
 mod identity_tests;
 #[cfg(test)]
 mod tests;
+
+/// Largest B/IP APDU; the default history bound until a server sets its own.
+const DEFAULT_TIMED_APDU_LENGTH: usize = 1476;
 
 /// Proposed COV subscription data. Table acceptance validates its canonical
 /// identity and returns an immutable [`CovSubscriptionSnapshot`] for delivery.
@@ -95,6 +101,7 @@ pub struct CovSubscriptionTable {
     counters: Arc<AtomicCovCounters>,
     in_flight: Arc<CovInFlightTracker>,
     dispatch_turn: usize,
+    timed: timed::TimedStore,
 }
 
 impl Default for CovSubscriptionTable {
@@ -111,6 +118,7 @@ impl CovSubscriptionTable {
 
     /// Create a new COV subscription table with a custom policy and counters.
     pub fn with_policy(policy: CovPolicy, counters: Arc<AtomicCovCounters>) -> Self {
+        let timed = timed::TimedStore::new(DEFAULT_TIMED_APDU_LENGTH, Arc::clone(&counters));
         Self {
             subs: HashMap::new(),
             generation: 0,
@@ -121,7 +129,20 @@ impl CovSubscriptionTable {
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
             dispatch_turn: 0,
+            timed,
         }
+    }
+
+    /// Bound each Multiple context's pending timestamped changes by what one
+    /// notification of this maximum APDU length can carry.
+    pub fn with_max_apdu_length(mut self, max_apdu_length: usize) -> Self {
+        self.timed = timed::TimedStore::new(max_apdu_length, Arc::clone(&self.counters));
+        self
+    }
+
+    /// Pending timestamped COV-multiple changes of this table's references.
+    pub(crate) fn timed(&self) -> &timed::TimedStore {
+        &self.timed
     }
 
     /// Return the next notification dispatch turn counter (wrapping).
@@ -168,6 +189,7 @@ impl CovSubscriptionTable {
 
     fn remove_internal(&mut self, key: &CovSubscriptionKey, was_cancelled: bool) -> bool {
         if let Some(sub) = self.subs.remove(key) {
+            self.timed.lock().remove(key);
             let peer = sub.recipient();
             if let Some(count) = self.peer_counts.get_mut(&peer) {
                 *count = count.saturating_sub(1);

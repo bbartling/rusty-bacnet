@@ -95,9 +95,11 @@ impl Request<'_> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn write_property<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         written_oids: &mut Vec<ObjectIdentifier>,
         coarse_cov_oids: &mut Vec<ObjectIdentifier>,
         life_safety_cov_changes: &mut Vec<LifeSafetyCovChange>,
@@ -132,6 +134,10 @@ impl Request<'_> {
                 |_| Vec::new(),
                 |oid| BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid)),
             );
+            if let Ok(oid) = &result {
+                let capture = cov_table.read().await.timed_capture(*oid);
+                capture.run(&db);
+            }
             (result, changes, plans)
         };
         staging_plans.extend(plans);

@@ -651,6 +651,8 @@ mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;
 #[cfg(test)]
+mod cov_timed_multiple_tests;
+#[cfg(test)]
 mod dcc_event_detection_tests;
 #[cfg(test)]
 mod device_bindings_tests;

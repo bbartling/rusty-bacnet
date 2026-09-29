@@ -192,6 +192,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 mutation
                     .write_property::<T>(
                         db,
+                        cov_table,
                         &mut written_oids,
                         &mut coarse_cov_oids,
                         &mut life_safety_cov_changes,
@@ -581,6 +582,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 for oid in &written_oids {
                     Self::fire_event_notifications_with_bindings(
                         db,
+                        cov_table,
                         network,
                         comm_state,
                         learned_routers,
@@ -671,6 +673,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         for oid in &written_oids {
             Self::fire_event_notifications_with_bindings(
                 db,
+                cov_table,
                 network,
                 comm_state,
                 learned_routers,
