@@ -1,34 +1,36 @@
 ---
 title: "Support status and evidence"
-description: "Understand pre-1.0 release scope without mistaking tests for certification."
+description: "Read release, development, platform and protocol evidence at the scope actually tested."
 ---
 
-Rusty BACnet v0.11.0 is a **pre-1.0 release with breaking APIs and partial conformance coverage**. The release makes no BTL certification or full BACnet conformance claim.
+Rusty BACnet is pre-1.0, with changing APIs and partial conformance coverage. Neither the release nor current development makes a BTL certification or full BACnet conformance claim.
 
-## What the site can tell you
+## Choose the version and owner first
 
-Guides identify the release, interface, configuration prerequisites, and known boundaries behind a task. They should make it easier to perform a small operation correctly and to recognize when evidence is missing.
+The [installation and local tutorials](/rusty-bacnet/start/installation/) describe **v0.11.0**. The [development section](/rusty-bacnet/development/overview/) describes **unreleased source**, including shared endpoints, current SC requirements and local Network Number controls. A checkout may still report version 0.11.0; use its commit to identify behavior.
 
-## What the site cannot establish
+Standalone client, full server, shared endpoint and language binding are different surfaces. The shared endpoint's bounded responder does not acquire the full server's service set. Use the [current transport matrix](/rusty-bacnet/development/transports/) to choose a starting point, then follow its evidence links.
 
-A screenshot, successful build, unit-test count, or single-device demonstration does not establish all-device interoperability, deterministic serial timing, complete object/service coverage, or fitness for a particular operating building.
+## Keep the evidence source authoritative
 
-The conformance ledger contains scoped evidence and incomplete-review labels. Its machine-readable source is `docs/conformance/bacnet-135-2020.json`. A future site view may render that source, but must retain its exact status meaning and explicitly handle missing or unrecognized status values.
+The current [machine-readable conformance ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/bacnet-135-2020.json) owns clause status, notes and test links. The [support summary](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/support-summary.md), [detailed ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/standard-135-2020-ledger.md), draft PICS and BIBBs are generated views. This site helps readers navigate those records; it does not maintain a second support-status database.
 
-## Read evidence at the right scope
+For released behavior, read the [v0.11 ledger](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/conformance/standard-135-2020-ledger.md). Current evidence must not be projected backwards onto a release artifact.
 
-“Implementation present” is different from “tested for this clause.” A clause-evidenced property rule is different from a fully qualified object. A standalone transport example is different from a combined endpoint profile. A draft PICS is different from a formal declaration or BTL listing.
+## Understand what a result proves
 
-Do not turn those distinctions into one green “supported” checkmark. This site deliberately uses explanatory text alongside any visual status indicators.
+| Result | Useful evidence | Still separate |
+|---|---|---|
+| Build or cross-compile passes | Selected code compiles on that target | Runtime behavior and native-library availability |
+| Unit or simulated transport tests pass | Exercised state transitions and failure cases | Actual sockets, frames or physical timing |
+| Loopback or isolated wire tests pass | Captured framing and the tested owner/lifecycle | Building-network interoperability and every platform |
+| Installed Python tests pass | The tested interpreter and native artifact work together | Other wheels, interpreters and free-threaded builds |
+| A ledger row has scoped evidence | The stated clause behavior and controls | Complete object/profile conformance or BTL listing |
 
-## Report a problem
+A screenshot, test count or single-device demonstration does not establish all-device interoperability or fitness for an operating building. No green badge replaces the stated limits. External ignored fixtures, hardware tests and ordinary CI have different execution requirements.
 
-Start with [troubleshooting](/rusty-bacnet/help/troubleshooting/). Provide the release/build, transport, platform, minimal reproduction, and sanitized evidence. Include the exact source of a conflicting documentation claim so it can be fixed along with the code or example.
+## Report a current problem
 
-The documentation's reviewed baseline is v0.11.0. Later development work is not silently treated as released capability. Consult release notes when upgrading.
+Start with [troubleshooting](/rusty-bacnet/help/troubleshooting/) for release tasks or the relevant development guide. Open a [GitLab issue](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues/new) with revision/artifact, transport, feature set, platform, minimal reproduction and sanitized evidence. Include the exact conflicting documentation link.
 
-## Sources and release scope
-
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
-
-[Release scope](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0) · [Conformance ledger](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/conformance/standard-135-2020-ledger.md) · [Machine-readable evidence](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/conformance/bacnet-135-2020.json).
+GitLab is the primary project and CI host; GitHub is the downstream mirror and retains historical release assets. Never attach private keys, customer identifiers or unredacted operational captures. Use the project's security-reporting guidance for sensitive findings.

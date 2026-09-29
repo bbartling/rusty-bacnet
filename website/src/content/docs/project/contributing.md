@@ -13,7 +13,7 @@ Start a guide with the intended outcome, prerequisites, and whether it sends tra
 
 Check command help and implementation for CLI syntax; check published APIs, type stubs, and tests for language examples. Do not infer a server capability from an enum constant or a CLI feature from a Rust transport module.
 
-Keep examples tied to a named release. Use relative repository links for maintainer-only material and correctly based website links for public routes. Test the GitHub Pages project subpath rather than only a local root URL.
+Keep examples tied to a named release or explicitly marked current development. Use relative repository links for maintainer-only material and correctly based website links for public routes. Test the GitHub Pages project subpath rather than only a local root URL.
 
 ## Make visuals useful
 
@@ -29,8 +29,14 @@ The website is the task-oriented entry point. Generated rustdoc, distributed Pyt
 
 No private keys, real customer identifiers, or unredacted operational captures belong in site source or public issue attachments.
 
-## Sources and release scope
+## Work in the primary project
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+Use [GitLab issues and merge requests](https://gitlab.com/justinscott-group/rusty-bacnet) for current work. GitHub is the downstream mirror; preserve immutable release links and historical artifact provenance there. Do not edit deployment workflows or publish the site as a side effect of a content change.
 
-[Repository](https://github.com/jscott3201/rusty-bacnet) · [Existing docs](https://github.com/jscott3201/rusty-bacnet/tree/v0.11.0/docs).
+The [engineering docs map](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/README.md) identifies canonical contracts. Add task guidance under `website/src/content/docs/development/` for current-source behavior; keep released install/lab examples tied to their validated revision. Navigation drives route checks, and Markdown exports must preserve version scope and usable links.
+
+## Validate a content change
+
+From `website/`, use Node 24 and the locked dependencies, then run `DOCS_TEST_PORT=46329 npm run verify`. This checks Astro, unit tests, the static build and Chromium/axe at four widths. Inspect desktop and phone screenshots in both themes; exercise search, local links, code copy and keyboard navigation for the changed flow. See the [site maintenance guide](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/website/README.md).
+
+A documentation build does not execute Rust/Python snippets or requalify BACnet behavior. Reuse valid runtime evidence only with matching inputs, or run the relevant native check when behavior/examples change. The [merge-evidence policy](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/gitlab-ci.md) separates required local and hosted checks. Local verification never establishes publication.

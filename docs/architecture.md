@@ -2,32 +2,41 @@
 
 This document explains how the rusty-bacnet crates fit together, how data flows through the stack, and how the major subsystems work.
 
-## Crate Dependency Graph
+## Crate layout and selected dependencies
 
-```
-bacnet-types          Enums, primitives, error types (no I/O)
-    |
-bacnet-encoding       ASN.1 tags, APDU/NPDU codec, property value encode/decode
-    |
-bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
-    |
-    +---> bacnet-transport    Data-link transports (BIP, SC, MS/TP, Ethernet, Loopback)
-    |         |
-    |     bacnet-network      Network layer, BACnetRouter, RouterTable
-    |         |
-    |     bacnet-endpoint-core  Private endpoint lifecycle, ingress, egress, coordination
-    |         |
-    +---> bacnet-objects      BACnetObject trait, ObjectDatabase, object implementations
-    |         |
-    |     bacnet-client       Async BACnet client (TSM, segmentation, discovery)
-    |     bacnet-server       Async BACnet server (dispatch, COV, events, scheduling)
-    |         |
-    +---> bacnet-cli          Interactive shell and CLI tool
-    |
-    +---> rusty-bacnet        Python bindings (PyO3)
+This layout groups responsibilities; it is not a complete Cargo dependency graph.
+The arrows below mean “depends on.” Lower-level dependencies and feature edges
+are omitted; each crate's `Cargo.toml` is the exact dependency authority.
+
+```text
+Foundations
+  bacnet-types          Enums, primitives, error types (no I/O)
+  bacnet-encoding       ASN.1 tags, APDU/NPDU codecs, value encoding
+  bacnet-services       Service request/response structures
+  bacnet-transport      Data-link transports and framing
+  bacnet-network        Network layer, BACnetRouter, RouterTable
+  bacnet-objects        BACnetObject, ObjectDatabase, object implementations
+
+Runtime and application roles
+  bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
+  bacnet-client         Async requester, transactions, discovery
+  bacnet-server         Full server dispatch, COV, events, scheduling
+  bacnet-endpoint       Public shared owner composing bounded sibling roles
+
+Selected direct dependencies
+  bacnet-endpoint -> bacnet-client, bacnet-server, bacnet-endpoint-core,
+                     bacnet-network, bacnet-objects
+  bacnet-cli     -> bacnet-client              (CLI application)
+  rusty-bacnet   -> bacnet-client, bacnet-server, bacnet-endpoint
+                                              (PyO3 bindings)
 ```
 
-The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3) during normal development.
+`bacnet-client`, `bacnet-server` and `bacnet-endpoint` are all workspace
+`default-members`, along with the foundational crates, endpoint-core, integration
+tests and benchmarks. The CLI (`bacnet-cli`) and PyO3 binding (`rusty-bacnet`)
+are excluded from default builds: the CLI pulls in heavier application
+dependencies, and the Python extension needs its native Python build context.
+They remain workspace members and can be selected explicitly.
 
 The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
@@ -49,6 +58,8 @@ TransportPort::start() -> mpsc::Receiver<ReceivedNpdu>
     v
 NetworkLayer::start() -> mpsc::Receiver<ReceivedApdu>
     |  Decodes NPDU header (version, control, DNET/DADR/SNET/SADR)
+    |  Local network controls -> owner control intake -> bounded Number worker
+    |  Other raw controls retain their consumer (for example client Reject correlation)
     |  Filters: drops messages not for this device (wrong DNET)
     |  Extracts APDU bytes + source addressing + raw/effective group facts + attributes
     v
@@ -100,10 +111,14 @@ pub trait TransportPort: Send + Sync {
     fn local_mac(&self) -> &[u8];
     fn local_receive_apdu_capacity(&self) -> u16; // stable local declaration
     fn egress_apdu_limit(&self) -> u16; // current outgoing path limit
+    fn supports_local_nonrouter_number_controls(&self) -> bool; // opt-in, default false
+    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4>; // registration metadata
 }
 ```
 
-`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. This foundation does not add a public combined endpoint API, and it does not claim that B/IP and BACnet/SC operate together as one device.
+`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. The public `bacnet-endpoint` crate composes sibling requester and bounded responder roles on that private foundation. One `EndpointSession` owns one B/IP, SC or MS/TP transport; this is not a multi-link router or full `bacnet-server` responder replacement. See [endpoint scope](rust-api.md#bacnet-endpoint-forward-path-rb-18).
+
+Local nonrouter Number controls take a separate bounded path: one serial state owner per standalone client, full server or shared endpoint consumes eligible parsed controls without blocking independent APDU dispatch. Raw network controls remain available for other consumers, including routed Reject correlation. A client or unregistered owner starts UNKNOWN on an opted-in transport. Only an explicitly registered NORMAL B/IP receiving-port object supplies configured number authority; an unrelated database declaration cannot supply it. The capability is separate from registration metadata and from multiport/router behavior. See [Number controls and lifecycle](rust-api.md#local-network-number-controls).
 
 MAC address format varies by transport:
 - **BIP**: 6 bytes (4-byte IPv4 + 2-byte port, big-endian)

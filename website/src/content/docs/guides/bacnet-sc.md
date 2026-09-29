@@ -4,7 +4,7 @@ description: "Treat certificate trust, local identities, and build features as e
 ---
 
 :::caution[Release guide, not current dev]
-This page targets **v0.11.0**. Current `dev` has intentionally stricter SC configuration: the CLI requires explicit `--sc-ca` with no system-root fallback; Python requires explicit CA/operational credentials and device UUIDs. Do not mix those APIs with the release commands below. See the current-dev engineering references for [CLI trust migration](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/CLI.md#transport-variants), [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md#required-operational-credentials), and [device UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md#sc-device-uuid-migration).
+This page targets **v0.11.0**. Current `dev` has intentionally stricter SC configuration: the CLI requires explicit `--sc-ca` with no system-root fallback; Python requires explicit CA/operational credentials and device UUIDs. Do not mix those APIs with the release commands below. Follow the [current SC setup guide](/rusty-bacnet/development/bacnet-sc/) and the engineering references for [CLI trust migration](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/CLI.md#transport-variants), [Python credentials](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/python-api.md#required-operational-credentials), and [device UUID migration](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/python-api.md#sc-device-uuid-migration).
 :::
 
 BACnet/SC setup combines a WebSocket/TLS connection with BACnet-specific identities and hub behavior. A successful TCP or TLS connection alone does not establish a complete BACnet/SC deployment.
@@ -17,10 +17,10 @@ Keep private keys outside the repository and the generated site. Example names b
 
 ## CLI feature and identity setup
 
-Build a CLI with the `sc-tls` feature when required:
+From the [v0.11.0 source checkout](/rusty-bacnet/start/installation/#prefer-a-source-build), build a CLI with the `sc-tls` feature:
 
 ```sh
-cargo install bacnet-cli --version 0.11.0 --locked --features sc-tls
+cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
 
 The reviewed CLI requires a hub URL, client certificate, private key, local VMAC, and nonzero local device UUID:

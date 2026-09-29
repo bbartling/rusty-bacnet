@@ -49,7 +49,9 @@ test('download, MDX source view, Markdown exports and llms are source-derived', 
   expect(await download.text()).toBe(source);
   const llms = await request.get(base + 'llms.txt');
   const index = await llms.text();
-  expect(index.match(/^- \[/gm)).toHaveLength(19);
+  expect(index.match(/^- \[/gm)).toHaveLength(routes.length - 1);
+  expect(index).toContain("v0.11.0 release tutorials");
+  expect(index).toContain("Use development/ for unreleased source APIs");
   for (const route of routes.filter(Boolean)) {
     const rawPath = `raw/${route.slice(0, -1)}.md`;
     expect(index).toContain(origin + base + rawPath);
@@ -60,6 +62,11 @@ test('download, MDX source view, Markdown exports and llms are source-derived', 
     expect(body).not.toMatch(/\]\(\/(?!rusty-bacnet\/)/);
     expect(body).not.toMatch(/<(?:Tabs|TabItem|Code|Diagram|NextStep|DownloadList)\b/);
     if (route === 'start/local-lab/') expect(body).toContain(source.trim());
+    if (route.startsWith('development/')) {
+      expect(body).toMatch(/current development|unreleased source/i);
+      expect(body).toContain('https://gitlab.com/justinscott-group/rusty-bacnet/');
+      expect(index).toContain(`[Current development: `);
+    }
   }
   await page.goto(base + 'start/local-lab/');
   await page.getByText('Show the complete loopback_lab.py script', { exact: true }).click();

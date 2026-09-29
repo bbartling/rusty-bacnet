@@ -15,7 +15,7 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(join(root, 'public/examples'), { recursive: true });
 await copyFile(join(root, 'examples/python/loopback_lab.py'), join(root, 'public/examples/loopback_lab.py'));
-const links = ['# Rusty BACnet', '', '> Guides for v0.11.0; pre-1.0 APIs and partial conformance.', '', 'Read individual pages for the task at hand. The local lab is loopback-only.', '', '## Guides', ''];
+const links = ['# Rusty BACnet', '', '> v0.11.0 release tutorials and explicitly marked current-development guides; pre-1.0 APIs and partial conformance.', '', 'Use start/ and guides/ for the v0.11.0 release. Use development/ for unreleased source APIs; record the checkout revision. Reference and project pages name their scope. The local lab is loopback-only.', '', '## Guides', ''];
 let count = 0;
 for (const file of await walk(docs)) {
   if (!isGuideFile(file)) continue;
@@ -25,7 +25,7 @@ for (const file of await walk(docs)) {
   const target = join(output, name);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, `# ${page.title}\n\n${await plainBody(page.body, file, downloads)}\n`);
-  links.push(`- [${page.title}](https://jscott3201.github.io/rusty-bacnet/raw/${name})`);
+  links.push(`- [${name.startsWith('development/') ? 'Current development: ' : ''}${page.title}](https://jscott3201.github.io/rusty-bacnet/raw/${name})`);
   count++;
 }
 await writeFile(join(root, 'public/llms.txt'), links.join('\n') + '\n');

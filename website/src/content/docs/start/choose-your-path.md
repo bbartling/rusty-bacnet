@@ -5,6 +5,10 @@ description: "CLI, Python, or Rust: choose the path that matches your work."
 
 Rusty BACnet is a protocol stack with three user-facing entry points, not a desktop building-management application. Use the CLI to inspect an authorized network, Python to automate a task, or Rust to embed BACnet in your own software.
 
+## Building from current source?
+
+Use the [development overview](/rusty-bacnet/development/overview/) for shared endpoints, current SC setup and passive Number controls. The installation and tutorials below remain scoped to v0.11.0.
+
 ## Start without hardware
 
 The [local client/server lab](/rusty-bacnet/start/local-lab/) is the shortest route to a complete read without a controller. Install the Python package, run the supplied script, and check the result before configuring a real network.
