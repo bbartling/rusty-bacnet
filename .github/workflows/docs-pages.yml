@@ -1,11 +1,8 @@
 name: Docs
 
+# PR validation runs on Forgejo (.forgejo/workflows/docs.yml). This workflow
+# only publishes a reviewed dev commit to GitHub Pages, on manual dispatch.
 on:
-  pull_request:
-    branches: [dev, main]
-    paths:
-      - 'website/**'
-      - '.github/workflows/docs-pages.yml'
   workflow_dispatch:
     inputs:
       publish:
@@ -19,8 +16,8 @@ on:
         default: ''
         required: false
 
-# PR checks cannot cancel a publication. Manual publications share one lane;
-# GitHub concurrency is not a FIFO queue, so dispatch one publication at a time.
+# Manual publications share one lane; GitHub concurrency is not a FIFO queue,
+# so dispatch one publication at a time.
 concurrency:
   group: docs-pages-${{ github.event_name == 'workflow_dispatch' && inputs.publish == true && 'publish' || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

@@ -1,7 +1,7 @@
 //! Command-line argument definitions.
 //!
 //! Split out of `main.rs` so that adding a flag or a subcommand does not push
-//! that file into the 700-LOC cap enforced by `.github/scripts/check-file-size.sh`.
+//! that file into the 700-LOC cap enforced by `scripts/ci/check-file-size.sh`.
 //! Dispatch stays in `main.rs`; this module is the clap surface only.
 
 use std::{net::Ipv4Addr, path::PathBuf};

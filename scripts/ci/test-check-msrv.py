@@ -75,7 +75,7 @@ class MsrvScriptTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="msrv-controls-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        script = self.root / ".github/scripts/check-msrv.sh"
+        script = self.root / "scripts/ci/check-msrv.sh"
         script.parent.mkdir(parents=True)
         shutil.copyfile(SCRIPT, script)
         self.script = script

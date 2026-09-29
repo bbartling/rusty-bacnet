@@ -1,214 +1,30 @@
-name: CI
+name: Release
+
+# Tag-driven publication only. CI runs on Forgejo (.forgejo/workflows/ci.yml),
+# which must be green on the tagged commit before the tag is pushed; the
+# Forgejo push mirror then carries the tag here. These jobs stay on GitHub
+# because they need GitHub-hosted macOS/Windows/arm64 runners, the `release`
+# environment secrets and PyPI trusted publishing (GitHub OIDC).
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main, dev]
-    types: [opened, synchronize, reopened]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  # Per-rule lint severity is set by `[workspace.lints]` in the root
-  # Cargo.toml. We intentionally do not set `RUSTFLAGS=-Dwarnings`
-  # here — that would override `missing_docs = "warn"` and turn the
-  # 3,335 known warnings into errors. Things we *do* want as errors
-  # (`unsafe_code`, `unused_must_use`, `clippy::todo`, etc.) are
-  # already `deny` in the workspace lints.
 
 permissions:
   contents: write
   id-token: write
 
-# =============================================================================
-# Tier 1 — CI
-#
-# Two tiers of jobs share the triggers (PRs to main/dev, push to main, v* tags):
-#   Lean  — every PR (incl. feature→dev), push to main, v* tags.
-#           Fast gate: fmt, clippy, file-size, no-secret, Linux test.
-#   Heavy — skips feature→dev PRs; runs on dev→main PRs, push to main, v* tags.
-#           Cross-OS tests, MSRV, cargo-audit, cargo-deny.
-# This keeps the high-throughput feature→dev loop fast while the dev→main
-# gate (and the tag/push-main release gate) run the full matrix before merge.
-#
-# Guard cheat-sheet (the `if:` on each job is one of these two):
-#   lean : github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-#   heavy: github.event_name == 'push' || github.base_ref == 'main'
-# =============================================================================
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  # Defense in depth with the top-level trigger: PRs run on main/dev,
-  # but merge pushes to dev must not spend CI if push filters change later.
-  fmt:
-    name: Rustfmt
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    name: Clippy
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
-
-  audit:
-    name: Cargo Audit
-    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cargo/advisory-db
-          key: advisory-db-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: advisory-db-${{ runner.os }}-
-      - run: cargo audit --color always
-
-  file-size-cap:
-    name: File-size cap (700 LOC)
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: bash .github/scripts/check-file-size.sh
-
-  no-secret-scan:
-    name: No-secret scan
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: bash .github/scripts/check-no-secrets.sh
-
-  msrv:
-    name: MSRV (1.93)
-    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
-    runs-on: ubuntu-latest
-    env:
-      # Override `rust-toolchain.toml` (which pins the dev/CI channel to
-      # 1.97.1) so this job exercises the documented MSRV from the
-      # workspace `Cargo.toml`.
-      RUSTUP_TOOLCHAIN: "1.93"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.93"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: msrv
-      # Derives the publishable crates from cargo metadata and checks them with
-      # the optional features a consumer can enable. See the script for why the
-      # list is derived rather than written down.
-      - run: bash .github/scripts/check-msrv.sh
-
-  test:
-    name: Test (${{ matrix.os }})
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux only in the lean tier: the full-feature suite (serial +
-          # ethernet are Linux-only deps). macOS/Windows run in `test-cross`
-          # below, gated to dev→main PRs / push-main / tags so the
-          # feature→dev loop isn't held up by cross-OS runners.
-          - os: ubuntu-latest
-            features: "--features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}
-          # Do not cache ~/.cargo/bin; a stale cache from an older runner
-          # image can clobber rustup's shims after dtolnay installs them,
-          # causing `cargo test` to invoke a broken `rustup-init`. This
-          # bit us on macos-15-arm64 image 20260511.0048 — see PR #21.
-          cache-bin: false
-      - run: cargo test --workspace --exclude rusty-bacnet --locked ${{ matrix.features }}
-
-  test-cross:
-    name: Test (${{ matrix.os }})
-    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Cross-OS legs (macOS/Windows) — heavy tier, only on dev→main PRs,
-          # push to main, and v* tags. Linux is already covered by `test`
-          # above in the lean tier.
-          - os: macos-latest
-            features: "--features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls"
-          - os: windows-latest
-            features: "--features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97.1"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.os }}
-          cache-bin: false
-      - run: cargo test --workspace --exclude rusty-bacnet --locked --no-fail-fast ${{ matrix.features }}
-
-  deny:
-    name: Cargo Deny
-    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: EmbarkStudios/cargo-deny-action@v2
-
   # ===========================================================================
-  # Tier 2 — Release (only on v* tags, after all CI passes)
+  # Release (v* tags pushed to GitHub by the Forgejo push mirror)
   # ===========================================================================
 
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    # Every Tier 1 job, listed in declaration order so the list can be audited
-    # against the jobs above at a glance. A Tier 1 job omitted here still runs on
-    # the tag and can still fail — it just stops gating the release, which is how
-    # file-size-cap and msrv came to be missing.
-    needs:
-      [
-        fmt,
-        clippy,
-        audit,
-        file-size-cap,
-        no-secret-scan,
-        msrv,
-        test,
-        test-cross,
-        deny,
-      ]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
