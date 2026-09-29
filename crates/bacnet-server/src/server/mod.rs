@@ -36,9 +36,7 @@ use bacnet_objects::notification_class::{
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
-use bacnet_services::cov_multiple::{
-    COVNotificationItem, COVNotificationMultipleRequest, COVNotificationValue,
-};
+use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;

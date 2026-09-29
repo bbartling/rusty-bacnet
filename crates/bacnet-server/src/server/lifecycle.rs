@@ -714,6 +714,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
         let db_intrinsic = Arc::clone(&db);
+        let cov_table_intrinsic = Arc::clone(&cov_table);
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
         let learned_routers_intrinsic = Arc::clone(&learned_routers);
@@ -725,6 +726,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             audit_owner.clone(),
             intrinsic::run(
                 db_intrinsic,
+                cov_table_intrinsic,
                 network_intrinsic,
                 comm_state_intrinsic,
                 learned_routers_intrinsic,

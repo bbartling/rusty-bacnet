@@ -28,6 +28,7 @@ const SF: PropertyIdentifier = PropertyIdentifier::STATUS_FLAGS;
 const PEER: [u8; 6] = [10, 0, 0, 5, 0xBA, 0xC0];
 
 fn at(second: u8) -> ClockFrame {
+    assert!(second < 60, "an invalid Device clock captures nothing");
     ClockFrame {
         local_date: Date {
             year: 126,
@@ -67,6 +68,8 @@ struct ClockTransport {
     clock: SharedClock,
     /// Device time once a SimpleACK has been sent.
     after_ack: Arc<StdMutex<Option<ClockFrame>>>,
+    /// Device time once a broadcast (an event notification) has been sent.
+    after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     fail_notifications: Arc<AtomicBool>,
 }
 
@@ -96,6 +99,9 @@ impl TransportPort for ClockTransport {
         Ok(())
     }
     async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
+        if let Some(frame) = self.after_broadcast.lock().unwrap().take() {
+            *self.clock.0.lock().unwrap() = frame;
+        }
         Ok(())
     }
     fn local_receive_apdu_capacity(&self) -> u16 {
@@ -112,12 +118,17 @@ struct Harness {
     frames: Frames,
     clock: SharedClock,
     after_ack: Arc<StdMutex<Option<ClockFrame>>>,
+    after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     fail_notifications: Arc<AtomicBool>,
     invoke_id: u8,
 }
 
 impl Harness {
     async fn start(config: ServerConfig) -> Self {
+        Self::start_with(config, |_| {}).await
+    }
+
+    async fn start_with(config: ServerConfig, extend: impl FnOnce(&mut ObjectDatabase)) -> Self {
         let (tx, rx) = mpsc::channel(16);
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
@@ -132,15 +143,18 @@ impl Harness {
         .unwrap();
         db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
             .unwrap();
+        extend(&mut db);
         let frames = Arc::new(StdMutex::new(Vec::new()));
         let clock = SharedClock(Arc::new(StdMutex::new(at(0))));
         let after_ack = Arc::new(StdMutex::new(None));
+        let after_broadcast = Arc::new(StdMutex::new(None));
         let fail_notifications = Arc::new(AtomicBool::new(false));
         let transport = ClockTransport {
             incoming: Some(rx),
             frames: Arc::clone(&frames),
             clock: clock.clone(),
             after_ack: Arc::clone(&after_ack),
+            after_broadcast: Arc::clone(&after_broadcast),
             fail_notifications: Arc::clone(&fail_notifications),
         };
         let server = BACnetServer::start(config, db, transport).await.unwrap();
@@ -156,6 +170,7 @@ impl Harness {
             frames,
             clock,
             after_ack,
+            after_broadcast,
             fail_notifications,
             invoke_id: 0,
         }
@@ -211,23 +226,39 @@ impl Harness {
     }
 
     async fn subscribe(&mut self, confirmed: bool) {
+        self.subscribe_specs(confirmed, vec![(av1(), vec![(PV, true)])])
+            .await;
+    }
+
+    /// One context: `(object, [(property, timestamped)])` specifications.
+    async fn subscribe_specs(
+        &mut self,
+        confirmed: bool,
+        specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
+    ) {
         let mut body = BytesMut::new();
         SubscribeCOVPropertyMultipleRequest {
             subscriber_process_identifier: 856,
             issue_confirmed_notifications: confirmed,
             lifetime: Some(300),
             max_notification_delay: Some(10),
-            list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-                monitored_object_identifier: av1(),
-                list_of_cov_references: vec![COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PV,
-                        property_array_index: None,
-                    },
-                    cov_increment: Some(0.5),
-                    timestamped: true,
-                }],
-            }],
+            list_of_cov_subscription_specifications: specs
+                .into_iter()
+                .map(|(object, references)| COVSubscriptionSpecification {
+                    monitored_object_identifier: object,
+                    list_of_cov_references: references
+                        .into_iter()
+                        .map(|(property, timestamped)| COVReference {
+                            monitored_property: PropertyReference {
+                                property_identifier: property,
+                                property_array_index: None,
+                            },
+                            cov_increment: (property == PV).then_some(0.5),
+                            timestamped,
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
         .encode(&mut body)
         .unwrap();
@@ -263,9 +294,13 @@ impl Harness {
     }
 
     async fn write_local(&self, value: f32) {
+        self.write_local_to(av1(), value).await;
+    }
+
+    async fn write_local_to(&self, object: ObjectIdentifier, value: f32) {
         self.server
             .write_local(
-                &av1(),
+                &object,
                 PV,
                 None,
                 PropertyValue::Real(value),
@@ -310,18 +345,28 @@ impl Harness {
     }
 
     async fn no_notification(&self) {
-        for _ in 0..50 {
-            tokio::task::yield_now().await;
-        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
-            !self
-                .frames
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|apdu| matches!(apdu, Apdu::UnconfirmedRequest(_))),
+            !self.frames.lock().unwrap().iter().any(|apdu| match apdu {
+                Apdu::UnconfirmedRequest(_) => true,
+                Apdu::ConfirmedRequest(request) =>
+                    request.service_choice
+                        == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                _ => false,
+            }),
             "no notification expected"
         );
+    }
+
+    /// Wait until every confirmed notification worker has finished.
+    async fn workers_idle(&self) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.server.notification_transactions.active_count() > 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("confirmed notification workers finished");
     }
 }
 
@@ -471,35 +516,231 @@ async fn failed_send_keeps_changes_for_the_next_notification() {
 
 #[tokio::test]
 async fn full_history_drops_the_oldest_changes_and_counts_them() {
+    // 206-octet APDU: the context holds three PV + Status_Flags changes.
     let mut h = Harness::start(ServerConfig {
-        max_apdu_length: 128,
+        max_apdu_length: 206,
         ..ServerConfig::default()
     })
     .await;
     h.subscribe(false).await;
     h.notification().await;
     h.server.comm_state.store(2, Ordering::Release);
-    for (second, value) in [(31, 1.0), (32, 2.0), (33, 3.0)] {
+    for (second, value) in [(31, 1.0), (32, 2.0), (33, 3.0), (34, 4.0), (35, 5.0)] {
         h.set_clock(second);
         h.write_local(value).await;
     }
-    let dropped = h.server.cov_counters().timed_changes_dropped;
-    assert!(dropped >= 1, "a 128-octet APDU cannot hold three changes");
+    assert_eq!(h.server.cov_counters().timed_changes_dropped, 2);
     h.server.comm_state.store(0, Ordering::Release);
-    h.set_clock(34);
-    h.write_local(4.0).await;
+    h.set_clock(36);
+    h.write_local(6.0).await;
     let report = h.notification().await;
-    let pv = pv_rows(&report);
     assert_eq!(
-        pv.last(),
-        Some(&(real(4.0), Some(time(34)))),
-        "newest change kept"
+        pv_rows(&report),
+        vec![
+            (real(4.0), Some(time(34))),
+            (real(5.0), Some(time(35))),
+            (real(6.0), Some(time(36))),
+        ],
+        "the newest changes survive, oldest first"
     );
-    assert!(pv.len() < 4, "oldest changes were evicted: {pv:?}");
+    assert_eq!(h.server.cov_counters().timed_changes_dropped, 3);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn confirmed_changes_retire_once_transmitted() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.subscribe(true).await;
+    h.notification().await;
+    h.set_clock(41);
+    h.write_local(1.0).await;
     assert_eq!(
-        pv.first().map(|(_, time_of_change)| *time_of_change),
-        Some(Some(time(34 - pv.len() as u8 + 1))),
-        "survivors are the most recent changes"
+        pv_rows(&h.notification().await),
+        vec![(real(1.0), Some(time(41)))]
+    );
+    // Unacknowledged, but transmitted: the next report does not repeat it.
+    h.set_clock(42);
+    h.write_local(2.0).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(2.0), Some(time(42)))]
+    );
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn confirmed_changes_never_transmitted_return_for_the_next_report() {
+    let mut h = Harness::start(ServerConfig {
+        cov_retry_timeout_ms: 10,
+        ..ServerConfig::default()
+    })
+    .await;
+    h.subscribe(true).await;
+    h.notification().await;
+    h.fail_notifications.store(true, Ordering::Release);
+    h.set_clock(43);
+    h.write_local(3.0).await;
+    h.workers_idle().await;
+    h.fail_notifications.store(false, Ordering::Release);
+    h.set_clock(44);
+    h.write_local(4.0).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(3.0), Some(time(43))), (real(4.0), Some(time(44)))]
+    );
+    h.server.stop().await.unwrap();
+}
+
+/// AV-1 alarms above 80 and reports through Notification Class 0, whose
+/// local-broadcast recipient makes the event notification observable.
+fn high_limit_alarm(db: &mut ObjectDatabase) {
+    let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
+    nc.add_destination(super::event_notifications_tests::local_broadcast_destination());
+    db.add(Box::new(nc)).unwrap();
+    let object = db.get_mut(&av1()).unwrap();
+    for (property, value) in [
+        (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
+        (PropertyIdentifier::LOW_LIMIT, 0.0),
+        (PropertyIdentifier::DEADBAND, 1.0),
+    ] {
+        object
+            .write_property(property, None, PropertyValue::Real(value), None)
+            .unwrap();
+    }
+    for (property, unused_bits, bits) in [
+        (PropertyIdentifier::LIMIT_ENABLE, 6, 0xC0),
+        (PropertyIdentifier::EVENT_ENABLE, 5, 0xE0),
+    ] {
+        object
+            .write_property(
+                property,
+                None,
+                PropertyValue::BitString {
+                    unused_bits,
+                    data: vec![bits],
+                },
+                None,
+            )
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn alarm_status_change_carries_its_transition_time() {
+    let mut h = Harness::start_with(ServerConfig::default(), high_limit_alarm).await;
+    h.subscribe(false).await;
+    h.notification().await;
+    h.set_clock(40);
+    // The event notification goes out before COV fanout; move the clock then.
+    *h.after_broadcast.lock().unwrap() = Some(at(50));
+    h.write_local(90.0).await;
+    let report = h.notification().await;
+    assert_eq!(
+        *h.clock.0.lock().unwrap(),
+        at(50),
+        "event notification was sent"
+    );
+    let flags: Vec<_> = rows(&report)
+        .into_iter()
+        .filter(|(property, _, _)| *property == SF)
+        .collect();
+    assert_eq!(flags.len(), 2, "normal then in-alarm flags: {flags:?}");
+    assert_ne!(
+        flags[0].1, flags[1].1,
+        "the transition changed Status_Flags"
+    );
+    assert!(
+        flags
+            .iter()
+            .all(|(_, _, time_of_change)| *time_of_change == Some(time(40))),
+        "both captured when committed, not when prepared: {flags:?}"
+    );
+    assert_eq!(envelope(&report), Some((at(40).local_date, time(40))));
+    h.server.stop().await.unwrap();
+}
+
+fn av2() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap()
+}
+
+#[tokio::test]
+async fn any_notification_to_the_context_conveys_every_pending_timestamped_change() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
+            .unwrap();
+    })
+    .await;
+    h.subscribe_specs(
+        false,
+        vec![(av1(), vec![(PV, true)]), (av2(), vec![(PV, true)])],
+    )
+    .await;
+    h.notification().await;
+    h.server.comm_state.store(2, Ordering::Release);
+    h.set_clock(51);
+    h.write_local_to(av1(), 11.0).await;
+    h.no_notification().await;
+    h.server.comm_state.store(0, Ordering::Release);
+    h.set_clock(52);
+    h.write_local_to(av2(), 12.0).await;
+    let report = h.notification().await;
+    let items: Vec<_> = report
+        .list_of_cov_notifications
+        .iter()
+        .map(|item| {
+            let pv: Vec<_> = item
+                .list_of_values
+                .iter()
+                .filter(|value| value.property_identifier == PV)
+                .map(|value| (value.value.clone(), value.time_of_change))
+                .collect();
+            (item.monitored_object_identifier, pv)
+        })
+        .collect();
+    assert!(
+        items.contains(&(av1(), vec![(real(11.0), Some(time(51)))])),
+        "AV-1's held change travels with AV-2's report: {items:?}"
+    );
+    assert!(items.contains(&(av2(), vec![(real(12.0), Some(time(52)))])));
+    assert_eq!(envelope(&report), Some((at(52).local_date, time(52))));
+    // Retired with that notification.
+    h.set_clock(53);
+    h.write_local_to(av2(), 12.0).await;
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_explicit_untimestamped_selector_is_never_repeated_as_history() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.subscribe_specs(false, vec![(av1(), vec![(PV, true), (SF, false)])])
+        .await;
+    h.notification().await;
+    h.server.comm_state.store(2, Ordering::Release);
+    h.set_clock(54);
+    h.write_local(10.0).await;
+    h.set_clock(55);
+    h.write_local(20.0).await;
+    h.server.comm_state.store(0, Ordering::Release);
+    h.set_clock(56);
+    h.write_local(30.0).await;
+    let report = h.notification().await;
+    assert_eq!(
+        pv_rows(&report),
+        vec![
+            (real(10.0), Some(time(54))),
+            (real(20.0), Some(time(55))),
+            (real(30.0), Some(time(56))),
+        ]
+    );
+    let flags: Vec<_> = rows(&report)
+        .into_iter()
+        .filter(|(property, _, _)| *property == SF)
+        .collect();
+    assert_eq!(
+        flags.len(),
+        1,
+        "Status_Flags is not timestamped history: {flags:?}"
     );
     h.server.stop().await.unwrap();
 }

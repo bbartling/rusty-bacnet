@@ -182,6 +182,17 @@ impl CovSubscriptionTable {
         self.subs.get(key)
     }
 
+    /// Every accepted reference of one Multiple context.
+    pub(crate) fn multiple_context_references<'a>(
+        &'a self,
+        context: &'a MultipleContextKey,
+    ) -> impl Iterator<Item = &'a CovSubscriptionSnapshot> + 'a {
+        self.subs
+            .iter()
+            .filter(move |(key, _)| key.multiple_context() == Some(context))
+            .map(|(_, sub)| sub)
+    }
+
     /// Whether an exact subscription identity is present.
     pub fn contains(&self, key: &CovSubscriptionKey) -> bool {
         self.subs.contains_key(key)

@@ -1,7 +1,12 @@
 use super::cov_clock::cov_multiple_datetime;
+use super::multiple_items::build_items;
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{TimedChange, TimedClaim};
+
+/// Octets of an unsegmented confirmed-request APDU header.
+const CONFIRMED_REQUEST_HEADER: usize = 4;
+use std::collections::HashSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Fire the initial COVNotificationMultiple for a newly accepted
@@ -130,7 +135,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
         let mut claim: Option<TimedClaim> = None;
-        let (device_oid, items, last_notified, representative, time_remaining, timestamp) = {
+        let (notification, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
             // identity, the clock sample for any current-state fallback and
             // every value. A producer snapshot carries its own captured
@@ -202,7 +207,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // object callback runs under the table guard. Each prepared value
             // owns its own check; a live sibling with a failed read cannot
             // authorize a stale value.
-            let retained: Vec<_> = {
+            let context = subscriptions[0]
+                .key()
+                .multiple_context()
+                .expect("Multiple snapshot")
+                .clone();
+            let (retained, untimed) = {
                 let table = cov_table.read().await;
                 let now = Instant::now();
                 let store = table.timed().clone();
@@ -217,21 +227,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     };
                     let current = match prepared {
                         Ok((values, baseline, completion)) => {
-                            retained.push((sub, values, baseline, completion, remaining));
+                            retained.push((sub.clone(), values, baseline, completion, remaining));
                             continue;
                         }
                         Err(current) => current,
+                    };
+                    let Some(completion) = sub.prepare_completion() else {
+                        continue;
                     };
                     // Captured changes carry their own commit times. The current
                     // state is conveyed as well only when it differs from the last
                     // captured or conveyed observation (a producer without capture),
                     // stamped with this preparation's clock.
                     let mut timed = store.lock();
-                    let mut changes = timed.drain(sub.key(), sub.generation());
-                    let baseline = changes
-                        .last()
-                        .map(|change| change.observation().clone())
-                        .or_else(|| timed.baseline(sub.key(), sub.generation()).cloned())
+                    let (incarnation, mut changes) = timed.drain(sub.key(), sub.generation());
+                    // The store baseline is the newest captured or conveyed state;
+                    // a returned older change can sit at the tail of `changes`.
+                    let baseline = timed
+                        .baseline(sub.key(), sub.generation())
+                        .cloned()
+                        .or_else(|| changes.last().map(|change| change.observation().clone()))
                         .or_else(|| sub.last_notified_observation.clone());
                     // An admission capture already supplied the initial report.
                     let force = force
@@ -261,127 +276,79 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     else {
                         continue;
                     };
-                    let completion = sub.prepare_completion();
-                    claim.add(sub.key().clone(), sub.generation(), changes);
-                    if let Some(completion) = completion {
-                        retained.push((sub, Vec::new(), last, completion, remaining));
-                    }
+                    claim.add(sub.key().clone(), incarnation, changes);
+                    retained.push((sub.clone(), Vec::new(), last, completion, remaining));
                 }
-                retained
+                // Every notification to a context conveys all of its pending
+                // timestamped changes (§§13.17.1.1, 13.18.1.1), including those
+                // of references on objects that did not change now. Their
+                // captured values need no object read.
+                let mut untimed = HashSet::new();
+                for other in table.multiple_context_references(&context) {
+                    if !other.timestamped {
+                        untimed.insert((
+                            other.monitored_object_identifier,
+                            other.monitored_property,
+                            other.monitored_property_array_index,
+                        ));
+                        continue;
+                    }
+                    if subscriptions.iter().any(|sub| sub.key() == other.key()) {
+                        continue;
+                    }
+                    let Some(remaining) = table
+                        .remaining_lifetime(other, now)
+                        .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                    else {
+                        continue;
+                    };
+                    let Some(completion) = other.prepare_completion() else {
+                        continue;
+                    };
+                    let (incarnation, changes) =
+                        store.lock().drain(other.key(), other.generation());
+                    let Some(last) = changes.last().map(|change| change.observation().clone())
+                    else {
+                        continue;
+                    };
+                    claim.add(other.key().clone(), incarnation, changes);
+                    retained.push((other.clone(), Vec::new(), last, completion, remaining));
+                }
+                (retained, untimed)
             };
             let claim = claim.as_mut().expect("claim created under the table guard");
-            claim.fit();
-            let claim = &*claim;
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
                 return;
             };
-            let representative = *representative;
+            let representative = representative.clone();
             let time_remaining = *time_remaining;
-            let mut items: Vec<COVNotificationItem> = Vec::new();
-            let mut last_notified = Vec::new();
-            let item_for = |items: &mut Vec<COVNotificationItem>, oid: ObjectIdentifier| {
-                items
-                    .iter()
-                    .position(|item| item.monitored_object_identifier == oid)
-                    .unwrap_or_else(|| {
-                        items.push(COVNotificationItem {
-                            monitored_object_identifier: oid,
-                            list_of_values: Vec::new(),
-                        });
-                        items.len() - 1
-                    })
-            };
-            // Queued history first: every earlier timestamped change as distinct
-            // values with its own time (repeated coordinates are permitted).
-            for (key, change) in claim.earlier() {
-                let index = item_for(&mut items, key.object());
-                let list = &mut items[index].list_of_values;
-                for value in change.values() {
-                    if !list.contains(value) {
-                        list.push(value.clone());
-                    }
-                }
-            }
-            let history: Vec<usize> = items.iter().map(|item| item.list_of_values.len()).collect();
-            // Current state: one value per coordinate. A timestamped reference
-            // contributes its latest change stamped with that change's own time.
-            let latest_time = |sub: &CovSubscriptionSnapshot| {
-                claim
-                    .latest(sub.key())
-                    .map(|change| change.frame().local_time)
-            };
-            let mut retained_subscriptions = Vec::new();
-            for (sub, values, baseline, completion, _) in retained {
-                last_notified.push((sub.clone(), baseline, completion));
-                retained_subscriptions.push(sub);
-                let values = if sub.timestamped {
-                    claim
-                        .latest(sub.key())
-                        .map(|change| change.values().to_vec())
-                        .unwrap_or_default()
-                } else {
-                    values
+            let parts: Vec<_> = retained
+                .iter()
+                .map(|(sub, values, _, _, _)| (sub, values.as_slice()))
+                .collect();
+            // Fit the encoded request into one local APDU (confirmed header is
+            // the larger form) by discarding the oldest queued history; the
+            // latest change of every reference is always kept.
+            let notification = loop {
+                let notification = COVNotificationMultipleRequest {
+                    subscriber_process_identifier: representative.subscriber_process_identifier,
+                    initiating_device_identifier: device_oid,
+                    time_remaining,
+                    timestamp: claim.last_frame().map(cov_multiple_datetime),
+                    list_of_cov_notifications: build_items(claim, &parts, &reads, &untimed),
                 };
-                let index = item_for(&mut items, sub.monitored_object_identifier);
-                let start = history.get(index).copied().unwrap_or(0);
-                for value in values {
-                    let current = &mut items[index].list_of_values[start..];
-                    if let Some(existing) = current.iter_mut().find(|v| {
-                        v.property_identifier == value.property_identifier
-                            && v.property_array_index == value.property_array_index
-                    }) {
-                        existing.time_of_change = existing.time_of_change.or(value.time_of_change);
-                    } else {
-                        items[index].list_of_values.push(value);
-                    }
+                let mut encoded = BytesMut::new();
+                let fits = notification.encode(&mut encoded).is_err()
+                    || encoded.len() + CONFIRMED_REQUEST_HEADER <= config.max_apdu_length as usize;
+                if fits || !claim.drop_oldest_earlier() {
+                    break notification;
                 }
-            }
-            for (index, item) in items.iter_mut().enumerate() {
-                let start = history.get(index).copied().unwrap_or(0);
-                if item.list_of_values[start..]
-                    .iter()
-                    .any(|v| v.property_identifier == PropertyIdentifier::STATUS_FLAGS)
-                {
-                    continue;
-                }
-                if let Some(encoded) = reads.encoded_flags(&item.monitored_object_identifier) {
-                    item.list_of_values.push(COVNotificationValue {
-                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                        property_array_index: None,
-                        value: encoded.to_vec(),
-                        time_of_change: None,
-                    });
-                }
-            }
-            // Qualified explicit selectors control their own current coordinate.
-            // OR above combines only implicit companion intent; an explicit false
-            // remains false. Unqualified references have no entry in this list.
-            for sub in &retained_subscriptions {
-                let Some(index) = items.iter().position(|item| {
-                    item.monitored_object_identifier == sub.monitored_object_identifier
-                }) else {
-                    continue;
-                };
-                let start = history.get(index).copied().unwrap_or(0);
-                if let Some(value) = items[index].list_of_values[start..]
-                    .iter_mut()
-                    .find(|value| {
-                        Some(value.property_identifier) == sub.monitored_property
-                            && value.property_array_index == sub.monitored_property_array_index
-                    })
-                {
-                    value.time_of_change = sub.timestamped.then(|| latest_time(sub)).flatten();
-                }
-            }
-            let timestamp = claim.last_frame().map(cov_multiple_datetime);
-            (
-                device_oid,
-                items,
-                last_notified,
-                representative,
-                time_remaining,
-                timestamp,
-            )
+            };
+            let last_notified: Vec<_> = retained
+                .into_iter()
+                .map(|(sub, _, baseline, completion, _)| (sub, baseline, completion))
+                .collect();
+            (notification, last_notified, representative)
         };
 
         // From the final live decision through fresh admission there is no await.
@@ -391,14 +358,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-
-        let notification = COVNotificationMultipleRequest {
-            subscriber_process_identifier: representative.subscriber_process_identifier,
-            initiating_device_identifier: device_oid,
-            time_remaining,
-            timestamp,
-            list_of_cov_notifications: items,
-        };
 
         if representative.issue_confirmed_notifications {
             let guard = match in_flight_tracker.try_acquire(
@@ -420,7 +379,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
 
             let (operation, result_rx) = match notification_transactions.reserve(
-                Self::canonical_cov_peer(representative),
+                Self::canonical_cov_peer(&representative),
                 ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
             ) {
                 Ok(reservation) => reservation,
@@ -550,7 +509,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .notification_bytes_sent
                 .fetch_add(buf.len() as u64, Ordering::Relaxed);
 
-            if let Err(e) = Self::send_cov_apdu(network, &buf, representative, false).await {
+            if let Err(e) = Self::send_cov_apdu(network, &buf, &representative, false).await {
                 warn!(error = %e, "Failed to send COVNotificationMultiple");
             } else {
                 if let Some(claim) = claim.take() {

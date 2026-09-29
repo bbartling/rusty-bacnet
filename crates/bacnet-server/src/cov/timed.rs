@@ -7,12 +7,15 @@
 //! [`TimedClaim`] that requeues its entries unless the notification was
 //! actually transmitted.
 //!
-//! Local bound policy (the Standard sets none): the pending changes of one
-//! COV-multiple context are limited to what one notification APDU can carry.
-//! On overflow the oldest change of the same reference is evicted first, then
-//! the oldest change in the context. A reference's newest change is never
-//! evicted, so every reference's current state is always conveyed. Each
-//! discarded change is counted in [`AtomicCovCounters::timed_changes_dropped`].
+//! Local bound policy: the pending changes of one COV-multiple context are
+//! limited to an estimate of what one notification APDU of the local maximum
+//! length can carry. The Standard expects additional notifications rather than
+//! loss (§13.1, §13.18.1.1); until notifications are split, this bounds memory
+//! by dropping instead, a documented deviation. On overflow the oldest change
+//! of the same reference is evicted first, then the oldest change in the
+//! context. A reference's newest change is never evicted, so every reference's
+//! current state is always conveyed. Each discarded change is counted in
+//! [`AtomicCovCounters::timed_changes_dropped`].
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
@@ -81,6 +84,9 @@ impl TimedChange {
 
 #[derive(Debug)]
 struct TimedHistory {
+    /// Identity of this history across renewals. A cancelled and recreated
+    /// reference gets a new one, so late returns cannot reach it.
+    incarnation: u64,
     generation: u64,
     /// Latest observation already captured or conveyed; the next change
     /// qualifies against it rather than the last completed delivery.
@@ -97,6 +103,7 @@ pub(crate) struct TimedHistories {
     histories: HashMap<CovSubscriptionKey, TimedHistory>,
     context_bytes: HashMap<MultipleContextKey, usize>,
     next_seq: u64,
+    next_incarnation: u64,
     capacity: usize,
     counters: Arc<AtomicCovCounters>,
 }
@@ -107,6 +114,7 @@ impl TimedHistories {
             histories: HashMap::new(),
             context_bytes: HashMap::new(),
             next_seq: 1,
+            next_incarnation: 1,
             capacity,
             counters,
         }
@@ -115,12 +123,20 @@ impl TimedHistories {
     /// Bind a (re)published reference generation. A renewal keeps changes not
     /// yet conveyed; its initial report is captured afresh.
     pub(super) fn reset(&mut self, key: &CovSubscriptionKey, generation: u64) {
-        let history = self.histories.entry(key.clone()).or_insert(TimedHistory {
-            generation,
-            baseline: None,
-            committed: 0,
-            entries: VecDeque::new(),
-        });
+        let incarnation = self.next_incarnation;
+        let history = self
+            .histories
+            .entry(key.clone())
+            .or_insert_with(|| TimedHistory {
+                incarnation,
+                generation,
+                baseline: None,
+                committed: 0,
+                entries: VecDeque::new(),
+            });
+        if history.incarnation == incarnation {
+            self.next_incarnation += 1;
+        }
         history.generation = generation;
         history.baseline = None;
     }
@@ -168,31 +184,39 @@ impl TimedHistories {
         change
     }
 
-    /// Take every pending change of a live generation, oldest first.
-    pub(crate) fn drain(&mut self, key: &CovSubscriptionKey, generation: u64) -> Vec<TimedChange> {
+    /// Take every pending change of a live generation, oldest first, with the
+    /// history incarnation that later commits or returns them.
+    pub(crate) fn drain(
+        &mut self,
+        key: &CovSubscriptionKey,
+        generation: u64,
+    ) -> (u64, Vec<TimedChange>) {
         let Some(history) = self.history_mut(key, generation) else {
-            return Vec::new();
+            return (0, Vec::new());
         };
+        let incarnation = history.incarnation;
         let drained: Vec<_> = history.entries.drain(..).collect();
         let bytes = drained.iter().map(|e| e.encoded_len).sum();
         self.release_bytes(key, bytes);
-        drained
+        (incarnation, drained)
     }
 
     /// Record that changes up to `seq` were transmitted.
-    fn commit(&mut self, key: &CovSubscriptionKey, generation: u64, seq: u64) {
-        if let Some(history) = self.history_mut(key, generation) {
+    fn commit(&mut self, key: &CovSubscriptionKey, incarnation: u64, seq: u64) {
+        if let Some(history) = self.incarnation_mut(key, incarnation) {
             history.committed = history.committed.max(seq);
         }
     }
 
-    /// Return untransmitted changes to their reference in capture order. A
-    /// replaced or removed generation discards them, and so does a newer
-    /// transmitted change: delivering them now would regress the subscriber.
-    fn requeue(&mut self, key: &CovSubscriptionKey, generation: u64, changes: Vec<TimedChange>) {
-        let Some(history) = self.history(key, generation) else {
+    /// Return untransmitted changes to their reference in capture order, also
+    /// across a renewal. A cancelled reference discards them, and a newer
+    /// transmitted change supersedes them: delivering them now would regress
+    /// the subscriber.
+    fn requeue(&mut self, key: &CovSubscriptionKey, incarnation: u64, changes: Vec<TimedChange>) {
+        let Some(history) = self.incarnation_mut(key, incarnation) else {
             return;
         };
+        let generation = history.generation;
         let committed = history.committed;
         let (keep, stale): (Vec<_>, Vec<_>) = changes
             .into_iter()
@@ -293,6 +317,16 @@ impl TimedHistories {
             .get_mut(key)
             .filter(|h| h.generation == generation)
     }
+
+    fn incarnation_mut(
+        &mut self,
+        key: &CovSubscriptionKey,
+        incarnation: u64,
+    ) -> Option<&mut TimedHistory> {
+        self.histories
+            .get_mut(key)
+            .filter(|h| h.incarnation == incarnation)
+    }
 }
 
 /// Shared handle to the table's timestamped histories. Locked only for short
@@ -301,7 +335,6 @@ impl TimedHistories {
 #[derive(Debug, Clone)]
 pub(crate) struct TimedStore {
     histories: Arc<Mutex<TimedHistories>>,
-    capacity: usize,
 }
 
 impl TimedStore {
@@ -309,7 +342,6 @@ impl TimedStore {
         let capacity = max_apdu_length.saturating_sub(ENVELOPE_RESERVE);
         Self {
             histories: Arc::new(Mutex::new(TimedHistories::new(capacity, counters))),
-            capacity,
         }
     }
 
@@ -341,43 +373,35 @@ impl TimedClaim {
     pub(crate) fn add(
         &mut self,
         key: CovSubscriptionKey,
-        generation: u64,
+        incarnation: u64,
         changes: Vec<TimedChange>,
     ) {
         if !changes.is_empty() {
-            self.changes.push((key, generation, changes));
+            self.changes.push((key, incarnation, changes));
         }
     }
 
-    /// Keep one notification's history within the context bound: discard the
-    /// oldest change that some newer claimed change of its reference
-    /// supersedes, until the claim fits. Latest changes are always kept.
-    pub(crate) fn fit(&mut self) {
-        loop {
-            let used: usize = self
-                .changes
-                .iter()
-                .flat_map(|(_, _, changes)| changes)
-                .map(|change| change.encoded_len)
-                .sum();
-            if used <= self.store.capacity {
-                return;
-            }
-            let Some(at) = self
-                .changes
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, _, changes))| changes.len() > 1)
-                .min_by_key(|(_, (_, _, changes))| changes[0].seq)
-                .map(|(at, _)| at)
-            else {
-                return;
-            };
-            self.changes[at].2.remove(0);
-            self.store
-                .lock()
-                .dropped(&self.changes[at].0, 1, "notification history full");
-        }
+    /// Discard the oldest claimed change that a newer claimed change of its
+    /// reference supersedes, so a notification fits its APDU. `false` when
+    /// only each reference's latest change remains.
+    pub(crate) fn drop_oldest_earlier(&mut self) -> bool {
+        let Some(at) = self
+            .changes
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, changes))| changes.len() > 1)
+            .min_by_key(|(_, (_, _, changes))| changes[0].seq)
+            .map(|(at, _)| at)
+        else {
+            return false;
+        };
+        self.changes[at].2.remove(0);
+        self.store.lock().dropped(
+            &self.changes[at].0,
+            1,
+            "notification exceeds the maximum APDU",
+        );
+        true
     }
 
     /// The latest claimed change of a reference: its current conveyed state.
@@ -415,9 +439,9 @@ impl TimedClaim {
     /// The notification carrying these changes was transmitted: retire them.
     pub(crate) fn commit(mut self) {
         let mut store = self.store.lock();
-        for (key, generation, changes) in self.changes.drain(..) {
+        for (key, incarnation, changes) in self.changes.drain(..) {
             if let Some(last) = changes.last() {
-                store.commit(&key, generation, last.seq);
+                store.commit(&key, incarnation, last.seq);
             }
         }
     }
@@ -429,8 +453,8 @@ impl Drop for TimedClaim {
             return;
         }
         let mut store = self.store.lock();
-        for (key, generation, changes) in self.changes.drain(..) {
-            store.requeue(&key, generation, changes);
+        for (key, incarnation, changes) in self.changes.drain(..) {
+            store.requeue(&key, incarnation, changes);
         }
     }
 }

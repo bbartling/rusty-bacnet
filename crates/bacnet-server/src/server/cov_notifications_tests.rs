@@ -5,6 +5,7 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, Time};
 use bytes::Bytes;

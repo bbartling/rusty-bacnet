@@ -3,9 +3,10 @@
 //! Producers capture while still holding the database write guard that
 //! committed the change, so each captured value is paired with the Device
 //! clock frame of the commit rather than the later time of notification
-//! preparation. The affected references are collected under a short COV
-//! table read; object reads then run without the table guard, and the timed
-//! store is locked last (database, then table, then timed store).
+//! preparation. Producers collect the affected references under a short COV
+//! table read and read objects after releasing it; the admission capture runs
+//! inside the subscribe handler, which already holds the table. The timed
+//! store is always locked last (database, then table, then timed store).
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -22,9 +23,9 @@ pub(crate) struct TimedCapture {
 
 impl CovSubscriptionTable {
     /// References of `oid` a committing mutation must capture. Producers
-    /// without capture (WritePropertyMultiple, staging writes, the Life Safety
-    /// path) still report through the builder's current-state fallback,
-    /// stamped when the notification is prepared.
+    /// without capture (WritePropertyMultiple, staging and source-completion
+    /// writes, the Life Safety path) still report through the builder's
+    /// current-state fallback, stamped when the notification is prepared.
     pub(crate) fn timed_capture(&self, oid: ObjectIdentifier) -> TimedCapture {
         // Life Safety fanout reports exact changed properties through its own
         // path; its references keep preparation-time stamping for now.

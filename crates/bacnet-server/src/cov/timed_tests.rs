@@ -90,13 +90,13 @@ fn values_carry_their_own_change_time_and_queue_in_capture_order() {
     h.push(&k, 7, change(1, 4));
     h.push(&k, 7, change(2, 4));
     assert_eq!(h.baseline(&k, 7), Some(change(2, 4).observation()));
-    let drained = h.drain(&k, 7);
+    let drained = h.drain(&k, 7).1;
     assert_eq!(seconds(&drained), [1, 2]);
     assert_eq!(
         drained[0].values()[0].time_of_change,
         Some(frame(1).local_time)
     );
-    assert!(h.drain(&k, 7).is_empty(), "drain retires the queue");
+    assert!(h.drain(&k, 7).1.is_empty(), "drain retires the queue");
     assert_eq!(h.baseline(&k, 7), Some(change(2, 4).observation()));
 }
 
@@ -108,7 +108,7 @@ fn overflow_evicts_the_oldest_change_of_the_same_reference_and_counts_it() {
     for second in 1..=3 {
         h.push(&k, 1, change(second, 4));
     }
-    assert_eq!(seconds(&h.drain(&k, 1)), [2, 3]);
+    assert_eq!(seconds(&h.drain(&k, 1).1), [2, 3]);
     assert_eq!(dropped(&counters), 1);
 }
 
@@ -123,16 +123,16 @@ fn overflow_evicts_the_oldest_in_the_context_but_never_a_lone_newest_change() {
     h.push(&a, 1, change(1, 4));
     h.push(&a, 1, change(2, 4));
     h.push(&b, 1, change(3, 4));
-    assert_eq!(seconds(&h.drain(&a, 1)), [2]);
-    assert_eq!(seconds(&h.drain(&b, 1)), [3]);
-    assert_eq!(seconds(&h.drain(&other, 1)), [9]);
+    assert_eq!(seconds(&h.drain(&a, 1).1), [2]);
+    assert_eq!(seconds(&h.drain(&b, 1).1), [3]);
+    assert_eq!(seconds(&h.drain(&other, 1).1), [9]);
     assert_eq!(dropped(&counters), 1);
 
     // A single change larger than the bound is still retained.
     let (mut h, counters) = histories(1, 4);
     h.reset(&a, 1);
     h.push(&a, 1, change(5, 64));
-    assert_eq!(seconds(&h.drain(&a, 1)), [5]);
+    assert_eq!(seconds(&h.drain(&a, 1).1), [5]);
     assert_eq!(dropped(&counters), 0);
 }
 
@@ -145,54 +145,70 @@ fn dropped_claim_requeues_ahead_of_newer_changes_and_commit_retires() {
     store.lock().push(&k, 3, change(2, 4));
 
     let mut claim = TimedClaim::new(store.clone());
-    let drained = store.lock().drain(&k, 3);
-    claim.add(k.clone(), 3, drained);
+    let (incarnation, drained) = store.lock().drain(&k, 3);
+    claim.add(k.clone(), incarnation, drained);
     assert_eq!(claim.earlier().len(), 1);
     assert_eq!(claim.latest(&k).map(|c| c.frame()), Some(frame(2)));
     assert_eq!(claim.last_frame(), Some(frame(2)));
     store.lock().push(&k, 3, change(3, 4));
     drop(claim);
-    assert_eq!(seconds(&store.lock().drain(&k, 3)), [1, 2, 3]);
+    assert_eq!(seconds(&store.lock().drain(&k, 3).1), [1, 2, 3]);
 
     store.lock().push(&k, 3, change(4, 4));
     let mut claim = TimedClaim::new(store.clone());
-    let drained = store.lock().drain(&k, 3);
-    claim.add(k.clone(), 3, drained);
+    let (incarnation, drained) = store.lock().drain(&k, 3);
+    claim.add(k.clone(), incarnation, drained);
     claim.commit();
-    assert!(store.lock().drain(&k, 3).is_empty());
+    assert!(store.lock().drain(&k, 3).1.is_empty());
 }
 
 #[test]
-fn replaced_or_removed_generations_discard_changes() {
+fn stale_generations_and_cancelled_references_keep_nothing() {
     let (store, _) = store(8, 4);
     let k = key(1, 1);
     store.lock().reset(&k, 1);
     store.lock().push(&k, 1, change(1, 4));
     assert!(
-        store.lock().drain(&k, 2).is_empty(),
+        store.lock().drain(&k, 2).1.is_empty(),
         "stale generation drains nothing"
     );
-
-    let mut claim = TimedClaim::new(store.clone());
-    let drained = store.lock().drain(&k, 1);
-    claim.add(k.clone(), 1, drained);
     store.lock().reset(&k, 2); // renewal publishes a new generation
-    drop(claim);
-    assert!(
-        store.lock().drain(&k, 2).is_empty(),
-        "old changes are not requeued"
-    );
     assert_eq!(store.lock().baseline(&k, 2), None);
-
     store.lock().push(&k, 1, change(5, 4)); // stale capture is ignored
-    assert!(store.lock().drain(&k, 2).is_empty());
+    assert_eq!(seconds(&store.lock().drain(&k, 2).1), [1]);
 
     store.lock().push(&k, 2, change(6, 4));
     store.lock().remove(&k);
     store.lock().push(&k, 2, change(7, 4));
     assert!(
-        store.lock().drain(&k, 2).is_empty(),
+        store.lock().drain(&k, 2).1.is_empty(),
         "removed reference keeps nothing"
+    );
+}
+
+#[test]
+fn a_failed_notification_returns_changes_across_renewal_but_not_recreation() {
+    let (store, _) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1);
+    store.lock().push(&k, 1, change(1, 4));
+    let mut claim = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    claim.add(k.clone(), incarnation, drained);
+    store.lock().reset(&k, 2); // renewal while the notification is in flight
+    drop(claim);
+    assert_eq!(seconds(&store.lock().drain(&k, 2).1), [1]);
+
+    store.lock().push(&k, 2, change(2, 4));
+    let mut claim = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 2);
+    claim.add(k.clone(), incarnation, drained);
+    store.lock().remove(&k); // cancelled and subscribed again
+    store.lock().reset(&k, 3);
+    drop(claim);
+    assert!(
+        store.lock().drain(&k, 3).1.is_empty(),
+        "a recreated reference never receives the old subscription's changes"
     );
 }
 
@@ -205,8 +221,8 @@ fn another_references_lone_newest_change_is_never_evicted() {
     }
     h.push(&a, 1, change(1, 4));
     h.push(&b, 1, change(2, 4));
-    assert_eq!(seconds(&h.drain(&a, 1)), [1]);
-    assert_eq!(seconds(&h.drain(&b, 1)), [2]);
+    assert_eq!(seconds(&h.drain(&a, 1).1), [1]);
+    assert_eq!(seconds(&h.drain(&b, 1).1), [2]);
     assert_eq!(dropped(&counters), 0);
 }
 
@@ -218,7 +234,7 @@ fn renewal_keeps_pending_changes_and_recaptures_its_baseline() {
     h.push(&k, 1, change(1, 4));
     h.reset(&k, 2);
     assert_eq!(h.baseline(&k, 2), None);
-    assert_eq!(seconds(&h.drain(&k, 2)), [1]);
+    assert_eq!(seconds(&h.drain(&k, 2).1), [1]);
 }
 
 #[test]
@@ -228,37 +244,68 @@ fn failed_older_notification_cannot_requeue_behind_a_transmitted_newer_one() {
     store.lock().reset(&k, 1);
     store.lock().push(&k, 1, change(1, 4));
     let mut first = TimedClaim::new(store.clone());
-    let drained = store.lock().drain(&k, 1);
-    first.add(k.clone(), 1, drained);
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    first.add(k.clone(), incarnation, drained);
 
     store.lock().push(&k, 1, change(2, 4));
     let mut second = TimedClaim::new(store.clone());
-    let drained = store.lock().drain(&k, 1);
-    second.add(k.clone(), 1, drained);
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    second.add(k.clone(), incarnation, drained);
     second.commit();
 
     drop(first); // its send failed after the newer change was delivered
-    assert!(store.lock().drain(&k, 1).is_empty());
+    assert!(store.lock().drain(&k, 1).1.is_empty());
     assert_eq!(dropped(&counters), 1);
 }
 
 #[test]
-fn fit_discards_oldest_superseded_history_but_keeps_latest_changes() {
-    let (store, counters) = store(2, 4);
+fn trimming_a_claim_discards_oldest_superseded_history_but_keeps_latest_changes() {
+    let (store, counters) = store(8, 4);
     let (a, b) = (key(1, 1), key(1, 2));
     let mut claim = TimedClaim::new(store.clone());
     let mut changes_a: Vec<_> = (1..=3).map(|s| change(s, 4)).collect();
     for (seq, c) in changes_a.iter_mut().enumerate() {
         c.seq = seq as u64 + 1;
     }
-    let mut change_b = change(9, 4);
-    change_b.seq = 9;
+    let mut changes_b: Vec<_> = [9, 10].into_iter().map(|s| change(s, 4)).collect();
+    changes_b[0].seq = 9;
+    changes_b[1].seq = 10;
     claim.add(a.clone(), 1, changes_a);
-    claim.add(b.clone(), 1, vec![change_b]);
-    claim.fit();
-    assert!(claim.earlier().is_empty());
+    claim.add(b.clone(), 1, changes_b);
+    let order = |claim: &TimedClaim| {
+        claim
+            .earlier()
+            .iter()
+            .map(|(_, c)| c.frame().local_time.second)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(&claim), [1, 2, 9]);
+    assert!(claim.drop_oldest_earlier());
+    assert_eq!(order(&claim), [2, 9], "oldest across the claim goes first");
+    assert!(claim.drop_oldest_earlier());
+    assert!(claim.drop_oldest_earlier());
+    assert!(
+        !claim.drop_oldest_earlier(),
+        "latest changes are never trimmed"
+    );
     assert_eq!(claim.latest(&a).map(|c| c.frame()), Some(frame(3)));
-    assert_eq!(claim.latest(&b).map(|c| c.frame()), Some(frame(9)));
-    assert_eq!(dropped(&counters), 2);
+    assert_eq!(claim.latest(&b).map(|c| c.frame()), Some(frame(10)));
+    assert_eq!(dropped(&counters), 3);
     claim.commit();
+}
+
+#[test]
+fn a_reference_evicts_its_own_oldest_change_before_a_siblings() {
+    let (mut h, counters) = histories(3, 4);
+    let (a, b) = (key(1, 1), key(1, 2));
+    for k in [&a, &b] {
+        h.reset(k, 1);
+    }
+    h.push(&b, 1, change(1, 4));
+    h.push(&b, 1, change(2, 4));
+    h.push(&a, 1, change(3, 4));
+    h.push(&a, 1, change(4, 4)); // over the bound: a's own oldest goes
+    assert_eq!(seconds(&h.drain(&a, 1).1), [4]);
+    assert_eq!(seconds(&h.drain(&b, 1).1), [1, 2]);
+    assert_eq!(dropped(&counters), 1);
 }

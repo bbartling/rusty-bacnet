@@ -1946,30 +1946,38 @@ replay guarantee.
 Timestamped SubscribeCOVPropertyMultiple references (§13.16.3.1.2.3) record each
 qualifying change together with the Device clock frame of its commit. The capture
 runs under the database write guard of network WriteProperty, `write_local`,
-Binary Lighting terminal transitions and committed intrinsic event transitions.
-Changes queue per reference until a notification carrying them is transmitted, so
-held, suppressed or failed sends convey the whole history in capture order. Each
-value carries its own `Time_Of_Change`, and the header timestamp names the last
-conveyed change (§§13.17.1.1, 13.18.1.1). A reference's latest change merges with
-untimestamped current values under the existing one-value-per-coordinate rules.
-Earlier changes are added as repeated coordinates. The initial report after
-admission or re-subscription is stamped with the Device time of admission; this is
-a local convention, since no change has been observed yet. Renewal keeps changes
-that were not yet conveyed.
+Binary Lighting terminal transitions and committed intrinsic transitions (both
+write-triggered and those confirmed by the periodic Time_Delay task). Changes queue
+per reference until a notification carrying them is transmitted. Any notification
+to a context also carries the pending changes of that context's other references
+(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`.
+Earlier changes of a reference come first, in capture order, as repeated
+coordinates. Its latest change then merges with untimestamped current values under
+the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
+without timestamps is never repeated or timestamped. The header timestamp names
+the latest timestamped change conveyed. The initial report after admission or
+re-subscription is stamped with the Device time of admission; this is a local
+convention, since no change has been observed yet. A renewal keeps changes not yet
+conveyed, including those of a notification that fails during the renewal.
 
-Local bound policy: one context's pending changes are limited to what one
-notification of the server's `max_apdu_length` can carry. On overflow the oldest
-change of the same reference is dropped first, then the oldest change in the
-context. A reference's newest change is never dropped. A failed notification whose
-changes were superseded by a transmitted newer change drops them rather than
-delivering stale state. Every drop increments `CovCounters::timed_changes_dropped`
-and logs a warning. `CovSubscriptionTable::with_max_apdu_length` sets the bound
-(the full server uses its configured capacity).
+Local bounds deviate from the Standard's expectation of additional notifications
+rather than loss (§13.1, §13.18.1.1). One context's pending changes are limited to
+an estimate of what one notification of the server's `max_apdu_length` can carry;
+on overflow the oldest change of the same reference is dropped first, then the
+oldest in the context. Before sending, the oldest queued history is trimmed until
+the encoded request fits the local maximum APDU. A reference's latest change is
+never dropped. A failed notification whose changes were superseded by a transmitted
+newer change drops them rather than delivering stale state. These drops increment
+`CovCounters::timed_changes_dropped` and log a warning. The subscriber's own
+maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
+the bound (the full server uses its configured capacity).
 
-WritePropertyMultiple, staging writes and Life Safety fanout are not captured yet.
-Their changes still report through the builder's current-state fallback, stamped
-when the notification is prepared (#856). `Max_Notification_Delay` remains
-reported but not acted on.
+WritePropertyMultiple, staging and source-completion writes and Life Safety fanout
+are not captured yet. Their changes still report through the builder's
+current-state fallback, stamped when the notification is prepared (#856).
+Transitions from the periodic intrinsic task are captured but trigger no COV
+notification of their own; they are conveyed with the context's next notification.
+`Max_Notification_Delay` remains reported but not acted on.
 
 The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
 Set or relinquish a priority slot by writing a value or NULL to `Present_Value`

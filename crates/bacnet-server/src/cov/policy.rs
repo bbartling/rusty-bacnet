@@ -137,8 +137,10 @@ pub struct CovCounters {
     pub notifications_throttled_fanout: u64,
     /// Total number of notifications throttled due to peer in-flight confirmed limit.
     pub notifications_throttled_peer: u64,
-    /// Total number of pending timestamped COV-multiple changes evicted because
-    /// their context exceeded the one-notification history bound.
+    /// Total number of pending timestamped COV-multiple changes discarded while
+    /// their reference stayed subscribed: evicted by the per-context history
+    /// bound, trimmed so a notification fits its APDU, or superseded by a newer
+    /// transmitted change when an older notification failed.
     pub timed_changes_dropped: u64,
 }
 
@@ -171,8 +173,10 @@ pub struct AtomicCovCounters {
     pub notifications_throttled_fanout: AtomicU64,
     /// Total number of notifications throttled due to peer in-flight confirmed limit.
     pub notifications_throttled_peer: AtomicU64,
-    /// Total number of pending timestamped COV-multiple changes evicted because
-    /// their context exceeded the one-notification history bound.
+    /// Total number of pending timestamped COV-multiple changes discarded while
+    /// their reference stayed subscribed: evicted by the per-context history
+    /// bound, trimmed so a notification fits its APDU, or superseded by a newer
+    /// transmitted change when an older notification failed.
     pub timed_changes_dropped: AtomicU64,
 }
 

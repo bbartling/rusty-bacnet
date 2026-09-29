@@ -29,18 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Timestamped COV-multiple reports now carry each change's actual commit time
-  instead of the time the notification was prepared, and they keep every
-  qualifying change until a notification carrying it is transmitted.
+  instead of the time the notification was prepared. Changes are kept until a
+  notification carrying them is transmitted.
   - **Capture points:** network WriteProperty, `write_local`, Binary Lighting
-    terminal transitions and intrinsic event transitions capture under the
+    terminal transitions and committed intrinsic transitions capture under the
     database write guard.
-  - **History:** held, suppressed or failed sends deliver the full ordered history
-    (for example A→B→A), and the header timestamp names the last conveyed change.
+  - **Delivery:** any notification to a context also carries that context's other
+    pending timestamped changes, earlier changes first, per reference (for example
+    A→B→A). The header timestamp names the latest timestamped change conveyed.
   - **Initial report:** the report after admission is stamped with the admission
-    time.
-  - **Bound:** pending history is limited to one notification APDU per context and
-    drops the oldest changes first, counted in the new
-    `CovCounters::timed_changes_dropped`.
+    time. A renewal keeps unconveyed changes.
+  - **Local bounds:** pending history is capped at an estimate of one notification
+    APDU per context, and each request is trimmed to fit the local maximum APDU,
+    dropping the oldest history first. This deviates from the Standard's
+    additional-notification expectation until splitting lands. Drops are counted
+    in the new `CovCounters::timed_changes_dropped` field, which breaks exhaustive
+    struct literals.
   - **Not yet captured:** WritePropertyMultiple, staging and Life Safety producers
     still use preparation time.
   - **API:** `CovSubscriptionTable::with_max_apdu_length` is new (#856).
