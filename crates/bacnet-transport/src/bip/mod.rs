@@ -540,7 +540,13 @@ impl TransportPort for BipTransport {
         )
         .map_err(Error::Transport)?;
 
-        socket2.set_reuse_address(true).map_err(Error::Transport)?;
+        // Linux gives an ephemeral port to an SO_REUSEADDR socket even while
+        // another SO_REUSEADDR socket owns it, and unicast to that port then
+        // reaches only one of them (#892). Only an explicitly requested port,
+        // such as 0xBAC0 shared by co-located BACnet applications, opts in.
+        if self.port != 0 {
+            socket2.set_reuse_address(true).map_err(Error::Transport)?;
+        }
         socket2.set_broadcast(true).map_err(Error::Transport)?;
         socket2.set_nonblocking(true).map_err(Error::Transport)?;
 
@@ -561,7 +567,7 @@ impl TransportPort for BipTransport {
         // Linux UDP socket bound to a specific interface IP only receives
         // packets whose destination IP matches the bound IP, so binding to
         // self.interface would silently drop every inbound broadcast — see
-        // tests::socket_is_broadcast_capable_and_binds_inaddr_any. `self.interface`
+        // socket_tests::socket_is_broadcast_capable_and_binds_inaddr_any. `self.interface`
         // is still used below for the announced local MAC (line 318), so I-Am
         // responses continue to advertise the correct source IP.
         let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.port);
@@ -859,6 +865,8 @@ mod original_tests;
 mod rate_limit_tests;
 #[cfg(test)]
 mod response_amplification_tests;
+#[cfg(test)]
+mod socket_tests;
 #[cfg(test)]
 mod tests;
 

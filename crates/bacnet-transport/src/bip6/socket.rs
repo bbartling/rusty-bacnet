@@ -36,7 +36,11 @@ impl Bip6Socket {
             Some(socket2::Protocol::UDP),
         )?;
         socket.set_only_v6(true)?;
-        socket.set_reuse_address(true)?;
+        // Only an explicit port opts into sharing: Linux would otherwise hand
+        // this ephemeral bind a port another SO_REUSEADDR socket owns (#892).
+        if port != 0 {
+            socket.set_reuse_address(true)?;
+        }
         socket.set_nonblocking(true)?;
         socket.set_multicast_loop_v6(true)?;
         let bound = if let Some(bbmd) = foreign {
@@ -148,6 +152,24 @@ fn admits(link: SelectedLink, datagram: &ReceivedDatagram) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn only_an_explicit_port_opts_into_address_reuse() {
+        let ephemeral = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+            .await
+            .unwrap();
+        assert!(!socket2::SockRef::from(&ephemeral.udp)
+            .reuse_address()
+            .unwrap());
+        let port = ephemeral.local_port().unwrap();
+        drop(ephemeral);
+        let explicit = Bip6Socket::bind(Ipv6Addr::LOCALHOST, port, None)
+            .await
+            .unwrap();
+        assert!(socket2::SockRef::from(&explicit.udp)
+            .reuse_address()
+            .unwrap());
+    }
 
     #[test]
     fn arrival_interface_and_selected_destination_are_required_before_learning() {

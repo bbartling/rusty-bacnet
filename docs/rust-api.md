@@ -498,6 +498,13 @@ let transport = BipTransport::new(
 );
 ```
 
+The socket binds the wildcard address so directed and limited broadcasts
+arrive. An explicit port sets `SO_REUSEADDR` so co-located BACnet applications
+can share 47808. Port zero asks for a private ephemeral port and never sets it:
+on Linux an `SO_REUSEADDR` bind to port zero can be given a port another such
+socket already holds, and unicast to that port then reaches only one of them.
+B/IPv6 applies the same rule.
+
 ### BIP6 (IPv6)
 
 ```rust
