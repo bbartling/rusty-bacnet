@@ -2,33 +2,41 @@
 
 This document explains how the rusty-bacnet crates fit together, how data flows through the stack, and how the major subsystems work.
 
-## Crate Dependency Graph
+## Crate layout and selected dependencies
 
-```
-bacnet-types          Enums, primitives, error types (no I/O)
-    |
-bacnet-encoding       ASN.1 tags, APDU/NPDU codec, property value encode/decode
-    |
-bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
-    |
-    +---> bacnet-transport    Data-link transports (BIP, SC, MS/TP, Ethernet, Loopback)
-    |         |
-    |     bacnet-network      Network layer, BACnetRouter, RouterTable
-    |         |
-    |     bacnet-endpoint-core  Private endpoint lifecycle, ingress, egress, coordination
-    |         |
-    +---> bacnet-objects      BACnetObject trait, ObjectDatabase, object implementations
-    |         |
-    |     bacnet-client       Async BACnet client (TSM, segmentation, discovery)
-    |     bacnet-server       Async BACnet server (dispatch, COV, events, scheduling)
-    |     bacnet-endpoint     Public shared owner with requester/bounded responder roles
-    |         |
-    +---> bacnet-cli          Interactive shell and CLI tool
-    |
-    +---> rusty-bacnet        Python bindings (PyO3)
+This layout groups responsibilities; it is not a complete Cargo dependency graph.
+The arrows below mean “depends on.” Lower-level dependencies and feature edges
+are omitted; each crate's `Cargo.toml` is the exact dependency authority.
+
+```text
+Foundations
+  bacnet-types          Enums, primitives, error types (no I/O)
+  bacnet-encoding       ASN.1 tags, APDU/NPDU codecs, value encoding
+  bacnet-services       Service request/response structures
+  bacnet-transport      Data-link transports and framing
+  bacnet-network        Network layer, BACnetRouter, RouterTable
+  bacnet-objects        BACnetObject, ObjectDatabase, object implementations
+
+Runtime and application roles
+  bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
+  bacnet-client         Async requester, transactions, discovery
+  bacnet-server         Full server dispatch, COV, events, scheduling
+  bacnet-endpoint       Public shared owner composing bounded sibling roles
+
+Selected direct dependencies
+  bacnet-endpoint -> bacnet-client, bacnet-server, bacnet-endpoint-core,
+                     bacnet-network, bacnet-objects
+  bacnet-cli     -> bacnet-client              (CLI application)
+  rusty-bacnet   -> bacnet-client, bacnet-server, bacnet-endpoint
+                                              (PyO3 bindings)
 ```
 
-The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3) during normal development.
+`bacnet-client`, `bacnet-server` and `bacnet-endpoint` are all workspace
+`default-members`, along with the foundational crates, endpoint-core, integration
+tests and benchmarks. The CLI (`bacnet-cli`) and PyO3 binding (`rusty-bacnet`)
+are excluded from default builds: the CLI pulls in heavier application
+dependencies, and the Python extension needs its native Python build context.
+They remain workspace members and can be selected explicitly.
 
 The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
