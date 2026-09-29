@@ -776,7 +776,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         })
     }
 
-    /// Apply the logical `Present_Value` supplied by an Input's application.
+    /// Apply the logical `Present_Value` supplied by the local application.
     ///
     /// This narrow internal hook is distinct from the network
     /// [`write_property`](Self::write_property) route. Built-in Analog Input,
@@ -784,6 +784,12 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// accept application updates only while in service; rejecting them while
     /// `Out_Of_Service` is TRUE is a local ownership policy that protects the
     /// client's simulation value, not a requirement imposed by the Standard.
+    ///
+    /// Analog, Binary, and Multi-state Value objects opt in unless their
+    /// [`PresentValueAccess`](crate::present_value_access::PresentValueAccess)
+    /// is `Commandable`. For them, rejecting updates while `Out_Of_Service` is
+    /// TRUE is required: their Out_Of_Service clause keeps software local to
+    /// the device from changing Present_Value.
     ///
     /// The default fails closed so commandable and other object families do not
     /// acquire privileged `Present_Value` write authority through this hook.

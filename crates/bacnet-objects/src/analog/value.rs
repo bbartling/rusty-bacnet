@@ -3,6 +3,7 @@ use crate::common::{
     read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
     write_generic_event_properties,
 };
+use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
 
 mod metadata;
@@ -23,6 +24,7 @@ pub struct AnalogValueObject {
     units: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
+    access: PresentValueAccess,
     /// 16-level priority array. `None` = no command at that level.
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
@@ -54,8 +56,18 @@ impl AnalogValueObject {
         self.audit_policy = policy;
     }
 
-    /// Create a new Analog Value object.
+    /// Create a new Analog Value object with a commandable Present_Value.
     pub fn new(instance: u32, name: impl Into<String>, units: u32) -> Result<Self, Error> {
+        Self::with_access(instance, name, units, PresentValueAccess::Commandable)
+    }
+
+    /// Create a new Analog Value object whose Present_Value is written as `access` says.
+    pub fn with_access(
+        instance: u32,
+        name: impl Into<String>,
+        units: u32,
+        access: PresentValueAccess,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance)?;
         Ok(Self {
             audit_policy: crate::audit::ObjectAuditPolicy::default(),
@@ -66,6 +78,7 @@ impl AnalogValueObject {
             units,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
+            access,
             priority_array: [None; 16],
             relinquish_default: 0.0,
             cov_increment: 0.0,
@@ -118,10 +131,23 @@ impl AnalogValueObject {
     /// after the store, Present_Value is resolved anew from the priority
     /// array so an empty array falls back to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: f32) -> Result<(), Error> {
+        if self.access != PresentValueAccess::Commandable {
+            return Err(common::unknown_property_error());
+        }
         common::reject_non_finite(value)?;
         self.relinquish_default = value;
         self.recalculate_present_value();
         Ok(())
+    }
+
+    fn checked_present_value(value: PropertyValue) -> Result<f32, Error> {
+        let PropertyValue::Real(v) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if !v.is_finite() {
+            return Err(common::value_out_of_range_error());
+        }
+        Ok(v)
     }
 }
 
@@ -151,6 +177,9 @@ impl BACnetObject for AnalogValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
         if let Some(result) = self
             .value_source
             .read(property, array_index, &self.priority_array)
@@ -237,26 +266,30 @@ impl BACnetObject for AnalogValueObject {
         {
             return Err(common::property_is_not_an_array_error());
         }
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == PropertyIdentifier::VALUE_SOURCE
+            && self.access == PresentValueAccess::Commandable
+        {
             return self.value_source.correct(value, priority, origin);
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
-            return crate::command_source::write_sourced_priority!(
-                self,
-                value,
-                priority,
-                origin,
-                |v| {
-                    if let PropertyValue::Real(f) = v {
-                        if !f.is_finite() {
-                            return Err(common::value_out_of_range_error());
-                        }
-                        Ok(f)
-                    } else {
-                        Err(common::invalid_data_type_error())
-                    }
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    crate::command_source::write_sourced_priority!(
+                        self,
+                        value,
+                        priority,
+                        origin,
+                        Self::checked_present_value
+                    )
                 }
-            );
+                PresentValueAccess::ReadOnly if !self.out_of_service => {
+                    Err(common::write_access_denied_error())
+                }
+                PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                    self.present_value = Self::checked_present_value(value)?;
+                    Ok(())
+                }
+            };
         }
         self.write_property(property, array_index, value, priority)
     }
@@ -268,6 +301,9 @@ impl BACnetObject for AnalogValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
         if let Some(result) = self
             .audit_policy
             .write(property, array_index, &value, priority)
@@ -411,6 +447,19 @@ impl BACnetObject for AnalogValueObject {
         self.reliability = reliability;
         self.fault_out_of_range.clear_ownership();
         Ok(())
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        match self.access {
+            PresentValueAccess::Commandable => {
+                Err(common::optional_functionality_not_supported_error())
+            }
+            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                self.present_value = Self::checked_present_value(value)?;
+                Ok(())
+            }
+        }
     }
 
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {

@@ -3,6 +3,7 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
@@ -97,6 +98,16 @@ const BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_object(object: &BinaryValueObject) -> Cow<'_, [PropertyMetadata]> {
+    object.access.project(rows(object))
+}
+
+/// Whether `property` is absent under the object's Present_Value access.
+pub(super) fn excludes(object: &BinaryValueObject, property: P) -> bool {
+    object.access != PresentValueAccess::Commandable
+        && object.access.excludes(&rows(object), property)
+}
+
+fn rows(object: &BinaryValueObject) -> Cow<'_, [PropertyMetadata]> {
     // Optional Audit rows belong to this particular value instance.
     let mut rows = Cow::Borrowed(BASE);
     if object.audit_policy != crate::audit::ObjectAuditPolicy::default() {

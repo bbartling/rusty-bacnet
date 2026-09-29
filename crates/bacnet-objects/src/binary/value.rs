@@ -1,4 +1,5 @@
 use super::*;
+use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
 
 #[path = "value/metadata.rs"]
@@ -10,7 +11,6 @@ mod metadata;
 
 /// BACnet Binary Value object.
 ///
-/// Commandable binary value with 16-level priority array.
 /// Uses Enumerated values: 0 = inactive, 1 = active.
 pub struct BinaryValueObject {
     audit_policy: crate::audit::ObjectAuditPolicy,
@@ -20,6 +20,7 @@ pub struct BinaryValueObject {
     present_value: u32, // 0 = inactive, 1 = active
     out_of_service: bool,
     status_flags: StatusFlags,
+    access: PresentValueAccess,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
@@ -46,8 +47,17 @@ impl BinaryValueObject {
         self.audit_policy = policy;
     }
 
-    /// Create a new Binary Value object.
+    /// Create a new Binary Value object with a commandable Present_Value.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
+        Self::with_access(instance, name, PresentValueAccess::Commandable)
+    }
+
+    /// Create a new Binary Value object whose Present_Value is written as `access` says.
+    pub fn with_access(
+        instance: u32,
+        name: impl Into<String>,
+        access: PresentValueAccess,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, instance)?;
         Ok(Self {
             audit_policy: crate::audit::ObjectAuditPolicy::default(),
@@ -57,6 +67,7 @@ impl BinaryValueObject {
             present_value: 0, // inactive
             out_of_service: false,
             status_flags: StatusFlags::empty(),
+            access,
             priority_array: [None; 16],
             relinquish_default: 0,
             reliability: 0,
@@ -90,12 +101,25 @@ impl BinaryValueObject {
     /// after the store, Present_Value is resolved anew from the priority
     /// array so an empty array falls back to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if self.access != PresentValueAccess::Commandable {
+            return Err(common::unknown_property_error());
+        }
         if value > 1 {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
         self.recalculate_present_value();
         Ok(())
+    }
+
+    fn checked_present_value(value: PropertyValue) -> Result<u32, Error> {
+        let PropertyValue::Enumerated(e) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if e > 1 {
+            return Err(common::value_out_of_range_error());
+        }
+        Ok(e)
     }
 }
 
@@ -156,6 +180,9 @@ impl BACnetObject for BinaryValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
         if let Some(result) = self
             .value_source
             .read(property, array_index, &self.priority_array)
@@ -241,27 +268,30 @@ impl BACnetObject for BinaryValueObject {
         {
             return Err(common::property_is_not_an_array_error());
         }
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == PropertyIdentifier::VALUE_SOURCE
+            && self.access == PresentValueAccess::Commandable
+        {
             return self.value_source.correct(value, priority, origin);
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
-            return crate::command_source::write_sourced_priority!(
-                self,
-                value,
-                priority,
-                origin,
-                |v| {
-                    if let PropertyValue::Enumerated(e) = v {
-                        if e > 1 {
-                            Err(common::value_out_of_range_error())
-                        } else {
-                            Ok(e)
-                        }
-                    } else {
-                        Err(common::invalid_data_type_error())
-                    }
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    crate::command_source::write_sourced_priority!(
+                        self,
+                        value,
+                        priority,
+                        origin,
+                        Self::checked_present_value
+                    )
                 }
-            );
+                PresentValueAccess::ReadOnly if !self.out_of_service => {
+                    Err(common::write_access_denied_error())
+                }
+                PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                    self.present_value = Self::checked_present_value(value)?;
+                    Ok(())
+                }
+            };
         }
         self.write_property(property, array_index, value, priority)
     }
@@ -273,6 +303,9 @@ impl BACnetObject for BinaryValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
         if let Some(result) = self
             .audit_policy
             .write(property, array_index, &value, priority)
@@ -396,6 +429,19 @@ impl BACnetObject for BinaryValueObject {
         }
         self.reliability = reliability;
         Ok(())
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        match self.access {
+            PresentValueAccess::Commandable => {
+                Err(common::optional_functionality_not_supported_error())
+            }
+            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                self.present_value = Self::checked_present_value(value)?;
+                Ok(())
+            }
+        }
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
