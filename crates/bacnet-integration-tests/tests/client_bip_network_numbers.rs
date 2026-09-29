@@ -55,7 +55,8 @@ async fn client_number_bbmd_wire_admission_and_release() {
     let fd = udp().await;
     let peer = udp().await;
     let denied = udp().await;
-    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, BROADCAST);
+    let (captured, port) = observer();
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
     transport.enable_bbmd(vec![BdtEntry {
         ip: Ipv4Addr::LOCALHOST.octets(),
         port: address(&bdt).port(),
@@ -63,7 +64,6 @@ async fn client_number_bbmd_wire_admission_and_release() {
     }]);
     transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let (client, local) = client(transport).await;
-    let captured = observer(local.port());
     let group = SocketAddrV4::new(BROADCAST, local.port());
     // Prove actual wildcard production intake and broadcast observer coexistence.
     send(&peer, group, &frame(11, QUERY)).await;

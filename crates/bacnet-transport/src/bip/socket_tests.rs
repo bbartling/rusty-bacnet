@@ -58,18 +58,25 @@ fn reuses_address(transport: &BipTransport) -> bool {
         .expect("SO_REUSEADDR is queryable")
 }
 
-#[tokio::test]
-async fn only_an_explicit_port_opts_into_address_reuse() {
+#[test]
+fn only_an_explicitly_requested_port_opts_into_address_reuse() {
     // Linux can hand two SO_REUSEADDR sockets the same ephemeral port, and
     // unicast to it then reaches only one of them (#892).
-    let mut ephemeral = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-    let _rx = ephemeral.start().await.unwrap();
-    assert!(!reuses_address(&ephemeral));
-    let (_, port) = decode_bip_mac(ephemeral.local_mac()).unwrap();
-    ephemeral.stop().await.unwrap();
+    assert!(!udp_socket(false).unwrap().reuse_address().unwrap());
+    assert!(udp_socket(true).unwrap().reuse_address().unwrap());
+    assert!(!BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST).share_port);
+    assert!(BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::BROADCAST).share_port);
+}
 
-    let mut explicit = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST);
-    let _rx = explicit.start().await.unwrap();
-    assert!(reuses_address(&explicit));
-    explicit.stop().await.unwrap();
+#[tokio::test]
+async fn an_ephemeral_port_stays_private_across_restart() {
+    // A restart rebinds the remembered actual port, which must not opt the
+    // socket into sharing it.
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _rx = transport.start().await.unwrap();
+    assert!(!reuses_address(&transport));
+    transport.stop().await.unwrap();
+    let _rx = transport.start().await.unwrap();
+    assert!(!reuses_address(&transport));
+    transport.stop().await.unwrap();
 }

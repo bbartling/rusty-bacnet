@@ -147,7 +147,8 @@ async fn endpoint_number_bbmd_server_wire_admission() {
     let foreign = udp().await;
     let peer = udp().await;
     let impostor = udp().await;
-    let configured = builder()
+    let (observer, port) = observer();
+    let configured = builder_on(port)
         .role(SessionRole::ServerOnly)
         .enable_bbmd(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),
@@ -158,7 +159,6 @@ async fn endpoint_number_bbmd_server_wire_admission() {
     let (server, local) = start(configured).await;
     assert!(server.server().is_some());
     assert!(server.client().is_none());
-    let observer = observer(local.port());
     let group = SocketAddrV4::new(BROADCAST, local.port());
     // Before relying on shared capture, prove the real production wildcard
     // receives this broadcast (BDT fanout) and the independent observer sees it.

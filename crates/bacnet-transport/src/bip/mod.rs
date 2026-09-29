@@ -124,10 +124,31 @@ struct BbmdConfig {
     foreign_device_policy: Option<ForeignDevicePolicy>,
 }
 
+/// The unbound B/IP socket. Linux gives an ephemeral port to an SO_REUSEADDR
+/// socket even while another SO_REUSEADDR socket owns it, and unicast to that
+/// port then reaches only one of them (#892). So only an explicitly requested
+/// port sets it, keeping the long-standing behavior for configured ports.
+fn udp_socket(share_port: bool) -> std::io::Result<socket2::Socket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    if share_port {
+        socket.set_reuse_address(true)?;
+    }
+    socket.set_broadcast(true)?;
+    socket.set_nonblocking(true)?;
+    Ok(socket)
+}
+
 /// BACnet/IP transport over UDP.
 pub struct BipTransport {
     interface: Ipv4Addr,
     port: u16,
+    /// Fixed at construction: a restart rebinds the remembered actual port,
+    /// but only an explicitly requested one may be shared.
+    share_port: bool,
     broadcast_address: Ipv4Addr,
     local_mac: [u8; 6],
     socket: Option<Arc<BipSocket>>,
@@ -177,6 +198,7 @@ impl BipTransport {
         Self {
             interface,
             port,
+            share_port: port != 0,
             broadcast_address,
             local_mac: [0; 6],
             socket: None,
@@ -533,22 +555,7 @@ impl TransportPort for BipTransport {
             )));
         }
 
-        let socket2 = socket2::Socket::new(
-            socket2::Domain::IPV4,
-            socket2::Type::DGRAM,
-            Some(socket2::Protocol::UDP),
-        )
-        .map_err(Error::Transport)?;
-
-        // Linux gives an ephemeral port to an SO_REUSEADDR socket even while
-        // another SO_REUSEADDR socket owns it, and unicast to that port then
-        // reaches only one of them (#892). Only an explicitly requested port,
-        // such as 0xBAC0 shared by co-located BACnet applications, opts in.
-        if self.port != 0 {
-            socket2.set_reuse_address(true).map_err(Error::Transport)?;
-        }
-        socket2.set_broadcast(true).map_err(Error::Transport)?;
-        socket2.set_nonblocking(true).map_err(Error::Transport)?;
+        let socket2 = udp_socket(self.share_port).map_err(Error::Transport)?;
 
         // Validate self.interface is a real local IP before binding the real
         // socket to 0.0.0.0 below. Previously the kernel enforced this when

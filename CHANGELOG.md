@@ -32,9 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On Linux the kernel could give such a socket an ephemeral port that another
   `SO_REUSEADDR` socket already held. Unicast to that port then reached only one
   of them, so replies and notifications for the other were silently lost,
-  including across processes. An explicit port such as 47808 still sets it, so
-  co-located BACnet applications can share the standard port. It caused the
-  intermittent audit-delivery test timeouts on Linux CI.
+  including across processes. The choice is made when the transport is
+  constructed, so a restart that rebinds the remembered actual port keeps it
+  private. An explicit port such as 47808 still sets it, as before. It caused
+  the intermittent audit-delivery test timeouts on Linux CI.
 
 - Timestamped COV-multiple reports now carry each change's actual commit time
   instead of the time the notification was prepared. Changes are kept until a

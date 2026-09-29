@@ -110,8 +110,11 @@ pub async fn fence(socket: &UdpSocket, target: SocketAddrV4) {
     .await;
 }
 
+/// A broadcast observer bound before the node under test, which then starts on
+/// the returned port. Only an explicitly requested B/IP port sets SO_REUSEADDR
+/// (#892), and both sockets need it to share the port.
 #[cfg(target_os = "linux")]
-pub fn observer(port: u16) -> UdpSocket {
+pub fn observer() -> (UdpSocket, u16) {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
@@ -121,9 +124,11 @@ pub fn observer(port: u16) -> UdpSocket {
     socket.set_reuse_address(true).unwrap();
     socket.set_nonblocking(true).unwrap();
     socket
-        .bind(&SocketAddrV4::new(BROADCAST, port).into())
+        .bind(&SocketAddrV4::new(BROADCAST, 0).into())
         .unwrap();
-    UdpSocket::from_std(socket.into()).unwrap()
+    let socket = UdpSocket::from_std(socket.into()).unwrap();
+    let port = socket.local_addr().unwrap().port();
+    (socket, port)
 }
 pub async fn start(builder: BipEndpointBuilder) -> (Endpoint, SocketAddrV4) {
     let mut db = ObjectDatabase::new();
@@ -148,7 +153,10 @@ pub async fn start(builder: BipEndpointBuilder) -> (Endpoint, SocketAddrV4) {
     (endpoint, local)
 }
 pub fn builder() -> BipEndpointBuilder {
-    BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, BROADCAST).client_timers(2000, 0)
+    builder_on(0)
+}
+pub fn builder_on(port: u16) -> BipEndpointBuilder {
+    BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, port, BROADCAST).client_timers(2000, 0)
 }
 pub async fn stopped(mut endpoint: Endpoint, local: SocketAddrV4) {
     bounded(endpoint.stop()).await.unwrap();
