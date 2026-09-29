@@ -17,12 +17,13 @@
 | Cargo Audit + Cargo Deny | | ✓ | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ |
 
-`CI OK` is the single status to require in branch protection; jobs skipped by
-tier count as passing. [`.forgejo/workflows/docs.yml`](../.forgejo/workflows/docs.yml)
+`CI OK` is the single status to require in branch protection (its context is
+`CI / CI OK (pull_request)`); jobs skipped by tier count as passing. [`.forgejo/workflows/docs.yml`](../.forgejo/workflows/docs.yml)
 validates the website (Astro checks, unit tests, production build and Chromium
 tests) on PRs that change `website/**`.
 
 Merge pushes to `dev` do not start a pipeline: the PR already tested that head.
+The weekly scheduled run checks the default branch (`dev`).
 A new push to a PR cancels its superseded run.
 
 The Linux test command is:
@@ -99,7 +100,9 @@ merge comes from that PR's run, not an older one.
 crates, wheels, the sdist, CLI binaries and the GitHub release when a `v*` tag
 reaches GitHub. It runs on GitHub because it needs GitHub-hosted
 macOS/Windows/arm64 runners, the `release` environment secrets and PyPI trusted
-publishing. Tag only a commit whose `CI OK` passed on `main`. GitHub Pages publication remains the manual
+publishing. Tag only a commit whose `CI OK` passed on `main`; as a backstop,
+publication waits for a full-feature Linux test of the tag. GitHub Pages
+publication remains the manual
 [`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch. Both require
 GitHub Actions to be enabled on the GitHub repository.
 

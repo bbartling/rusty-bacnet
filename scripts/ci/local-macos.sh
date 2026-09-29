@@ -26,6 +26,7 @@ step "rev $(git rev-parse --short HEAD)$(git diff --quiet HEAD || echo ' (+ unco
 step "rustfmt";          cargo fmt --all --check
 step "file-size cap";    bash scripts/ci/check-file-size.sh
 step "no-secret scan";   bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
+step "MSRV script regressions"; python3 scripts/ci/test-check-msrv.py
 step "clippy";           cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
 if ! "$quick"; then
   step "tests (ipv6, sc-tls)"

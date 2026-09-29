@@ -22,9 +22,26 @@ jobs:
   # Release (v* tags pushed to GitHub by the Forgejo push mirror)
   # ===========================================================================
 
+  # Backstop: CI runs on Forgejo before tagging, but publication is irreversible
+  # and uses --no-verify, so the tagged commit must build and pass here too.
+  test:
+    name: Test (Linux, full features)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - run: cargo test --workspace --exclude rusty-bacnet --locked --features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet
+
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}

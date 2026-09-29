@@ -24,7 +24,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Per event, so a scheduled or manual run never cancels a push to main.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -87,7 +88,7 @@ jobs:
       - name: System packages
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends pkg-config libudev-dev cmake perl
+          apt-get install -y -qq --no-install-recommends pkg-config cmake perl
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.TOOLCHAIN }}
@@ -104,13 +105,14 @@ jobs:
     timeout-minutes: 45
     env:
       # Overrides rust-toolchain.toml so the documented MSRV is what compiles.
+      # Job env cannot read env.MSRV; keep the two in sync.
       RUSTUP_TOOLCHAIN: "1.93"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: System packages
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends pkg-config libpcap-dev cmake perl file python3
+          apt-get install -y -qq --no-install-recommends build-essential pkg-config libpcap-dev cmake perl file python3
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.MSRV }}
