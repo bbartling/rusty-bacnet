@@ -737,9 +737,12 @@ async fn an_explicit_untimestamped_selector_is_never_repeated_as_history() {
         .into_iter()
         .filter(|(property, _, _)| *property == SF)
         .collect();
+    // One current row only. It still carries the timestamped companion's time
+    // because the unchanged explicit selector did not qualify (the existing
+    // #823 rule; tracked as a #856 follow-up).
     assert_eq!(
-        flags.len(),
-        1,
+        flags.iter().map(|(_, _, time)| *time).collect::<Vec<_>>(),
+        vec![Some(time(56))],
         "Status_Flags is not timestamped history: {flags:?}"
     );
     h.server.stop().await.unwrap();

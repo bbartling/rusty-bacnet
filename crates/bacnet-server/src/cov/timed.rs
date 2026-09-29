@@ -91,6 +91,8 @@ struct TimedHistory {
     /// Latest observation already captured or conveyed; the next change
     /// qualifies against it rather than the last completed delivery.
     baseline: Option<CovObservation>,
+    /// Sequence of the newest captured or conveyed change.
+    latest: u64,
     /// Sequence of the newest transmitted change. An older change returned by
     /// a failed notification would contradict what was already delivered.
     committed: u64,
@@ -131,6 +133,7 @@ impl TimedHistories {
                 incarnation,
                 generation,
                 baseline: None,
+                latest: 0,
                 committed: 0,
                 entries: VecDeque::new(),
             });
@@ -176,16 +179,20 @@ impl TimedHistories {
         generation: u64,
         mut change: TimedChange,
     ) -> TimedChange {
-        if let Some(history) = self.history_mut(key, generation) {
-            history.baseline = Some(change.observation.clone());
-        }
         change.seq = self.next_seq;
         self.next_seq += 1;
+        if let Some(history) = self.history_mut(key, generation) {
+            history.baseline = Some(change.observation.clone());
+            history.latest = change.seq;
+        }
         change
     }
 
     /// Take every pending change of a live generation, oldest first, with the
-    /// history incarnation that later commits or returns them.
+    /// history incarnation that later commits or returns them. Older changes
+    /// returned by a failed notification stay queued while the reference's
+    /// newest change is still in flight elsewhere, so they are never conveyed
+    /// as its latest state; that change's outcome settles them.
     pub(crate) fn drain(
         &mut self,
         key: &CovSubscriptionKey,
@@ -195,16 +202,39 @@ impl TimedHistories {
             return (0, Vec::new());
         };
         let incarnation = history.incarnation;
+        if history
+            .entries
+            .back()
+            .is_some_and(|newest| newest.seq < history.latest)
+        {
+            return (incarnation, Vec::new());
+        }
         let drained: Vec<_> = history.entries.drain(..).collect();
         let bytes = drained.iter().map(|e| e.encoded_len).sum();
         self.release_bytes(key, bytes);
         (incarnation, drained)
     }
 
-    /// Record that changes up to `seq` were transmitted.
+    /// Record that changes up to `seq` were transmitted; queued older changes
+    /// are superseded by it.
     fn commit(&mut self, key: &CovSubscriptionKey, incarnation: u64, seq: u64) {
-        if let Some(history) = self.incarnation_mut(key, incarnation) {
-            history.committed = history.committed.max(seq);
+        let Some(history) = self.incarnation_mut(key, incarnation) else {
+            return;
+        };
+        history.committed = history.committed.max(seq);
+        let committed = history.committed;
+        let stale = history
+            .entries
+            .partition_point(|change| change.seq < committed);
+        let removed: Vec<_> = history.entries.drain(..stale).collect();
+        if !removed.is_empty() {
+            let bytes = removed.iter().map(|change| change.encoded_len).sum();
+            self.release_bytes(key, bytes);
+            self.dropped(
+                key,
+                removed.len(),
+                "superseded by a transmitted newer change",
+            );
         }
     }
 

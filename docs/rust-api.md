@@ -1954,7 +1954,8 @@ to a context also carries the pending changes of that context's other references
 Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
-without timestamps is never repeated or timestamped. The header timestamp names
+without timestamps is never repeated as history; as before, an unqualified explicit
+selector does not remove a companion's time from its current row. The header timestamp names
 the latest timestamped change conveyed. The initial report after admission or
 re-subscription is stamped with the Device time of admission; this is a local
 convention, since no change has been observed yet. A renewal keeps changes not yet
@@ -1964,10 +1965,12 @@ Local bounds deviate from the Standard's expectation of additional notifications
 rather than loss (§13.1, §13.18.1.1). One context's pending changes are limited to
 an estimate of what one notification of the server's `max_apdu_length` can carry;
 on overflow the oldest change of the same reference is dropped first, then the
-oldest in the context. Before sending, the oldest queued history is trimmed until
-the encoded request fits the local maximum APDU. A reference's latest change is
-never dropped. A failed notification whose changes were superseded by a transmitted
-newer change drops them rather than delivering stale state. These drops increment
+oldest in the context. Before sending, queued history is trimmed, oldest first, to
+fit the encoded request into the local maximum APDU. A reference's latest change is
+never dropped, so latest changes plus untimestamped values can still exceed it.
+Changes returned by a failed notification wait while a newer change of the same
+reference is in flight; once a newer change is transmitted, older ones are dropped
+rather than delivered as stale state. These drops increment
 `CovCounters::timed_changes_dropped` and log a warning. The subscriber's own
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
 the bound (the full server uses its configured capacity).

@@ -309,3 +309,40 @@ fn a_reference_evicts_its_own_oldest_change_before_a_siblings() {
     assert_eq!(seconds(&h.drain(&b, 1).1), [1, 2]);
     assert_eq!(dropped(&counters), 1);
 }
+
+#[test]
+fn a_returned_older_change_waits_for_its_in_flight_successor() {
+    let (store, counters) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1);
+    store.lock().push(&k, 1, change(1, 4));
+    let mut older = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    older.add(k.clone(), incarnation, drained);
+    store.lock().push(&k, 1, change(2, 4));
+    let mut newer = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    newer.add(k.clone(), incarnation, drained);
+
+    drop(older); // failed first, while the newer change is in flight
+    assert!(
+        store.lock().drain(&k, 1).1.is_empty(),
+        "an older change is never conveyed as the latest state"
+    );
+    newer.commit();
+    assert!(store.lock().drain(&k, 1).1.is_empty(), "superseded");
+    assert_eq!(dropped(&counters), 1);
+
+    // Had the newer notification failed as well, both return in order.
+    store.lock().push(&k, 1, change(3, 4));
+    let mut third = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    third.add(k.clone(), incarnation, drained);
+    store.lock().push(&k, 1, change(4, 4));
+    let mut fourth = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    fourth.add(k.clone(), incarnation, drained);
+    drop(third);
+    drop(fourth);
+    assert_eq!(seconds(&store.lock().drain(&k, 1).1), [3, 4]);
+}

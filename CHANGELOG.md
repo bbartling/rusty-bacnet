@@ -40,8 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Initial report:** the report after admission is stamped with the admission
     time. A renewal keeps unconveyed changes.
   - **Local bounds:** pending history is capped at an estimate of one notification
-    APDU per context, and each request is trimmed to fit the local maximum APDU,
-    dropping the oldest history first. This deviates from the Standard's
+    APDU per context, and queued history is trimmed, oldest first, to fit each
+    request into the local maximum APDU (latest changes are always sent). This deviates from the Standard's
     additional-notification expectation until splitting lands. Drops are counted
     in the new `CovCounters::timed_changes_dropped` field, which breaks exhaustive
     struct literals.
