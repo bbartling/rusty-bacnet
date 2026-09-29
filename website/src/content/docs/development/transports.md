@@ -24,13 +24,13 @@ The CLI has its own [configuration surface](https://gitlab.com/justinscott-group
 
 | Evidence | Exercised behavior | Limit |
 |---|---|---|
-| B/IP loopback | Server/endpoint NORMAL controls; independent standalone-client replies; full-server and shared-endpoint BBMD Original-Broadcast and foreign DBTN captures | Linux supplies BBMD broadcast observation; no physical-LAN qualification |
+| B/IP loopback | Server/endpoint NORMAL controls; independent standalone-client NORMAL/BBMD/foreign replies; full-server and shared-endpoint BBMD Original-Broadcast and foreign DBTN captures | Linux supplies BBMD broadcast observation; no physical-LAN qualification |
 | Constrained local SC TLS | Full server/shared endpoint and standalone client Number bytes and Hub broadcast VMAC; direct query replies use Hub broadcast | Generic controlled tests separately prove queued/pending cancellation; TLS trust does not authenticate a relayed NPDU origin |
 | MS/TP LoopbackSerial | Full server/shared endpoint standard frames, token opportunity, mode parity and producer cancellation | Simulator evidence, not RS-485 timing, transceiver control or hardware interoperability |
 | Isolated Linux Ethernet | Full server/standalone client MAC, LLC, length, payload and padding; raw-FD stop/drop and canceled-stop ownership | Opt-in virtual-link fixture needs raw-socket capability; excluded from ordinary CI |
 | Isolated Linux B/IPv6 | Full server/standalone Rust client selected-link OriginalBroadcast and configured-foreign DBTN; independent bytes/address/interface; normal installed-Python evidence | Explicit external ignored tests; no physical LAN, IPv6 endpoint builder or full Annex U claim |
 
-Other implemented opt-ins are not automatically independently qualified by this table. The authoritative row is `BACNET-06-NONROUTER-NETWORK-NUMBER` in the [machine-readable conformance ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/bacnet-135-2020.json). Its notes distinguish positive wire observations, FIFO refusal fences, controlled lifecycle tests and retained limitations.
+Standalone-client BBMD/foreign cases retain BDT/FDT admission, alternate-sender compatibility and registration NAK/retry behavior, and prove requester progress plus awaited-stop socket release. Independent standalone-client MS/TP frame qualification remains under #879. Other implemented opt-ins are not automatically independently qualified by this table. The authoritative row is `BACNET-06-NONROUTER-NETWORK-NUMBER` in the [machine-readable conformance ledger](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/conformance/bacnet-135-2020.json). Its notes distinguish positive wire observations, FIFO refusal fences, controlled lifecycle tests and retained limitations.
 
 ## Select IPv6 explicitly when discovery is ambiguous
 
