@@ -10,7 +10,7 @@
 # remembers to add is simply never checked.
 #
 # Run with RUSTUP_TOOLCHAIN set to the MSRV, which overrides rust-toolchain.toml:
-#   RUSTUP_TOOLCHAIN=1.93 bash .github/scripts/check-msrv.sh
+#   RUSTUP_TOOLCHAIN=1.93 bash scripts/ci/check-msrv.sh
 # Add --linux-native for the required local Linux GNU optional-feature/link gate.
 set -euo pipefail
 

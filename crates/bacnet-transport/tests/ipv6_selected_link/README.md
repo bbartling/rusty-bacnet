@@ -52,4 +52,4 @@ I-Am discovery. It prints the loaded extension's hash before/after execution.
 These checks do not qualify routed site/organization reachability, a physical
 link-local deployment, Windows runtime, or full Annex U conformance. Windows
 source is compile-checked separately; deployment/runtime qualification remains
-in [issue #885 (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/work_items/885).
+in GitLab issue #885.

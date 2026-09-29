@@ -1,0 +1,158 @@
+name: CI
+
+# Runs on the self-hosted Forgejo runner (Linux amd64 Spot VM, Docker jobs using
+# ghcr.io/catthehacker/ubuntu:act-24.04). macOS is checked locally with
+# scripts/ci/local-macos.sh; Windows is not currently tested. See docs/ci.md.
+#
+#   Lean  — every PR to dev/main, push to main, v* tags:
+#           lint (fmt, file-size cap, no-secret scan, script regressions),
+#           clippy, full-feature Linux tests.
+#   Heavy — PRs to main, push to main, v* tags, weekly schedule:
+#           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
+#   CI OK — single required status that fails if any job above failed.
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    tags: ["v*"]
+  schedule:
+    # Advisory databases change without code changes.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  # Per event, so a scheduled or manual run never cancels a push to main.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI builds are from scratch or a restored cache; incremental state is dead weight.
+  CARGO_INCREMENTAL: "0"
+  # Test binaries without native debug info: less codegen, linking and cache.
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # Per-rule lint severity lives in [workspace.lints]; RUSTFLAGS=-Dwarnings
+  # would turn the warn-level missing_docs backlog into errors.
+  TOOLCHAIN: "1.97.1"
+  MSRV: "1.93"
+  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.TOOLCHAIN }}
+          components: rustfmt
+      - name: Rustfmt
+        run: cargo fmt --all --check
+      - name: File-size cap (700 LOC)
+        run: bash scripts/ci/check-file-size.sh
+      - name: No-secret scan
+        run: |
+          bash scripts/ci/test-check-no-secrets.sh
+          bash scripts/ci/check-no-secrets.sh
+      - name: MSRV script regressions
+        run: python3 scripts/ci/test-check-msrv.py
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+          cache-bin: false
+      - run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
+
+  test:
+    name: Test (Linux, full features)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends pkg-config cmake perl
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+          cache-bin: false
+      - run: cargo test --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
+
+  msrv:
+    name: MSRV (Linux native)
+    if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Overrides rust-toolchain.toml so the documented MSRV is what compiles.
+      # Job env cannot read env.MSRV; keep the two in sync.
+      RUSTUP_TOOLCHAIN: "1.93"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential pkg-config libpcap-dev cmake perl file python3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+          cache-bin: false
+      # Publishable crates with consumer-visible features, then the ethernet,
+      # serial and serial-gpio transport checks and a linked bacnet-cli pcap build.
+      - run: bash scripts/ci/check-msrv.sh --linux-native
+
+  audit-deny:
+    name: Cargo Audit + Deny
+    if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.TOOLCHAIN }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
+      - name: Cargo Audit
+        run: cargo audit --color always
+      - name: Cargo Deny
+        if: ${{ !cancelled() }}
+        run: cargo deny --all-features check
+
+  ci-ok:
+    name: CI OK
+    if: ${{ always() }}
+    needs: [lint, clippy, test, msrv, audit-deny]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All required jobs succeeded or were skipped by tier
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' >/dev/null

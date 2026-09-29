@@ -61,7 +61,7 @@ Check commandability, priority arbitration, datatype, and the active higher-prio
 
 Describe the task, version/build features, platform and transport, minimal reproduction, expected result, actual result, and sanitized logs. For serial issues, include the adapter and driver as well as baud and direction-control mode. For SC issues, identify the failing stage without attaching private keys.
 
-[Open a project issue](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues/new). Use the repository's current security-reporting instructions for sensitive findings rather than publishing operational credentials or sensitive site data.
+[Open a project issue](https://github.com/jscott3201/rusty-bacnet/issues/new). Use the repository's current security-reporting instructions for sensitive findings rather than publishing operational credentials or sensitive site data.
 
 ## Sources and release scope
 

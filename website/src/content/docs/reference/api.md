@@ -7,15 +7,15 @@ Use the website for tasks and the canonical references for exact methods, parame
 
 ## Current development
 
-Start with the [development overview](/rusty-bacnet/development/overview/) and [engineering documentation map](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/README.md).
+Start with the [development overview](/rusty-bacnet/development/overview/) and [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/README.md).
 
 | Reference | Use it for |
 |---|---|
-| [Rust API](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/rust-api.md) | Crate APIs, feature gates, shared endpoint contracts, transport ownership and migration details |
-| [Python API](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/python-api.md) | Constructors, native Awaitable results, endpoint lifecycle and binding-specific limits |
-| [Python type stub](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/crates/rusty-bacnet/rusty_bacnet.pyi) | Editor-facing signatures for the matching native build |
-| [CLI reference](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/CLI.md) | Current flags and transport prerequisites |
-| [Architecture](https://gitlab.com/justinscott-group/rusty-bacnet/-/blob/dev/docs/architecture.md) | Crate composition, packet paths and lifecycle ownership |
+| [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md) | Crate APIs, feature gates, shared endpoint contracts, transport ownership and migration details |
+| [Python API](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md) | Constructors, native Awaitable results, endpoint lifecycle and binding-specific limits |
+| [Python type stub](https://github.com/jscott3201/rusty-bacnet/blob/dev/crates/rusty-bacnet/rusty_bacnet.pyi) | Editor-facing signatures for the matching native build |
+| [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/CLI.md) | Current flags and transport prerequisites |
+| [Architecture](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/architecture.md) | Crate composition, packet paths and lifecycle ownership |
 
 For source checkout rustdoc, select the features used by your application. Do not assume every workspace crate is published or that a published documentation page matches the current checkout. Use the [shared endpoint guide](/rusty-bacnet/development/shared-endpoints/) to compare requester, responder and source Audit scope before choosing that owner.
 
@@ -35,7 +35,7 @@ The release Python transport summary omits MS/TP; use the versioned mini-device 
 | `mstp_mini_device.py` | Standalone serial device | Adapter, MAC, baud and token participation |
 | `device_management.py` | Management services and errors | Control-changing operations |
 
-Browse [current examples](https://gitlab.com/justinscott-group/rusty-bacnet/-/tree/dev/examples/python) or [v0.11 examples](https://github.com/jscott3201/rusty-bacnet/tree/v0.11.0/examples/python). The site's [local lab](/rusty-bacnet/start/local-lab/) keeps its tested release source and download together.
+Browse [current examples](https://github.com/jscott3201/rusty-bacnet/tree/dev/examples/python) or [v0.11 examples](https://github.com/jscott3201/rusty-bacnet/tree/v0.11.0/examples/python). The site's [local lab](/rusty-bacnet/start/local-lab/) keeps its tested release source and download together.
 
 ## Companion projects
 

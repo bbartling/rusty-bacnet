@@ -5,7 +5,6 @@ Use it to build BACnet clients, model devices and serve their properties, or
 explore protocol behavior in a local lab. The project targets ASHRAE Standard
 135-2020 and tracks implementation evidence at the clause level.
 
-[GitLab CI (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/pipelines)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **[Documentation](https://jscott3201.github.io/rusty-bacnet/)** ·
@@ -326,12 +325,6 @@ flag list to the whole workspace.
 Annex J NAT traversal and IPv4 BACnet/IP multicast (B/IP-M) are **not claimed** by
 the current BACnet/IP transport. Loopback or protocol tests do not establish
 serial hardware timing, deployed-network behavior, or cross-OS support.
-The [GitLab CI configuration](.gitlab-ci.yml) runs the full-feature Linux tests
-for merge requests to `dev`/`main`. Formatting, Clippy, repository hygiene,
-applicable website checks, and main-target MSRV/dependency-policy checks require
-recorded local passing results before merge. See the
-[merge-evidence requirements and qualification scope](docs/gitlab-ci.md);
-cross-OS tests and release/publication workflows remain separate.
 
 ## BACnet/SC: current development checkout
 
@@ -542,7 +535,7 @@ non-published Rust `cdylib`, and integration tests are internal test infrastruct
   [support scope](https://jscott3201.github.io/rusty-bacnet/project/support/).
 - Checkout references: [Rust](docs/rust-api.md), [Python](docs/python-api.md),
   [CLI](docs/CLI.md), [architecture](docs/architecture.md), and [changelog](CHANGELOG.md).
-- [GitLab issues (project access required)](https://gitlab.com/justinscott-group/rusty-bacnet/-/issues) — include the package
+- [Issues](https://github.com/jscott3201/rusty-bacnet/issues) — include the package
   version/source revision, OS, transport, and a sanitized minimal reproduction.
   Do not post private keys, credentials, sensitive deployment
   details, or captures from real networks. Prefer synthetic/local-lab fixtures.

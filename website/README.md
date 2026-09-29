@@ -133,9 +133,9 @@ Actions artifacts retained for seven days, with hidden files excluded.
 
 ### Maintainer sequence (not evidence of publication)
 
-1. Follow the current [GitLab merge-evidence policy](../docs/gitlab-ci.md) for
-   delivery. This retained GitHub workflow describes publication mechanics, not
-   the current primary review/merge host. Do not infer live CI from local tests.
+1. Follow the [CI and merge-evidence policy](../docs/ci.md) for delivery. This
+   GitHub workflow describes publication mechanics; PR validation runs in
+   `.forgejo/workflows/docs.yml`. Do not infer live CI from local tests.
 2. Once the workflow is on the default branch, dispatch **validation only** from
    `dev`. `publish` defaults to false; `expected_sha` can be omitted:
 
@@ -200,7 +200,7 @@ artifact or fetch a mutable branch in the deployment job.
 ## Content organization
 
 - `start/` and `guides/`: preserved v0.11 release tasks; immutable release sources.
-- `development/`: marked current-source task guides, linked to canonical GitLab docs.
+- `development/`: marked current-source task guides, linked to canonical repository docs.
 - `reference/` and `project/`: cross-version navigation with explicit release/current links.
 - `src/data/navigation.json`: sidebar and test route inventory.
 - `scripts/prepare.mjs`: source-derived raw Markdown and version-aware llms index.
