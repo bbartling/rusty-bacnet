@@ -97,8 +97,13 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &MultiStateValueObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+pub(super) fn for_object(object: &MultiStateValueObject) -> Cow<'_, [PropertyMetadata]> {
+    object.access.project(Cow::Borrowed(BASE))
+}
+
+/// Whether `property` is absent under the object's Present_Value access.
+pub(super) fn excludes(object: &MultiStateValueObject, property: P) -> bool {
+    object.access.excludes(BASE, property)
 }
 
 #[cfg(test)]

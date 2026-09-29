@@ -28,6 +28,7 @@ pub mod loop_obj;
 pub mod multistate;
 pub mod network_port;
 pub mod notification_class;
+pub mod present_value_access;
 pub mod program;
 pub mod property_metadata;
 pub(crate) mod reference;
@@ -44,6 +45,9 @@ mod log_status_tests;
 
 #[cfg(test)]
 mod property_metadata_audit;
+
+#[cfg(test)]
+mod present_value_access_tests;
 
 #[cfg(test)]
 mod property_metadata_tests;

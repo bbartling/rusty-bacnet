@@ -1,4 +1,5 @@
 use super::*;
+use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
 
 mod metadata;
@@ -9,7 +10,6 @@ mod metadata;
 
 /// BACnet Multi-State Value object.
 ///
-/// Commandable multi-state value with 16-level priority array.
 /// Present_Value is Unsigned, range 1..=number_of_states.
 pub struct MultiStateValueObject {
     oid: ObjectIdentifier,
@@ -19,6 +19,7 @@ pub struct MultiStateValueObject {
     number_of_states: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
+    access: PresentValueAccess,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
@@ -38,10 +39,26 @@ pub struct MultiStateValueObject {
 }
 
 impl MultiStateValueObject {
+    /// Create a new Multi-State Value object with a commandable Present_Value.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
         number_of_states: u32,
+    ) -> Result<Self, Error> {
+        Self::with_access(
+            instance,
+            name,
+            number_of_states,
+            PresentValueAccess::Commandable,
+        )
+    }
+
+    /// Create a new Multi-State Value object whose Present_Value is written as `access` says.
+    pub fn with_access(
+        instance: u32,
+        name: impl Into<String>,
+        number_of_states: u32,
+        access: PresentValueAccess,
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, instance)?;
         require_nonzero_states(number_of_states)?;
@@ -53,6 +70,7 @@ impl MultiStateValueObject {
             number_of_states,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
+            access,
             priority_array: [None; 16],
             relinquish_default: 1,
             reliability: 0,
@@ -144,11 +162,30 @@ impl MultiStateValueObject {
     /// for the application to resolve; the object-owned evaluator reports
     /// CONFIGURATION_ERROR while that condition remains.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if self.access != PresentValueAccess::Commandable {
+            return Err(common::unknown_property_error());
+        }
         if value < 1 || value > self.number_of_states {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
         self.recalculate_present_value();
+        Ok(())
+    }
+
+    fn checked_present_value(number_of_states: u32, value: PropertyValue) -> Result<u32, Error> {
+        let PropertyValue::Unsigned(u) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if u < 1 || u > u64::from(number_of_states) {
+            return Err(common::value_out_of_range_error());
+        }
+        Ok(u as u32)
+    }
+
+    fn set_present_value_directly(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.present_value = Self::checked_present_value(self.number_of_states, value)?;
+        let _ = self.recompute_reliability();
         Ok(())
     }
 }
@@ -198,6 +235,9 @@ impl BACnetObject for MultiStateValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
         if let Some(result) = self
             .value_source
             .read(property, array_index, &self.priority_array)
@@ -288,28 +328,27 @@ impl BACnetObject for MultiStateValueObject {
         {
             return Err(common::property_is_not_an_array_error());
         }
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == PropertyIdentifier::VALUE_SOURCE
+            && self.access == PresentValueAccess::Commandable
+        {
             return self.value_source.correct(value, priority, origin);
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
-            let num_states = self.number_of_states;
-            return crate::command_source::write_sourced_priority!(
-                self,
-                value,
-                priority,
-                origin,
-                |v| {
-                    if let PropertyValue::Unsigned(u) = v {
-                        if u < 1 || u > num_states as u64 {
-                            Err(common::value_out_of_range_error())
-                        } else {
-                            Ok(u as u32)
-                        }
-                    } else {
-                        Err(common::invalid_data_type_error())
-                    }
+            let number_of_states = self.number_of_states;
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    crate::command_source::write_sourced_priority!(
+                        self,
+                        value,
+                        priority,
+                        origin,
+                        |v| Self::checked_present_value(number_of_states, v)
+                    )
                 }
-            );
+                PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                    self.write_property(property, array_index, value, priority)
+                }
+            };
         }
         self.write_property(property, array_index, value, priority)
     }
@@ -321,10 +360,26 @@ impl BACnetObject for MultiStateValueObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
-        ) {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            if self.access == PresentValueAccess::Commandable {
+                return Err(common::write_access_denied_error());
+            }
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+            if value == PropertyValue::Null {
+                return Ok(());
+            }
+            return self.set_present_value_directly(value);
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::STATE_TEXT {
@@ -441,6 +496,18 @@ impl BACnetObject for MultiStateValueObject {
 
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
         Ok(self.recompute_reliability())
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        match self.access {
+            PresentValueAccess::Commandable => {
+                Err(common::optional_functionality_not_supported_error())
+            }
+            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                self.set_present_value_directly(value)
+            }
+        }
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {

@@ -2412,6 +2412,36 @@
    "notes": "Typed-codec foundation; the bounded end-to-end #824 mechanism has separate evidence in BACNET-19-COMMAND-SOURCE-TRACKING. #823 specialized COV remains separate. Golden bytes are independently derived from Clause21 productions and Clause20.2 OID fields, not round-trip-only evidence. Generic decoding preserves any legal 10-bit OID type/22-bit instance including wildcard and non-Device optional identifiers, network0 and empty MAC. Those forms are datatype acceptance, not trusted source provenance. ObjectIdentifier construction enforces wire widths; ValueSource encoding retains fallible MAC-length validation before output mutation. No source producer, object property-array behavior, correction authorization, specialized COV, new PropertyValue variant or exact-whole-value wrapper is added. A complete-property writer must require end == payload.len(); concatenated consumers retain suffixes. Existing timestamp codecs are reused unchanged. Broader object/service support statuses are not promoted."
   },
   {
+   "id": "BACNET-12-VALUE-PRESENT-VALUE-ACCESS",
+   "standard_anchor": "Clauses 12.4, 12.8 and 12.20 Present_Value and Out_Of_Service; Clause 19.2; 135-2020 errata dated 2024-04-29 items 10–12 (Audit_Priority_Filter commandability condition)",
+   "priority": "P1",
+   "requirement_summary": "Rust AV/BV/MSV construction selects commandable (default), writable noncommandable or read-only noncommandable Present_Value access. Noncommandable property writes share access/type/range checks with or without a command origin, ignore valid priority and accept an otherwise permitted NULL without mutation. Local application updates are denied while Out_Of_Service.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/present_value_access.rs",
+    "crates/bacnet-objects/src/analog/value.rs",
+    "crates/bacnet-objects/src/binary/value.rs",
+    "crates/bacnet-objects/src/multistate/value.rs",
+    "crates/bacnet-server/src/server/local_writes.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/present_value_access_tests.rs::noncommandable_network_null_is_a_successful_noop",
+    "crates/bacnet-objects/src/present_value_access_tests.rs::noncommandable_context_free_writes_match_sourced_writes",
+    "crates/bacnet-server/src/server/input_present_value_tests.rs::noncommandable_value_write_local_without_resolved_origin_runs_cov",
+    "crates/bacnet-server/src/server/input_present_value_tests.rs::application_value_path_preserves_out_of_service_simulation"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/present_value_access_tests.rs::read_only_and_writable_have_no_command_prioritization",
+    "crates/bacnet-objects/src/present_value_access_tests.rs::noncommandable_write_errors_preserve_value_and_internal_null_is_invalid",
+    "crates/bacnet-objects/src/present_value_access_tests.rs::commandable_context_free_present_value_still_requires_origin"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md Value Present_Value access"
+   ],
+   "notes": "Refs historical GitHub PR #886. Bounded object and server-local evidence; no new Python constructor, authentication, general object-conformance or BTL claim. Projected noncommandable metadata omits priority-array, relinquish, current-priority, command-source and commandable Audit-priority rows. Other supported AV/BV Audit policy remains; MSV target Audit reporting is not introduced. Network-equivalent read-only writes remain denied in service; application NULL remains invalid. Existing server event/COV processing owns successful local notifications. The commandable tracking row applies only to commandable instances; defaults and context-free commandable denial are preserved."
+  },
+  {
    "id": "BACNET-19-COMMAND-SOURCE-TRACKING",
    "standard_anchor": "Clause 19.5.1 command source tracking and 19.5.1.3 source correction; Tables 12-3, 12-4, 12-8, 12-10, 12-22, 12-23; Clause 21 BACnetValueSource and BACnetTimeStamp",
    "priority": "P1",
@@ -2449,7 +2479,7 @@
     "docs/python-api.md write_property_local",
     "CHANGELOG.md six-family command-source producer"
    ],
-   "notes": "Refs #824. This bounded six-family profile enables paired Value_Source, Value_Source_Array and Last_Command_Time metadata/Property_List/REQUIRED RPM/PICS. Actual origins validate source syntax; generic correction payload grammar stays broader. Remote correlation snapshots Unknown/Unique/Ambiguous independently of Audit; unique same-Device ownership permits address changes, otherwise retained actual address is required without conflicting unique IDs or ambiguity. Routed origin uses SNET/SADR, not router MAC. Trusted local owner is the selected concrete Device; optional initiator must exist under the mutation guard. Missing/wildcard-only identity fails closed for tracked writes, unrelated writes remain available. A valid correction may assert none, forwarded objects or addresses and never replaces the original token. New PV commands replace slot ownership. Sequence starts0, first effective tuple change1, wraps at65535, and excludes noncurrent-only updates, correction and fallback configuration. NULL retaining the relinquishing writer in its inactive slot is the selected documented inference. Context-free tracked writes and direct Priority_Array writes are denied; the unsourced AV setter is removed. WPM preserves prefix/coordinate, CreateObject rolls back initialization failure, factory AV remains unsupported, Schedule priority16 and complete target index remain unchanged, Staging generation checks remain. Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. Specialized source-property COV is evidenced separately by BACNET-13-VALUE-SOURCE-COV. No Command_Time_Array, broader object-family support or authentication claim."
+   "notes": "Refs #824. This bounded six-family profile enables paired Value_Source, Value_Source_Array and Last_Command_Time metadata/Property_List/REQUIRED RPM/PICS. Actual origins validate source syntax; generic correction payload grammar stays broader. Remote correlation snapshots Unknown/Unique/Ambiguous independently of Audit; unique same-Device ownership permits address changes, otherwise retained actual address is required without conflicting unique IDs or ambiguity. Routed origin uses SNET/SADR, not router MAC. Trusted local owner is the selected concrete Device; optional initiator must exist under the mutation guard. Missing/wildcard-only identity fails closed for tracked writes, unrelated writes remain available. A valid correction may assert none, forwarded objects or addresses and never replaces the original token. New PV commands replace slot ownership. Sequence starts0, first effective tuple change1, wraps at65535, and excludes noncurrent-only updates, correction and fallback configuration. NULL retaining the relinquishing writer in its inactive slot is the selected documented inference. Context-free tracked writes and direct Priority_Array writes are denied; the unsourced AV setter is removed. WPM preserves prefix/coordinate, CreateObject rolls back initialization failure, factory AV remains unsupported, Schedule priority16 and complete target index remain unchanged, Staging generation checks remain. Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. Specialized source-property COV is evidenced separately by BACNET-13-VALUE-SOURCE-COV. No Command_Time_Array, broader object-family support or authentication claim. AV/BV/MSV tracking applies to commandable instances; their noncommandable construction modes are qualified separately by BACNET-12-VALUE-PRESENT-VALUE-ACCESS."
   },
   {
    "id": "BACNET-13-VALUE-SOURCE-COV",

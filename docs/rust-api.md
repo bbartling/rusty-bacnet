@@ -137,8 +137,8 @@ the timestamp encoding authority.
 
 ### Command-source tracking
 
-Analog Output/Value, Binary Output/Value and Multi-state Output/Value implement
-`Value_Source`, the 16-element `Value_Source_Array`, and `Last_Command_Time`.
+Analog Output, Binary Output and Multi-state Output, plus commandable instances
+of the corresponding Value families, implement `Value_Source`, the 16-element `Value_Source_Array`, and `Last_Command_Time`.
 These paired properties are required while this mechanism is enabled, including
 in Property_List, REQUIRED RPM selection and PICS. Sources and the timestamp are
 returned as `PropertyValue::ApplicationData` containing their BACnet CHOICE bytes;
@@ -151,7 +151,9 @@ Local origins contain a concrete owning Device and an optional concrete initiati
 object. Standalone calls validate syntax and trust the caller's declaration;
 they do not authenticate it or check database membership. Context-free
 `write_property` denies Present_Value commands and Value_Source corrections on
-these six families. `AnalogValueObject::set_present_value` was removed: configure
+these six commandable families. Noncommandable Value modes use the direct write
+contract described below and do not require command provenance.
+`AnalogValueObject::set_present_value` was removed: configure
 `set_relinquish_default` for a fallback or submit a sourced priority command.
 Input measurement setters keep their separate contract. Priority_Array stays
 read-only; a sourced Present_Value NULL relinquishes the specified priority.
@@ -1406,6 +1408,40 @@ the schedule; remote/indexed reference execution is not added.
 | `MultiStateInputObject` | `::new(instance, name, number_of_states)` |
 | `MultiStateOutputObject` | `::new(instance, name, number_of_states)` |
 | `MultiStateValueObject` | `::new(instance, name, number_of_states)` |
+
+#### Value Present_Value access
+
+The three Value families also offer `with_access`: Analog Value takes
+`(instance, name, units, access)`, Binary Value takes `(instance, name, access)`,
+and Multi-state Value takes `(instance, name, number_of_states, access)`.
+The final argument is `bacnet_objects::present_value_access::PresentValueAccess`:
+
+| Mode | Network-equivalent Present_Value writes | Local application updates |
+| --- | --- | --- |
+| `Commandable` (the `new` default) | Sourced priority commands; NULL relinquishes a slot | Use sourced commands through `write_local` |
+| `Writable` | Direct replacement; supplied valid priority is ignored | Accepted while in service |
+| `ReadOnly` | Denied in service; accepted while Out_Of_Service | Accepted while in service |
+
+For the two noncommandable modes, both `BACnetObject::write_property` and
+`write_property_from` enforce the same access and type/range checks. A permitted
+NULL write succeeds without changing Present_Value (§19.2); an array index still
+fails because Present_Value is not an array. Read-only in-service writes remain
+denied, including NULL. Priority_Array, Relinquish_Default, Current_Command_Priority,
+Value_Source, Value_Source_Array, Last_Command_Time and commandable-only
+Audit_Priority_Filter are absent from these modes' projected metadata. This does
+not disable the remaining supported AV/BV target Audit policy or add MSV target
+Audit reporting.
+
+`BACnetServer::set_present_value_local` supplies a logical application value to
+Analog/Binary/Multi-state Inputs and noncommandable Values, then runs the existing
+event and COV path after releasing the database lock. The corresponding low-level
+`set_present_value_internal` hook bypasses those server notifications. Both deny
+updates while Out_Of_Service to preserve simulation ownership: this is local
+policy for Inputs and the object-clause rule for these Values. Application NULL
+is an invalid datatype, not a relinquishment. For network-equivalent writes use
+`write_local`; noncommandable writes remain available without resolved command
+identity. Commandable writes still require a valid source. These access modes are
+Rust construction APIs; Python constructors retain their current defaults.
 
 #### Schedule & Notification (5)
 
@@ -3078,9 +3114,10 @@ Provision `bacnet_objects::audit::ObjectAuditPolicy` through `set_audit_policy`
 before registration. `None` omits a property; DEFAULT level and
 `AuditPriorityPolicy::Inherit` (a present NULL priority filter) inherit the selected
 Reporter's settings. Metadata and Property_List expose only provisioned rows.
-Both supported objects have commandable Present_Value; their optional priority
-filter applies only to commandable-property writes, not Description or lifecycle
-operations. Provisioning does not install or enable a Reporter.
+Only commandable AV/BV instances expose the optional Audit_Priority_Filter;
+it applies to commandable-property writes, not Description or lifecycle
+operations. Noncommandable instances retain the other supported provisioned
+Audit fields. Provisioning does not install or enable a Reporter.
 
 Target READ/WRITE/CREATE/DELETE use the effective instance policy. The selected
 Reporter's NONE level remains the master suppression boundary. With an enabled
@@ -3105,10 +3142,11 @@ mandatory records bypass the separately configured [delayed target queue](delaye
 
 `BACnetServer::write_local` uses the same target observer, with local Device
 provenance and no invoke ID. Device recipient changes still emit only their
-old/new pair. Physical Input sampling through `set_present_value_local` is silent;
+old/new pair. Application Input/noncommandable Value updates through `set_present_value_local`
+are silent to the target Audit observer;
 raw object/database authoring bypasses notification ownership.
 
-The AV/BV object clauses (§12.4 printed185/PDF187; §12.10 printed211/PDF213)
+The AV/BV object clauses (§12.4 printed185/PDF187; §12.8 printed211/PDF213)
 inherit the Reporter's priority filter when the object row is absent or NULL.
 Generic §19.6.3 (printed820/PDF822) conflicts for the absent case. This bounded
 implementation follows the object-specific clauses; the 2024-04-29 errata does
