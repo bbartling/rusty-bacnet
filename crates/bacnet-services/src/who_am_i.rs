@@ -15,8 +15,10 @@ use bytes::BytesMut;
 pub struct WhoAmIRequest;
 
 impl WhoAmIRequest {
+    /// Encode the request; it has no parameters, so nothing is written.
     pub fn encode(&self, _buf: &mut BytesMut) {}
 
+    /// Decode the request; it has no parameters, so the input is not inspected.
     pub fn decode(_data: &[u8]) -> Result<Self, Error> {
         Ok(Self)
     }
@@ -39,14 +41,20 @@ impl WhoAmIRequest {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YouAreRequest {
+    /// Vendor identifier (Unsigned16) of the device that should act on the request.
     pub vendor_id: u16,
+    /// Model name the target device reports in its Device object.
     pub model_name: String,
+    /// Serial number the target device reports in its Device object.
     pub serial_number: String,
+    /// Device object identifier to assign to the target device; `None` leaves it unchanged.
     pub device_identifier: Option<ObjectIdentifier>,
+    /// MAC address to configure on the target device; `None` leaves it unchanged.
     pub device_mac_address: Option<Vec<u8>>,
 }
 
 impl YouAreRequest {
+    /// Encode the request parameters into `buf`; fails if a character string cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] vendorID
         primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
@@ -65,6 +73,7 @@ impl YouAreRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

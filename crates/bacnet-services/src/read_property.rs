@@ -47,12 +47,17 @@ fn decode_context_u32(
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadPropertyRequest {
+    /// Object to read from.
     pub object_identifier: ObjectIdentifier,
+    /// Property to read.
     pub property_identifier: PropertyIdentifier,
+    /// Array index of the element to read; `None` reads the whole property, and index 0 requests
+    /// the array length.
     pub property_array_index: Option<u32>,
 }
 
 impl ReadPropertyRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         primitives::encode_ctx_unsigned(buf, 1, self.property_identifier.to_raw() as u64);
@@ -61,6 +66,7 @@ impl ReadPropertyRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -135,13 +141,19 @@ impl ReadPropertyRequest {
 /// The `property_value` field contains raw application-tagged bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadPropertyACK {
+    /// Object that was read.
     pub object_identifier: ObjectIdentifier,
+    /// Property that was read.
     pub property_identifier: PropertyIdentifier,
+    /// Array index that was requested, echoed from the request; `None` when the whole property was
+    /// read.
     pub property_array_index: Option<u32>,
+    /// Application-tagged encoding of the value, opaque to this crate.
     pub property_value: Vec<u8>,
 }
 
 impl ReadPropertyACK {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         primitives::encode_ctx_unsigned(buf, 1, self.property_identifier.to_raw() as u64);
@@ -153,6 +165,8 @@ impl ReadPropertyACK {
         tags::encode_closing_tag(buf, 3);
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

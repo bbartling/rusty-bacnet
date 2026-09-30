@@ -11,8 +11,12 @@ use bytes::BytesMut;
 /// Both services share the same PDU structure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListElementRequest {
+    /// Object whose list property is modified.
     pub object_identifier: ObjectIdentifier,
+    /// List property to modify.
     pub property_identifier: PropertyIdentifier,
+    /// Array index selecting one list within an array-of-lists property; `None` when the property
+    /// is itself the list. Zero is invalid.
     pub property_array_index: Option<u32>,
     /// Raw encoded list of elements to add/remove.
     pub list_of_elements: Vec<u8>,
@@ -58,6 +62,7 @@ impl ListElementRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

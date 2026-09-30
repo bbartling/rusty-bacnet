@@ -23,14 +23,17 @@ fn is_application_tag(tag: &tags::Tag, header: u8, number: u8, max_lvt: u8) -> b
 /// `vt_class` is an APPLICATION-tagged ENUMERATED.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VTOpenRequest {
+    /// Raw BACnetVTClass enumeration value naming the terminal type requested for the session.
     pub vt_class: u32,
 }
 
 impl VTOpenRequest {
+    /// Encode the request parameter into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_enumerated(buf, self.vt_class);
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, pos) = tags::decode_tag(data, 0)?;
         if !is_application_tag(&tag, data[0], tags::app_tag::ENUMERATED, 5) {
@@ -53,14 +56,19 @@ impl VTOpenRequest {
 /// `remote_vt_session_identifier` is an APPLICATION-tagged Unsigned8.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VTOpenAck {
+    /// Identifier the responder assigned to the new session, in the range 0-255; the requester
+    /// quotes it in later VT-Data and VT-Close requests.
     pub remote_vt_session_identifier: u8,
 }
 
 impl VTOpenAck {
+    /// Encode the acknowledgment parameter into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_unsigned(buf, self.remote_vt_session_identifier as u64);
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, pos) = tags::decode_tag(data, 0)?;
         if !is_application_tag(&tag, data[0], tags::app_tag::UNSIGNED, 5) {
@@ -98,16 +106,19 @@ impl VTOpenAck {
 /// Contains a SEQUENCE OF Unsigned8 (APPLICATION tagged).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VTCloseRequest {
+    /// Session identifiers to terminate, as known to the responding device.
     pub list_of_remote_vt_session_identifiers: Vec<u8>,
 }
 
 impl VTCloseRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         for &id in &self.list_of_remote_vt_session_identifiers {
             primitives::encode_app_unsigned(buf, id as u64);
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
         let mut ids = Vec::new();
@@ -153,18 +164,24 @@ impl VTCloseRequest {
 /// All fields are APPLICATION tagged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VTDataRequest {
+    /// Session the data belongs to, as known to the responding device.
     pub vt_session_identifier: u8,
+    /// Octets of new data for the peer terminal.
     pub vt_new_data: Vec<u8>,
+    /// Sequence flag that alternates between false and true with each new VT-Data request on a
+    /// session, letting the receiver detect repeats.
     pub vt_data_flag: bool,
 }
 
 impl VTDataRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_unsigned(buf, self.vt_session_identifier as u64);
         primitives::encode_app_octet_string(buf, &self.vt_new_data);
         primitives::encode_app_boolean(buf, self.vt_data_flag);
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -233,6 +250,7 @@ pub struct VTDataAck {
 }
 
 impl VTDataAck {
+    /// Encode the acknowledgment parameters into `buf`; absent fields are omitted.
     pub fn encode(&self, buf: &mut BytesMut) {
         if let Some(v) = self.all_new_data_accepted {
             primitives::encode_ctx_boolean(buf, 0, v);
@@ -242,6 +260,8 @@ impl VTDataAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

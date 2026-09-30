@@ -22,12 +22,18 @@ pub enum WhoHasObject {
 /// Who-Has-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoHasRequest {
+    /// Lowest device instance number that should answer; `None` when the request is not
+    /// range-limited.
     pub low_limit: Option<u32>,
+    /// Highest device instance number that should answer; `None` when the request is not
+    /// range-limited.
     pub high_limit: Option<u32>,
+    /// Object being searched for, by identifier or by name.
     pub object: WhoHasObject,
 }
 
 impl WhoHasRequest {
+    /// Encode the request parameters into `buf`; fails if the object name cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] low-limit (optional)
         if let Some(low) = self.low_limit {
@@ -49,6 +55,7 @@ impl WhoHasRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -114,12 +121,16 @@ impl WhoHasRequest {
 /// I-Have-Request service parameters (APPLICATION-tagged).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IHaveRequest {
+    /// Device object of the responding device.
     pub device_identifier: ObjectIdentifier,
+    /// Identifier of the object that was found.
     pub object_identifier: ObjectIdentifier,
+    /// Name of the object that was found.
     pub object_name: String,
 }
 
 impl IHaveRequest {
+    /// Encode the request parameters into `buf`; fails if the object name cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         primitives::encode_app_object_id(buf, &self.device_identifier);
         primitives::encode_app_object_id(buf, &self.object_identifier);
@@ -127,6 +138,7 @@ impl IHaveRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

@@ -35,13 +35,20 @@ pub struct GroupChannelValue {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteGroupRequest {
+    /// Control group to write, matched against each Channel object's Control_Groups; group 0 is
+    /// reserved.
     pub group_number: u32,
+    /// Priority (1-16) used for writes unless an entry overrides it.
     pub write_priority: u8,
+    /// Channel values to apply, each addressed by channel number.
     pub change_list: Vec<GroupChannelValue>,
+    /// When true, Channel objects that allow it skip their configured execution delay; `None` or
+    /// false leaves delays in force.
     pub inhibit_delay: Option<bool>,
 }
 
 impl WriteGroupRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] groupNumber
         primitives::encode_ctx_unsigned(buf, 0, self.group_number as u64);
@@ -70,6 +77,7 @@ impl WriteGroupRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

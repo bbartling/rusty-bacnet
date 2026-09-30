@@ -28,11 +28,15 @@ pub enum ObjectSpecifier {
 /// CreateObject-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateObjectRequest {
+    /// Object to create: either a type, letting the server choose the instance, or a full
+    /// identifier.
     pub object_specifier: ObjectSpecifier,
+    /// Initial property values to apply to the new object; empty means none were supplied.
     pub list_of_initial_values: Vec<BACnetPropertyValue>,
 }
 
 impl CreateObjectRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] object-specifier (constructed)
         tags::encode_opening_tag(buf, 0);
@@ -56,6 +60,7 @@ impl CreateObjectRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -155,14 +160,17 @@ impl CreateObjectRequest {
 /// Uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteObjectRequest {
+    /// Object to delete.
     pub object_identifier: ObjectIdentifier,
 }
 
 impl DeleteObjectRequest {
+    /// Encode the request parameter into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.object_identifier);
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, pos) = tags::decode_tag(data, 0)?;
         let end = pos + tag.length as usize;
