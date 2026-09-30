@@ -10,6 +10,23 @@ const ACK: NetworkMessageType = NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK
 
 struct DebugCounter(Arc<AtomicUsize>);
 
+impl DebugCounter {
+    fn new(events: Arc<AtomicUsize>) -> Self {
+        // While at most one dispatcher is registered, tracing-core 0.1.36 takes
+        // a cold callsite's interest from the registering thread's default. A
+        // parallel test reaching the disconnect callsite first would cache
+        // "never" and hide our events (#866). As in bacnet-server's
+        // dcc_trace_tests, keep a second, disabled dispatcher registered (not
+        // installed as a default) so registration consults every live
+        // dispatcher. It retains no events.
+        static REGISTRATION_PEER: std::sync::OnceLock<tracing::Dispatch> =
+            std::sync::OnceLock::new();
+        REGISTRATION_PEER
+            .get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+        Self(events)
+    }
+}
+
 impl tracing::Subscriber for DebugCounter {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         *metadata.level() == tracing::Level::DEBUG
@@ -323,7 +340,7 @@ async fn disconnect_retains_route_state_and_pending_and_counts_only_complete_req
     fixture.claim(1, &[2], I_AM).await;
     let debug_events = Arc::new(AtomicUsize::new(0));
     // This test's current-thread runtime keeps the scoped subscriber local.
-    let _subscriber = tracing::subscriber::set_default(DebugCounter(debug_events.clone()));
+    let _subscriber = tracing::subscriber::set_default(DebugCounter::new(debug_events.clone()));
     let before = fixture.table.lock().await.lookup(3000).unwrap().clone();
     let kind = NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK;
     for net in [3000u16, 4000, 5000, 0, 0xffff, 3000] {
@@ -333,7 +350,6 @@ async fn disconnect_retains_route_state_and_pending_and_counts_only_complete_req
     for payload in [&[][..], &[0x0b][..]] {
         fixture.deliver(1, &[2], kind, payload).await;
     }
-    assert_eq!(debug_events.load(Ordering::Relaxed), 6);
     {
         let table = fixture.table.lock().await;
         let route = table.lookup(3000).unwrap();
@@ -352,6 +368,8 @@ async fn disconnect_retains_route_state_and_pending_and_counts_only_complete_req
             }
         );
     }
+    // One DEBUG event per ignored removal; malformed requests log nothing.
+    assert_eq!(debug_events.load(Ordering::Relaxed), 6);
     fixture.claim(1, &[2], ACK).await; // Disconnect did not clear the pending slot.
     fixture.assert_forwarded(1, &[2]).await;
     assert_eq!(
@@ -363,4 +381,25 @@ async fn disconnect_retains_route_state_and_pending_and_counts_only_complete_req
             .corroborated_applied,
         1
     );
+}
+
+/// A parallel test reaching the disconnect DEBUG callsite first must not hide
+/// this thread's events, and its own events are not counted here (#866).
+#[tokio::test]
+async fn debug_counter_counts_this_thread_whoever_registers_the_callsite() {
+    let kind = NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK;
+    let payload = 3000u16.to_be_bytes();
+    let debug_events = Arc::new(AtomicUsize::new(0));
+    let _subscriber = tracing::subscriber::set_default(DebugCounter::new(debug_events.clone()));
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async { Fixture::learned().deliver(1, &[2], kind, &payload).await });
+    })
+    .join()
+    .unwrap();
+    Fixture::learned().deliver(1, &[2], kind, &payload).await;
+    assert_eq!(debug_events.load(Ordering::Relaxed), 1);
 }
