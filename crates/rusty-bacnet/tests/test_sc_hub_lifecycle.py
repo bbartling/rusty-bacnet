@@ -325,9 +325,12 @@ class HubLifecycleTests(HubTlsFixture):
     async def test_cancellation_during_async_close(self):
         hub = self.make_hub()
         await asyncio.wait_for(hub.start(), 10)
+        # The native close is spawned when the method is called; its result
+        # reaches this Future only once the loop runs a callback. Cancelling
+        # before yielding therefore always lands while the close is in flight,
+        # whereas yielding first let a fast close finish and flaked in CI (#918).
         graceful = asyncio.ensure_future(hub.shutdown_gracefully())
-        await asyncio.sleep(0)
-        graceful.cancel()
+        self.assertTrue(graceful.cancel())
         with self.assertRaises(asyncio.CancelledError):
             await graceful
         # Shutdown ownership stays native: a later forceful close is safe.
@@ -336,8 +339,7 @@ class HubLifecycleTests(HubTlsFixture):
         hub = self.make_hub()
         await asyncio.wait_for(hub.start(), 10)
         stopping = asyncio.ensure_future(hub.stop())
-        await asyncio.sleep(0)
-        stopping.cancel()
+        self.assertTrue(stopping.cancel())
         with self.assertRaises(asyncio.CancelledError):
             await stopping
         await asyncio.wait_for(hub.stop(), 5)
