@@ -216,8 +216,8 @@ does not provide a hardware runner or a capture parser; none is invented here.
 These actual repository tests provide **simulator/host** evidence only:
 
 ```sh
-cargo test -p bacnet-transport mstp --locked
-cargo test -p bacnet-transport mstp --features serial --locked
+cargo nextest run -p bacnet-transport mstp --locked
+cargo nextest run -p bacnet-transport mstp --features serial --locked
 cargo test -p bacnet-transport --doc --locked
 ```
 

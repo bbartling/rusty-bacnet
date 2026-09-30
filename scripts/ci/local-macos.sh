@@ -7,7 +7,9 @@
 #   bash scripts/ci/local-macos.sh --quick  # skip the test suite
 #
 # serial and ethernet are Linux-only transport features, so macOS runs the
-# ipv6 + sc-tls feature set. Record the result in the PR (see docs/ci.md).
+# ipv6 + sc-tls feature set. Tests need cargo-nextest 0.9.145 or later
+# (`cargo install cargo-nextest --locked`). Record the result in the PR (see
+# docs/ci.md).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -29,8 +31,12 @@ step "no-secret scan";   bash scripts/ci/test-check-no-secrets.sh && bash script
 step "MSRV script regressions"; python3 scripts/ci/test-check-msrv.py
 step "clippy";           cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
 if ! "$quick"; then
+  features=bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls
+  cargo nextest --version >/dev/null 2>&1 \
+    || { echo "error: cargo-nextest not found; cargo install cargo-nextest --locked" >&2; exit 1; }
   step "tests (ipv6, sc-tls)"
-  cargo test --workspace --exclude rusty-bacnet --locked \
-    --features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls
+  cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$features"
+  step "doctests"
+  cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$features"
 fi
 step "OK: macOS checks passed"
