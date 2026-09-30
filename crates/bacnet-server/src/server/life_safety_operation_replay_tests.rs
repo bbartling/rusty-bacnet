@@ -7,11 +7,11 @@
 //! service-specific extension confined to LifeSafetyOperation, not a Standard
 //! mandate, and makes no physical-idempotency claim.
 
-use super::cov_notifications_tests::RecordingTransport;
+use super::cov_notifications_tests::recording_transport;
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex as StdMutex;
 
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;

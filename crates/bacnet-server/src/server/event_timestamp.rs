@@ -75,7 +75,7 @@ pub(super) fn sample_event_timestamp(db: &mut ObjectDatabase) -> EventTimestampS
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex as StdMutex};
+    use std::sync::Arc;
 
     use bacnet_encoding::apdu::{decode_apdu, Apdu};
     use bacnet_encoding::npdu::decode_npdu;
@@ -92,10 +92,11 @@ mod tests {
     use tokio::sync::{Mutex, RwLock};
 
     use super::super::event_notifications_tests::{
-        local_broadcast_destination, RecordingTransport,
+        local_broadcast_destination, recording_transport,
     };
     use super::super::{BACnetServer, LearnedRouterCache, NotificationTransactions};
     use super::*;
+    use crate::server::test_transport::TestTransport;
 
     struct FixedClock(ClockFrame);
 
@@ -230,9 +231,9 @@ mod tests {
 
     async fn send_event(
         db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<RecordingTransport>>,
+        network: &Arc<NetworkLayer<TestTransport>>,
     ) {
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+        BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
             &crate::server::event_delivery::EventDelivery {
                 db,
                 network,
@@ -260,16 +261,13 @@ mod tests {
     #[tokio::test]
     async fn outbound_event_uses_exact_sampled_device_datetime() {
         let frame = fixed_frame();
-        let sent = Arc::new(StdMutex::new(Vec::new()));
-        let network = Arc::new(NetworkLayer::new(RecordingTransport {
-            sent_broadcast: Arc::clone(&sent),
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }));
+        let (transport, sent) = recording_transport();
+        let network = Arc::new(NetworkLayer::new(transport));
         let db = Arc::new(RwLock::new(outbound_database(Some(frame), 1)));
 
         send_event(&db, &network).await;
 
-        let sent = sent.lock().unwrap();
+        let sent = sent.npdus();
         assert_eq!(sent.len(), 1);
         assert_eq!(
             decode_notification(&sent[0]).timestamp,
@@ -284,16 +282,13 @@ mod tests {
     async fn outbound_event_with_invalid_clock_uses_sequence_without_suppressing_delivery() {
         let mut frame = fixed_frame();
         frame.local_time.hour = Time::UNSPECIFIED;
-        let sent = Arc::new(StdMutex::new(Vec::new()));
-        let network = Arc::new(NetworkLayer::new(RecordingTransport {
-            sent_broadcast: Arc::clone(&sent),
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }));
+        let (transport, sent) = recording_transport();
+        let network = Arc::new(NetworkLayer::new(transport));
         let db = Arc::new(RwLock::new(outbound_database(Some(frame), 1)));
 
         send_event(&db, &network).await;
 
-        let sent = sent.lock().unwrap();
+        let sent = sent.npdus();
         assert_eq!(sent.len(), 1);
         assert_eq!(
             decode_notification(&sent[0]).timestamp,
@@ -303,25 +298,22 @@ mod tests {
 
     #[tokio::test]
     async fn clockless_event_sequence_is_shared_by_all_recipients_and_increments_per_event() {
-        let sent = Arc::new(StdMutex::new(Vec::new()));
-        let network = Arc::new(NetworkLayer::new(RecordingTransport {
-            sent_broadcast: Arc::clone(&sent),
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }));
+        let (transport, sent) = recording_transport();
+        let network = Arc::new(NetworkLayer::new(transport));
         let db = Arc::new(RwLock::new(outbound_database(None, 2)));
 
         send_event(&db, &network).await;
         {
-            let first = sent.lock().unwrap();
+            let first = sent.npdus();
             assert_eq!(first.len(), 2);
             assert!(first.iter().all(|frame| {
                 decode_notification(frame).timestamp == BACnetTimeStamp::SequenceNumber(0)
             }));
         }
 
-        sent.lock().unwrap().clear();
+        sent.clear();
         send_event(&db, &network).await;
-        let second = sent.lock().unwrap();
+        let second = sent.npdus();
         assert_eq!(second.len(), 2);
         assert!(second.iter().all(|frame| {
             decode_notification(frame).timestamp == BACnetTimeStamp::SequenceNumber(1)

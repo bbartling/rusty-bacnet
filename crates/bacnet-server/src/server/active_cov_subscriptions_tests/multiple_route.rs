@@ -142,7 +142,7 @@ async fn initials_complete(wire: &Wire, expected: usize) {
 async fn changed_value_uses(wire: &Wire, route: &Peer, object: ObjectIdentifier, value: f32) {
     use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
     use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
-    wire.sent.lock().unwrap().clear();
+    wire.sent.clear();
     wire.server
         .write_local(
             &object,
@@ -154,14 +154,14 @@ async fn changed_value_uses(wire: &Wire, route: &Peer, object: ObjectIdentifier,
         )
         .await
         .unwrap();
-    let frames = wire.sent.lock().unwrap().clone();
+    let frames = wire.sent.frames();
     assert_eq!(
         frames.len(),
         1,
         "one grouped notification for the canonical context"
     );
-    assert_eq!(frames[0].0.as_slice(), route.mac.as_slice());
-    let npdu = decode_npdu(frames[0].1.clone()).unwrap();
+    assert_eq!(frames[0].mac.as_slice(), route.mac.as_slice());
+    let npdu = decode_npdu(frames[0].npdu.clone()).unwrap();
     assert_eq!(npdu.destination, route.network);
     let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
         panic!("unconfirmed Multiple notification");

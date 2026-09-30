@@ -2,6 +2,7 @@
 //! A transport exposes an encoded NPDU, then holds its send Result unresolved.
 //! This is local operation observation, not physical delivery or peer receipt.
 use super::*;
+use crate::server::test_transport::{SendMode, SentFrame, StartMode, TestTransport};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::value_types::CharacterStringValueObject;
@@ -68,19 +69,14 @@ struct Issued {
     release: oneshot::Sender<Result<(), Error>>,
     finished: oneshot::Receiver<()>,
 }
-struct GatedPort {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// The gated send path, installed as the shared test transport's send hook.
+#[derive(Clone)]
+struct Gate {
     issued: mpsc::UnboundedSender<Issued>,
 }
-impl TransportPort for GatedPort {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, data: &[u8], _: &[u8]) -> Result<(), Error> {
-        let npdu = decode_npdu(Bytes::copy_from_slice(data)).unwrap();
+impl Gate {
+    async fn send(self, frame: SentFrame) -> Result<(), Error> {
+        let npdu = decode_npdu(frame.npdu).unwrap();
         let apdu = apdu::decode_apdu(npdu.payload.clone()).unwrap();
         let (release, wait) = oneshot::channel();
         let (done, finished) = oneshot::channel();
@@ -96,19 +92,27 @@ impl TransportPort for GatedPort {
         wait.await
             .unwrap_or_else(|_| Err(Error::Encoding("test send cancelled".into())))
     }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[2]
-    }
+}
+/// A link with local MAC `[2]` that exposes each unicast as [`Issued`] and
+/// holds it until released; broadcasts succeed unrecorded. Without `incoming`
+/// the link must never start.
+fn gated_port(
+    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+    issued: mpsc::UnboundedSender<Issued>,
+) -> TestTransport {
+    let gate = Gate { issued };
+    TestTransport::builder()
+        .local_mac(&[2])
+        .start(match incoming {
+            Some(incoming) => StartMode::Inbound(Some(incoming)),
+            None => StartMode::Panic("gated port has no inbound channel"),
+        })
+        .broadcast(SendMode::Ignore)
+        .on_send(move |frame| gate.clone().send(frame))
+        .build()
 }
 struct Fixture {
-    server: BACnetServer<GatedPort>,
+    server: BACnetServer<TestTransport>,
     incoming: mpsc::Sender<ReceivedNpdu>,
     issued: mpsc::UnboundedReceiver<Issued>,
     held: Vec<Issued>,
@@ -135,16 +139,9 @@ impl Fixture {
         .unwrap();
         let (incoming, receive) = mpsc::channel(32);
         let (issued, observed) = mpsc::unbounded_channel();
-        let server = BACnetServer::start(
-            config,
-            db,
-            GatedPort {
-                incoming: Some(receive),
-                issued,
-            },
-        )
-        .await
-        .unwrap();
+        let server = BACnetServer::start(config, db, gated_port(Some(receive), issued))
+            .await
+            .unwrap();
         Self {
             server,
             incoming,

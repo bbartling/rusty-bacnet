@@ -109,7 +109,7 @@ fn encoded(
 
 async fn take(fixture: &DispatchFixture, count: usize, family: Family, expected: u32) {
     tokio::time::timeout(Duration::from_secs(2), async {
-        while fixture.sent.lock().unwrap().len() < count {
+        while fixture.sent.len() < count {
             tokio::task::yield_now().await;
         }
     })
@@ -155,7 +155,7 @@ async fn wire_case(family: Family, confirmed: bool, lifetime: Option<u32>, expec
     let (service, request) = encoded(family, confirmed, lifetime, false);
     fixture.dispatch(92, service, request).await;
     take(&fixture, 2, family, expected).await;
-    BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
+    BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &fixture.db,
             network: &fixture.network,

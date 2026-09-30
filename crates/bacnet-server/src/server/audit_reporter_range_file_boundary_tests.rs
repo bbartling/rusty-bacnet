@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::test_transport::TestTransport;
 
 fn request(kind: Kind, data: Bytes, segmented: bool) -> ConfirmedRequestPdu {
     ConfirmedRequestPdu {
@@ -16,7 +17,7 @@ fn request(kind: Kind, data: Bytes, segmented: bool) -> ConfirmedRequestPdu {
 }
 
 async fn ingress(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     req: ConfirmedRequestPdu,
     reply_tx: Option<oneshot::Sender<Bytes>>,
 ) {

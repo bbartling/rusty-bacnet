@@ -174,13 +174,7 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                             .unwrap();
                         let decoded = decode_npdu(bytes).unwrap();
                         assert_eq!(decoded.destination, source);
-                        assert!(server
-                            .test_network()
-                            .transport()
-                            .frames
-                            .lock()
-                            .unwrap()
-                            .is_empty());
+                        assert!(held_sends(&server).frames.lock().unwrap().is_empty());
                         apdu::decode_apdu(decoded.payload).unwrap()
                     } else {
                         let _completion =
@@ -188,7 +182,7 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                                 .await
                                 .unwrap()
                                 .unwrap();
-                        let transport = server.test_network().transport();
+                        let transport = held_sends(&server);
                         assert_eq!(
                             transport.routes.lock().unwrap().as_slice(),
                             &[(source, MacAddr::from_slice(&[1]))]

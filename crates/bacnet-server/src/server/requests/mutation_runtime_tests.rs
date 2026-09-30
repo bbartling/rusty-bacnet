@@ -3,44 +3,18 @@ use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
 
-struct IngressTransport(Option<mpsc::Receiver<ReceivedNpdu>>);
-
-impl TransportPort for IngressTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.0.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
-}
-
 #[tokio::test]
 async fn mutation_runtime_ingress_and_reassembly_share_retained_server_counters() {
     for segmented in [false, true] {
         let fixture = Fixture::new(Some(Arc::new(|_| true)));
-        let (tx, rx) = mpsc::channel(2);
+        let (transport, tx) = TestTransport::inbound(2);
         let config = ServerConfig {
             mutation_policy: MutationPolicy::DenyAll,
             segmentation_supported: Segmentation::BOTH,
             ..fixture.config
         };
         let db = std::mem::take(&mut *fixture.db.write().await);
-        let mut server = BACnetServer::start(config, db, IngressTransport(Some(rx)))
-            .await
-            .unwrap();
+        let mut server = BACnetServer::start(config, db, transport).await.unwrap();
         assert_eq!(
             server.mutation_decision_counters(),
             MutationDecisionCounters::default()

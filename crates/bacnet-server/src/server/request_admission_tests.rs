@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::request_admission::{Class, Rejection};
+use crate::server::test_transport::{SendMode, StartMode};
 
 #[path = "peer_admission_tests.rs"]
 mod peer_admission_tests;
@@ -11,7 +12,7 @@ mod recovery_admission_tests;
 
 // Exercise sealed admission before final transport retirement; after successful
 // stop there is deliberately no network owner left for direct private dispatch.
-async fn begin_stop(server: &mut BACnetServer<HeldTransport>) {
+async fn begin_stop(server: &mut BACnetServer<TestTransport>) {
     use std::future::Future;
     let stop = server.stop();
     tokio::pin!(stop);
@@ -23,7 +24,7 @@ async fn begin_stop(server: &mut BACnetServer<HeldTransport>) {
 }
 
 async fn small_fixture() -> (
-    BACnetServer<HeldTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
@@ -45,7 +46,7 @@ async fn small_fixture() -> (
 }
 
 async fn dispatch(
-    server: &BACnetServer<HeldTransport>,
+    server: &BACnetServer<TestTransport>,
     apdu: Apdu,
     source: Option<NpduAddress>,
     reply_tx: Option<oneshot::Sender<Bytes>>,
@@ -116,7 +117,7 @@ async fn admission_default_confirmed_limit_rejects_before_handler() {
             .unwrap();
     }
     {
-        let frames = server.test_network().transport().frames.lock().unwrap();
+        let frames = held_sends(&server).frames.lock().unwrap();
         assert_eq!(frames.len(), 65);
         assert!(
             matches!(&frames[64], Apdu::Abort(abort)
@@ -204,31 +205,13 @@ async fn admission_independent_handlers_and_eight_owned_abort_workers_never_queu
     }
     assert_eq!(server.request_admission_counters(), counters);
     assert!(started.try_recv().is_err());
-    assert_eq!(
-        server
-            .test_network()
-            .transport()
-            .frames
-            .lock()
-            .unwrap()
-            .len(),
-        10
-    );
-    server.test_network().transport().release.notify_waiters();
+    assert_eq!(held_sends(&server).frames.lock().unwrap().len(), 10);
+    held_sends(&server).release.notify_waiters();
     original.await.unwrap();
     unconfirmed.await.unwrap();
     wait_reaped(&server).await;
     // Denied work never starts after release. All ten prior frames are final.
-    assert_eq!(
-        server
-            .test_network()
-            .transport()
-            .frames
-            .lock()
-            .unwrap()
-            .len(),
-        10
-    );
+    assert_eq!(held_sends(&server).frames.lock().unwrap().len(), 10);
     assert_eq!(server.request_admission_counters().confirmed_active, 0);
     assert_eq!(server.request_admission_counters().unconfirmed_active, 0);
     assert_eq!(server.request_admission_counters().abort_active, 0);
@@ -275,7 +258,7 @@ async fn admission_pending_duplicate_precedes_capacity_but_issued_reuse_overload
         1
     );
     assert_eq!(server.request_admission_counters().abort_admitted_total, 1);
-    server.test_network().transport().release.notify_waiters();
+    held_sends(&server).release.notify_waiters();
     original.await.unwrap();
     overloaded.await.unwrap();
     wait_reaped(&server).await;
@@ -314,16 +297,7 @@ async fn admission_abort_reply_channel_preserves_routed_npdu_and_wire_fields() {
             if a.sent_by_server && a.invoke_id == 2 && a.abort_reason == AbortReason::OUT_OF_RESOURCES)
         );
     }
-    assert_eq!(
-        server
-            .test_network()
-            .transport()
-            .frames
-            .lock()
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(held_sends(&server).frames.lock().unwrap().len(), 1);
     server.stop().await.unwrap();
     assert_eq!(server.request_admission_counters().abort_active, 0);
 }
@@ -358,12 +332,10 @@ async fn admission_panic_releases_real_handler_and_abort_and_allows_retry() {
     for id in [1, 1] {
         inject(&tx, request(id)).await;
         let released = observed(&mut started).await;
-        server
-            .test_network()
-            .transport()
+        held_sends(&server)
             .panic_next
             .store(true, Ordering::Release);
-        server.test_network().transport().release.notify_one();
+        held_sends(&server).release.notify_one();
         released.await.unwrap();
         wait_reaped(&server).await;
         assert_eq!(server.request_admission_counters().confirmed_active, 0);
@@ -483,27 +455,16 @@ async fn admission_direct_and_routed_abort_send_release_on_error_and_panic() {
         dispatch(&server, request(id), route.clone(), None).await;
         let released = observed(&mut started).await;
         assert_eq!(
-            server
-                .test_network()
-                .transport()
-                .routes
-                .lock()
-                .unwrap()
-                .last()
-                .unwrap(),
+            held_sends(&server).routes.lock().unwrap().last().unwrap(),
             &(route, MacAddr::from_slice(&[1]))
         );
-        server
-            .test_network()
-            .transport()
+        held_sends(&server)
             .panic_next
             .store(panic, Ordering::Release);
-        server
-            .test_network()
-            .transport()
+        held_sends(&server)
             .fail_next
             .store(!panic, Ordering::Release);
-        server.test_network().transport().release.notify_one();
+        held_sends(&server).release.notify_one();
         released.await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             while server.request_admission_counters().abort_active != 0 {
@@ -520,28 +481,17 @@ async fn admission_direct_and_routed_abort_send_release_on_error_and_panic() {
     assert_eq!(server.request_admission_counters().abort_active, 0);
 }
 
-struct NeverStart(Arc<AtomicBool>);
-impl TransportPort for NeverStart {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.0.store(true, Ordering::Release);
-        panic!("invalid admission must not start transport");
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        unreachable!()
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        unreachable!()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
+/// Records that startup was reached, then panics; its sends are unreachable.
+fn never_start(started: &Arc<AtomicBool>) -> TestTransport {
+    let started = Arc::clone(started);
+    TestTransport::builder()
+        .on_start(move || started.store(true, Ordering::Release))
+        .start(StartMode::Panic(
+            "invalid admission must not start transport",
+        ))
+        .unicast(SendMode::Panic("unreachable send"))
+        .broadcast(SendMode::Panic("unreachable send"))
+        .build()
 }
 
 #[tokio::test]
@@ -559,14 +509,14 @@ async fn admission_invalid_direct_generic_bip_before_transport_start() {
                 ..Default::default()
             },
             ObjectDatabase::new(),
-            NeverStart(Arc::clone(&started)),
+            never_start(&started),
         )
         .await
         .err()
         .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("max_confirmed_in_flight")));
         let error = BACnetServer::generic_builder()
-            .transport(NeverStart(Arc::clone(&started)))
+            .transport(never_start(&started))
             .request_admission_policy(policy)
             .build()
             .await

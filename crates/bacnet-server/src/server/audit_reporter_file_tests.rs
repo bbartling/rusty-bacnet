@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_objects::{
     file::{FileObject, FileRecordRead, FileStorage, FileStreamRead, FileWriteStart},
     traits::BACnetObject,
@@ -236,7 +237,7 @@ async fn audit_reporter_atomic_write_file_preserves_decoder_acceptance_boundary(
             };
             assert_eq!(
                 wire(&response),
-                wire(&BACnetServer::<CaptureTransport>::error_apdu_from_error(
+                wire(&BACnetServer::<TestTransport>::error_apdu_from_error(
                     invoke_id, SERVICE, &error
                 ))
             );
@@ -479,7 +480,7 @@ async fn audit_reporter_atomic_write_file_backend_mapping_and_unknown_outcome_si
                 .add(Box::new(probe(&fixture, record)))
                 .unwrap();
             let expected_response =
-                BACnetServer::<CaptureTransport>::error_apdu_from_error(77, SERVICE, &error);
+                BACnetServer::<TestTransport>::error_apdu_from_error(77, SERVICE, &error);
             *fixture.execution_error.lock().unwrap() = Some(error);
             let before = metadata(&fixture).await;
             let target = oid(ObjectType::FILE, 1);

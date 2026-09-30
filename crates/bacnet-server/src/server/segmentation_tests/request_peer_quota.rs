@@ -9,7 +9,7 @@ use request_reassembly::{
 
 /// Consume a real wire reply, checking both routed and immediate destinations.
 pub(super) async fn next_routed_apdu(
-    sent: &SentFrames,
+    sent: &SendLog,
     index: &mut usize,
     router: &MacAddr,
     remote: &NpduAddress,

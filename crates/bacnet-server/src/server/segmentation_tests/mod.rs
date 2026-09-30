@@ -1,123 +1,38 @@
 use super::*;
+use crate::server::test_transport::{
+    SendLog, SendMode, TestTransport, TestTransportHandle, BIP_LOCAL_MAC,
+};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{mpsc, watch};
 
-type SentFrames = StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>;
-
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sent_unicast: SentFrames,
-    local_mac: Vec<u8>,
+/// Records unicasts and ignores broadcasts, from a B/IP-shaped local MAC.
+fn recording_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .broadcast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
-impl RecordingTransport {
-    fn new(sent_unicast: SentFrames) -> Self {
-        Self {
-            sent_unicast,
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }
-    }
+fn recording_network() -> (Arc<NetworkLayer<TestTransport>>, SendLog) {
+    let (transport, sent) = recording_transport();
+    (Arc::new(NetworkLayer::new(transport)), sent)
 }
 
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent_unicast
-            .lock()
-            .unwrap()
-            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-}
-
-#[derive(Clone)]
-struct BlockingSendTransport {
-    sent_unicast: SentFrames,
-    local_mac: Vec<u8>,
-    first_send_started: Arc<Notify>,
-    release_first_send: Arc<Notify>,
-    block_first_send: Arc<AtomicBool>,
-}
-
-impl BlockingSendTransport {
-    fn new(
-        sent_unicast: SentFrames,
-        first_send_started: Arc<Notify>,
-        release_first_send: Arc<Notify>,
-    ) -> Self {
-        Self {
-            sent_unicast,
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-            first_send_started,
-            release_first_send,
-            block_first_send: Arc::new(AtomicBool::new(true)),
-        }
-    }
-}
-
-impl TransportPort for BlockingSendTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent_unicast
-            .lock()
-            .unwrap()
-            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
-
-        if self.block_first_send.swap(false, Ordering::AcqRel) {
-            self.first_send_started.notify_waiters();
-            self.release_first_send.notified().await;
-        }
-
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+/// [`recording_network`] whose first send is held until released.
+fn blocking_first_send_network() -> (
+    Arc<NetworkLayer<TestTransport>>,
+    SendLog,
+    TestTransportHandle,
+) {
+    let (transport, sent) = recording_transport();
+    let first_send = transport.handle();
+    first_send.block_next_send();
+    (Arc::new(NetworkLayer::new(transport)), sent, first_send)
 }
 
 fn test_mac(byte: u8) -> MacAddr {
@@ -125,7 +40,7 @@ fn test_mac(byte: u8) -> MacAddr {
 }
 
 fn spawn_segmented_complex_ack(
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: MacAddr,
     invoke_id: u8,
@@ -144,7 +59,7 @@ fn spawn_segmented_complex_ack(
 }
 
 fn spawn_segmented_complex_ack_from_network(
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     seg_send_permits: Arc<Semaphore>,
     source_mac: MacAddr,
@@ -175,13 +90,13 @@ struct SegmentedSendTestRequest {
 }
 
 fn spawn_segmented_complex_ack_from_network_with_options(
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     seg_send_permits: Arc<Semaphore>,
     request: SegmentedSendTestRequest,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        BACnetServer::<RecordingTransport>::send_segmented_complex_ack_with_options(
+        BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
             SegmentedSendResources {
                 network: &network,
                 seg_ack_senders: &seg_ack_senders,
@@ -207,7 +122,7 @@ fn spawn_segmented_complex_ack_from_network_with_options(
 }
 
 fn spawn_segmented_complex_ack_with_options(
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: MacAddr,
     invoke_id: u8,
@@ -229,17 +144,8 @@ fn spawn_segmented_complex_ack_with_options(
     )
 }
 
-async fn wait_until_sent_len(sent: &SentFrames, expected: usize) {
-    loop {
-        if sent.lock().unwrap().len() >= expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
-async fn wait_for_sent_len(sent: &SentFrames, expected: usize) {
-    tokio::time::timeout(Duration::from_secs(1), wait_until_sent_len(sent, expected))
+async fn wait_for_sent_len(sent: &SendLog, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(1), sent.wait_for_len(expected))
         .await
         .expect("timed out waiting for segmented response frame");
 }
@@ -267,8 +173,8 @@ async fn send_segment_ack(
         .expect("segmented response task should still be waiting for SegmentAck");
 }
 
-async fn dispatch_test_apdu<T: TransportPort + 'static>(
-    network: &Arc<NetworkLayer<T>>,
+async fn dispatch_test_apdu(
+    network: &Arc<NetworkLayer<TestTransport>>,
     seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: &MacAddr,
     apdu: Apdu,
@@ -276,14 +182,14 @@ async fn dispatch_test_apdu<T: TransportPort + 'static>(
     dispatch_test_apdu_from_network(network, seg_ack_senders, source_mac, None, apdu).await;
 }
 
-async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
-    network: &Arc<NetworkLayer<T>>,
+async fn dispatch_test_apdu_from_network(
+    network: &Arc<NetworkLayer<TestTransport>>,
     seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: &MacAddr,
     source_network: Option<NpduAddress>,
     apdu: Apdu,
 ) {
-    BACnetServer::<T>::dispatch(
+    BACnetServer::<TestTransport>::dispatch(
         &DispatchContext::for_test(RequestServices {
             seg_ack_senders: Arc::clone(seg_ack_senders),
             cov_in_flight: Arc::new(Semaphore::new(255)),
@@ -307,40 +213,23 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
     .await;
 }
 
-fn decoded_sent_apdu(sent: &SentFrames, index: usize) -> Apdu {
-    let npdu_bytes = {
-        let sent = sent.lock().unwrap();
-        sent[index].0.clone()
-    };
-    let npdu = decode_npdu(npdu_bytes).expect("sent frame should decode as NPDU");
-    decode_apdu(npdu.payload).expect("sent NPDU payload should decode as APDU")
+fn decoded_sent_apdu(sent: &SendLog, index: usize) -> Apdu {
+    sent.frame(index).apdu()
 }
 
-fn sent_npdu_destination(sent: &SentFrames, index: usize) -> Option<NpduAddress> {
-    let npdu_bytes = {
-        let sent = sent.lock().unwrap();
-        sent[index].0.clone()
-    };
-    decode_npdu(npdu_bytes)
-        .expect("sent frame should decode as NPDU")
-        .destination
+fn sent_npdu_destination(sent: &SendLog, index: usize) -> Option<NpduAddress> {
+    sent.frame(index).decode_npdu().destination
 }
 
-fn sent_link_destination(sent: &SentFrames, index: usize) -> MacAddr {
-    sent.lock().unwrap()[index].1.clone()
+fn sent_link_destination(sent: &SendLog, index: usize) -> MacAddr {
+    sent.frame(index).mac
 }
 
-fn sent_expecting_reply(sent: &SentFrames, index: usize) -> bool {
-    let npdu_bytes = {
-        let sent = sent.lock().unwrap();
-        sent[index].0.clone()
-    };
-    decode_npdu(npdu_bytes)
-        .expect("sent frame should decode as NPDU")
-        .expecting_reply
+fn sent_expecting_reply(sent: &SendLog, index: usize) -> bool {
+    sent.frame(index).decode_npdu().expecting_reply
 }
 
-fn complex_ack_sequence(sent: &SentFrames, index: usize) -> u8 {
+fn complex_ack_sequence(sent: &SendLog, index: usize) -> u8 {
     match decoded_sent_apdu(sent, index) {
         Apdu::ComplexAck(ack) => {
             assert!(ack.segmented);
@@ -355,15 +244,15 @@ fn complex_ack_sequence(sent: &SentFrames, index: usize) -> u8 {
     }
 }
 
-fn abort_reason(sent: &SentFrames, index: usize) -> AbortReason {
+fn abort_reason(sent: &SendLog, index: usize) -> AbortReason {
     match decoded_sent_apdu(sent, index) {
         Apdu::Abort(abort) => abort.abort_reason,
         other => panic!("expected Abort, got {other:?}"),
     }
 }
 
-fn sent_count(sent: &SentFrames) -> usize {
-    sent.lock().unwrap().len()
+fn sent_count(sent: &SendLog) -> usize {
+    sent.len()
 }
 
 fn segment_ack(invoke_id: u8, negative_ack: bool, sequence_number: u8) -> SegmentAckPdu {

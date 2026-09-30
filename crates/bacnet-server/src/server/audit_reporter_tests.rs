@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
@@ -259,7 +260,7 @@ async fn settle() {
     }
 }
 
-async fn health(server: &BACnetServer<CaptureTransport>) -> Reliability {
+async fn health(server: &BACnetServer<TestTransport>) -> Reliability {
     let db = server.db.read().await;
     let value = db
         .get(&oid(ObjectType::AUDIT_REPORTER, 1))
@@ -272,7 +273,7 @@ async fn health(server: &BACnetServer<CaptureTransport>) -> Reliability {
     Reliability::from_raw(value)
 }
 
-async fn write_value(server: &BACnetServer<CaptureTransport>, priority: Option<u8>) -> Apdu {
+async fn write_value(server: &BACnetServer<TestTransport>, priority: Option<u8>) -> Apdu {
     dispatch(
         server,
         ConfirmedServiceChoice::WRITE_PROPERTY,
@@ -697,7 +698,7 @@ async fn immediate_and_delayed_reporter_raw_1474_emit_header_1024() {
             vec![DeviceBinding::local(oid(ObjectType::DEVICE, 20), LOGGER).unwrap()],
             true,
             1474,
-            CaptureTransport::default(),
+            AuditCapture::default(),
         )
         .await
         .unwrap();

@@ -5,7 +5,7 @@ use bacnet_transport::port::ReceivedNpdu;
 
 async fn fixture(confirmed: bool) -> (Fixture, mpsc::Sender<ReceivedNpdu>) {
     let (tx, rx) = mpsc::channel(16);
-    let transport = CaptureTransport::default();
+    let transport = AuditCapture::default();
     *transport.incoming.lock().unwrap() = Some(rx);
     let mut reporter = delayed(60);
     reporter
@@ -48,7 +48,7 @@ async fn inject(tx: &mpsc::Sender<ReceivedNpdu>, source: &[u8], apdu: Apdu) {
     .await
     .unwrap();
 }
-fn confirmed_frames(f: &CaptureTransport) -> Vec<ConfirmedRequestPdu> {
+fn confirmed_frames(f: &AuditCapture) -> Vec<ConfirmedRequestPdu> {
     f.sent
         .lock()
         .unwrap()

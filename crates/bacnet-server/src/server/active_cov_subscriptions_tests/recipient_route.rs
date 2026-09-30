@@ -64,7 +64,7 @@ async fn renewal_wire(single: bool) {
     }
     let active = wire.active().await;
     let entries = wire.server.cov_table.read().await.len();
-    wire.sent.lock().unwrap().clear();
+    wire.sent.clear();
     wire.server
         .write_local(
             &av(1),
@@ -76,7 +76,7 @@ async fn renewal_wire(single: bool) {
         )
         .await
         .unwrap();
-    let frames = wire.sent.lock().unwrap().clone();
+    let frames = wire.sent.frames();
     wire.server.stop().await.unwrap();
     assert_eq!(
         entries, 1,
@@ -85,8 +85,8 @@ async fn renewal_wire(single: bool) {
     assert_eq!(active.len(), 1, "one Device property152 entry");
     assert_eq!(active[0].recipient.recipient, address(&routed()));
     assert_eq!(frames.len(), 1, "one later notification");
-    assert_eq!(frames[0].0.as_slice(), router_b().mac);
-    let npdu = decode_npdu(frames[0].1.clone()).unwrap();
+    assert_eq!(frames[0].mac.as_slice(), router_b().mac);
+    let npdu = decode_npdu(frames[0].npdu.clone()).unwrap();
     assert_eq!(npdu.destination, routed().network);
     let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
         panic!("expected unconfirmed COV notification");

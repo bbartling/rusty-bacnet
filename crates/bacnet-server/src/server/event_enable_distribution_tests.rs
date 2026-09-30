@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::handlers::{handle_add_list_element, handle_remove_list_element};
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
@@ -22,47 +23,9 @@ use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_services::list_manipulation::ListElementRequest;
-use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, EventType, NotifyType};
 use bytes::{Bytes, BytesMut};
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
-
-/// Records every broadcast NPDU and discards unicasts.
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent_broadcast
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
-    }
-}
 
 /// The state value the fixture treats as an alarm, and the one it does not.
 const ALARM_STATE: u64 = 2;
@@ -90,7 +53,7 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
     let sent = broadcasts_from_per_write_path(&db, 0).await;
 
     assert_eq!(sent.len(), 1);
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let notification = decode_broadcast_notification(&sent);
     assert_eq!(notification.notify_type, NotifyType::EVENT.to_raw());
     assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
     assert_eq!(
@@ -108,11 +71,11 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
 /// notification path needs to run against it.
 struct Fixture {
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     comm_state: Arc<AtomicU8>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     notification_transactions: Arc<NotificationTransactions>,
-    sent: StdArc<StdMutex<Vec<Bytes>>>,
+    sent: SendLog,
     oid: ObjectIdentifier,
 }
 
@@ -181,12 +144,10 @@ impl Fixture {
         ))
         .unwrap();
 
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
+        let (transport, sent) = super::event_notifications_tests::recording_transport();
         Self {
             db: Arc::new(RwLock::new(db)),
-            network: Arc::new(NetworkLayer::new(RecordingTransport {
-                sent_broadcast: StdArc::clone(&sent),
-            })),
+            network: Arc::new(NetworkLayer::new(transport)),
             comm_state: Arc::new(AtomicU8::new(0)), // DCC not blocking
             learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             notification_transactions: NotificationTransactions::new(),
@@ -217,7 +178,7 @@ impl Fixture {
             )
             .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
 
-        BACnetServer::<RecordingTransport>::fire_event_notifications_with_bindings(
+        BACnetServer::<TestTransport>::fire_event_notifications_with_bindings(
             &crate::server::event_delivery::EventDelivery {
                 db: &self.db,
                 network: &self.network,
@@ -267,7 +228,11 @@ impl Fixture {
 
     /// Take the broadcasts recorded since the last call.
     fn drain(&self) -> Vec<Bytes> {
-        std::mem::take(&mut *self.sent.lock().unwrap())
+        self.sent
+            .take()
+            .into_iter()
+            .map(|frame| frame.npdu)
+            .collect()
     }
 
     async fn event_state(&self) -> PropertyValue {

@@ -1,6 +1,7 @@
 //! Wire harness and independent list decoder for the Device
 //! `Active_COV_Subscriptions` projection tests.
 use super::super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::constructed::{decode_object_property_reference, decode_recipient};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
@@ -28,43 +29,6 @@ pub(super) const ACTIVE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_SUB
 pub(super) const MULTIPLE: PropertyIdentifier =
     PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
 pub(super) const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
-
-pub(super) type SentFrames = Arc<std::sync::Mutex<Vec<(MacAddr, Bytes)>>>;
-
-pub(super) struct WireTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent: SentFrames,
-}
-
-impl TransportPort for WireTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent
-            .lock()
-            .unwrap()
-            .push((MacAddr::from_slice(mac), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent
-            .lock()
-            .unwrap()
-            .push((MacAddr::new(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0x0A, 0, 0, 2, 0xBA, 0xC0]
-    }
-}
 
 /// A subscriber as seen by the server: link source plus optional routed source.
 #[derive(Clone)]
@@ -280,9 +244,9 @@ pub(super) async fn exchange(
 }
 
 pub(super) struct Wire {
-    pub(super) server: BACnetServer<WireTransport>,
+    pub(super) server: BACnetServer<TestTransport>,
     pub(super) tx: mpsc::Sender<ReceivedNpdu>,
-    pub(super) sent: SentFrames,
+    pub(super) sent: SendLog,
     invoke_id: u8,
 }
 
@@ -293,7 +257,6 @@ impl Wire {
 
     pub(super) async fn start_with_devices(config: ServerConfig, instances: &[u32]) -> Self {
         let (tx, rx) = mpsc::channel(16);
-        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut db = ObjectDatabase::new();
         for &instance in instances {
             db.add(Box::new(
@@ -311,10 +274,11 @@ impl Wire {
         db.add(Box::new(first)).unwrap();
         db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
             .unwrap();
-        let transport = WireTransport {
-            incoming: Some(rx),
-            sent: Arc::clone(&sent),
-        };
+        let transport = TestTransport::builder()
+            .local_mac(&[0x0A, 0, 0, 2, 0xBA, 0xC0])
+            .inbound(rx)
+            .build();
+        let sent = transport.sent();
         let server = BACnetServer::start(config, db, transport).await.unwrap();
         Self {
             server,

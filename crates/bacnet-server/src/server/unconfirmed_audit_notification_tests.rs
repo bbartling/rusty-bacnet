@@ -1,49 +1,15 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use bacnet_objects::device::DeviceConfig;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::AuditOperation;
-use tokio::sync::mpsc;
 
 use super::audit_notification_tests::{
     count, database, database_with_device, notification, oid, request_bytes, MemoryPersistence,
 };
 use super::*;
-
-#[derive(Clone)]
-struct CountingTransport {
-    sends: Arc<AtomicUsize>,
-}
-
-impl TransportPort for CountingTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.sends.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        self.sends.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0]
-    }
-}
+use crate::server::test_transport::{SendLog, TestTransport};
 
 fn received(
     source_mac: &[u8],
@@ -63,6 +29,8 @@ fn received(
     }
 }
 
+/// Dispatch one request through a fresh link and return that link's log of
+/// every unicast and broadcast send.
 async fn dispatch_unconfirmed(
     db: &Arc<RwLock<ObjectDatabase>>,
     config: &ServerConfig,
@@ -70,10 +38,11 @@ async fn dispatch_unconfirmed(
     source_mac: &[u8],
     source_network: Option<NpduAddress>,
     service_request: Bytes,
-    sends: Arc<AtomicUsize>,
-) {
-    let network = Arc::new(NetworkLayer::new(CountingTransport { sends }));
-    BACnetServer::<CountingTransport>::handle_unconfirmed_request(
+) -> SendLog {
+    let transport = TestTransport::builder().local_mac(&[0]).build();
+    let sends = transport.sent();
+    let network = Arc::new(NetworkLayer::new(transport));
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(db),
             comm_state: Arc::clone(comm_state),
@@ -86,6 +55,7 @@ async fn dispatch_unconfirmed(
         &received(source_mac, source_network),
     )
     .await;
+    sends
 }
 
 async fn assert_silent_drop(
@@ -96,19 +66,17 @@ async fn assert_silent_drop(
     comm_state: u8,
 ) {
     let before = count(db, sink).await;
-    let sends = Arc::new(AtomicUsize::new(0));
-    dispatch_unconfirmed(
+    let sends = dispatch_unconfirmed(
         db,
         config,
         &Arc::new(AtomicU8::new(comm_state)),
         &[1],
         None,
         service_request,
-        Arc::clone(&sends),
     )
     .await;
     assert_eq!(count(db, sink).await, before);
-    assert_eq!(sends.load(Ordering::SeqCst), 0);
+    assert_eq!(sends.len(), 0, "a silently dropped request must not send");
 }
 
 #[tokio::test]
@@ -130,21 +98,19 @@ async fn accepted_direct_and_routed_requests_commit_atomically_without_output() 
         network: 55,
         mac_address: MacAddr::from_slice(&[0xaa]),
     };
-    let sends = Arc::new(AtomicUsize::new(0));
     let comm_state = Arc::new(AtomicU8::new(0));
 
     let source = notification(AuditOperation::WRITE);
     let mut target = source.clone();
     target.source_timestamp = None;
     target.target_timestamp = source.source_timestamp.clone();
-    dispatch_unconfirmed(
+    let routed_sends = dispatch_unconfirmed(
         &db,
         &config,
         &comm_state,
         &[0x10],
         Some(routed.clone()),
         request_bytes(vec![source, target]),
-        Arc::clone(&sends),
     )
     .await;
     assert_eq!(count(&db, sink).await, (1, 1));
@@ -160,18 +126,18 @@ async fn accepted_direct_and_routed_requests_commit_atomically_without_output() 
         1
     );
 
-    dispatch_unconfirmed(
+    let direct_sends = dispatch_unconfirmed(
         &db,
         &config,
         &comm_state,
         &[0x20],
         None,
         request_bytes(vec![notification(AuditOperation::READ)]),
-        Arc::clone(&sends),
     )
     .await;
     assert_eq!(count(&db, sink).await, (2, 2));
-    assert_eq!(sends.load(Ordering::SeqCst), 0);
+    assert_eq!(routed_sends.len(), 0, "the routed request must not send");
+    assert_eq!(direct_sends.len(), 0, "the direct request must not send");
     assert!(persistence
         .snapshot
         .lock()

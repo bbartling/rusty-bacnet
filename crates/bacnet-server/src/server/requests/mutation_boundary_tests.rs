@@ -1,8 +1,7 @@
-use super::mutation_tests::{
-    apdu, assert_denied, cases, oid, route, Fixture, TestTransport, SOURCE,
-};
+use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
 use super::*;
 use crate::mutation::MutationTarget;
+use crate::server::test_transport::TestTransport;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -70,11 +69,11 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
     let discovery = fixture
         .network
         .transport()
-        .sent
+        .sent()
         .lock()
-        .unwrap()
         .pop()
-        .unwrap();
+        .unwrap()
+        .npdu;
     let npdu = decode_npdu(discovery).unwrap();
     assert_eq!(npdu.destination, route());
     let Apdu::UnconfirmedRequest(i_am) = decode_apdu(npdu.payload).unwrap() else {

@@ -1,14 +1,14 @@
 use super::*;
 
 async fn dispatch_lso_raw_recording(
-    services: &RequestServices<RecordingTransport>,
+    services: &RequestServices<TestTransport>,
     tracker: &Arc<ConfirmedRequestTracker>,
     source_mac: &MacAddr,
-    sent: &Arc<StdMutex<Vec<(Bytes, MacAddr)>>>,
+    sent: &SendLog,
     invoke_id: u8,
     service_request: Bytes,
 ) -> Vec<Bytes> {
-    BACnetServer::<RecordingTransport>::handle_confirmed_request(
+    BACnetServer::<TestTransport>::handle_confirmed_request(
         services,
         tracker,
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
@@ -30,13 +30,8 @@ async fn dispatch_lso_raw_recording(
     )
     .await;
 
-    let frames: Vec<Bytes> = sent
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(frame, _)| frame.clone())
-        .collect();
-    sent.lock().unwrap().clear();
+    let frames: Vec<Bytes> = sent.lock().iter().map(|frame| frame.npdu.clone()).collect();
+    sent.clear();
     frames
 }
 
@@ -94,10 +89,8 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
         ..ServerConfig::default()
     };
     let db = Arc::new(RwLock::new(db));
-    let sent = Arc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(Arc::clone(
-        &sent,
-    ))));
+    let (transport, sent) = recording_transport();
+    let network = Arc::new(NetworkLayer::new(transport));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
     {
         let mut table = cov_table.write().await;

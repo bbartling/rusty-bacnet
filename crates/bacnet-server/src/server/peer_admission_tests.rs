@@ -281,7 +281,7 @@ async fn peer_admission_duplicates_denied_retry_and_shared_eight_abort_workers()
     );
     assert_eq!(server.request_tasks.peer_entries(), [1, 0, 0]);
     assert!(started.try_recv().is_err());
-    server.test_network().transport().release.notify_waiters();
+    held_sends(&server).release.notify_waiters();
     wait_reaped(&server).await;
     assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
     dispatch(&server, request(10), None, None).await;
@@ -333,19 +333,10 @@ async fn peer_admission_direct_routed_reply_abort_fields_unchanged() {
                 dispatch(&server, request(2), source.clone(), None).await;
                 observed(&mut started).await;
                 assert_eq!(
-                    server
-                        .test_network()
-                        .transport()
-                        .routes
-                        .lock()
-                        .unwrap()
-                        .last()
-                        .unwrap(),
+                    held_sends(&server).routes.lock().unwrap().last().unwrap(),
                     &(source.clone(), MacAddr::from_slice(&[1]))
                 );
-                server
-                    .test_network()
-                    .transport()
+                held_sends(&server)
                     .frames
                     .lock()
                     .unwrap()
@@ -382,7 +373,7 @@ async fn peer_admission_positive_validation_generic_bip_and_tiny_global() {
             assert!(policy.validate().is_err());
             let started = Arc::new(AtomicBool::new(false));
             let error = BACnetServer::generic_builder()
-                .transport(NeverStart(Arc::clone(&started)))
+                .transport(never_start(&started))
                 .request_admission_policy(policy)
                 .build()
                 .await

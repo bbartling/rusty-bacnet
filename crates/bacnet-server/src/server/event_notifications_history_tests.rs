@@ -209,7 +209,7 @@ async fn commit_and_capture_history_notification(
     let (db, oid) = atomic_history_database(timestamps, messages, clocked);
     let committed = {
         let mut guard = db.write().await;
-        BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+        BACnetServer::<TestTransport>::commit_intrinsic_transition(
             &mut guard,
             &oid,
             TransitionOutcome {
@@ -220,13 +220,10 @@ async fn commit_and_capture_history_notification(
         )
     };
 
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     if let Some(committed) = committed {
-        let network = Arc::new(NetworkLayer::new(RecordingTransport {
-            sent_broadcast: StdArc::clone(&sent),
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }));
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+        let network = Arc::new(NetworkLayer::new(transport));
+        BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
             &crate::server::event_delivery::EventDelivery {
                 db: &db,
                 network: &network,
@@ -245,8 +242,7 @@ async fn commit_and_capture_history_notification(
         .await;
     }
 
-    let captured = sent.lock().unwrap().clone();
-    (db, captured)
+    (db, sent.npdus())
 }
 
 fn repeated_timestamp_reads(timestamp: BACnetTimeStamp) -> [IndexedHistoryRead; 3] {
@@ -446,7 +442,7 @@ fn malformed_or_missing_required_projection_commits_locally_but_cannot_emit() {
         }))
         .unwrap();
 
-        let committed = BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+        let committed = BACnetServer::<TestTransport>::commit_intrinsic_transition(
             &mut db,
             &oid,
             TransitionOutcome {
@@ -504,7 +500,7 @@ async fn committed_history_preserves_each_timestamp_choice_on_the_wire() {
             true,
         )
         .await;
-        let notification = decode_broadcast_notification(&StdMutex::new(sent));
+        let notification = decode_broadcast_notification(&sent);
         assert_eq!(notification.timestamp, expected);
         assert_eq!(
             notification.message_text, None,
@@ -553,7 +549,7 @@ async fn committed_history_selects_only_the_transition_coordinate() {
         )
         .await;
         assert_eq!(
-            decode_broadcast_notification(&StdMutex::new(sent)).timestamp,
+            decode_broadcast_notification(&sent).timestamp,
             BACnetTimeStamp::SequenceNumber(expected)
         );
     }
@@ -574,7 +570,7 @@ async fn committed_history_timestamp_is_distinct_from_the_staged_device_clock_sa
     .await;
 
     assert_eq!(
-        decode_broadcast_notification(&StdMutex::new(sent)).timestamp,
+        decode_broadcast_notification(&sent).timestamp,
         expected,
         "the stored coordinate, not the staged Device DateTime, is wire authority"
     );
@@ -597,7 +593,7 @@ async fn nonempty_committed_message_is_captured_with_its_timestamp() {
     .await;
 
     assert_eq!(
-        decode_broadcast_notification(&StdMutex::new(sent)).message_text,
+        decode_broadcast_notification(&sent).message_text,
         Some("message-1".into())
     );
 }

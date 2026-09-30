@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_objects::audit::{
     AuditLogObject, AuditLogPersistence, AuditLogQueryPage, AuditLogSnapshot, AuditLogStorage,
 };
@@ -215,7 +216,7 @@ pub(super) fn request(data: Bytes) -> ConfirmedRequestPdu {
 }
 
 pub(super) async fn ingress(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     req: ConfirmedRequestPdu,
     reply_tx: Option<oneshot::Sender<Bytes>>,
 ) {

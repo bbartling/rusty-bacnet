@@ -2,12 +2,13 @@ use super::audit_notification_tests::{
     confirmed_request, notification, oid, request_bytes, MemoryPersistence,
 };
 use super::*;
+use crate::server::test_transport::{SendMode, SentFrame, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
     audit::AuditLogObject,
     device::{DeviceConfig, DeviceObject},
 };
-use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::{
     constructed::BACnetDeviceObjectReference,
     enums::{AuditOperation, Reliability},
@@ -22,22 +23,18 @@ mod boundaries;
 #[path = "audit_forwarder_recovery_tests.rs"]
 mod recovery;
 
+/// What the forwarder's link observed, and switches that steer it. The link
+/// itself is the shared [`TestTransport`] built by [`Capture::port`].
 #[derive(Clone, Default)]
 struct Capture {
     sent: Arc<StdMutex<Vec<Bytes>>>,
     block: Arc<AtomicBool>,
     fail: Arc<AtomicBool>,
 }
-impl TransportPort for Capture {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(mpsc::channel(1).1)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, data: &[u8], mac: &[u8]) -> Result<(), Error> {
-        assert_eq!(mac, &[2]);
-        self.sent.lock().unwrap().push(Bytes::copy_from_slice(data));
+impl Capture {
+    async fn send(self, frame: SentFrame) -> Result<(), Error> {
+        assert_eq!(frame.mac.as_slice(), &[2]);
+        self.sent.lock().unwrap().push(frame.npdu);
         if self.block.load(Ordering::Acquire) {
             std::future::pending::<()>().await;
         }
@@ -46,20 +43,19 @@ impl TransportPort for Capture {
         }
         Ok(())
     }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        panic!("forwarding must be unicast")
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
 
-    fn local_mac(&self) -> &[u8] {
-        &[1]
+    /// A closed link with local MAC `[1]` whose unicasts run [`Self::send`].
+    fn port(&self) -> TestTransport {
+        let sends = self.clone();
+        TestTransport::builder()
+            .broadcast(SendMode::Panic("forwarding must be unicast"))
+            .on_send(move |frame| sends.clone().send(frame))
+            .build()
     }
 }
 
 struct Fixture {
-    server: BACnetServer<Capture>,
+    server: BACnetServer<TestTransport>,
     store: Arc<MemoryPersistence>,
     wire: Capture,
 }
@@ -109,7 +105,7 @@ async fn start(
     local: u32,
     log: AuditLogObject,
     binding: Option<DeviceBinding>,
-) -> (BACnetServer<Capture>, Capture) {
+) -> (BACnetServer<TestTransport>, Capture) {
     start_with_apdu(local, log, binding, 1476).await
 }
 
@@ -118,7 +114,7 @@ async fn start_with_apdu(
     log: AuditLogObject,
     binding: Option<DeviceBinding>,
     max_apdu_length: u32,
-) -> (BACnetServer<Capture>, Capture) {
+) -> (BACnetServer<TestTransport>, Capture) {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -141,7 +137,7 @@ async fn start_with_apdu(
             ..Default::default()
         },
         db,
-        wire.clone(),
+        wire.port(),
         Some(ClockConfig::default()),
         binding.into_iter().collect(),
     )

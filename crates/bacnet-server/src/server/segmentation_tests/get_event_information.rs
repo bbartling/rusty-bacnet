@@ -158,7 +158,7 @@ async fn dispatch(
     client_max_apdu: u16,
     local_max_apdu: u32,
 ) -> (
-    SentFrames,
+    SendLog,
     Arc<segmented_send::SegmentedSendRegistry>,
     MacAddr,
     Arc<crate::server::request_tasks::RequestTasks>,
@@ -180,15 +180,12 @@ async fn dispatch_with_budget(
     local_max_apdu: u32,
     budget: GetEventInformationBudget,
 ) -> (
-    SentFrames,
+    SendLog,
     Arc<segmented_send::SegmentedSendRegistry>,
     MacAddr,
     Arc<crate::server::request_tasks::RequestTasks>,
 ) {
-    let sent = SentFrames::default();
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(Arc::clone(
-        &sent,
-    ))));
+    let (network, sent) = recording_network();
     let db = Arc::new(RwLock::new(database()));
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
@@ -201,7 +198,7 @@ async fn dispatch_with_budget(
     let source_mac = test_mac(41);
     let request_tasks = Arc::new(crate::server::request_tasks::RequestTasks::default());
 
-    BACnetServer::<RecordingTransport>::handle_confirmed_request(
+    BACnetServer::<TestTransport>::handle_confirmed_request(
         &RequestServices {
             db: Arc::clone(&db),
             seg_ack_senders: Arc::clone(&seg_ack_senders),

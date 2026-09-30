@@ -141,7 +141,7 @@ async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_order
         unconfirmed(&wire, UnconfirmedServiceChoice::WHO_HAS, who_has).await;
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if wire.sent.lock().unwrap().len() >= 6 {
+                if wire.sent.len() >= 6 {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -149,12 +149,12 @@ async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_order
         })
         .await
         .expect("all initial notifications and I-Am sent");
-        let packets = wire.sent.lock().unwrap().clone();
+        let packets = wire.sent.frames();
         let mut processes = Vec::new();
         let mut i_am = 0;
         let mut i_have = 0;
-        for (_, packet) in packets {
-            let npdu = decode_npdu(packet).unwrap();
+        for packet in packets {
+            let npdu = decode_npdu(packet.npdu).unwrap();
             let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected unconfirmed discovery or COV");
             };

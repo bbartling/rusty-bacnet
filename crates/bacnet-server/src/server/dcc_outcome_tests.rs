@@ -29,12 +29,12 @@ fn request(mode: u32, password: Option<&str>, duration: Option<u16>) -> Confirme
     }
 }
 
-async fn handle(server: &BACnetServer<HeldTransport>, req: ConfirmedRequestPdu) {
+async fn handle(server: &BACnetServer<TestTransport>, req: ConfirmedRequestPdu) {
     handle_source(server, req, &[1], None).await;
 }
 
 async fn handle_source(
-    server: &BACnetServer<HeldTransport>,
+    server: &BACnetServer<TestTransport>,
     req: ConfirmedRequestPdu,
     mac: &[u8],
     source: Option<NpduAddress>,
@@ -239,12 +239,8 @@ async fn dcc_outcomes_exact_precedence_before_response_and_secret_redaction() {
                 assert!(!events[0].keys().any(|key| key.contains("password")));
             }
             // Fail transport after the commit; never revise or double count it.
-            server
-                .test_network()
-                .transport()
-                .fail_next
-                .store(true, Ordering::Release);
-            server.test_network().transport().release.notify_one();
+            held_sends(&server).fail_next.store(true, Ordering::Release);
+            held_sends(&server).release.notify_one();
             future.await;
             completion.await.unwrap();
             assert_eq!(server.dcc_outcome_counters(), counts);

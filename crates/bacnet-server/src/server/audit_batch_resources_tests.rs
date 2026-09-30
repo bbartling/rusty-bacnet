@@ -281,7 +281,7 @@ async fn delayed_target_audit_oversize_record_is_known_local_loss_and_does_not_b
         vec![DeviceBinding::local(oid(ObjectType::DEVICE, 20), LOGGER).unwrap()],
         true,
         50,
-        CaptureTransport::default(),
+        AuditCapture::default(),
     )
     .await
     .unwrap();

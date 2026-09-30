@@ -1,32 +1,24 @@
 //! Time synchronization handler controls.
 use super::*;
+use crate::server::test_transport::{SendMode, StartMode, TestTransport};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::atomic::AtomicUsize;
 
-struct SilentTransport(Option<mpsc::Receiver<ReceivedNpdu>>);
-impl TransportPort for SilentTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.0.take().unwrap())
+/// Any send panics: time sync must be silent on the wire. Without an inbound
+/// link, startup panics too.
+fn silent(incoming: Option<mpsc::Receiver<ReceivedNpdu>>) -> TestTransport {
+    let builder = TestTransport::builder()
+        .local_mac(&[99])
+        .unicast(SendMode::Panic("time sync must be silent on wire"))
+        .broadcast(SendMode::Panic("time sync must be silent on wire"));
+    match incoming {
+        Some(incoming) => builder.inbound(incoming),
+        None => builder.start(StartMode::Panic("silent transport has no inbound link")),
     }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        panic!("time sync must be silent on wire")
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        panic!("time sync must be silent on wire")
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[99]
-    }
+    .build()
 }
 
 fn date() -> Date {
@@ -94,12 +86,12 @@ async fn dispatch(
     received: &ReceivedApdu,
     data: Bytes,
 ) {
-    BACnetServer::<SilentTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             time_sync_limiter: Arc::clone(limiter),
             clock: Some(Arc::clone(clock)),
             ..UnconfirmedServices::for_test(
-                Arc::new(NetworkLayer::new(SilentTransport(None))),
+                Arc::new(NetworkLayer::new(silent(None))),
                 config.clone(),
             )
         },
@@ -278,7 +270,7 @@ async fn time_sync_panicking_observer_keeps_change_and_live_ingress_continues() 
         })),
         ..Default::default()
     };
-    let mut server = BACnetServer::start(config, ObjectDatabase::new(), SilentTransport(Some(rx)))
+    let mut server = BACnetServer::start(config, ObjectDatabase::new(), silent(Some(rx)))
         .await
         .unwrap();
     for (is_utc, hour) in [(false, 10), (true, 11), (false, 12)] {

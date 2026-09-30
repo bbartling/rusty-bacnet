@@ -18,7 +18,7 @@ async fn recovery_classification_is_not_password_authorization() {
         observed(&mut started).await;
         assert_eq!(server.comm_state.load(Ordering::Acquire), 1);
         assert!(
-            matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Error(e)) if e.error_code == ErrorCode::PASSWORD_FAILURE)
+            matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e)) if e.error_code == ErrorCode::PASSWORD_FAILURE)
         );
     }
     assert_eq!(server.request_admission_counters().recovery_active, 2);
@@ -75,7 +75,7 @@ async fn recovery_noneligible_requests_cannot_borrow_and_password_capacity_prece
         dispatch(&server, Apdu::ConfirmedRequest(req), source(id), None).await;
         observed(&mut started).await;
         assert!(
-            matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == id)
+            matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == id)
         );
     }
     assert_eq!(
@@ -85,12 +85,12 @@ async fn recovery_noneligible_requests_cannot_borrow_and_password_capacity_prece
     dispatch(&server, enable(5, None), source(5), None).await;
     observed(&mut started).await;
     assert!(
-        matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Error(e)) if e.error_code == ErrorCode::PASSWORD_FAILURE)
+        matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e)) if e.error_code == ErrorCode::PASSWORD_FAILURE)
     );
     dispatch(&server, enable(6, Some("wrong")), source(6), None).await;
     observed(&mut started).await;
     assert!(
-        matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == 6)
+        matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == 6)
     );
     assert_eq!(
         server

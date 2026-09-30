@@ -16,74 +16,32 @@ use super::event_notifications::CommittedIntrinsicTransition;
 use super::event_notifications_tests::local_broadcast_destination;
 use super::event_recipient_routing_tests::{address_recipient, destination_for};
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_transport::port::TransportPort;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
 mod learned_router_cache;
 
 /// One recorded unicast send: destination MAC and NPDU bytes.
 type UnicastFrame = (Vec<u8>, Bytes);
 
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<UnicastFrame>>>,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.unicasts
-            .lock()
-            .unwrap()
-            .push((mac.to_vec(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.broadcasts
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
-    }
-}
-
 /// A live distribution fixture: the same database, network and router cache across
 /// multiple distributions, so router learning is observable between them.
 struct Harness {
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     notification_transactions: Arc<NotificationTransactions>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
-    broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<UnicastFrame>>>,
+    sent: SendLog,
     retry_timeout_ms: u64,
 }
 
@@ -97,9 +55,8 @@ impl Harness {
         retry_timeout_ms: u64,
         device_bindings: DeviceBindingTable,
     ) -> Self {
-        let transport = RecordingTransport::default();
-        let broadcasts = StdArc::clone(&transport.broadcasts);
-        let unicasts = StdArc::clone(&transport.unicasts);
+        let transport = TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build();
+        let sent = transport.sent();
         let network = Arc::new(NetworkLayer::new(transport));
         let comm_state = Arc::new(AtomicU8::new(0));
         let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
@@ -138,15 +95,14 @@ impl Harness {
             notification_transactions,
             device_bindings: Arc::new(RwLock::new(device_bindings)),
             comm_state,
-            broadcasts,
-            unicasts,
+            sent,
             retry_timeout_ms,
         }
     }
 
     async fn distribute(&self) {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+        BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
             &EventDelivery {
                 db: &self.db,
                 network: &self.network,
@@ -181,7 +137,7 @@ impl Harness {
     ) -> CommittedIntrinsicTransition {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         let mut db = self.db.write().await;
-        BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+        BACnetServer::<TestTransport>::commit_intrinsic_transition(
             &mut db,
             &oid,
             bacnet_objects::event::TransitionOutcome {
@@ -198,7 +154,7 @@ impl Harness {
         let committed = self
             .commit_transition(EventState::NORMAL, EventState::HIGH_LIMIT)
             .await;
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+        BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
             &EventDelivery {
                 db: &self.db,
                 network: &self.network,
@@ -220,11 +176,19 @@ impl Harness {
     }
 
     fn broadcast_frames(&self) -> Vec<Bytes> {
-        self.broadcasts.lock().unwrap().clone()
+        self.sent
+            .broadcasts()
+            .into_iter()
+            .map(|frame| frame.npdu)
+            .collect()
     }
 
     fn unicast_frames(&self) -> Vec<UnicastFrame> {
-        self.unicasts.lock().unwrap().clone()
+        self.sent
+            .unicasts()
+            .into_iter()
+            .map(|frame| (frame.mac.to_vec(), frame.npdu))
+            .collect()
     }
 
     /// Deliver an ack through the live notification owner, carrying
@@ -258,7 +222,7 @@ impl Harness {
         apdu: Apdu,
     ) -> bool {
         let active_before = self.notification_transactions.active_count();
-        BACnetServer::<RecordingTransport>::dispatch(
+        BACnetServer::<TestTransport>::dispatch(
             &DispatchContext::for_test(RequestServices {
                 db: Arc::clone(&self.db),
                 learned_routers: Arc::clone(&self.learned_routers),

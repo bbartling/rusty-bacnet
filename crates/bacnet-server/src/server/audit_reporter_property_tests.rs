@@ -1,6 +1,7 @@
 //! Wire-visible optional property, metadata/PICS, and network-write denial.
 
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_services::{
     common::PropertyReference,
     read_property::{ReadPropertyACK, ReadPropertyRequest},
@@ -9,7 +10,7 @@ use bacnet_services::{
 use bacnet_types::constructed::BACnetObjectSelector as Selector;
 
 async fn read_wire(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     property: PropertyIdentifier,
     index: Option<u32>,
 ) -> Result<Vec<u8>, (ErrorClass, ErrorCode)> {
@@ -39,7 +40,7 @@ async fn read_wire(
 }
 
 async fn rpm_wire(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     property: PropertyIdentifier,
     index: Option<u32>,
 ) -> Vec<bacnet_services::rpm::ReadResultElement> {

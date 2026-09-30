@@ -1,13 +1,11 @@
 use super::event_notifications_tests::{
-    broadcasts_from_per_write_path, db_with_high_limit_transition, RecordingTransport,
+    broadcasts_from_per_write_path, db_with_high_limit_transition, recording_transport,
 };
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::EventState;
-use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 #[tokio::test]
 async fn dcc_states_preserve_per_write_detection_but_suppress_distribution() {
@@ -35,11 +33,7 @@ async fn dcc_states_preserve_per_write_detection_but_suppress_distribution() {
 #[tokio::test(start_paused = true)]
 async fn dcc_states_preserve_delayed_detection_but_suppress_distribution() {
     for comm_state in [1, 2] {
-        let sent = StdArc::new(StdMutex::new(Vec::<Bytes>::new()));
-        let transport = RecordingTransport {
-            sent_broadcast: StdArc::clone(&sent),
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        };
+        let (transport, sent) = recording_transport();
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
         for (property, value) in [
             (PropertyIdentifier::HIGH_LIMIT, 80.0),
@@ -135,7 +129,7 @@ async fn dcc_states_preserve_delayed_detection_but_suppress_distribution() {
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         assert!(
-            sent.lock().unwrap().is_empty(),
+            sent.is_empty(),
             "DCC state {comm_state} must suppress delayed event notification distribution"
         );
         {

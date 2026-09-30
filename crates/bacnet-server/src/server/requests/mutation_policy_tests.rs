@@ -1,8 +1,9 @@
 use super::*;
 use crate::mutation::{MutationAuthorizer, MutationDecisionCounters, MutationServiceCounters};
 use crate::server::requests::mutation_tests::{
-    apdu, assert_denied, cases, oid, route, value, wpm, Fixture, TestTransport, SOURCE,
+    apdu, assert_denied, cases, oid, route, value, wpm, Fixture, SOURCE,
 };
+use crate::server::test_transport::TestTransport;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
@@ -25,7 +26,7 @@ async fn server(
         mutation_policy: policy,
         ..fixture.config
     };
-    BACnetServer::start(config, db, TestTransport::default())
+    BACnetServer::start(config, db, TestTransport::new())
         .await
         .unwrap()
 }
@@ -171,13 +172,7 @@ async fn mutation_policy_matrix_all_ten_decisions_and_post_issuance_reauthorizat
                 } else {
                     assert_denied(response, service, 1);
                     assert_eq!(snapshot(&server).await, before, "{service:?}");
-                    assert!(server
-                        .test_network()
-                        .transport()
-                        .sent
-                        .lock()
-                        .unwrap()
-                        .is_empty());
+                    assert!(server.test_network().transport().sent().is_empty());
                 }
                 let counters = expected(
                     service,
@@ -515,11 +510,11 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
     let sent = server
         .test_network()
         .transport()
-        .sent
+        .sent()
         .lock()
-        .unwrap()
         .pop()
-        .unwrap();
+        .unwrap()
+        .npdu;
     let Apdu::UnconfirmedRequest(i_am) = apdu(sent) else {
         panic!("expected I-Am")
     };

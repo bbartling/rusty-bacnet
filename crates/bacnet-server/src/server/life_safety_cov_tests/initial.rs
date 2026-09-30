@@ -150,7 +150,7 @@ async fn initial_single_and_multiple_life_safety_payloads_include_one_status_fla
         )
     };
 
-    BACnetServer::<RecordingTransport>::fire_initial_cov_notification(
+    BACnetServer::<TestTransport>::fire_initial_cov_notification(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &fixture.db,
             network: &fixture.network,
@@ -163,7 +163,7 @@ async fn initial_single_and_multiple_life_safety_payloads_include_one_status_fla
         &single,
     )
     .await;
-    BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
+    BACnetServer::<TestTransport>::fire_initial_cov_notification_multiple(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &fixture.db,
             network: &fixture.network,

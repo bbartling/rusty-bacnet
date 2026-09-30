@@ -10,66 +10,31 @@
 
 use super::event_notifications_tests::local_broadcast_destination;
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::{EventStateChange, EventTransition};
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::borrow::Cow;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
-/// Records broadcasts and unicasts separately, keeping each unicast's target
-/// MAC. The MAC matters: a recipient on a remote network that is delivered as a
-/// local unicast reaches whichever device happens to hold that MAC on this link,
-/// which is the failure this module exists to catch.
 /// One recorded unicast send: destination MAC and NPDU bytes.
 type UnicastFrame = (Vec<u8>, Bytes);
 
-#[derive(Clone, Default)]
-pub(super) struct RoutingTransport {
-    broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<UnicastFrame>>>,
-}
-
-impl TransportPort for RoutingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.unicasts
-            .lock()
-            .unwrap()
-            .push((mac.to_vec(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.broadcasts
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
-    }
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        mac == LITERAL_BROADCAST_MAC
-    }
+/// Records broadcasts and unicasts, keeping each unicast's target MAC. The MAC
+/// matters: a recipient on a remote network that is delivered as a local
+/// unicast reaches whichever device happens to hold that MAC on this link,
+/// which is the failure this module exists to catch.
+fn routing_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .broadcast_mac(LITERAL_BROADCAST_MAC)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
 /// This test link's literal broadcast MAC — the data-link spelling of a
@@ -141,9 +106,7 @@ pub(super) async fn distribute_from_database_with_bindings(
     mut db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>) {
-    let transport = RoutingTransport::default();
-    let broadcasts = StdArc::clone(&transport.broadcasts);
-    let unicasts = StdArc::clone(&transport.unicasts);
+    let (transport, sent) = routing_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(0));
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
@@ -170,7 +133,7 @@ pub(super) async fn distribute_from_database_with_bindings(
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let notifications = NotificationTransactions::new();
-    BACnetServer::<RoutingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &EventDelivery {
             db: &db,
             network: &network,
@@ -203,8 +166,16 @@ pub(super) async fn distribute_from_database_with_bindings(
         NotificationTransactions::observe(Some(result));
     }
 
-    let broadcasts = broadcasts.lock().unwrap().clone();
-    let unicasts = unicasts.lock().unwrap().clone();
+    let broadcasts = sent
+        .broadcasts()
+        .into_iter()
+        .map(|frame| frame.npdu)
+        .collect();
+    let unicasts = sent
+        .unicasts()
+        .into_iter()
+        .map(|frame| (frame.mac.to_vec(), frame.npdu))
+        .collect();
     (broadcasts, unicasts)
 }
 

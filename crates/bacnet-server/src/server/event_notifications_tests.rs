@@ -1,13 +1,11 @@
 use super::*;
+use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
 #[path = "event_notifications_commit_tests.rs"]
 mod commit_tests;
@@ -24,39 +22,13 @@ mod priority_tests;
 /// A transport that records every broadcast NPDU it is asked to send and
 /// discards unicasts. Used to capture the EventNotification a server
 /// actually puts on the wire.
-#[derive(Clone, Default)]
-pub(super) struct RecordingTransport {
-    pub(super) sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
-    pub(super) local_mac: Vec<u8>,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent_broadcast
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+pub(super) fn recording_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .unicast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
 /// A DCC-disabled server (comm_state >= 1) suppresses the periodic event
@@ -65,11 +37,7 @@ impl TransportPort for RecordingTransport {
 /// transport that would otherwise capture the broadcast APDU.
 #[tokio::test]
 async fn dcc_suppresses_periodic_event_send() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(1)); // DCC disabled
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
@@ -98,7 +66,7 @@ async fn dcc_suppresses_periodic_event_send() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -117,31 +85,28 @@ async fn dcc_suppresses_periodic_event_send() {
     .await;
 
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "DCC-disabled server must not send event notifications"
     );
 }
 
 /// Decode the single broadcast EventNotification captured by a
-/// [`RecordingTransport`] into its [`EventNotificationRequest`].
+/// [`recording_transport`] into its [`EventNotificationRequest`].
 ///
 /// Panics with a useful message if no notification was sent (so a regression
 /// that silently drops the notification is caught rather than masking as
 /// "no broadcast = pass").
-pub(super) fn decode_broadcast_notification(
-    sent: &StdMutex<Vec<Bytes>>,
-) -> EventNotificationRequest {
+pub(super) fn decode_broadcast_notification(sent: &[Bytes]) -> EventNotificationRequest {
     use bacnet_encoding::apdu::decode_apdu;
     use bacnet_encoding::npdu::decode_npdu;
 
-    let guard = sent.lock().unwrap();
     assert_eq!(
-        guard.len(),
+        sent.len(),
         1,
         "expected exactly one broadcast EventNotification, got {}",
-        guard.len()
+        sent.len()
     );
-    let npdu = decode_npdu(guard[0].clone()).expect("decode NPDU");
+    let npdu = decode_npdu(sent[0].clone()).expect("decode NPDU");
     match decode_apdu(npdu.payload).expect("decode APDU") {
         Apdu::UnconfirmedRequest(req) => {
             assert_eq!(
@@ -209,17 +174,13 @@ async fn fixture_with_commanded_nc(
     ack_required: [bool; 3],
 ) -> (
     Arc<RwLock<ObjectDatabase>>,
-    Arc<NetworkLayer<RecordingTransport>>,
+    Arc<NetworkLayer<TestTransport>>,
     Arc<AtomicU8>,
     Arc<Mutex<LearnedRouterCache>>,
-    Arc<StdMutex<Vec<Bytes>>>,
+    SendLog,
     ObjectIdentifier,
 ) {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(0)); // DCC enabled
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
@@ -282,11 +243,7 @@ async fn fixture_with_commanded_nc(
 /// every device on the link.
 #[tokio::test]
 async fn event_notification_missing_class_distributes_nothing() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(0));
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
@@ -325,7 +282,7 @@ async fn event_notification_missing_class_distributes_nothing() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -344,7 +301,7 @@ async fn event_notification_missing_class_distributes_nothing() {
     .await;
 
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "a Notification_Class that does not exist names no recipients, so \
          nothing may be distributed"
     );
@@ -374,7 +331,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -392,7 +349,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     // ack_required is encoded for both ALARM and EVENT notify types; the
     // per-transition ACK_REQUIRED bit 0 (TO_OFFNORMAL) is true here.
     assert!(
@@ -466,17 +423,13 @@ pub(super) async fn broadcasts_from_per_write_path(
     db: &Arc<tokio::sync::RwLock<ObjectDatabase>>,
     comm_state_value: u8,
 ) -> Vec<Bytes> {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(comm_state_value));
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    BACnetServer::<RecordingTransport>::fire_event_notifications_with_bindings(
+    BACnetServer::<TestTransport>::fire_event_notifications_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db,
             network: &network,
@@ -494,8 +447,7 @@ pub(super) async fn broadcasts_from_per_write_path(
     )
     .await;
 
-    let out = sent.lock().unwrap().clone();
-    out
+    sent.npdus()
 }
 
 /// A cleared `Event_Enable` bit must suppress the outbound notification.
@@ -540,11 +492,7 @@ async fn event_enable_cleared_suppresses_per_write_send() {
 /// replaced with `if true`.
 #[tokio::test(start_paused = true)]
 async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
 
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     for (p, v) in [
@@ -620,7 +568,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
         .await
         .expect("local write should succeed");
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "a nonzero Time_Delay must not send on the write itself"
     );
 
@@ -628,9 +576,9 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "Event_Enable cleared: the periodic Time_Delay path must not send, got {} broadcast(s)",
-        sent.lock().unwrap().len()
+        sent.len()
     );
 
     // The transition did fire internally — only distribution was withheld.
@@ -648,11 +596,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
 
 #[tokio::test(start_paused = true)]
 async fn periodic_time_delay_carries_detector_event_type_to_wire() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0),
@@ -721,7 +665,7 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
         .expect("local write should seed delayed transition");
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(
         notif.event_type,
         EventType::OUT_OF_RANGE.to_raw(),

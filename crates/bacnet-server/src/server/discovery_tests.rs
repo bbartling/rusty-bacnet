@@ -1,7 +1,6 @@
 //! Comprehensive tests for discovery rate limiting, duplicate suppression,
 //! and directed responses (Issue #534).
 
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
@@ -17,7 +16,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::WhoIsRequest;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::enums::{
     ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
     UnconfirmedServiceChoice,
@@ -26,72 +25,18 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 
-type CapturedUnicasts = StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>;
-
-#[derive(Clone)]
-struct MockDiscoveryTransport {
-    inbound_rx: StdArc<StdMutex<Option<mpsc::Receiver<ReceivedNpdu>>>>,
-    unicasts: CapturedUnicasts,
-    broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-}
-
-impl MockDiscoveryTransport {
-    fn new() -> (Self, mpsc::Sender<ReceivedNpdu>) {
-        let (tx, rx) = mpsc::channel(256);
-        let transport = Self {
-            inbound_rx: StdArc::new(StdMutex::new(Some(rx))),
-            unicasts: StdArc::new(StdMutex::new(Vec::new())),
-            broadcasts: StdArc::new(StdMutex::new(Vec::new())),
-        };
-        (transport, tx)
-    }
-
-    fn unicast_count(&self) -> usize {
-        self.unicasts.lock().unwrap().len()
-    }
-
-    fn broadcast_count(&self) -> usize {
-        self.broadcasts.lock().unwrap().len()
-    }
-}
-
-impl TransportPort for MockDiscoveryTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inbound_rx
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or_else(|| Error::Encoding("MockDiscoveryTransport started twice".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.unicasts
-            .lock()
-            .unwrap()
-            .push((mac.to_vec(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.broadcasts
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0x0A, 0x00, 0x00, 0x01]
-    }
+/// A link at `0A:00:00:01` fed by the returned inbound channel (capacity 256).
+/// Its log records every unicast and broadcast; a second start fails.
+fn discovery_transport() -> (TestTransport, SendLog, mpsc::Sender<ReceivedNpdu>) {
+    let (tx, rx) = mpsc::channel(256);
+    let transport = TestTransport::builder()
+        .local_mac(&[0x0A, 0x00, 0x00, 0x01])
+        .inbound(rx)
+        .build();
+    let sent = transport.sent();
+    (transport, sent, tx)
 }
 
 fn wrap_apdu(apdu: Bytes, source_mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedNpdu {
@@ -168,12 +113,11 @@ fn build_who_has_npdu(
 async fn spawn_test_server(
     policy: DiscoveryPolicy,
 ) -> (
-    BACnetServer<MockDiscoveryTransport>,
-    MockDiscoveryTransport,
+    BACnetServer<TestTransport>,
+    SendLog,
     mpsc::Sender<ReceivedNpdu>,
 ) {
-    let (transport, tx) = MockDiscoveryTransport::new();
-    let transport_clone = transport.clone();
+    let (transport, sent, tx) = discovery_transport();
 
     let mut db = ObjectDatabase::new();
     let dev = DeviceObject::new(DeviceConfig {
@@ -196,7 +140,7 @@ async fn spawn_test_server(
         .await
         .unwrap();
 
-    (server, transport_clone, tx)
+    (server, sent, tx)
 }
 
 #[tokio::test]
@@ -210,7 +154,7 @@ async fn test_controlled_burst_from_one_source_throttled() {
         prefer_directed_responses: true,
         ..Default::default()
     };
-    let (mut server, transport, tx) = spawn_test_server(policy).await;
+    let (mut server, sent, tx) = spawn_test_server(policy).await;
     let src = &[0x0A, 0x00, 0x00, 0x02];
 
     for _ in 0..10 {
@@ -225,7 +169,7 @@ async fn test_controlled_burst_from_one_source_throttled() {
     assert_eq!(c.i_am_sent, 4);
     assert_eq!(c.responses_throttled_source, 6);
     assert_eq!(c.responses_throttled_global, 0);
-    assert_eq!(transport.unicast_count(), 4);
+    assert_eq!(sent.unicasts().len(), 4);
 
     server.stop().await.unwrap();
 }
@@ -241,7 +185,7 @@ async fn test_source_fairness_while_first_source_throttled() {
         prefer_directed_responses: true,
         ..Default::default()
     };
-    let (mut server, _transport, tx) = spawn_test_server(policy).await;
+    let (mut server, _sent, tx) = spawn_test_server(policy).await;
     let src1 = &[0x0A, 0x00, 0x00, 0x02];
     let src2 = &[0x0A, 0x00, 0x00, 0x03];
 
@@ -282,7 +226,7 @@ async fn test_reserved_capacity_preserved_under_global_load() {
         prefer_directed_responses: true,
         ..Default::default()
     };
-    let (mut server, _transport, tx) = spawn_test_server(policy).await;
+    let (mut server, _sent, tx) = spawn_test_server(policy).await;
     let unreserved = &[0x0A, 0x00, 0x00, 0x02];
 
     for _ in 0..5 {
@@ -325,7 +269,7 @@ async fn test_duplicate_scans_coalesced_within_window() {
         prefer_directed_responses: true,
         ..Default::default()
     };
-    let (mut server, _transport, tx) = spawn_test_server(policy).await;
+    let (mut server, _sent, tx) = spawn_test_server(policy).await;
     let src = &[0x0A, 0x00, 0x00, 0x02];
 
     // First Who-Is -> sent
@@ -398,7 +342,7 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
         coalesce_window: Duration::from_millis(100),
         ..Default::default()
     };
-    let (mut server, transport, tx) = spawn_test_server(policy).await;
+    let (mut server, sent, tx) = spawn_test_server(policy).await;
     let flood_src = &[0x0A, 0x00, 0x00, 0x02];
 
     for _ in 0..50 {
@@ -461,10 +405,9 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     let mut found_ack = false;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let unicasts = transport.unicasts.lock().unwrap();
-        for (dest, raw) in unicasts.iter() {
-            if dest == client_mac {
-                if let Ok(np) = decode_npdu(raw.clone()) {
+        for frame in sent.unicasts() {
+            if frame.mac.as_slice() == client_mac {
+                if let Ok(np) = decode_npdu(frame.npdu) {
                     if let Ok(Apdu::ComplexAck(ack)) = decode_apdu(np.payload) {
                         if ack.invoke_id == 1 {
                             found_ack = true;
@@ -491,7 +434,7 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
 #[tokio::test]
 async fn test_who_is_range_and_who_has_matching_correctness() {
     let policy = DiscoveryPolicy::unlimited();
-    let (mut server, _transport, tx) = spawn_test_server(policy).await;
+    let (mut server, _sent, tx) = spawn_test_server(policy).await;
     let src = &[0x0A, 0x00, 0x00, 0x02];
 
     // Device instance is 1234
@@ -560,7 +503,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
         coalesce_window: Duration::ZERO,
         ..Default::default()
     };
-    let (mut server, transport, tx) = spawn_test_server(policy).await;
+    let (mut server, sent, tx) = spawn_test_server(policy).await;
     let local_src = &[0x0A, 0x00, 0x00, 0x02];
 
     // Local Who-Is produces directed unicast response
@@ -568,8 +511,8 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(transport.unicast_count(), 1);
-    assert_eq!(transport.broadcast_count(), 0);
+    assert_eq!(sent.unicasts().len(), 1);
+    assert_eq!(sent.broadcasts().len(), 0);
     assert_eq!(server.discovery_counters().directed_responses_sent, 1);
 
     // Routed Who-Is produces routed unicast response
@@ -584,7 +527,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     .await
     .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(transport.unicast_count(), 2);
+    assert_eq!(sent.unicasts().len(), 2);
     assert_eq!(server.discovery_counters().directed_responses_sent, 2);
 
     // Routed Who-Has produces routed unicast I-Have (verifying routed Who-Has bug fix!)
@@ -599,8 +542,8 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     .await
     .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(transport.unicast_count(), 3);
-    assert_eq!(transport.broadcast_count(), 0);
+    assert_eq!(sent.unicasts().len(), 3);
+    assert_eq!(sent.broadcasts().len(), 0);
     assert_eq!(server.discovery_counters().directed_responses_sent, 3);
     assert_eq!(server.discovery_counters().i_have_sent, 1);
 
@@ -612,15 +555,15 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
         coalesce_window: Duration::ZERO,
         ..Default::default()
     };
-    let (mut server2, transport2, tx2) = spawn_test_server(policy_bcast).await;
+    let (mut server2, sent2, tx2) = spawn_test_server(policy_bcast).await;
 
     // Local Who-Is with link_layer_group / broadcast produces broadcast response
     let mut req = build_who_is_npdu(None, None, local_src, None);
     req.link_layer_group = true;
     tx2.send(req).await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(transport2.broadcast_count(), 1);
-    assert_eq!(transport2.unicast_count(), 0);
+    assert_eq!(sent2.broadcasts().len(), 1);
+    assert_eq!(sent2.unicasts().len(), 0);
     assert_eq!(server2.discovery_counters().directed_responses_sent, 0);
 
     // Routed Who-Is still routes back unicast even when prefer_directed_responses is false!
@@ -633,7 +576,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     .await
     .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(transport2.unicast_count(), 1);
+    assert_eq!(sent2.unicasts().len(), 1);
     assert_eq!(server2.discovery_counters().directed_responses_sent, 1);
 
     server2.stop().await.unwrap();

@@ -1,5 +1,7 @@
 use super::*;
 use crate::cov::AtomicCovCounters;
+use crate::server::cov_notifications_tests::recording_transport;
+use crate::server::test_transport::TestTransport;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
@@ -10,57 +12,6 @@ use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_types::enums::ObjectType;
-use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
-
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
-    local_mac: Vec<u8>,
-}
-
-impl RecordingTransport {
-    fn new(sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>) -> Self {
-        Self {
-            sent_unicast,
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }
-    }
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent_unicast
-            .lock()
-            .unwrap()
-            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-}
 
 fn test_db_with_ao() -> (Arc<RwLock<ObjectDatabase>>, ObjectIdentifier) {
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
@@ -81,7 +32,7 @@ fn test_db_with_ao() -> (Arc<RwLock<ObjectDatabase>>, ObjectIdentifier) {
 
 #[tokio::test]
 async fn in_flight_failure_does_not_consume_event_budget() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, _sent) = recording_transport();
     let (db, ao_oid) = test_db_with_ao();
     let policy = CovPolicy {
         max_notifications_per_event: 2,
@@ -124,11 +75,9 @@ async fn in_flight_failure_does_not_consume_event_budget() {
         }
     }
 
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let network = Arc::new(NetworkLayer::new(transport));
 
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+    BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &db,
             network: &network,
@@ -153,7 +102,7 @@ async fn in_flight_failure_does_not_consume_event_budget() {
 
 #[tokio::test]
 async fn fair_distribution_between_single_and_multiple_notifications() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     let (db, ao_oid) = test_db_with_ao();
     let policy = CovPolicy {
         max_notifications_per_event: 2,
@@ -215,11 +164,9 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
         }
     }
 
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let network = Arc::new(NetworkLayer::new(transport));
 
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+    BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &db,
             network: &network,
@@ -233,12 +180,12 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
     )
     .await;
 
-    let sent_frames = sent.lock().unwrap();
+    let sent_frames = sent.lock();
     assert_eq!(sent_frames.len(), 2);
     let mut saw_single = false;
     let mut saw_multiple = false;
-    for (frame, _) in sent_frames.iter() {
-        let npdu = decode_npdu(frame.clone()).unwrap();
+    for frame in sent_frames.iter() {
+        let npdu = decode_npdu(frame.npdu.clone()).unwrap();
         if let Apdu::UnconfirmedRequest(req) = decode_apdu(npdu.payload).unwrap() {
             if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION {
                 saw_single = true;
@@ -255,7 +202,7 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
 
 #[tokio::test]
 async fn expired_subscription_releases_quota_on_handle_subscribe_cov() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, _sent) = recording_transport();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let mut db = ObjectDatabase::new();
@@ -276,7 +223,7 @@ async fn expired_subscription_releases_quota_on_handle_subscribe_cov() {
     };
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(transport)
         .cov_policy(policy)
         .build()
         .await
@@ -326,7 +273,7 @@ async fn expired_subscription_releases_quota_on_handle_subscribe_cov() {
 
 #[tokio::test]
 async fn expired_subscription_purged_before_cov_property_multiple_admission() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, _sent) = recording_transport();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let mut db = ObjectDatabase::new();
@@ -347,7 +294,7 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
     };
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(transport)
         .cov_policy(policy)
         .build()
         .await
@@ -428,7 +375,7 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
 
 #[tokio::test]
 async fn unlimited_policy_half_cap_computation_does_not_overflow() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     let (db, ao_oid) = test_db_with_ao();
     let config = ServerConfig {
         cov_policy: CovPolicy::unlimited(),
@@ -480,14 +427,12 @@ async fn unlimited_policy_half_cap_computation_does_not_overflow() {
             .unwrap();
     }
 
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let network = Arc::new(NetworkLayer::new(transport));
 
     // Under CovPolicy::unlimited(), remaining_notifications is usize::MAX.
     // The previous computation `(remaining_notifications + 1) / 2` panicked on overflow.
     // This must complete without panicking and dispatch both families.
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+    BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &db,
             network: &network,
@@ -501,12 +446,12 @@ async fn unlimited_policy_half_cap_computation_does_not_overflow() {
     )
     .await;
 
-    let sent_frames = sent.lock().unwrap();
+    let sent_frames = sent.lock();
     assert_eq!(sent_frames.len(), 2);
     let mut saw_single = false;
     let mut saw_multiple = false;
-    for (frame, _) in sent_frames.iter() {
-        let npdu = decode_npdu(frame.clone()).unwrap();
+    for frame in sent_frames.iter() {
+        let npdu = decode_npdu(frame.npdu.clone()).unwrap();
         if let Apdu::UnconfirmedRequest(req) = decode_apdu(npdu.payload).unwrap() {
             if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION {
                 saw_single = true;
@@ -529,7 +474,7 @@ async fn unlimited_policy_half_cap_computation_does_not_overflow() {
 
 #[tokio::test]
 async fn life_safety_fair_budget_partitioning_between_single_and_multiple() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     let point_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let mut db = ObjectDatabase::new();
     let lsp = LifeSafetyPointObject::new(1, "point").unwrap();
@@ -596,11 +541,9 @@ async fn life_safety_fair_budget_partitioning_between_single_and_multiple() {
         }
     }
 
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let network = Arc::new(NetworkLayer::new(transport));
 
-    BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
+    BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &db,
             network: &network,
@@ -615,12 +558,12 @@ async fn life_safety_fair_budget_partitioning_between_single_and_multiple() {
     )
     .await;
 
-    let sent_frames = sent.lock().unwrap();
+    let sent_frames = sent.lock();
     assert_eq!(sent_frames.len(), 2);
     let mut saw_single = false;
     let mut saw_multiple = false;
-    for (frame, _) in sent_frames.iter() {
-        let npdu = decode_npdu(frame.clone()).unwrap();
+    for frame in sent_frames.iter() {
+        let npdu = decode_npdu(frame.npdu.clone()).unwrap();
         if let Apdu::UnconfirmedRequest(req) = decode_apdu(npdu.payload).unwrap() {
             if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION {
                 saw_single = true;
