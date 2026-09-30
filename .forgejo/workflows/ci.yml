@@ -1,8 +1,10 @@
 name: CI
 
-# Runs on the self-hosted Forgejo runner (Linux amd64 Spot VM, Docker jobs using
-# ghcr.io/catthehacker/ubuntu:act-24.04). macOS is checked locally with
-# scripts/ci/local-macos.sh; Windows is not currently tested. See docs/ci.md.
+# Runs on the self-hosted Forgejo runner (Linux amd64 Spot VM). Jobs run in the
+# prebuilt image from .forgejo/ci-image (the runner's act image plus the
+# toolchains, tools and apt packages), which the "CI image" job builds and pushes
+# to Forgejo's registry when its tag is missing (#904). macOS is checked locally
+# with scripts/ci/local-macos.sh; Windows is not currently tested. See docs/ci.md.
 #
 #   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
 #           lint (fmt, file-size cap, no-secret scan, script regressions),
@@ -45,8 +47,12 @@ env:
   # Test binaries without native debug info: less codegen, linking and cache.
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
+  # Keep TOOLCHAIN and MSRV equal to the Dockerfile's RUST_TOOLCHAIN and RUST_MSRV
+  # (and TOOLCHAIN to rust-toolchain.toml); the "CI image" job checks this.
   TOOLCHAIN: "1.97.1"
   MSRV: "1.93"
+  # Tag = first 12 hex digits of sha256(.forgejo/ci-image/Dockerfile).
+  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:b45d37b9e2ed
   # Every optional feature that builds on Linux, including per-crate features
   # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap} that nothing
   # else in the workspace turns on (#906). bacnet-benchmarks/console is left
@@ -54,16 +60,49 @@ env:
   LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap
 
 jobs:
+  # Builds and pushes CI_IMAGE only when that tag is not in the registry yet, so
+  # a PR that changes the Dockerfile (and therefore the tag) tests its own image.
+  image:
+    name: CI image
+    runs-on: linux-host
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the tag and toolchain pins
+        run: |
+          dockerfile=.forgejo/ci-image/Dockerfile
+          want=$(sha256sum "$dockerfile" | cut -c1-12)
+          test "${CI_IMAGE##*:}" = "$want" || { echo "::error::set CI_IMAGE's tag to $want"; exit 1; }
+          arg() { sed -n "s/^ARG $1=//p" "$dockerfile"; }
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          test "$(arg RUST_TOOLCHAIN)" = "$TOOLCHAIN" && test "$channel" = "$TOOLCHAIN" \
+            || { echo "::error::TOOLCHAIN, rust-toolchain.toml and the Dockerfile disagree"; exit 1; }
+          test "$(arg RUST_MSRV)" = "$MSRV" || { echo "::error::MSRV and the Dockerfile disagree"; exit 1; }
+      - name: Build and push if the tag is missing
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          registry=${CI_IMAGE%%/*}
+          export DOCKER_CONFIG=$(mktemp -d)
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          echo "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+          if docker manifest inspect "$CI_IMAGE" >/dev/null 2>&1; then
+            echo "$CI_IMAGE already exists"
+            exit 0
+          fi
+          docker build --pull -t "$CI_IMAGE" .forgejo/ci-image
+          docker push "$CI_IMAGE"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: ${{ env.CI_IMAGE }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.TOOLCHAIN }}
-          components: rustfmt
       - name: Rustfmt
         run: cargo fmt --all --check
       - name: File-size cap (700 LOC)
@@ -78,17 +117,12 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: ${{ env.CI_IMAGE }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends pkg-config libpcap-dev python3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.TOOLCHAIN }}
-          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy
@@ -114,25 +148,18 @@ jobs:
   test:
     name: Test (Linux, full features)
     runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: ${{ env.CI_IMAGE }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends pkg-config cmake perl libpcap-dev
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: test
           cache-bin: false
           cache-on-failure: true
           env-vars: LINUX_FEATURES
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.146
       # nextest runs each test in its own process (.config/nextest.toml);
       # it does not run doctests, so cargo test --doc covers those.
       - run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES" --profile ci
@@ -145,35 +172,22 @@ jobs:
   python:
     name: Python bindings
     runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: ${{ env.CI_IMAGE }}
     timeout-minutes: 30
-    env:
-      MATURIN_VERSION: "1.15.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The SC hub and endpoint tests generate certificates with the openssl CLI.
-      # The crate's Rust tests link libpython: libpython3-dev brings the shared
-      # library and its unversioned .so symlink for the image's python3 (#919).
-      - name: System packages
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends python3 python3-venv libpython3-dev openssl
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: python
           cache-bin: false
           cache-on-failure: true
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.146
       # A debug extension builds faster, and the suite doesn't need release speed.
       - name: Build the extension (maturin develop)
         run: |
           python3 -m venv /tmp/venv
           . /tmp/venv/bin/activate
-          pip install --quiet --disable-pip-version-check "maturin==$MATURIN_VERSION"
           python --version
           maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
       - name: Python tests
@@ -181,7 +195,7 @@ jobs:
           . /tmp/venv/bin/activate
           python -m unittest discover -s crates/rusty-bacnet/tests
       # The crate's lib unit tests and integration tests, linked against libpython
-      # (#919). PYO3_PYTHON pins the apt python3 that libpython3-dev matches;
+      # (#919). PYO3_PYTHON pins the image's apt python3, which libpython3-dev matches;
       # pyo3 would otherwise try `python` on PATH first. Not using the venv keeps
       # this step independent of the maturin build.
       - name: Rust tests
@@ -196,6 +210,9 @@ jobs:
     # dev, manual, or a trigger added later) runs it.
     if: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
     runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: ${{ env.CI_IMAGE }}
     timeout-minutes: 45
     env:
       # Overrides rust-toolchain.toml so the documented MSRV is what compiles.
@@ -203,13 +220,6 @@ jobs:
       RUSTUP_TOOLCHAIN: "1.93"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends build-essential pkg-config libpcap-dev cmake perl file python3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.MSRV }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
@@ -225,15 +235,12 @@ jobs:
     # dev, manual, or a trigger added later) runs it.
     if: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
     runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: ${{ env.CI_IMAGE }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.TOOLCHAIN }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
       - name: Cargo Audit
         run: cargo audit --color always
       - name: Cargo Deny
@@ -243,7 +250,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: ${{ always() }}
-    needs: [lint, clippy, test, python, msrv, audit-deny]
+    needs: [image, lint, clippy, test, python, msrv, audit-deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
