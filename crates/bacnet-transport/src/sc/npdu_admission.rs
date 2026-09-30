@@ -233,6 +233,20 @@ pub(crate) struct ScNpduAdmission {
     state: StdMutex<AdmissionState>,
 }
 
+/// Identity, address and reply channel of a direct-connect peer whose NPDU is
+/// being admitted.
+#[cfg(any(test, feature = "sc-tls"))]
+pub(crate) struct DirectPeer {
+    /// Peer VMAC (the fairness key on the direct path).
+    pub(crate) vmac: Vmac,
+    /// Peer socket address, for drop logging.
+    pub(crate) addr: SocketAddr,
+    /// Verified TLS identity of the peer.
+    pub(crate) identity: crate::port::DirectScIdentity,
+    /// Handle for replying on the direct connection, when available.
+    pub(crate) response: Option<crate::port::DirectResponse>,
+}
+
 impl ScNpduAdmission {
     pub(crate) fn new(policy: ScNpduAdmissionPolicy) -> Self {
         Self {
@@ -360,11 +374,14 @@ impl ScNpduAdmission {
         tx: &mpsc::Sender<ReceivedNpdu>,
         msg: &ScMessage,
         npdu: Bytes,
-        peer: Vmac,
-        peer_addr: SocketAddr,
-        identity: crate::port::DirectScIdentity,
-        direct_response: Option<crate::port::DirectResponse>,
+        peer: DirectPeer,
     ) {
+        let DirectPeer {
+            vmac: peer,
+            addr: peer_addr,
+            identity,
+            response: direct_response,
+        } = peer;
         let source_mac = MacAddr::from_slice(&peer);
         let item = ReceivedNpdu {
             npdu,
@@ -613,19 +630,23 @@ mod tests {
             &tx,
             &encapsulated(None),
             npdu.clone(),
-            source,
-            peer_addr,
-            crate::port::DirectScIdentity::verified([1; 32], 1),
-            None,
+            DirectPeer {
+                vmac: source,
+                addr: peer_addr,
+                identity: crate::port::DirectScIdentity::verified([1; 32], 1),
+                response: None,
+            },
         );
         admission.admit_direct_peer(
             &tx,
             &encapsulated(None),
             npdu.clone(),
-            source,
-            peer_addr,
-            crate::port::DirectScIdentity::verified([1; 32], 1),
-            None,
+            DirectPeer {
+                vmac: source,
+                addr: peer_addr,
+                identity: crate::port::DirectScIdentity::verified([1; 32], 1),
+                response: None,
+            },
         );
         assert_eq!(rx.len(), 6);
         assert_eq!(admission.drop_counts().fairness_drops, 2);

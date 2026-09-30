@@ -190,35 +190,6 @@ impl std::fmt::Debug for ReceivedNetworkControl {
     }
 }
 
-impl ReceivedApdu {
-    /// Build an explicitly unverified test/compat envelope (mechanical helper
-    /// for the ~55 in-memory literals; production paths thread the transport
-    /// value instead of synthesizing one).
-    pub fn unverified(
-        apdu: Bytes,
-        source_mac: MacAddr,
-        ingress_network: Option<u16>,
-        source_network: Option<NpduAddress>,
-        link_layer_group: bool,
-        is_group: bool,
-        data_attributes: Vec<DataAttribute>,
-        reply_tx: Option<oneshot::Sender<Bytes>>,
-    ) -> Self {
-        Self {
-            apdu,
-            source_mac,
-            ingress_network,
-            source_network,
-            link_layer_group,
-            is_group,
-            data_attributes,
-            provenance: TransportProvenance::unverified(),
-            direct_response: None,
-            reply_tx,
-        }
-    }
-}
-
 impl Clone for ReceivedApdu {
     fn clone(&self) -> Self {
         Self {
@@ -264,6 +235,17 @@ pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&Npd
         None => link_layer_group,
         Some(destination) => destination.network == 0xFFFF || destination.mac_address.is_empty(),
     }
+}
+
+/// A remote device reached through a local router.
+#[derive(Debug, Clone, Copy)]
+pub struct RoutedTarget<'a> {
+    /// Destination network number written to the NPDU DNET.
+    pub network: u16,
+    /// Destination MAC on that network (NPDU DADR).
+    pub mac: &'a [u8],
+    /// Next-hop router MAC on the local network (the link-layer destination).
+    pub router_mac: &'a [u8],
 }
 
 /// Non-router BACnet network layer.
@@ -485,9 +467,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ) -> Result<(), Error> {
         self.send_apdu_routed_with_data_attributes(
             apdu,
-            dest_network,
-            dest_mac,
-            router_mac,
+            RoutedTarget {
+                network: dest_network,
+                mac: dest_mac,
+                router_mac,
+            },
             expecting_reply,
             priority,
             &[],
@@ -499,17 +483,20 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     pub async fn send_apdu_routed_with_data_attributes(
         &self,
         apdu: &[u8],
-        dest_network: u16,
-        dest_mac: &[u8],
-        router_mac: &[u8],
+        target: RoutedTarget<'_>,
         expecting_reply: bool,
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        let buf =
-            Self::encode_routed_npdu_buf(apdu, dest_network, dest_mac, expecting_reply, priority)?;
+        let buf = Self::encode_routed_npdu_buf(
+            apdu,
+            target.network,
+            target.mac,
+            expecting_reply,
+            priority,
+        )?;
         self.transport
-            .send_unicast_with_data_attributes(&buf, router_mac, data_attributes)
+            .send_unicast_with_data_attributes(&buf, target.router_mac, data_attributes)
             .await
     }
 

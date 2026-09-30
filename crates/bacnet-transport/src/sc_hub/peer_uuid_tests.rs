@@ -33,17 +33,21 @@ impl Peer {
         let runtime = Arc::new(super::admission::AdmissionRuntime::default());
         // Do not retain a test-owned sink: worker completion must release TLS.
         let operation = super::deadlines::serve(
-            address,
-            ([0x10; 6], [0x10; 16]),
-            read,
-            Arc::new(Mutex::new(write)),
-            clients,
+            super::context::PeerConnection {
+                addr: address,
+                read,
+                write: Arc::new(Mutex::new(write)),
+                verified_leaf,
+            },
+            super::context::HubConnectionContext {
+                hub: ([0x10; 6], [0x10; 16]),
+                clients,
+                admission: runtime,
+                graceful: super::tasks::Tasks::new().graceful_ctx(),
+                timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
+            },
             deadline.clone(),
             || {},
-            runtime,
-            verified_leaf,
-            super::tasks::Tasks::new().graceful_ctx(),
-            super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
         );
         let task = tokio::spawn(async move {
             let _admission = admission;

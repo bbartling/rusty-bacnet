@@ -24,6 +24,7 @@ use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_endpoint::session::SessionRole;
+use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
@@ -402,10 +403,12 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
     let raw_mac2 = raw_mac.clone();
     let routed = tokio::spawn(async move {
         client2
-            .read_property_routed(
-                &raw_mac2,
-                77,
-                &[0x44],
+            .read_property_with_destination(
+                EndpointApduDestination::Routed {
+                    router_mac: MacAddr::from_slice(&raw_mac2),
+                    destination_network: 77,
+                    destination_mac: MacAddr::from_slice(&[0x44]),
+                },
                 Vec::new(),
                 oid(ObjectType::ANALOG_INPUT, 1),
                 PropertyIdentifier::PRESENT_VALUE,

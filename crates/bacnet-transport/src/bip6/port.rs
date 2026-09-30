@@ -15,7 +15,7 @@ use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use super::frame::destination_vmac_matches;
 use super::ingress::{
     forwarded_npdu_is_trusted, forwarded_source_is_usable, is_local_unicast_delivery,
-    original_destination_matches,
+    original_destination_matches, LocalBinding,
 };
 use super::socket::Bip6Socket;
 use super::vmac_table::{derive_vmac_from_device_instance, generate_random_vmac, VmacTable};
@@ -300,10 +300,12 @@ impl TransportPort for Bip6Transport {
                                     && is_local_unicast_delivery(
                                         received.destination,
                                         frame.destination_vmac,
-                                        local_ip,
-                                        source_vmac,
-                                        &local_unicast_ips,
-                                        wildcard_bind,
+                                        &LocalBinding {
+                                            ip: local_ip,
+                                            vmac: source_vmac,
+                                            unicast_ips: &local_unicast_ips,
+                                            wildcard_bind,
+                                        },
                                         received.os_group_delivery,
                                     )
                                 {
@@ -407,10 +409,12 @@ impl TransportPort for Bip6Transport {
                                     frame.function,
                                     received.destination,
                                     frame.destination_vmac,
-                                    local_ip,
-                                    source_vmac_copy,
-                                    &local_unicast_ips,
-                                    wildcard_bind,
+                                    &LocalBinding {
+                                        ip: local_ip,
+                                        vmac: source_vmac_copy,
+                                        unicast_ips: &local_unicast_ips,
+                                        wildcard_bind,
+                                    },
                                     received.os_group_delivery,
                                 ) {
                                     debug!(

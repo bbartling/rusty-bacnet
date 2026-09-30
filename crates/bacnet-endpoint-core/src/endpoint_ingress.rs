@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
-use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
+use bacnet_network::layer::{NetworkLayer, ReceivedApdu, RoutedTarget};
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
@@ -603,9 +603,11 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
             network
                 .send_apdu_routed_with_data_attributes(
                     apdu,
-                    *destination_network,
-                    destination_mac,
-                    router_mac,
+                    RoutedTarget {
+                        network: *destination_network,
+                        mac: destination_mac,
+                        router_mac,
+                    },
                     expecting_reply,
                     priority,
                     data_attributes,

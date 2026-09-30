@@ -22,17 +22,40 @@ pub(super) enum ActiveHub {
     Failover,
 }
 
+/// Borrowed state a primary-restore attempt reads and updates.
+pub(super) struct PrimaryRestoreContext<'a, W> {
+    /// Retired primary socket, when it can be reused as-is.
+    pub(super) primary_ws: Option<&'a Arc<W>>,
+    /// Connector used to dial a fresh primary socket.
+    pub(super) primary_connector: Option<&'a WebSocketConnector<W>>,
+    /// Socket slot shared with the send path.
+    pub(super) active_ws: &'a Arc<Mutex<Arc<W>>>,
+    /// Shared connection state machine.
+    pub(super) conn: &'a Arc<Mutex<ScConnection>>,
+    /// Slot holding the in-flight disconnect of the replaced failover socket.
+    pub(super) restore_disconnect_task: &'a Arc<StdMutex<Option<JoinHandle<()>>>>,
+    /// Connection-state publisher.
+    pub(super) state_tx: &'a watch::Sender<ScConnectionState>,
+    /// Connect and handshake timeout in milliseconds.
+    pub(super) connect_timeout_ms: u64,
+    /// Published effective maximum APDU length.
+    pub(super) effective_max_apdu_length: &'a AtomicU16,
+}
+
 pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
-    primary_ws: Option<&Arc<W>>,
-    primary_connector: Option<&WebSocketConnector<W>>,
+    ctx: &PrimaryRestoreContext<'_, W>,
     current_ws: &Arc<W>,
-    active_ws: &Arc<Mutex<Arc<W>>>,
-    conn: &Arc<Mutex<ScConnection>>,
-    restore_disconnect_task: &Arc<StdMutex<Option<JoinHandle<()>>>>,
-    state_tx: &watch::Sender<ScConnectionState>,
-    connect_timeout_ms: u64,
-    effective_max_apdu_length: &AtomicU16,
 ) -> Result<Arc<W>, Error> {
+    let PrimaryRestoreContext {
+        primary_ws,
+        primary_connector,
+        active_ws,
+        conn,
+        restore_disconnect_task,
+        state_tx,
+        connect_timeout_ms,
+        effective_max_apdu_length,
+    } = *ctx;
     let restored_ws = if let Some(connector) = primary_connector {
         Arc::new(dial_connector(connector, connect_timeout_ms).await?)
     } else if let Some(primary_ws) = primary_ws {

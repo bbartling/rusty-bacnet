@@ -1,5 +1,6 @@
 //! Sole accepted socket writer with bounded response/control scheduling.
 use super::*;
+use crate::sc::npdu_admission::DirectPeer;
 
 pub(super) async fn serve_npdu_loop<W>(
     write: &mut W,
@@ -129,10 +130,12 @@ pub(super) async fn serve_npdu_loop<W>(
                             npdu_tx,
                             &msg,
                             npdu,
-                            member.vmac,
-                            peer_addr,
-                            identity,
-                            Some(response.clone()),
+                            DirectPeer {
+                                vmac: member.vmac,
+                                addr: peer_addr,
+                                identity,
+                                response: Some(response.clone()),
+                            },
                         )
                     });
                 }

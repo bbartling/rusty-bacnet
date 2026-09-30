@@ -54,7 +54,7 @@ mod unknown_function;
 pub use connection::{ScConnection, ScConnectionState};
 use connector::{dial_failover_ws, WebSocketConnector};
 pub use errors::{ScConnectError, ScWebSocketErrorKind};
-use failover::{attempt_primary_restore, ActiveHub};
+use failover::{attempt_primary_restore, ActiveHub, PrimaryRestoreContext};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
 pub use npdu_admission::{ScNpduAdmissionPolicy, ScNpduDropCounts};
@@ -669,15 +669,17 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 continue;
                             }
                             match attempt_primary_restore(
-                                primary_ws.as_ref(),
-                                primary_connector.as_ref(),
+                                &PrimaryRestoreContext {
+                                    primary_ws: primary_ws.as_ref(),
+                                    primary_connector: primary_connector.as_ref(),
+                                    active_ws: &active_ws,
+                                    conn: &conn,
+                                    restore_disconnect_task: &restore_disconnect_task,
+                                    state_tx: &state_tx,
+                                    connect_timeout_ms,
+                                    effective_max_apdu_length: &effective_max_apdu_length,
+                                },
                                 &ws_clone,
-                                &active_ws,
-                                &conn,
-                                &restore_disconnect_task,
-                                &state_tx,
-                                connect_timeout_ms,
-                                &effective_max_apdu_length,
                             )
                             .await
                             {

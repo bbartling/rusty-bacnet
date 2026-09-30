@@ -22,14 +22,17 @@ pub fn generate_random48_vmac() -> Result<Vmac, Error> {
 }
 
 #[cfg(test)]
+type Random48Generator = fn() -> Result<Vmac, Error>;
+
+#[cfg(test)]
 thread_local! {
     static TEST_RANDOM48_VMAC_GENERATOR:
-        std::cell::RefCell<Option<fn() -> Result<Vmac, Error>>> =
+        std::cell::RefCell<Option<Random48Generator>> =
             const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
-fn test_random48_vmac_generator() -> Option<fn() -> Result<Vmac, Error>> {
+fn test_random48_vmac_generator() -> Option<Random48Generator> {
     TEST_RANDOM48_VMAC_GENERATOR.with(|generator| *generator.borrow())
 }
 
@@ -47,7 +50,7 @@ impl Drop for TestRandom48VmacGeneratorGuard {
 
 #[cfg(test)]
 pub(crate) fn set_test_random48_vmac_generator(
-    generator: fn() -> Result<Vmac, Error>,
+    generator: Random48Generator,
 ) -> TestRandom48VmacGeneratorGuard {
     TEST_RANDOM48_VMAC_GENERATOR.with(|slot| {
         assert!(

@@ -5,13 +5,13 @@ use std::sync::Arc;
 use tokio::time::Instant;
 
 use futures_util::StreamExt;
-use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, warn};
 
 use crate::sc_frame::{Vmac, BACNET_SC_HUB_SUBPROTOCOL};
 
+use super::context::{HubConnectionContext, HubListener, PeerConnection};
 use super::heartbeat;
 use super::helpers::{offers_websocket_subprotocol, websocket_subprotocol_error_response};
 use super::{handle_client, Clients, DeviceUuid};
@@ -21,17 +21,19 @@ use super::{handle_client, Clients, DeviceUuid};
 // ---------------------------------------------------------------------------
 
 pub(super) async fn accept_loop_with_counter(
-    listener: TcpListener,
-    tls_acceptor: TlsAcceptor,
+    bound: HubListener,
     hub: (Vmac, DeviceUuid),
     clients: Clients,
-    timeouts: super::ScHubHandshakeTimeouts,
     active_connections: Arc<AtomicUsize>,
     tasks: super::tasks::Tasks,
     admission: Arc<super::admission::AdmissionRuntime>,
 ) {
     let _abort_on_exit = tasks.abort_on_exit();
-    let (hub_vmac, hub_uuid) = hub;
+    let HubListener {
+        listener,
+        tls_acceptor,
+        timeouts,
+    } = bound;
     let mut shutdown = tasks.subscribe();
     // All active accepted connections count, including established clients.
     // The total is the configured sum (defaults 256 + 256 = 512); the
@@ -114,8 +116,13 @@ pub(super) async fn accept_loop_with_counter(
 
         let acceptor = tls_acceptor.clone();
         let clients = clients.clone();
-        let admission_runtime = admission.clone();
-        let graceful = tasks.graceful_ctx();
+        let context = HubConnectionContext {
+            hub,
+            clients,
+            admission: admission.clone(),
+            graceful: tasks.graceful_ctx(),
+            timing,
+        };
 
         // Task locals are not inherited by spawn. Explicitly scope every
         // connection to this hub's one aggregate budget; no new worker/lifetime.
@@ -127,13 +134,9 @@ pub(super) async fn accept_loop_with_counter(
                     tcp_stream,
                     peer_addr,
                     acceptor,
-                    (hub_vmac, hub_uuid),
-                    clients,
+                    context,
                     timeouts,
                     admission_permit,
-                    admission_runtime,
-                    graceful,
-                    timing,
                 ),
             ));
     }
@@ -184,15 +187,11 @@ pub(super) async fn serve_connection(
     tcp_stream: tokio::net::TcpStream,
     peer_addr: std::net::SocketAddr,
     acceptor: TlsAcceptor,
-    hub: (Vmac, DeviceUuid),
-    clients: Clients,
+    ctx: HubConnectionContext,
     timeouts: super::ScHubHandshakeTimeouts,
     admission: Admission,
-    runtime: Arc<super::admission::AdmissionRuntime>,
-    graceful: super::graceful::GracefulCtx,
-    timing: super::timing::HubTiming,
 ) {
-    let (hub_vmac, hub_uuid) = hub;
+    let clients = &ctx.clients;
     let tls_deadline = admission.tls_deadline;
     // TLS handshake
     let tls_stream = match super::deadlines::before(tls_deadline, acceptor.accept(tcp_stream)).await
@@ -257,17 +256,14 @@ pub(super) async fn serve_connection(
     let write = Arc::new(Mutex::new(write));
 
     handle_client(
-        peer_addr,
-        hub_vmac,
-        hub_uuid,
-        read,
-        write,
-        clients,
+        PeerConnection {
+            addr: peer_addr,
+            read,
+            write,
+            verified_leaf,
+        },
+        ctx,
         connect_deadline,
-        runtime,
-        verified_leaf,
-        graceful,
-        timing,
     )
     .await;
 }
