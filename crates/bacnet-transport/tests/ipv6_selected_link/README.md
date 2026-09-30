@@ -10,8 +10,8 @@ concrete ULA on its interface. Set `RB_IPV6_TEST_ADDRESS` to that address and
 `RB_IPV6_TEST_INDEX` to its actual nonzero OS interface index. Run:
 
 ```sh
-cargo test -p bacnet-transport --features ipv6 --locked \
-  --test ipv6_selected_link -- --ignored --nocapture
+cargo nextest run -p bacnet-transport --features ipv6 --locked \
+  --test ipv6_selected_link --run-ignored only --no-capture
 ```
 
 The fixture uses the actual transport, independent raw BVLC bytes and `recvmsg`
@@ -26,8 +26,8 @@ Set `RB_IPV6_OTHER_ADDRESS` and `RB_IPV6_OTHER_INDEX` for its different ULA/inde
 then run this separate target (the automatic single-link cases are inapplicable):
 
 ```sh
-cargo test -p bacnet-transport --features ipv6 --locked \
-  --test ipv6_selected_link_multi -- --ignored --nocapture
+cargo nextest run -p bacnet-transport --features ipv6 --locked \
+  --test ipv6_selected_link_multi --run-ignored only --no-capture
 ```
 
 That target requires ambiguous automatic startup to fail. An explicit link must
