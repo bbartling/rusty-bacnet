@@ -47,12 +47,9 @@ env:
   # Test binaries without native debug info: less codegen, linking and cache.
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
-  # Keep TOOLCHAIN and MSRV equal to the Dockerfile's RUST_TOOLCHAIN and RUST_MSRV
-  # (and TOOLCHAIN to rust-toolchain.toml); the "CI image" job checks this.
-  TOOLCHAIN: "1.97.1"
-  MSRV: "1.93"
-  # Tag = first 12 hex digits of sha256(.forgejo/ci-image/Dockerfile).
-  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:b45d37b9e2ed
+  # Tag = first 12 hex digits of sha256(.forgejo/ci-image/Dockerfile). The image
+  # carries the toolchains; the "CI image" job checks they match the repo's pins.
+  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:6e5b652a2730
   # Every optional feature that builds on Linux, including per-crate features
   # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap} that nothing
   # else in the workspace turns on (#906). bacnet-benchmarks/console is left
@@ -70,29 +67,45 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the tag and toolchain pins
         run: |
-          dockerfile=.forgejo/ci-image/Dockerfile
-          want=$(sha256sum "$dockerfile" | cut -c1-12)
+          dir=.forgejo/ci-image
+          # The tag hashes only the Dockerfile, so nothing else may feed the build.
+          test "$(ls -A "$dir")" = Dockerfile || { echo "::error::$dir must hold only the Dockerfile"; exit 1; }
+          want=$(sha256sum "$dir/Dockerfile" | cut -c1-12)
           test "${CI_IMAGE##*:}" = "$want" || { echo "::error::set CI_IMAGE's tag to $want"; exit 1; }
-          arg() { sed -n "s/^ARG $1=//p" "$dockerfile"; }
-          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
-          test "$(arg RUST_TOOLCHAIN)" = "$TOOLCHAIN" && test "$channel" = "$TOOLCHAIN" \
-            || { echo "::error::TOOLCHAIN, rust-toolchain.toml and the Dockerfile disagree"; exit 1; }
-          test "$(arg RUST_MSRV)" = "$MSRV" || { echo "::error::MSRV and the Dockerfile disagree"; exit 1; }
+          arg() { sed -n "s/^ARG $1=//p" "$dir/Dockerfile"; }
+          toolchain=$(arg RUST_TOOLCHAIN) msrv=$(arg RUST_MSRV)
+          channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          rust_version=$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml)
+          fail=0
+          [ "$channel" = "$toolchain" ] || { echo "::error::rust-toolchain.toml has $channel, the image $toolchain"; fail=1; }
+          [ "$rust_version" = "$msrv" ] || { echo "::error::Cargo.toml rust-version is $rust_version, the image's MSRV $msrv"; fail=1; }
+          grep -q "RUSTUP_TOOLCHAIN: \"$msrv\"" .forgejo/workflows/ci.yml \
+            || { echo "::error::the MSRV job's RUSTUP_TOOLCHAIN is not $msrv"; fail=1; }
+          if grep -n 'toolchain: "' .github/workflows/release.yml | grep -v "toolchain: \"$toolchain\""; then
+            echo "::error::release.yml pins a toolchain other than $toolchain"; fail=1
+          fi
+          exit $fail
       # The automatic job token can't write packages, so pushes use a personal
-      # access token with package read/write scope, stored as this secret.
-      - name: Build and push if the tag is missing
+      # access token with package read/write scope, stored as this secret. The
+      # registry also needs sign-in to pull, and job containers never pull
+      # (force_pull: false), so an existing tag is pulled here into the VM's
+      # Docker for the jobs that follow.
+      - name: Pull, or build and push if the tag is missing
         env:
           REGISTRY_TOKEN: ${{ secrets.CI_IMAGE_TOKEN }}
           REGISTRY_USER: ${{ github.repository_owner }}
         run: |
           registry=${CI_IMAGE%%/*}
-          export DOCKER_CONFIG=$(mktemp -d)
+          # Under RUNNER_TEMP, which the runner deletes even if the job is killed.
+          export DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX")
           trap 'rm -rf "$DOCKER_CONFIG"' EXIT
           echo "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
-          if docker manifest inspect "$CI_IMAGE" >/dev/null 2>&1; then
-            echo "$CI_IMAGE already exists"
+          if err=$(docker manifest inspect "$CI_IMAGE" 2>&1 >/dev/null); then
+            docker pull -q "$CI_IMAGE"
             exit 0
           fi
+          grep -qiE 'no such manifest|manifest unknown|not found' <<<"$err" \
+            || { echo "::error::cannot query $CI_IMAGE: $err"; exit 1; }
           docker build --pull -t "$CI_IMAGE" .forgejo/ci-image
           docker push "$CI_IMAGE"
 
@@ -218,7 +231,7 @@ jobs:
     timeout-minutes: 45
     env:
       # Overrides rust-toolchain.toml so the documented MSRV is what compiles.
-      # Job env cannot read env.MSRV; keep the two in sync.
+      # The "CI image" job checks it matches the image's MSRV and Cargo.toml.
       RUSTUP_TOOLCHAIN: "1.93"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

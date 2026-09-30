@@ -83,10 +83,11 @@ about them.
 
 ### Runner
 
-Jobs run on a self-hosted Linux runner (8 vCPU, 32 GB, up to three concurrent
-Docker jobs) on a preemptible VM. `Swatinem/rust-cache` keeps Cargo state in the
-runner's cache. The cache lives on the VM, so a preemption starts the next run
-cold, and a preempted job must be re-run.
+Jobs run on a self-hosted Linux runner (8 vCPU, 32 GB) on a preemptible VM. It
+runs up to three jobs at once, and the host-mode CI image job takes one of those
+slots. `Swatinem/rust-cache` keeps Cargo state in the runner's cache. The cache
+lives on the VM, so a preemption starts the next run cold, and a preempted job
+must be re-run.
 
 ### CI image
 
@@ -95,41 +96,61 @@ Every job except CI OK runs in one prebuilt image,
 [`.forgejo/ci-image/Dockerfile`](../.forgejo/ci-image/Dockerfile) (#904). It
 contains:
 
-- the runner's default `ghcr.io/catthehacker/ubuntu:act-24.04`;
+- the runner's default `ghcr.io/catthehacker/ubuntu:act-24.04`, pinned by
+  digest;
 - Rust 1.97.1 with rustfmt and clippy, and the 1.93 MSRV toolchain;
-- cargo-nextest, cargo-audit, cargo-deny and maturin, at pinned versions;
+- cargo-nextest, cargo-audit, cargo-deny and maturin at pinned versions, each
+  download checked against its SHA-256;
 - the apt packages the jobs need.
 
 The jobs no longer spend time on apt, rustup or tool downloads.
 
-The first job, **CI image**, runs on the `linux-host` label. It does three things:
+The first job, **CI image**, runs on the `linux-host` label. It does three
+things:
 
-1. Checks that `CI_IMAGE`'s tag equals the first 12 hex digits of the
-   Dockerfile's SHA-256.
-2. Checks that `TOOLCHAIN`, `MSRV`, `rust-toolchain.toml` and the Dockerfile's
-   `RUST_TOOLCHAIN` / `RUST_MSRV` agree.
-3. Builds and pushes the image only if that tag isn't in Forgejo's container
-   registry yet.
+1. **Tag.** Checks that `CI_IMAGE`'s tag equals the first 12 hex digits of the
+   Dockerfile's SHA-256, and that `.forgejo/ci-image` holds nothing but the
+   Dockerfile.
+2. **Pins.** Checks that the Dockerfile's `RUST_TOOLCHAIN` matches
+   `rust-toolchain.toml` and the toolchain pins in `release.yml`, and that its
+   `RUST_MSRV` matches `Cargo.toml`'s `rust-version` and the MSRV job's
+   `RUSTUP_TOOLCHAIN`.
+3. **Image.** Queries Forgejo's container registry for the tag:
+   - If the tag exists, it pulls the image into the VM's Docker. The registry
+     requires sign-in to pull, and the runner never pulls job images itself
+     (`force_pull: false`), so this pull is what gets the image onto a fresh VM
+     for the jobs that follow.
+   - If the tag is missing, it builds and pushes the image.
+   - Any other registry error fails the job.
 
 A PR that changes the Dockerfile therefore builds and tests its own image.
 
 **Changing the image** (a toolchain bump, a tool version, an apt package):
 
-1. Edit the Dockerfile. Move `TOOLCHAIN` / `MSRV` in `ci.yml` and
-   `rust-toolchain.toml` along with its `ARG`s.
+1. Edit the Dockerfile.
+   - For a toolchain bump, also move `rust-toolchain.toml` and
+     `.github/workflows/release.yml`.
+   - For an MSRV bump, also move `Cargo.toml`'s `rust-version`, the MSRV job's
+     `RUSTUP_TOOLCHAIN` and `scripts/ci/check-msrv.sh`.
+   - For a tool bump, update its `*_SHA256` along with its version.
 2. Set `CI_IMAGE`'s tag to
    `$(sha256sum .forgejo/ci-image/Dockerfile | cut -c1-12)`.
 
-**Credentials:**
+Never re-push an existing tag. Change the Dockerfile, even just a comment, to get
+a new one.
 
-- Pushes use the `CI_IMAGE_TOKEN` repository secret: a personal access token
-  with only package read and write scope. Forgejo's automatic job token can log
-  in to the registry but gets 401 on uploads.
-- Pulls are anonymous. Container packages take the owner's visibility, and the
-  owner is public.
+**Credentials:** the image job logs in with the `CI_IMAGE_TOKEN` repository
+secret, a personal access token with only package read and write scope, used for
+both the pull and the push.
+- Forgejo's automatic job token can log in, but gets 401 on uploads.
+- The login uses a Docker config under `RUNNER_TEMP`, which the runner deletes
+  even if the job is cancelled.
+- If the runner ever gets a second VM, or turns on `force_pull`, give the jobs
+  `container.credentials` with a separate read-only package token.
 
-**Storage:** images take space on Forgejo's data disk. Keep the last few tags
-with a package cleanup rule, set in the owner's Settings → Packages.
+**Storage:** each image version takes space on Forgejo's data disk, and old tags
+stay cached on the runner VM until it's rebuilt. Keep the last few versions with
+a package cleanup rule, set in the owner's Settings → Packages.
 
 **Caches:** the image sets `CARGO_HOME=/usr/local/cargo`, so switching to it
 started every job with a cold Rust cache once. Later image changes keep the same
