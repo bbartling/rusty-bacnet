@@ -845,6 +845,7 @@ mod device_events;
 mod device_mgmt;
 mod discovery;
 mod dispatch;
+mod dispatch_context;
 mod inbound_replies;
 use inbound_replies::InboundReply;
 mod event_notifications;

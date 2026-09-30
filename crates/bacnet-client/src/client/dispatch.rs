@@ -1,6 +1,7 @@
+use super::dispatch_context::{DispatchContext, InboundApdu};
 use super::response_admission::{
     admit_terminal_during_reassembly, complete_terminal_response, current_reassembly_owner,
-    log_coordinated_mismatch, take_current_reassembly, TerminalDispatchOutcome,
+    log_coordinated_mismatch, take_current_reassembly, TerminalDispatchOutcome, TerminalResponse,
 };
 use super::segmentation_context::InboundSegmentSource;
 use super::*;
@@ -8,27 +9,32 @@ use crate::tsm::{CompletionOutcome, CoordinatedCompletion};
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn dispatch_apdu(
-        tsm: &Arc<Mutex<Tsm>>,
-        device_table: &Arc<Mutex<DeviceTable>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_tx: &broadcast::Sender<ReceivedCOVNotification>,
-        event_tx: &broadcast::Sender<ReceivedEventNotification>,
-        confirmed_cov_ack_policy: &ConfirmedCOVNotificationAckPolicy,
-        device_tx: &broadcast::Sender<DeviceEvent>,
-        device_collision_tx: &broadcast::Sender<DeviceCollisionEvent>,
+        context: DispatchContext<'_, T>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>>,
-        source_mac: &[u8],
-        source_network: &Option<NpduAddress>,
-        provenance: TransportProvenance,
-        direct_response: Option<bacnet_transport::port::DirectResponse>,
-        is_group: bool,
-        reply_tx: Option<oneshot::Sender<Bytes>>,
+        inbound: InboundApdu<'_>,
         apdu: Apdu,
         limits: ResponseLimits,
     ) {
+        let DispatchContext {
+            tsm,
+            device_table,
+            network,
+            cov_tx,
+            event_tx,
+            confirmed_cov_ack_policy,
+            device_tx,
+            device_collision_tx,
+            seg_ack_senders,
+        } = context;
+        let InboundApdu {
+            source_mac,
+            source_network,
+            provenance,
+            direct_response,
+            is_group,
+            reply_tx,
+        } = inbound;
         let transaction_peer = response_transaction_peer(source_mac, source_network);
         let tsm_mac = transaction_peer.tsm_mac;
         let canonical_peer = transaction_peer.canonical;
@@ -58,10 +64,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        &tsm_mac,
-                        &state.owner,
-                        &state.reply_mac,
-                        &state.reply_network,
+                        state.abort_target(&tsm_mac),
                         ack.invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -71,13 +74,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 debug!(invoke_id = ack.invoke_id, "Received SimpleAck");
                 match complete_terminal_response(
                     tsm,
-                    &tsm_mac,
-                    ack.invoke_id,
-                    &canonical_peer,
-                    &coordinator_apdu,
-                    TsmResponse::SimpleAck,
-                    true,
-                    None,
+                    TerminalResponse {
+                        tsm_mac: &tsm_mac,
+                        invoke_id: ack.invoke_id,
+                        peer: &canonical_peer,
+                        apdu: &coordinator_apdu,
+                        response: TsmResponse::SimpleAck,
+                        phase_gate: true,
+                        owner: None,
+                    },
                 )
                 .await
                 {
@@ -134,10 +139,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         Self::abort_reassembly(
                             tsm,
                             network,
-                            &tsm_mac,
-                            &state.owner,
-                            &state.reply_mac,
-                            &state.reply_network,
+                            state.abort_target(&tsm_mac),
                             ack.invoke_id,
                             bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                         )
@@ -147,15 +149,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     debug!(invoke_id = ack.invoke_id, "Received ComplexAck");
                     match complete_terminal_response(
                         tsm,
-                        &tsm_mac,
-                        ack.invoke_id,
-                        &canonical_peer,
-                        &coordinator_apdu,
-                        TsmResponse::ComplexAck {
-                            service_data: ack.service_ack,
+                        TerminalResponse {
+                            tsm_mac: &tsm_mac,
+                            invoke_id: ack.invoke_id,
+                            peer: &canonical_peer,
+                            apdu: &coordinator_apdu,
+                            response: TsmResponse::ComplexAck {
+                                service_data: ack.service_ack,
+                            },
+                            phase_gate: true,
+                            owner: None,
                         },
-                        true,
-                        None,
                     )
                     .await
                     {
@@ -200,10 +204,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        &tsm_mac,
-                        &state.owner,
-                        &state.reply_mac,
-                        &state.reply_network,
+                        state.abort_target(&tsm_mac),
                         err.invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -220,16 +221,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // would reject conformant responses.
                 match complete_terminal_response(
                     tsm,
-                    &tsm_mac,
-                    err.invoke_id,
-                    &canonical_peer,
-                    &coordinator_apdu,
-                    TsmResponse::Error {
-                        class: err.error_class.to_raw() as u32,
-                        code: err.error_code.to_raw() as u32,
+                    TerminalResponse {
+                        tsm_mac: &tsm_mac,
+                        invoke_id: err.invoke_id,
+                        peer: &canonical_peer,
+                        apdu: &coordinator_apdu,
+                        response: TsmResponse::Error {
+                            class: err.error_class.to_raw() as u32,
+                            code: err.error_code.to_raw() as u32,
+                        },
+                        phase_gate: true,
+                        owner: None,
                     },
-                    true,
-                    None,
                 )
                 .await
                 {
@@ -268,10 +271,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        &tsm_mac,
-                        &state.owner,
-                        &state.reply_mac,
-                        &state.reply_network,
+                        state.abort_target(&tsm_mac),
                         rej.invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -283,15 +283,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // only correlation the Standard provides.
                 let _ = complete_terminal_response(
                     tsm,
-                    &tsm_mac,
-                    rej.invoke_id,
-                    &canonical_peer,
-                    &coordinator_apdu,
-                    TsmResponse::Reject {
-                        reason: rej.reject_reason.to_raw(),
+                    TerminalResponse {
+                        tsm_mac: &tsm_mac,
+                        invoke_id: rej.invoke_id,
+                        peer: &canonical_peer,
+                        apdu: &coordinator_apdu,
+                        response: TsmResponse::Reject {
+                            reason: rej.reject_reason.to_raw(),
+                        },
+                        phase_gate: false,
+                        owner: None,
                     },
-                    false,
-                    None,
                 )
                 .await;
             }
@@ -329,13 +331,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let coordinator_apdu = Apdu::Abort(abt.clone());
                 let outcome = complete_terminal_response(
                     tsm,
-                    &tsm_mac,
-                    abt.invoke_id,
-                    &canonical_peer,
-                    &coordinator_apdu,
-                    response,
-                    false,
-                    reassembly_owner.clone(),
+                    TerminalResponse {
+                        tsm_mac: &tsm_mac,
+                        invoke_id: abt.invoke_id,
+                        peer: &canonical_peer,
+                        apdu: &coordinator_apdu,
+                        response,
+                        phase_gate: false,
+                        owner: reassembly_owner.clone(),
+                    },
                 )
                 .await;
                 if matches!(
@@ -580,10 +584,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        &tsm_mac,
-                        &state.owner,
-                        &state.reply_mac,
-                        &state.reply_network,
+                        state.abort_target(&tsm_mac),
                         invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )

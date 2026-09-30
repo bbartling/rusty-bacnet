@@ -1,5 +1,6 @@
 //! Network/server lifetime and router propagation over real TLS ingress.
 use super::*;
+use bacnet_network::layer::IssuedApdu;
 use bacnet_network::response_route::ResponseRoute;
 
 fn idle_network() -> NetworkLayer<QueuedPort> {
@@ -16,11 +17,13 @@ async fn issue(
     invoke: u8,
 ) -> Result<(), Error> {
     net.send_response_apdu_on_issuance(
-        &[0x20, invoke, 15],
-        &PEER_MAC,
-        None,
-        false,
-        NetworkPriority::NORMAL,
+        IssuedApdu {
+            apdu: &[0x20, invoke, 15],
+            next_hop: &PEER_MAC,
+            destination: None,
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
+        },
         route,
         || {},
     )

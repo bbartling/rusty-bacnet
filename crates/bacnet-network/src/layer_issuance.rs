@@ -1,5 +1,20 @@
 use super::*;
 
+/// One APDU handed to a local-issuance send.
+#[derive(Debug, Clone, Copy)]
+pub struct IssuedApdu<'a> {
+    /// Encoded APDU to wrap in an NPDU.
+    pub apdu: &'a [u8],
+    /// Local data-link destination.
+    pub next_hop: &'a [u8],
+    /// Routed NPDU destination (DNET/DADR), when the peer is behind a router.
+    pub destination: Option<&'a NpduAddress>,
+    /// Whether the NPDU sets the data-expecting-reply flag.
+    pub expecting_reply: bool,
+    /// Network priority of the NPDU.
+    pub priority: NetworkPriority,
+}
+
 impl<T: TransportPort> NetworkLayer<T> {
     /// Seal original-direct response issuance before joining owned server work.
     /// Queued writes observe this irreversible seal; writes already started
@@ -31,11 +46,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         on_issuance: impl FnOnce() + Send,
     ) -> Result<(), Error> {
         self.send_response_apdu_on_issuance(
-            apdu,
-            next_hop,
-            destination,
-            expecting_reply,
-            priority,
+            IssuedApdu {
+                apdu,
+                next_hop,
+                destination,
+                expecting_reply,
+                priority,
+            },
             &crate::response_route::ResponseRoute::unverified(),
             on_issuance,
         )
@@ -48,17 +65,19 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// missing, invalid or stale capability cannot fall back to ordinary unicast.
     /// The callback has the same local issuance contract as
     /// [`Self::send_apdu_on_issuance`]; neither issuance nor success proves receipt.
-    #[allow(clippy::too_many_arguments)]
     pub async fn send_response_apdu_on_issuance(
         &self,
-        apdu: &[u8],
-        next_hop: &[u8],
-        destination: Option<&NpduAddress>,
-        expecting_reply: bool,
-        priority: NetworkPriority,
+        issued: IssuedApdu<'_>,
         route: &crate::response_route::ResponseRoute,
         on_issuance: impl FnOnce() + Send,
     ) -> Result<(), Error> {
+        let IssuedApdu {
+            apdu,
+            next_hop,
+            destination,
+            expecting_reply,
+            priority,
+        } = issued;
         let buf = crate::response_route::encode_response_npdu(
             apdu,
             destination,

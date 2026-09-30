@@ -146,12 +146,14 @@ pub(super) async fn handle_write<T: TransportPort + 'static>(
     if let Err(e) = commands::write::write_property_cmd(
         client,
         &mac,
-        object_type,
-        instance,
-        property,
-        index,
-        value,
-        priority,
+        commands::write::WritePropertyArgs {
+            object_type,
+            instance,
+            property,
+            index,
+            value,
+            priority,
+        },
         format,
     )
     .await

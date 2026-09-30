@@ -1,7 +1,9 @@
-use super::segmentation_context::{InboundSegmentSource, SegmentedRequestLimits};
+use super::segmentation_context::{
+    ConfirmedWait, InboundSegmentSource, ReassemblyAbortTarget, SegmentedRequestLimits,
+};
 use super::segmented_request::{OutgoingSegmentContext, OutgoingSegmentSend};
 use super::*;
-use crate::tsm::CompletionOutcome;
+use crate::tsm::{CompletionOutcome, SegmentedAckArrival};
 use bacnet_encoding::apdu::advertised_max_segments;
 
 /// Size of the sequence-number space, and so the hard reassembly ceiling.
@@ -75,10 +77,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Self::abort_reassembly(
                     tsm,
                     network,
-                    &tsm_mac,
-                    &state.owner,
-                    &state.reply_mac,
-                    &state.reply_network,
+                    state.abort_target(&tsm_mac),
                     ack.invoke_id,
                     bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                 )
@@ -93,10 +92,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let mut tsm = tsm.lock().await;
                 if let Some(owner) = deferred_owner.as_ref() {
                     tsm.coordinated_admit_segmented_complex_ack_for_owner(
-                        &tsm_mac,
-                        ack.invoke_id,
-                        seq,
-                        limits.segmented_response_accepted,
+                        SegmentedAckArrival {
+                            source_mac: &tsm_mac,
+                            invoke_id: ack.invoke_id,
+                            sequence_number: seq,
+                            segmented_response_accepted: limits.segmented_response_accepted,
+                        },
                         owner,
                         &canonical_peer,
                         &coordinator_apdu,
@@ -174,10 +175,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::abort_reassembly(
                 tsm,
                 network,
-                &tsm_mac,
-                &owner,
-                &MacAddr::from_slice(source_mac),
-                source_network,
+                ReassemblyAbortTarget {
+                    tsm_mac: &tsm_mac,
+                    owner: &owner,
+                    reply_mac: &MacAddr::from_slice(source_mac),
+                    reply_network: source_network,
+                },
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -295,10 +298,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::abort_reassembly(
                 tsm,
                 network,
-                &tsm_mac,
-                &owner,
-                &reply_mac,
-                &reply_network,
+                ReassemblyAbortTarget {
+                    tsm_mac: &tsm_mac,
+                    owner: &owner,
+                    reply_mac: &reply_mac,
+                    reply_network: &reply_network,
+                },
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -345,10 +350,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::abort_reassembly(
                 tsm,
                 network,
-                &tsm_mac,
-                &owner,
-                &reply_mac,
-                &reply_network,
+                ReassemblyAbortTarget {
+                    tsm_mac: &tsm_mac,
+                    owner: &owner,
+                    reply_mac: &reply_mac,
+                    reply_network: &reply_network,
+                },
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -740,13 +747,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // A later key-only cancellation could target a reused invoke ID.
             owns_tsm_cleanup = false;
             self.wait_for_confirmed_response(
-                target,
-                &tsm_mac,
-                invoke_id,
-                &owner,
+                ConfirmedWait {
+                    target,
+                    tsm_mac: &tsm_mac,
+                    invoke_id,
+                    owner: &owner,
+                    retry_apdu: None,
+                },
                 response_rx,
                 progress_rx,
-                None,
             )
             .await
         }

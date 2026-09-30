@@ -51,7 +51,6 @@ pub(crate) struct DirectMembership {
 }
 
 impl DirectMembership {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn reserve(
         self: &Arc<Self>,
         uuid: Uuid,

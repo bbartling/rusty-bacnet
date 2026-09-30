@@ -119,15 +119,7 @@ impl PyEndpointClient {
         let handle = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             handle
-                .write_property(
-                    &mac,
-                    request.object_identifier,
-                    request.property_identifier,
-                    request.property_array_index,
-                    request.property_value,
-                    request.priority,
-                    commandability,
-                )
+                .write_property(&mac, request, commandability)
                 .await
                 .map_err(to_py_err)?;
             Ok(Python::attach(|py| py.None()))

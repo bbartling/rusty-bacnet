@@ -25,12 +25,14 @@ async fn source_write_preflight_is_silent_with_and_without_reporter() {
             assert!(client
                 .write_property(
                     peer.local_mac(),
-                    target(),
-                    PropertyIdentifier::PRESENT_VALUE,
-                    None,
-                    value,
-                    priority,
-                    Commandability::Commandable
+                    WritePropertyRequest {
+                        object_identifier: target(),
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                        property_value: value,
+                        priority,
+                    },
+                    Commandability::Commandable,
                 )
                 .await
                 .is_err());
@@ -45,12 +47,14 @@ async fn source_write_preflight_is_silent_with_and_without_reporter() {
             assert!(client
                 .write_property(
                     &mac,
-                    target(),
-                    PropertyIdentifier::PRESENT_VALUE,
-                    None,
-                    vec![0],
-                    None,
-                    Commandability::Noncommandable
+                    WritePropertyRequest {
+                        object_identifier: target(),
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                        property_value: vec![0],
+                        priority: None,
+                    },
+                    Commandability::Noncommandable,
                 )
                 .await
                 .is_err());
@@ -170,12 +174,14 @@ async fn endpoint_write_non_bip_without_reporter_is_refused_and_reads_remain_ava
     assert!(client
         .write_property(
             &encode_bip_mac([127, 0, 0, 1], 47808),
-            target(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            vec![0],
-            None,
-            Commandability::Noncommandable
+            WritePropertyRequest {
+                object_identifier: target(),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                property_value: vec![0],
+                priority: None,
+            },
+            Commandability::Noncommandable,
         )
         .await
         .unwrap_err()
@@ -235,11 +241,13 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
             .unwrap()
             .write_property(
                 remote.local_mac(),
-                object,
-                property,
-                None,
-                vec![],
-                None,
+                WritePropertyRequest {
+                    object_identifier: object,
+                    property_identifier: property,
+                    property_array_index: None,
+                    property_value: vec![],
+                    priority: None,
+                },
                 Commandability::Noncommandable,
             )
             .await;

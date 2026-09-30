@@ -59,11 +59,13 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
         client
             .write_property(
                 &peer_mac,
-                target(),
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                vec![0],
-                None,
+                WritePropertyRequest {
+                    object_identifier: target(),
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    property_value: vec![0],
+                    priority: None,
+                },
                 Commandability::Commandable,
             )
             .await
@@ -152,11 +154,13 @@ async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends(
             client
                 .write_property(
                     &peer_mac,
-                    target(),
-                    PropertyIdentifier::PRESENT_VALUE,
-                    None,
-                    vec![0],
-                    None,
+                    WritePropertyRequest {
+                        object_identifier: target(),
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                        property_value: vec![0],
+                        priority: None,
+                    },
                     Commandability::Noncommandable,
                 )
                 .await

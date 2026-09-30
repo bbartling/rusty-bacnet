@@ -16,6 +16,19 @@ use super::{
     TsmConfig, TsmResponse,
 };
 
+/// A segmented ComplexAck segment as it arrived, before admission.
+#[derive(Clone, Copy)]
+pub(crate) struct SegmentedAckArrival<'a> {
+    /// MAC of the peer the segment came from.
+    pub(crate) source_mac: &'a [u8],
+    /// Invoke ID the segment answers.
+    pub(crate) invoke_id: u8,
+    /// Sequence number of this segment.
+    pub(crate) sequence_number: u8,
+    /// Whether this client advertised acceptance of segmented responses.
+    pub(crate) segmented_response_accepted: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingLease {
     Legacy,
@@ -432,17 +445,19 @@ impl Tsm {
         self.coordinate_segmented_response_admission(source_mac, invoke_id, peer, apdu, admission)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn coordinated_admit_segmented_complex_ack_for_owner(
         &mut self,
-        source_mac: &[u8],
-        invoke_id: u8,
-        sequence_number: u8,
-        segmented_response_accepted: bool,
+        segment: SegmentedAckArrival<'_>,
         owner: &TransactionOwner,
         peer: &CanonicalPeer,
         apdu: &Apdu,
     ) -> SegmentedResponseAdmission {
+        let SegmentedAckArrival {
+            source_mac,
+            invoke_id,
+            sequence_number,
+            segmented_response_accepted,
+        } = segment;
         let admission = self.admit_segmented_complex_ack_for_owner(
             source_mac,
             invoke_id,

@@ -167,15 +167,10 @@ impl ClientRoleHandle {
     /// Empty lists are allowed; malformed TLVs and oversized unsegmented requests fail
     /// before traffic. An eligible admitted write remains session-owned after caller
     /// cancellation. Retries share one Invoke ID and produce at most one source record.
-    #[allow(clippy::too_many_arguments)]
     pub async fn write_property(
         &self,
         destination_mac: &[u8],
-        object_identifier: ObjectIdentifier,
-        property_identifier: PropertyIdentifier,
-        property_array_index: Option<u32>,
-        property_value: Vec<u8>,
-        priority: Option<u8>,
+        request: bacnet_services::write_property::WritePropertyRequest,
         commandability: Commandability,
     ) -> Result<(), Error> {
         self.check_open()?;
@@ -196,13 +191,6 @@ impl ClientRoleHandle {
         }
         let destination = EndpointApduDestination::Direct {
             destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
-        };
-        let request = bacnet_services::write_property::WritePropertyRequest {
-            object_identifier,
-            property_identifier,
-            property_array_index,
-            property_value,
-            priority,
         };
         if let Some(source) = &self.source_audit {
             source

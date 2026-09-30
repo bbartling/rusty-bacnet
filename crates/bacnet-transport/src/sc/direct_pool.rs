@@ -40,7 +40,6 @@ impl Drop for Retire {
     }
 }
 impl PooledDirect {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn start<W: WebSocketPort>(
         ws: DirectSocket<W>,
         member: Arc<Membership>,

@@ -25,3 +25,43 @@ pub(super) struct SegmentedRequestLimits<'a> {
     /// Routed-path lease to mark terminal when the request finishes.
     pub(super) routed_path_lease: Option<&'a RoutedPathLease>,
 }
+
+/// Where and for whom a reassembly abort is sent and completed.
+#[derive(Clone, Copy)]
+pub(super) struct ReassemblyAbortTarget<'a> {
+    /// TSM key MAC of the transaction being aborted.
+    pub(super) tsm_mac: &'a MacAddr,
+    /// Owner of the transaction being aborted.
+    pub(super) owner: &'a TransactionOwner,
+    /// Immediate MAC the Abort is sent to.
+    pub(super) reply_mac: &'a MacAddr,
+    /// The peer's SNET/SADR when the segments arrived through a router.
+    pub(super) reply_network: &'a Option<NpduAddress>,
+}
+
+impl SegmentedReceiveState {
+    /// Abort target that replies along the route this session was opened on.
+    pub(super) fn abort_target<'a>(&'a self, tsm_mac: &'a MacAddr) -> ReassemblyAbortTarget<'a> {
+        ReassemblyAbortTarget {
+            tsm_mac,
+            owner: &self.owner,
+            reply_mac: &self.reply_mac,
+            reply_network: &self.reply_network,
+        }
+    }
+}
+
+/// The transaction a confirmed-response wait is bound to.
+#[derive(Clone, Copy)]
+pub(super) struct ConfirmedWait<'a> {
+    /// Where the request was sent.
+    pub(super) target: ConfirmedTarget<'a>,
+    /// TSM key MAC of the transaction.
+    pub(super) tsm_mac: &'a MacAddr,
+    /// Invoke ID of the transaction.
+    pub(super) invoke_id: u8,
+    /// Owner of the transaction.
+    pub(super) owner: &'a TransactionOwner,
+    /// Encoded request to retransmit on AWAIT_CONFIRMATION timeout, if retryable.
+    pub(super) retry_apdu: Option<&'a [u8]>,
+}
