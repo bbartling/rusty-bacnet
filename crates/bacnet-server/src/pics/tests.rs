@@ -390,7 +390,7 @@ fn text_output_contains_key_sections() {
     assert!(text.contains("Data Link Layer Support"));
     assert!(text.contains("BACnet/IP (Annex J)"));
     assert!(text.contains("Character Sets Supported"));
-    assert!(text.contains("UTF-8"));
+    assert!(text.contains("ISO 10646 (UTF-8)"));
     assert!(text.contains("Special Functionality"));
     assert!(text.contains("Intrinsic event reporting"));
 }
