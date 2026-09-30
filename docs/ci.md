@@ -23,12 +23,25 @@
 validates the website (Astro checks, unit tests, production build and Chromium
 tests) on PRs that change `website/**`.
 
-Merge pushes to `dev` run the Lean jobs. That tests the merge result, which a
-PR run doesn't (it checks out the PR head). It also writes each job's Rust cache
-from a non-PR event. The runner scopes cache writes from `pull_request` events
-to that PR, and a PR's first run falls back only to non-PR caches, so without
-this every new PR started cold (#904). The weekly scheduled run checks the
-default branch (`dev`) with the Heavy jobs too.
+Merge pushes to `dev` run the Lean jobs, for two reasons (#904).
+
+- **Caches.** The runner scopes cache writes from `pull_request` events to that
+  PR. A PR's first run falls back only to caches from non-PR events: merges,
+  `main`, tags, the schedule or manual runs. Before this, those were rare, so
+  most new PRs started cold.
+- **Merge result.** A PR run checks out the PR head, not the merge. With the
+  repo's default merge commits, the `dev` run is the only test of the combined
+  code, and an outdated branch can still merge.
+
+A newer merge cancels the previous merge's run, since it tests a superset.
+**After merging, check the `dev` run.** It isn't a required status, so a red
+merge run is the only signal of merge skew; fix it forward on `dev` right away.
+The weekly scheduled run checks the default branch (`dev`) with the Heavy jobs
+too.
+
+Rust caches are keyed per job on the toolchain, `Cargo.lock`, the manifests,
+and, for Clippy and Test, `LINUX_FEATURES`. They're saved even when a job
+fails.
 A new push to a PR cancels its superseded run.
 
 Tests run with [cargo-nextest](https://nexte.st), which gives each test its
