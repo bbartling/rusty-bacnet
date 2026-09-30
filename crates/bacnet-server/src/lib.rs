@@ -1,6 +1,7 @@
 //! BACnet server: APDU dispatch and service handlers.
 
 pub mod audit_notification;
+mod committed_cov;
 pub mod cov;
 mod device_view;
 pub mod event_enrollment;

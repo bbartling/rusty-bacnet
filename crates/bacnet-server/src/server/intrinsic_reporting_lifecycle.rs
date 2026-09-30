@@ -1,10 +1,10 @@
 //! Periodic intrinsic notification owner; uses the server's effective raw acceptance.
+use super::super::cov_fanout::CovFanout;
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run<T: TransportPort + 'static>(
-    db_intrinsic: Arc<RwLock<ObjectDatabase>>,
-    cov_table_intrinsic: Arc<RwLock<CovSubscriptionTable>>,
+    fanout: CovFanout<T>,
     network_intrinsic: Arc<NetworkLayer<T>>,
     comm_state_intrinsic: Arc<AtomicU8>,
     learned_routers_intrinsic: Arc<Mutex<LearnedRouterCache>>,
@@ -31,10 +31,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
         // Event_Enable gates distribution only (Clause 12.12), so every
         // proposal is committed locally before a suppressed
         // transition is omitted from the outbound work list.
-        let fired = {
-            let mut db = db_intrinsic.write().await;
+        let (fired, committed) = {
+            let mut db = fanout.db.write().await;
             let mut out = Vec::new();
-            let mut transitioned = Vec::new();
+            let mut commit = BackgroundCommit::begin(&db);
             for oid in db.list_objects() {
                 let outcome = db
                     .get_mut(&oid)
@@ -43,31 +43,21 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     BACnetServer::<T>::commit_intrinsic_transition(&mut db, &oid, outcome)
                 });
                 if let Some(resolved) = resolved {
-                    transitioned.push(oid);
+                    commit.changed(oid);
                     if resolved.distribute && resolved.event_values.is_some() {
                         out.push((oid, resolved));
                     }
                 }
             }
-            // Each committed transition changes Status_Flags: capture it at
-            // its own time for timestamped COV-multiple references.
-            if !transitioned.is_empty() {
-                let captures: Vec<_> = {
-                    let table = cov_table_intrinsic.read().await;
-                    transitioned
-                        .iter()
-                        .map(|oid| table.timed_capture(*oid))
-                        .collect()
-                };
-                for capture in captures {
-                    capture.run(&db);
-                }
-            }
-            out
+            // Each committed transition changes Status_Flags. Timestamped
+            // references capture it at commit time; every subscriber hears of
+            // it once the guard is dropped, after the event notifications, as
+            // on the write path (#889).
+            (out, commit.finish(&db, &fanout.cov_table).await)
         };
         for (oid, resolved) in fired {
             BACnetServer::<T>::build_and_send_event_notification_with_bindings(
-                &db_intrinsic,
+                &fanout.db,
                 &network_intrinsic,
                 &comm_state_intrinsic,
                 &learned_routers_intrinsic,
@@ -80,5 +70,6 @@ pub(super) async fn run<T: TransportPort + 'static>(
             )
             .await;
         }
+        fanout.fire(&committed).await;
     }
 }

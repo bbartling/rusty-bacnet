@@ -1957,8 +1957,9 @@ replay guarantee.
 Timestamped SubscribeCOVPropertyMultiple references (§13.16.3.1.2.3) record each
 qualifying change together with the Device clock frame of its commit. The capture
 runs under the database write guard of network WriteProperty, `write_local`,
-Binary Lighting terminal transitions and committed intrinsic transitions (both
-write-triggered and those confirmed by the periodic Time_Delay task). Changes queue
+Binary Lighting terminal transitions, committed intrinsic transitions (both
+write-triggered and those confirmed by the periodic Time_Delay task),
+fault-detection reliability changes and schedule writes. Changes queue
 per reference until a notification carrying them is transmitted. Any notification
 to a context also carries the pending changes of that context's other references
 (§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`.
@@ -1989,9 +1990,16 @@ the bound (the full server uses its configured capacity).
 WritePropertyMultiple, staging and source-completion writes and Life Safety fanout
 are not captured yet. Their changes still report through the builder's
 current-state fallback, stamped when the notification is prepared (#856).
-Transitions from the periodic intrinsic task are captured but trigger no COV
-notification of their own; they are conveyed with the context's next notification.
 `Max_Notification_Delay` remains reported but not acted on.
+
+Background commits fan COV out as a network write does, once their database guard
+is dropped, to ordinary, SubscribeCOVProperty and Multiple subscribers alike: the
+periodic intrinsic task's transitions (after their event notifications),
+fault-detection reliability changes and schedule writes to controlled objects. Life
+Safety objects report exactly the properties the pass changed. Event Enrollment
+objects accept no COV subscriptions, so their periodic evaluation fans nothing out.
+The usual COV criteria and DCC suppression apply, so a change a write already
+reported is not reported again.
 
 The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
 Set or relinquish a priority slot by writing a value or NULL to `Present_Value`

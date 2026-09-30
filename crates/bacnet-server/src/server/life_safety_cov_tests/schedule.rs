@@ -4,6 +4,11 @@ use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 
+async fn tick(db: &Arc<RwLock<ObjectDatabase>>) -> crate::committed_cov::CommittedCov {
+    let table = RwLock::new(CovSubscriptionTable::new());
+    crate::schedule::tick_schedules_committed(db, &table).await
+}
+
 #[tokio::test]
 async fn live_schedule_retains_actual_life_safety_status_delta() {
     let mut schedule = ScheduleObject::new(1, "schedule", PropertyValue::Boolean(false)).unwrap();
@@ -24,10 +29,11 @@ async fn live_schedule_retains_actual_life_safety_status_delta() {
     db.add(Box::new(schedule)).unwrap();
     let db = Arc::new(RwLock::new(db));
 
-    let changes = crate::schedule::tick_schedules_with_life_safety_cov(&db, 0).await;
+    let committed = tick(&db).await;
 
+    assert!(committed.coarse.is_empty());
     assert_eq!(
-        changes,
+        committed.life_safety,
         vec![crate::life_safety_cov::LifeSafetyCovChange {
             object_identifier: point_oid(),
             changed_properties: vec![PropertyIdentifier::STATUS_FLAGS],
@@ -98,9 +104,10 @@ async fn schedule_indexed_target_and_later_unindexed_target_survive_failure() {
     db.add(Box::new(target)).unwrap();
     db.add(Box::new(schedule)).unwrap();
     let db = Arc::new(RwLock::new(db));
-    assert!(crate::schedule::tick_schedules_with_life_safety_cov(&db, 0)
-        .await
-        .is_empty());
+    // An ordinary target owes a whole-object COV fanout, not a Life Safety delta.
+    let committed = tick(&db).await;
+    assert!(committed.life_safety.is_empty());
+    assert_eq!(committed.coarse, vec![target_oid]);
     let db = db.read().await;
     let target = db.get(&target_oid).unwrap();
     assert_eq!(
@@ -158,7 +165,7 @@ async fn schedule_unindexed_command_retains_fixed_priority_sixteen() {
     db.add(Box::new(target)).unwrap();
     db.add(Box::new(schedule)).unwrap();
     let db = Arc::new(RwLock::new(db));
-    crate::schedule::tick_schedules_with_life_safety_cov(&db, 0).await;
+    tick(&db).await;
     let db = db.read().await;
     let target = db.get(&target_oid).unwrap();
     assert_eq!(
