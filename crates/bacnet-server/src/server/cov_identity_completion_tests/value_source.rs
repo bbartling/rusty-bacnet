@@ -307,7 +307,22 @@ async fn value_source_cov_send_failure_and_confirmation_baselines() {
                 .last_notified_observation
                 .clone();
             if confirmed {
-                assert!(observation.unwrap().command().is_some());
+                assert!(
+                    observation.is_none(),
+                    "the baseline waits for the ACK (#896)"
+                );
+                f.finish(true).await;
+                assert!(f
+                    .table
+                    .read()
+                    .await
+                    .get_subscription(sub.key())
+                    .unwrap()
+                    .last_notified_observation
+                    .as_ref()
+                    .unwrap()
+                    .command()
+                    .is_some());
             } else {
                 assert!(observation.is_none());
                 f.fail.store(false, Ordering::Relaxed);
@@ -324,8 +339,8 @@ async fn value_source_cov_send_failure_and_confirmation_baselines() {
                     .unwrap()
                     .command()
                     .is_some());
+                f.finish(false).await;
             }
-            f.finish(confirmed).await;
         }
     }
 }

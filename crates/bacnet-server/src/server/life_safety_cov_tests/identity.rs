@@ -179,6 +179,15 @@ async fn take_after_confirmed(fixture: &DispatchFixture, count: usize) -> Vec<Ap
             ));
         }
     }
+    // Acknowledged workers complete their baselines (#896) before the caller
+    // fans out again.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !fixture.transactions.workers_empty() {
+            fixture.transactions.join_next().await;
+        }
+    })
+    .await
+    .unwrap();
     apdus
 }
 

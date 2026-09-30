@@ -5,7 +5,8 @@
 //! notification carrying them is sent. Producers capture each change under
 //! the database write guard; the notification builder drains the queue into a
 //! [`TimedClaim`] that requeues its entries unless the notification was
-//! actually transmitted.
+//! delivered: transmitted when unconfirmed, acknowledged when confirmed. Keeping
+//! a confirmed report's changes until its Ack is local policy (#896).
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what one notification APDU of the local maximum
@@ -93,7 +94,7 @@ struct TimedHistory {
     baseline: Option<CovObservation>,
     /// Sequence of the newest captured or conveyed change.
     latest: u64,
-    /// Sequence of the newest transmitted change. An older change returned by
+    /// Sequence of the newest delivered change. An older change returned by
     /// a failed notification would contradict what was already delivered.
     committed: u64,
     entries: VecDeque<TimedChange>,
@@ -215,7 +216,7 @@ impl TimedHistories {
         (incarnation, drained)
     }
 
-    /// Record that changes up to `seq` were transmitted; queued older changes
+    /// Record that changes up to `seq` were delivered; queued older changes
     /// are superseded by it.
     fn commit(&mut self, key: &CovSubscriptionKey, incarnation: u64, seq: u64) {
         let Some(history) = self.incarnation_mut(key, incarnation) else {
@@ -230,17 +231,13 @@ impl TimedHistories {
         if !removed.is_empty() {
             let bytes = removed.iter().map(|change| change.encoded_len).sum();
             self.release_bytes(key, bytes);
-            self.dropped(
-                key,
-                removed.len(),
-                "superseded by a transmitted newer change",
-            );
+            self.dropped(key, removed.len(), "superseded by a delivered newer change");
         }
     }
 
-    /// Return untransmitted changes to their reference in capture order, also
+    /// Return undelivered changes to their reference in capture order, also
     /// across a renewal. A cancelled reference discards them, and a newer
-    /// transmitted change supersedes them: delivering them now would regress
+    /// delivered change supersedes them: delivering them now would regress
     /// the subscriber.
     fn requeue(&mut self, key: &CovSubscriptionKey, incarnation: u64, changes: Vec<TimedChange>) {
         let Some(history) = self.incarnation_mut(key, incarnation) else {
@@ -252,7 +249,7 @@ impl TimedHistories {
             .into_iter()
             .partition(|change| change.seq > committed);
         if !stale.is_empty() {
-            self.dropped(key, stale.len(), "superseded by a transmitted newer change");
+            self.dropped(key, stale.len(), "superseded by a delivered newer change");
         }
         self.insert_ordered(key, generation, keep);
     }
@@ -384,8 +381,8 @@ impl TimedStore {
 }
 
 /// Changes drained into one notification. Unless [`TimedClaim::commit`] is
-/// called after the notification is transmitted, dropping the claim returns
-/// the changes to their references.
+/// called once the notification is delivered, dropping the claim returns the
+/// changes to their references.
 #[derive(Debug)]
 pub(crate) struct TimedClaim {
     store: TimedStore,
@@ -466,7 +463,7 @@ impl TimedClaim {
             .map(|change| change.frame)
     }
 
-    /// The notification carrying these changes was transmitted: retire them.
+    /// The notification carrying these changes was delivered: retire them.
     pub(crate) fn commit(mut self) {
         let mut store = self.store.lock();
         for (key, incarnation, changes) in self.changes.drain(..) {

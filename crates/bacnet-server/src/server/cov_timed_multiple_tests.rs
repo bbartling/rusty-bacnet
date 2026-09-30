@@ -23,12 +23,16 @@ async fn initial_report_carries_admission_time() {
     h.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn write_property_change_reports_commit_time_not_preparation_time() {
     for confirmed in [false, true] {
         let mut h = Harness::start(ServerConfig::default()).await;
         h.subscribe(confirmed).await;
         h.notification().await;
+        if confirmed {
+            h.ack().await;
+            h.settle().await;
+        }
         h.set_clock(10);
         h.write_pv(42.0, 20).await;
         let report = h.notification().await;
@@ -102,7 +106,7 @@ async fn failed_send_keeps_changes_for_the_next_notification() {
         pv_rows(&report),
         vec![(real(5.0), Some(time(21))), (real(6.0), Some(time(22)))]
     );
-    // Retired once transmitted: an unchanged fanout conveys nothing further.
+    // Retired once sent: an unchanged fanout conveys nothing further.
     h.set_clock(23);
     h.write_local(6.0).await;
     h.no_notification().await;
@@ -142,20 +146,25 @@ async fn full_history_drops_the_oldest_changes_and_counts_them() {
     h.server.stop().await.unwrap();
 }
 
-#[tokio::test]
-async fn confirmed_changes_retire_once_transmitted() {
+#[tokio::test(start_paused = true)]
+async fn confirmed_changes_retire_once_acknowledged() {
     let mut h = Harness::start(ServerConfig::default()).await;
     h.subscribe(true).await;
     h.notification().await;
+    h.ack().await;
+    h.settle().await;
     h.set_clock(41);
     h.write_local(1.0).await;
     assert_eq!(
         pv_rows(&h.notification().await),
         vec![(real(1.0), Some(time(41)))]
     );
-    // Unacknowledged, but transmitted: the next report does not repeat it.
+    // Captured while that report is outstanding, so it waits (#896).
     h.set_clock(42);
     h.write_local(2.0).await;
+    h.no_notification().await;
+    // The Ack retires 1.0 and the held change follows without another write.
+    h.ack().await;
     assert_eq!(
         pv_rows(&h.notification().await),
         vec![(real(2.0), Some(time(42)))]
@@ -163,7 +172,34 @@ async fn confirmed_changes_retire_once_transmitted() {
     h.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
+async fn confirmed_changes_unacknowledged_return_for_the_next_report() {
+    let mut h = Harness::start(ServerConfig {
+        cov_retry_timeout_ms: 10,
+        ..ServerConfig::default()
+    })
+    .await;
+    h.subscribe(true).await;
+    h.notification().await;
+    h.ack().await;
+    h.settle().await;
+    h.set_clock(45);
+    h.write_local(5.0).await;
+    h.notification().await;
+    // Transmitted with every retry but never acknowledged.
+    h.workers_idle().await;
+    h.settle().await;
+    h.frames.lock().unwrap().clear();
+    h.set_clock(46);
+    h.write_local(6.0).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(5.0), Some(time(45))), (real(6.0), Some(time(46)))]
+    );
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn confirmed_changes_never_transmitted_return_for_the_next_report() {
     let mut h = Harness::start(ServerConfig {
         cov_retry_timeout_ms: 10,
@@ -172,10 +208,13 @@ async fn confirmed_changes_never_transmitted_return_for_the_next_report() {
     .await;
     h.subscribe(true).await;
     h.notification().await;
+    h.ack().await;
+    h.settle().await;
     h.fail_notifications.store(true, Ordering::Release);
     h.set_clock(43);
     h.write_local(3.0).await;
     h.workers_idle().await;
+    h.settle().await;
     h.fail_notifications.store(false, Ordering::Release);
     h.set_clock(44);
     h.write_local(4.0).await;

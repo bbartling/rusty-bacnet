@@ -1969,8 +1969,25 @@ local policy covers ordinary, Single and Multiple reports, including specialized
 Value_Source tuples; overlapping companions never complete unqualified references.
 Existing owner, generation, route and lifetime fences still apply. Same-route
 Multiple expiry refresh retains progress; reference replacement resets it.
-Ticket exhaustion suppresses further unconfirmed candidates for that table.
-Confirmed reports retain their admission-time baseline and consume no tickets.
+Ticket exhaustion suppresses further candidates of either form for that table.
+
+Confirmed reports draw tickets from the same counter but complete only on the
+subscriber's Ack (#896). While a report is outstanding, each reference it carries
+is marked with its ticket and fanouts skip it, so later changes wait instead of
+going out as a second report. The Ack advances each reference's baseline to the
+acknowledged observation, clears the mark and fans the references out again
+through the usual per-subscription path: a change made in the meantime, Status_Flags
+included, follows at once, and an unchanged value sends nothing. Exhausted retries,
+an Error, Reject or Abort answer, and shutdown only clear the mark. The baseline
+stays put, so the next ordinary fanout reports the change again; there is no
+immediate retry against a subscriber that stopped answering. The standard ends
+delivery with the confirmed-request retries (Clause 5.4.4), so reporting again later
+is local policy. The mark is per reference, like the baseline and its ticket. A
+COV-multiple notification marks every reference it carries, and a replaced reference
+or a context moved to a new route starts unmarked, so a report of an older
+generation or route can neither complete nor unmark it. The peer and global
+in-flight limits, event budgets and throttling counters apply to every report,
+including the one that follows an Ack.
 
 This orders prepared observations, not original object mutations, transport byte
 order or remote receipt. In particular, a retained Binary Lighting terminal
@@ -1984,9 +2001,12 @@ runs under the database write guard of network WriteProperty, `write_local`,
 Binary Lighting terminal transitions, committed intrinsic transitions (both
 write-triggered and those confirmed by the periodic Time_Delay task),
 fault-detection reliability changes and schedule writes. Changes queue
-per reference until a notification carrying them is transmitted. Any notification
+per reference until a notification carrying them is delivered: sent, for an
+unconfirmed context, or acknowledged, for a confirmed one (#896). Any notification
 to a context also carries the pending changes of that context's other references
-(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`.
+(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`. The
+exception is a reference whose confirmed report is still outstanding: its newer
+changes stay queued and follow that report's Ack (#896).
 Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
@@ -2005,7 +2025,7 @@ oldest in the context. Before sending, queued history is trimmed, oldest first, 
 fit the encoded request into the local maximum APDU. A reference's latest change is
 never dropped, so latest changes plus untimestamped values can still exceed it.
 Changes returned by a failed notification wait while a newer change of the same
-reference is in flight; once a newer change is transmitted, older ones are dropped
+reference is in flight; once a newer change is delivered, older ones are dropped
 rather than delivered as stale state. These drops increment
 `CovCounters::timed_changes_dropped` and log a warning. The subscriber's own
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
@@ -2058,8 +2078,8 @@ numeric signed zeros compare equal. These are explicit local exceptional-value
 policies, not Standard-prescribed arithmetic. Ordinary whole-object values follow
 the same rule (#889): a numeric Present_Value must move by the increment, and a
 non-numeric or increment-less one must change. Life Safety committed-delta
-triggers and confirmed-admission versus unconfirmed-success baseline timing are
-preserved.
+triggers are preserved, and a baseline still advances only when an unconfirmed
+report is sent or a confirmed one acknowledged (#896).
 
 Applicable Status_Flags changes independently trigger ordinary and property COV.
 Property reports include the selected value and declared-present flags; explicit

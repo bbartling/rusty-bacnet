@@ -503,6 +503,8 @@ pub struct BACnetServer<T: TransportPort> {
     intrinsic_reporting_task: Option<JoinHandle<()>>,
     /// Monotonic Binary Lighting Output WARN_OFF/WARN_RELINQUISH task.
     binary_lighting_operation_task: Option<JoinHandle<()>>,
+    /// Follow-up fanout after acknowledged confirmed COV reports (#896).
+    cov_revisit_task: Option<JoinHandle<()>>,
     local_mac: MacAddr,
 }
 
@@ -655,6 +657,8 @@ mod binary_lighting_task_tests;
 mod cov_background_tests;
 #[cfg(test)]
 mod cov_budget_tests;
+#[cfg(test)]
+mod cov_confirmed_baseline_tests;
 #[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]

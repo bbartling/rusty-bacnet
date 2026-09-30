@@ -148,9 +148,9 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
         .unwrap();
     let current = migrate(&fixture, &old).await;
     assert_eq!(
-        current.last_notified_observation.as_ref().unwrap().sample(),
-        &CovSample::new(&PropertyValue::Real(10.0)).unwrap(),
-        "confirmed admission established the baseline before route migration"
+        current.last_notified_observation,
+        Some(observation(1.0)),
+        "an unacknowledged confirmed report leaves the baseline alone (#896)"
     );
     assert!(fixture
         .table
@@ -176,6 +176,10 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
             service_choice: request.service_choice
         })
     ));
+    // Let the worker handle the ACK before shutdown can cancel it.
+    tokio::time::timeout(Duration::from_secs(2), fixture.transactions.join_next())
+        .await
+        .unwrap();
     fixture.finish(false).await;
     assert_eq!(
         fixture

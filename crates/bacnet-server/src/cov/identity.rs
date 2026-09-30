@@ -156,6 +156,8 @@ pub struct CovSubscriptionSnapshot {
     // Shared by one live Multiple route incarnation; unchanged on same-route
     // refresh. Private so callers cannot forge completion authority.
     pub(super) route_owner: Option<Arc<()>>,
+    // Outstanding confirmed report, shared by this entry's snapshots (#896).
+    pub(super) confirmed_flight: super::confirmed::FlightMarker,
     pub(super) subscription: CovSubscription,
     /// Reported maximum notification delay of a Multiple reference; `None`
     /// for ordinary and Single entries. Never acted on.

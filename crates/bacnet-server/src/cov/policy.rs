@@ -140,7 +140,7 @@ pub struct CovCounters {
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted by the per-context history
     /// bound, trimmed so a notification fits its APDU, or superseded by a newer
-    /// transmitted change when an older notification failed.
+    /// delivered change when an older notification failed.
     pub timed_changes_dropped: u64,
 }
 
@@ -176,7 +176,7 @@ pub struct AtomicCovCounters {
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted by the per-context history
     /// bound, trimmed so a notification fits its APDU, or superseded by a newer
-    /// transmitted change when an older notification failed.
+    /// delivered change when an older notification failed.
     pub timed_changes_dropped: AtomicU64,
 }
 

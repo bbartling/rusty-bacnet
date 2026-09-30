@@ -85,6 +85,14 @@ impl CovSubscriptionTable {
                 entry.max_notification_delay = Some(max_notification_delay);
                 entry.subscription.subscriber_mac = route.mac.clone();
                 entry.subscription.subscriber_network = route.network.clone();
+                if !entry
+                    .route_owner
+                    .as_ref()
+                    .is_some_and(|owner| Arc::ptr_eq(owner, &route_owner))
+                {
+                    // A new route fences the old route's outstanding report too.
+                    entry.confirmed_flight = Default::default();
+                }
                 entry.route_owner = Some(Arc::clone(&route_owner));
             }
         }
@@ -170,6 +178,7 @@ impl CovSubscriptionTable {
             owner: Arc::clone(&self.owner),
             last_successful_ticket: 0,
             route_owner,
+            confirmed_flight: Default::default(),
             subscription: sub.clone(),
             max_notification_delay,
         };

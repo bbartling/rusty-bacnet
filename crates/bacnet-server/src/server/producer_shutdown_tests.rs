@@ -13,7 +13,7 @@ impl Drop for Released {
     }
 }
 
-fn slots(server: &mut BACnetServer<TestTransport>) -> [&mut Option<JoinHandle<()>>; 7] {
+fn slots(server: &mut BACnetServer<TestTransport>) -> [&mut Option<JoinHandle<()>>; 8] {
     [
         &mut server.fault_detection_task,
         &mut server.event_enrollment_task,
@@ -22,6 +22,7 @@ fn slots(server: &mut BACnetServer<TestTransport>) -> [&mut Option<JoinHandle<()
         &mut server.intrinsic_reporting_task,
         &mut server.binary_lighting_operation_task,
         &mut server.cov_purge_task,
+        &mut server.cov_revisit_task,
     ]
 }
 

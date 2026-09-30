@@ -1,10 +1,13 @@
 use super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use crate::cov::InFlightAcquireError;
+use confirmed::ConfirmedReport;
 
+mod confirmed;
 mod life_safety;
 mod multiple;
 mod multiple_items;
+mod revisit;
 
 #[derive(Debug)]
 pub(super) struct EventBudget {
@@ -63,7 +66,6 @@ impl EventBudget {
         true
     }
 
-    #[allow(dead_code)]
     pub(super) fn refund(&mut self, bytes: usize) {
         self.notifications_sent = self.notifications_sent.saturating_sub(1);
         self.bytes_sent = self.bytes_sent.saturating_sub(bytes);
@@ -181,7 +183,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if single_subs.is_empty() {
             Self::fire_cov_notification_multiple_for_subscriptions(
                 handles,
-                Some(oid),
                 &multiple_subs,
                 snapshot,
                 force,
@@ -220,7 +221,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 Self::fire_cov_notification_multiple_for_subscriptions(
                     handles,
-                    Some(oid),
                     &multiple_subs,
                     snapshot,
                     force,
@@ -230,7 +230,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             } else {
                 Self::fire_cov_notification_multiple_for_subscriptions(
                     handles,
-                    Some(oid),
                     &multiple_subs,
                     snapshot,
                     force,
@@ -303,13 +302,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db,
                     network,
                     cov_table,
-                    cov_in_flight,
-                    notification_transactions,
                     config,
                     ..
                 },
-            in_flight_tracker,
             counters,
+            ..
         } = handles;
         if budget.is_exhausted() {
             return;
@@ -472,11 +469,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
 
             // Resolve after every awaited read/callback and before fresh admission.
+            // A confirmed reference with an outstanding report waits for it (#896).
             let time_remaining = {
                 let table = cov_table.read().await;
                 table
                     .remaining_lifetime(sub, Instant::now())
                     .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                    .filter(|_| table.confirmed_idle(sub))
             };
             let Some(time_remaining) = time_remaining else {
                 continue;
@@ -500,126 +499,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification.encode(&mut service_buf);
 
             if sub.issue_confirmed_notifications {
-                let guard = match in_flight_tracker.try_acquire(
-                    sub.recipient(),
-                    config.cov_policy.max_confirmed_in_flight_per_peer,
-                    cov_in_flight,
-                ) {
-                    Ok(guard) => guard,
-                    Err(InFlightAcquireError::PeerLimitExceeded) => {
-                        counters
-                            .notifications_throttled_peer
-                            .fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-                    Err(InFlightAcquireError::GlobalPoolExhausted) => {
-                        warn!(
-                            object = ?oid,
-                            "255 confirmed COV notifications in-flight, skipping notification"
-                        );
-                        continue;
-                    }
-                };
-
-                let (operation, result_rx) = match notification_transactions.reserve(
-                    Self::canonical_cov_peer(sub),
-                    ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
-                ) {
-                    Ok(reservation) => reservation,
-                    Err(error) => {
-                        warn!(
-                            %error,
-                            object = ?oid,
-                            "No free invoke ID for confirmed COV notification"
-                        );
-                        continue;
-                    }
-                };
-                let id = operation.invoke_id();
-
-                let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                    segmented: false,
-                    more_follows: false,
-                    segmented_response_accepted: false,
-                    max_segments: None,
-                    max_apdu_length: apdu::max_apdu_header_at_or_below(config.max_apdu_length)
-                        .expect("validated local APDU capacity"),
-                    invoke_id: id,
-                    sequence_number: None,
-                    proposed_window_size: None,
-                    service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
-                    service_request: service_buf.freeze(),
-                });
-
-                let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-
-                if !budget.try_consume(buf.len()) {
-                    counters
-                        .notifications_throttled_fanout
-                        .fetch_add(1, Ordering::Relaxed);
-                    continue;
-                }
-
-                counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
-                counters
-                    .notifications_confirmed
-                    .fetch_add(1, Ordering::Relaxed);
-                counters
-                    .notification_bytes_sent
-                    .fetch_add(buf.len() as u64, Ordering::Relaxed);
-
-                {
-                    let mut table = cov_table.write().await;
-                    table.complete_observation(sub, completion, current_observation);
-                }
-
-                let network = Arc::clone(network);
-                let sub = sub.clone();
-                let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
-                let apdu_retries = DEFAULT_APDU_RETRIES;
-                notification_transactions.spawn(async move {
-                    let _guard = guard;
-                    let result = run_notification_worker(
-                        operation,
-                        result_rx,
-                        apdu_timeout,
-                        apdu_retries,
-                        |attempt| {
-                            let network = Arc::clone(&network);
-                            let buf = buf.clone();
-                            let sub = sub.clone();
-                            async move {
-                                let result = Self::send_cov_apdu(&network, &buf, &sub, true).await;
-                                match &result {
-                                    Ok(()) => debug!(
-                                        invoke_id = id,
-                                        attempt, "Confirmed COV notification sent"
-                                    ),
-                                    Err(error) => warn!(
-                                        %error,
-                                        attempt, "COV notification send failed"
-                                    ),
-                                }
-                                result
-                            }
-                        },
-                    )
-                    .await;
-                    match result {
-                        NotificationWorkerResult::Ack => {
-                            debug!(invoke_id = id, "COV notification acknowledged");
-                        }
-                        NotificationWorkerResult::Error => {
-                            warn!(invoke_id = id, "COV notification rejected by subscriber");
-                        }
-                        NotificationWorkerResult::Exhausted => warn!(
-                            invoke_id = id,
-                            "COV notification failed after {} retries", apdu_retries
-                        ),
-                        NotificationWorkerResult::Closed => {}
-                    }
-                });
+                let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
+                    .expect("validated local APDU capacity");
+                let service_request = service_buf.freeze();
+                Self::send_confirmed_cov(
+                    handles,
+                    budget,
+                    ConfirmedReport {
+                        service: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+                        route: sub.clone(),
+                        completions: vec![(sub.clone(), current_observation, completion)],
+                        claim: None,
+                    },
+                    |invoke_id| {
+                        let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+                            segmented: false,
+                            more_follows: false,
+                            segmented_response_accepted: false,
+                            max_segments: None,
+                            max_apdu_length,
+                            invoke_id,
+                            sequence_number: None,
+                            proposed_window_size: None,
+                            service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+                            service_request,
+                        });
+                        let mut buf = BytesMut::new();
+                        encode_apdu(&mut buf, &pdu)?;
+                        Ok(buf)
+                    },
+                )
+                .await;
             } else {
                 let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                     service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,

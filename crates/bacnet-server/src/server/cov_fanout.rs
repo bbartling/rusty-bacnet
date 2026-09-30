@@ -1,4 +1,5 @@
-//! The COV fanout a background commit owes, sent after its guard is dropped.
+//! The COV fanout a background commit owes, sent after its guard is dropped,
+//! and the follow-up fanout an acknowledged confirmed report owes (#896).
 use super::cov_notify_context::CovNotifyContext;
 use super::event_delivery::EventDelivery;
 use super::*;
@@ -94,5 +95,16 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             &committed.life_safety,
         )
         .await;
+    }
+
+    /// Fan out again each reference whose confirmed report was acknowledged,
+    /// so changes held back while it was outstanding reach the subscriber
+    /// (#896). Runs until the server aborts it.
+    pub(super) async fn run_revisits(self) {
+        let revisits = Arc::clone(self.cov_table.read().await.revisits());
+        loop {
+            let keys = revisits.next().await;
+            BACnetServer::<T>::fire_cov_revisits(&self.notify_context(), &keys).await;
+        }
     }
 }

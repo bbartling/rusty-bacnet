@@ -1060,9 +1060,10 @@ policy: complete eligible unconfirmed observations reserve a checked table-owned
 ticket before later waits, and successful sends commit the entire baseline only
 when newer than that live reference's last successful ticket. Failed or cancelled
 newer work cannot prevent older success. Confirmed admission timing, lifecycle
-fences and per-reference qualification remain unchanged. This is not a claimed
-Standard tie-break or an original-write, event-time, byte-order or remote-receipt
-guarantee. A supplied Binary Lighting terminal snapshot prepared later can win
+fences and per-reference qualification remain unchanged; #896 later moved
+confirmed completion to the subscriber's Ack, under a ticket from the same
+counter. This is not a claimed Standard tie-break or an original-write,
+event-time, byte-order or remote-receipt guarantee. A supplied Binary Lighting terminal snapshot prepared later can win
 even when its object state is older. Regression anchors in the machine ledger
 cover held completions, capture-before-await, per-reference overlap, failure,
 exhaustion and the supplied-snapshot limit; row status is unchanged.

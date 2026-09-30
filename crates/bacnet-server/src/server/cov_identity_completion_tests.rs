@@ -199,6 +199,10 @@ impl Fixture {
                     service_choice: request.service_choice
                 })
             ));
+            // The worker completes baselines on the Ack (#896); let it.
+            tokio::time::timeout(Duration::from_secs(2), self.transactions.join_next())
+                .await
+                .unwrap();
         }
         self.transactions.close();
         while self.transactions.join_next().await.is_some() {}
@@ -241,8 +245,8 @@ async fn stale_completion(
                 .unwrap(),
         );
     }
-    // Confirmed baseline is assigned at admission, before transport send. Hold the
-    // actual object-read boundary after the snapshot was captured, not a mock setter.
+    // Confirmed baseline is assigned on the Ack (#896), so hold the actual
+    // object-read boundary after the snapshot was captured, not a mock setter.
     // Unconfirmed baseline is assigned after success: hold the actual send instead.
     let db_guard = if confirmed {
         Some(fixture.db.write().await)
@@ -279,6 +283,15 @@ async fn stale_completion(
     tokio::time::timeout(Duration::from_secs(2), work)
         .await
         .unwrap();
+    let admitted = confirmed && kind == CovNotificationKind::Multiple;
+    if confirmed && !admitted {
+        assert!(
+            fixture.sent.lock().unwrap().is_empty(),
+            "late stale Single ownership must suppress admission"
+        );
+        assert_eq!(fixture.transactions.active_count(), 0);
+    }
+    fixture.finish(admitted).await;
     {
         let table = fixture.table.read().await;
         if matches!(change, Change::Remove) {
@@ -309,15 +322,6 @@ async fn stale_completion(
             );
         }
     }
-    let admitted = confirmed && kind == CovNotificationKind::Multiple;
-    if confirmed && !admitted {
-        assert!(
-            fixture.sent.lock().unwrap().is_empty(),
-            "late stale Single ownership must suppress admission"
-        );
-        assert_eq!(fixture.transactions.active_count(), 0);
-    }
-    fixture.finish(admitted).await;
 }
 
 #[tokio::test]

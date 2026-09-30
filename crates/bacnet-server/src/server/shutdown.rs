@@ -55,6 +55,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &self.intrinsic_reporting_task,
                 &self.binary_lighting_operation_task,
                 &self.cov_purge_task,
+                &self.cov_revisit_task,
             ]
             .into_iter()
             .flatten()
@@ -99,6 +100,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.intrinsic_reporting_task).await;
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
+        stop_producer(&mut self.cov_revisit_task).await;
         // Dispatch has relinquished the sole join-consumer role. Retain the
         // set in self across await so a cancelled stop can finish this drain.
         while let Some(result) = self.notification_transactions.join_next().await {
@@ -176,6 +178,7 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
             &self.schedule_tick_task,
             &self.intrinsic_reporting_task,
             &self.binary_lighting_operation_task,
+            &self.cov_revisit_task,
         ]
         .into_iter()
         .flatten()

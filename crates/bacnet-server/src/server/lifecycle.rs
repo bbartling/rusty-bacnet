@@ -700,6 +700,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ),
         ));
 
+        // Reports what changed while a confirmed report was outstanding, once
+        // it is acknowledged (#896).
+        let cov_revisit_task = Some(spawn_owned(
+            audit_owner.clone(),
+            cov_fanout.clone().run_revisits(),
+        ));
+
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
                 cov_fanout,
@@ -743,6 +750,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             schedule_tick_task,
             intrinsic_reporting_task,
             binary_lighting_operation_task,
+            cov_revisit_task,
             local_mac,
         };
         server.execute_initial_staging_plans().await;

@@ -1,4 +1,5 @@
-//! Local preparation order for whole, successfully sent unconfirmed observations.
+//! Local completion order for whole observations: unconfirmed reports complete
+//! once sent (#826), confirmed ones once acknowledged (#896).
 use super::{CovObservation, CovSubscriptionSnapshot, CovSubscriptionTable};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -10,30 +11,44 @@ pub(super) struct ObservationOwner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ObservationTicket(u64);
 
+impl ObservationTicket {
+    /// Issued tickets start at one; zero is every marker's empty value.
+    pub(super) fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// Only a complete eligible preparation may obtain this internal completion authority.
-/// Confirmed reports retain admission-time completion without consuming tickets.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PreparedCovCompletion {
-    Confirmed,
+    /// Completes on the subscriber's Ack, and only while this ticket is the
+    /// reference's outstanding report (see [`super::confirmed`]).
+    Confirmed(ObservationTicket),
+    /// Completes once the transport accepts the send, if no newer send did.
     Unconfirmed(ObservationTicket),
 }
 impl CovSubscriptionSnapshot {
     /// Call synchronously after complete capture/qualification, before any later await.
     /// For shared ordinary capture, prepare each applicable reference under that view.
     pub(crate) fn prepare_completion(&self) -> Option<PreparedCovCompletion> {
-        if self.issue_confirmed_notifications {
-            return Some(PreparedCovCompletion::Confirmed);
-        }
-        self.owner
+        let ticket = self
+            .owner
             .issued
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .ok()
-            .map(|n| PreparedCovCompletion::Unconfirmed(ObservationTicket(n + 1)))
+            .map(|n| ObservationTicket(n + 1))?;
+        Some(if self.issue_confirmed_notifications {
+            PreparedCovCompletion::Confirmed(ticket)
+        } else {
+            PreparedCovCompletion::Unconfirmed(ticket)
+        })
     }
 }
 impl CovSubscriptionTable {
     /// Commit a complete observation and successful marker together under the caller's
     /// table write guard. Issued-but-failed/canceled work never advances this marker.
+    /// A confirmed completion must be the reference's outstanding report, whose
+    /// mark it clears; an older or replaced report changes nothing.
     pub(crate) fn complete_observation(
         &mut self,
         snapshot: &CovSubscriptionSnapshot,
@@ -44,29 +59,45 @@ impl CovSubscriptionTable {
             return false;
         }
         let entry = self.subs.get_mut(snapshot.key()).expect("current entry");
-        match (snapshot.issue_confirmed_notifications, completion) {
-            (true, PreparedCovCompletion::Confirmed) => {}
-            (false, PreparedCovCompletion::Unconfirmed(ticket)) => {
-                if ticket.0 <= entry.last_successful_ticket {
-                    return false;
-                }
-                entry.last_successful_ticket = ticket.0;
+        let ticket = match (snapshot.issue_confirmed_notifications, completion) {
+            (true, PreparedCovCompletion::Confirmed(ticket))
+                if entry.confirmed_flight.holds(ticket) =>
+            {
+                ticket
             }
+            (false, PreparedCovCompletion::Unconfirmed(ticket)) => ticket,
             _ => return false,
+        };
+        if ticket.0 <= entry.last_successful_ticket {
+            return false;
         }
+        entry.last_successful_ticket = ticket.0;
         entry.subscription.last_notified_observation = Some(value);
+        if snapshot.issue_confirmed_notifications {
+            entry.confirmed_flight.release(ticket);
+        }
         true
     }
-    /// Test setup still uses real reservation and completion, not a baseline bypass.
+    /// Test setup still uses real reservation and completion, not a baseline
+    /// bypass. A confirmed reference goes through its own outstanding report.
     #[cfg(test)]
     pub(crate) fn complete_for_test(
         &mut self,
         snapshot: &CovSubscriptionSnapshot,
         value: CovObservation,
     ) -> bool {
-        snapshot
-            .prepare_completion()
-            .is_some_and(|completion| self.complete_observation(snapshot, completion, value))
+        let Some(completion) = snapshot.prepare_completion() else {
+            return false;
+        };
+        let _flight = if snapshot.issue_confirmed_notifications {
+            let Some(flight) = self.begin_confirmed([(snapshot, completion)]) else {
+                return false;
+            };
+            Some(flight)
+        } else {
+            None
+        };
+        self.complete_observation(snapshot, completion, value)
     }
 }
 

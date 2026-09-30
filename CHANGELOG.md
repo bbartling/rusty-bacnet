@@ -87,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A confirmed COV notification now advances its subscriber's baseline only when
+  the subscriber acknowledges it (#896). Before, the baseline moved when the
+  notification was admitted, before its first transmission, and stayed there if
+  every retry went unanswered or the subscriber answered with an Error. Since
+  COV criteria report only actual changes (#889), that change was then never
+  re-sent until the value changed again. Now:
+  - Exhausted retries, an Error, Reject or Abort answer, and shutdown leave the
+    baseline alone, so the next fanout reports the change again. There is no
+    immediate retry against a subscriber that stopped answering.
+  - Each subscription, and each COV-multiple reference, has at most one
+    outstanding confirmed report. Changes made while it is outstanding wait.
+  - The Ack re-evaluates the subscription through the usual fanout, so the
+    current value, including Status_Flags, follows at once if it differs from
+    what was acknowledged. An unchanged value sends nothing.
+  - Timestamped COV-multiple history retires on the Ack instead of the first
+    transmission, and returns to its queue otherwise.
+  - A report for a replaced subscription, or one sent on a route its context has
+    since left, can neither complete the new subscription nor unblock it.
+  Peer and global in-flight limits, event budgets and the unconfirmed path are
+  unchanged. Re-reporting after the standard's retries end is local policy.
+
 - The VT, WriteGroup, Who-Am-I and You-Are codecs now put the same bytes on
   the wire as the Clause 21 grammar, so peers that follow the standard can
   decode them (#912). Each encoding is checked against byte vectors worked out

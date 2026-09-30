@@ -156,8 +156,8 @@ async fn cov_recipient_route_admitted_confirmed_ack_cannot_overwrite_new_generat
                 .as_ref()
                 .unwrap()
                 .sample(),
-            &CovSample::new(&PropertyValue::Real(10.0)).unwrap(),
-            "confirmed baseline commits at admission before transport success or ACK"
+            &CovSample::new(&PropertyValue::Real(1.0)).unwrap(),
+            "confirmed baseline waits for the ACK (#896)"
         );
         let current = migrate(&fixture, &old).await;
         assert_eq!(
@@ -187,6 +187,10 @@ async fn cov_recipient_route_admitted_confirmed_ack_cannot_overwrite_new_generat
                 service_choice: request.service_choice
             })
         ));
+        // Let the worker handle the ACK before shutdown can cancel it.
+        tokio::time::timeout(Duration::from_secs(2), fixture.transactions.join_next())
+            .await
+            .unwrap();
         fixture.finish(false).await;
         assert_eq!(
             fixture
