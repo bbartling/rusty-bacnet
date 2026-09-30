@@ -24,7 +24,7 @@ tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
 tokio-rustls = { workspace = true, optional = true }
 
 [features]
-sc-tls = ["bacnet-transport/sc-tls", "tokio-rustls"]
+sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
 
 [dev-dependencies]
 rcgen.workspace = true

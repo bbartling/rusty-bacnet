@@ -53,9 +53,9 @@ default = []
 sc-tls = [
     "bacnet-client/sc-tls",
     "bacnet-transport/sc-tls",
-    "tokio-rustls",
-    "rustls",
-    "rustls-pki-types",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:rustls-pki-types",
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]
 

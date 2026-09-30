@@ -23,7 +23,12 @@ tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
 tokio-rustls = { workspace = true, optional = true }
 
 [features]
-sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls", "bacnet-server/sc-tls", "tokio-rustls"]
+sc-tls = [
+    "bacnet-transport/sc-tls",
+    "bacnet-client/sc-tls",
+    "bacnet-server/sc-tls",
+    "dep:tokio-rustls",
+]
 
 [dev-dependencies]
 socket2.workspace = true
