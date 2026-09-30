@@ -13,7 +13,7 @@
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
-| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` | ✓ | ✓ | ✓ | ✓ |
+| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
 | Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
@@ -64,6 +64,18 @@ the CI image's Python (3.12) and runs the unittest suite. The SC tests generate
 certificates with the `openssl` CLI. Cargo Deny covers the bindings'
 dependencies too; only `bacnet-benchmarks` is excluded.
 
+The same job then runs the crate's Rust tests, its lib unit tests and
+integration tests, with `cargo nextest run -p rusty-bacnet --locked --profile ci`.
+The workspace doesn't turn on pyo3's `extension-module` feature, so these test
+binaries link libpython (#919); maturin turns the feature on for wheel and
+`maturin develop` builds from `crates/rusty-bacnet/pyproject.toml`. Linking
+needs the interpreter's shared library and its unversioned `.so` symlink, which
+the job gets from `libpython3-dev`. The step sets `PYO3_PYTHON=/usr/bin/python3`
+so it links the apt Python that package matches, whatever else is on `PATH`,
+and without depending on the venv from the maturin step. Tests that call into
+Python start the interpreter with `Python::initialize()` first, since nothing
+enables pyo3's `auto-initialize`.
+
 Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
 mark unrelated passing tests as leaky (#751), and the configuration warns
 about them.
@@ -101,6 +113,11 @@ the workspace turns on, so a transport-only list never built them (#906). CI's
 `LINUX_FEATURES` is the same list plus `bacnet-transport/{serial,serial-gpio,ethernet}`
 and `bacnet-integration-tests/ethernet`.
 
+The script also runs the PyO3 crate's Rust tests. pyo3 links the libpython of
+`PYO3_PYTHON` if it's set, else of the active venv, else of the first `python`
+or `python3` on `PATH`. The Homebrew and python.org framework builds both ship
+the shared library.
+
 Clippy and rustdoc deny warnings (#902). Every public item must be documented:
 `missing_docs` is `deny`, and only the unpublished `bacnet-benchmarks` opts out.
 Clippy runs three ways:
@@ -123,6 +140,7 @@ cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$FEATURES"
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
+cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests
 bash scripts/ci/check-file-size.sh
 bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
 python3 scripts/ci/test-check-msrv.py

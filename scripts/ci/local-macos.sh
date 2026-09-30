@@ -9,8 +9,10 @@
 # serial and ethernet are Linux-only features, so macOS uses every other
 # optional feature, including those crates gate on their own features (#906).
 # Clippy and rustdoc deny warnings, as CI does. Tests need cargo-nextest
-# 0.9.145 or later (`cargo install cargo-nextest --locked`). Record the result
-# in the PR (see docs/ci.md).
+# 0.9.145 or later (`cargo install cargo-nextest --locked`). The PyO3 crate's
+# Rust tests link libpython from PYO3_PYTHON, the active venv, or `python` /
+# `python3` on PATH, in that order (#919). Record the result in the PR (see
+# docs/ci.md).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -47,5 +49,7 @@ if ! "$quick"; then
   cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$features"
   step "bacnet-cli tests (default features)"
   cargo nextest run -p bacnet-cli --locked
+  step "PyO3 crate Rust tests"
+  cargo nextest run -p rusty-bacnet --locked
 fi
 step "OK: macOS checks passed"
