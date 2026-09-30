@@ -164,7 +164,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Split `subs` into Single and Multiple notifications and fire both under
     /// one shared event budget. When both kinds are present the kind that goes
     /// first alternates per event and is capped at half the budget.
-    pub(super) async fn fire_cov_by_kind(
+    async fn fire_cov_by_kind(
         handles: &CovFanoutHandles<'_, '_, T>,
         dispatch_turn: usize,
         oid: &ObjectIdentifier,

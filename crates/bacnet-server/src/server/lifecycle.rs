@@ -62,9 +62,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
             Arc::new(Mutex::new(Default::default()));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
-        let dcc_outcomes_dispatch = Arc::clone(&dcc_outcomes);
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
-        let mutation_decisions_dispatch = Arc::clone(&mutation_decisions);
 
         let target_audit = super::audit_recipient::TargetAudit::install(
             &mut *db.write().await,
@@ -95,7 +93,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
         });
         let network_dispatch = Arc::clone(&network);
-        let comm_state_dispatch = Arc::clone(&comm_state);
         let config_dispatch = Arc::new(config.clone());
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
@@ -117,10 +114,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 learned_routers: Arc::clone(&learned_routers),
                 notification_transactions: Arc::clone(&notification_transactions_dispatch),
                 device_bindings: Arc::clone(&device_bindings),
-                comm_state: Arc::clone(&comm_state_dispatch),
+                comm_state: Arc::clone(&comm_state),
                 dcc_timer: Arc::clone(&dcc_timer),
-                dcc_outcomes: Arc::clone(&dcc_outcomes_dispatch),
-                mutation_decisions: Arc::clone(&mutation_decisions_dispatch),
+                dcc_outcomes: Arc::clone(&dcc_outcomes),
+                mutation_decisions: Arc::clone(&mutation_decisions),
                 config: Arc::clone(&config_dispatch),
             },
             confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
@@ -504,8 +501,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     "Reassembled segmented ConfirmedRequest"
                                                 );
                                                 Self::dispatch(
-&dispatch_context,
-&source_mac,
+                                                    &dispatch_context,
+                                                    &source_mac,
                                                     Apdu::ConfirmedRequest(reassembled),
                                                     received.take().unwrap_or_else(|| {
                                                         warn!("received consumed twice - using empty fallback");

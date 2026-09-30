@@ -94,6 +94,23 @@ pub(super) struct RequestOrigin<'a> {
     pub(super) route: bacnet_network::response_route::ResponseRoute,
 }
 
+impl<T: TransportPort + 'static> RequestServices<T> {
+    /// The EventNotification delivery view of these handles, with the
+    /// confirmed retry timeout and APDU capacity taken from the config.
+    pub(super) fn event_delivery(&self) -> super::event_delivery::EventDelivery<'_, T> {
+        super::event_delivery::EventDelivery {
+            db: &self.db,
+            network: &self.network,
+            comm_state: &self.comm_state,
+            learned_routers: &self.learned_routers,
+            notification_transactions: &self.notification_transactions,
+            device_bindings: &self.device_bindings,
+            retry_timeout_ms: self.config.cov_retry_timeout_ms,
+            local_apdu_capacity: self.config.max_apdu_length,
+        }
+    }
+}
+
 #[cfg(test)]
 impl<T: TransportPort + 'static> RequestServices<T> {
     /// Fresh, empty handles around `network` and `config`. Tests overwrite the

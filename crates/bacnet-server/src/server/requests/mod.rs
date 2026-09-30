@@ -64,7 +64,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_ack_senders,
             seg_send_permits,
             cov_in_flight,
-            learned_routers,
+            learned_routers: _,
             notification_transactions,
             device_bindings,
             comm_state,
@@ -519,21 +519,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             config,
         };
-        Self::execute_staging_plans(
-            &crate::server::event_delivery::EventDelivery {
-                db,
-                network,
-                comm_state,
-                learned_routers,
-                notification_transactions,
-                device_bindings,
-                retry_timeout_ms: config.cov_retry_timeout_ms,
-                local_apdu_capacity: config.max_apdu_length,
-            },
-            &cov_ctx,
-            staging_plans,
-        )
-        .await;
+        Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await;
 
         if let Apdu::ComplexAck(ref ack) = response {
             let mut full_buf = BytesMut::new();
@@ -593,16 +579,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 for oid in &written_oids {
                     Self::fire_event_notifications_with_bindings(
-                        &EventDelivery {
-                            db,
-                            network,
-                            comm_state,
-                            learned_routers,
-                            notification_transactions,
-                            device_bindings,
-                            retry_timeout_ms: config.cov_retry_timeout_ms,
-                            local_apdu_capacity: config.max_apdu_length,
-                        },
+                        &services.event_delivery(),
                         cov_table,
                         oid,
                     )
@@ -646,16 +623,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         if let Some(accepted) = accepted_acknowledgment {
             Self::send_acknowledgment_notification_with_bindings(
-                &EventDelivery {
-                    db,
-                    network,
-                    comm_state,
-                    learned_routers,
-                    notification_transactions,
-                    device_bindings,
-                    retry_timeout_ms: config.cov_retry_timeout_ms,
-                    local_apdu_capacity: config.max_apdu_length,
-                },
+                &services.event_delivery(),
                 accepted,
             )
             .await;
@@ -663,16 +631,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         for oid in &written_oids {
             Self::fire_event_notifications_with_bindings(
-                &EventDelivery {
-                    db,
-                    network,
-                    comm_state,
-                    learned_routers,
-                    notification_transactions,
-                    device_bindings,
-                    retry_timeout_ms: config.cov_retry_timeout_ms,
-                    local_apdu_capacity: config.max_apdu_length,
-                },
+                &services.event_delivery(),
                 cov_table,
                 oid,
             )

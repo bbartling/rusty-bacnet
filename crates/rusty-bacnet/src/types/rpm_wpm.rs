@@ -5,7 +5,7 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// Python `(property, array_index)` reference in a ReadPropertyMultiple spec.
-pub(crate) type PyPropertyReference = (PyPropertyIdentifier, Option<u32>);
+type PyPropertyReference = (PyPropertyIdentifier, Option<u32>);
 /// Python `(object, [property_reference, ...])` ReadPropertyMultiple spec.
 pub(crate) type PyReadAccessSpec = (PyObjectIdentifier, Vec<PyPropertyReference>);
 /// Python `(property, value, priority, array_index)` write, used by

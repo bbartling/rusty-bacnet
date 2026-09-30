@@ -2952,9 +2952,10 @@ is described below and in the [Device recipient contract](device-audit-recipient
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 
-`ClientRoleHandle::write_property` accepts a direct B/IP IPv4 unicast MAC, object,
-property, optional index, complete encoded property value, optional wire priority,
-and required `bacnet_endpoint::roles::Commandability::{Commandable, Noncommandable}`.
+`ClientRoleHandle::write_property` accepts a direct B/IP IPv4 unicast MAC, a
+`bacnet_services::write_property::WritePropertyRequest` (object, property, optional
+index, complete encoded property value, optional wire priority), and the required
+`bacnet_endpoint::roles::Commandability::{Commandable, Noncommandable}`.
 This assertion is required with or without a source Reporter; neither object type,
 property identifier, local object state nor the supplied priority establishes it.
 The method refuses other endpoint transports and invalid/group destinations before
