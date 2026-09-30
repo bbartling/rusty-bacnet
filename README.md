@@ -504,7 +504,7 @@ binding check:
 cargo nextest run --workspace --exclude rusty-bacnet --locked
 cargo test --doc --workspace --exclude rusty-bacnet --locked
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
-cargo check -p rusty-bacnet --tests --locked
+cargo nextest run -p rusty-bacnet --locked
 cargo fmt --all --check
 cargo nextest run -p bacnet-integration-tests --test conformance_ledger --locked
 python3 scripts/generate-conformance-docs.py --check
@@ -513,8 +513,9 @@ python3 scripts/generate-conformance-docs.py --check
 Tests run with [cargo-nextest](https://nexte.st) 0.9.145 or later
 (`cargo install cargo-nextest --locked`); it skips doctests, hence the
 separate `cargo test --doc`. The Python `cdylib` is excluded from those
-workspace test commands intentionally; its check and installed-package tests
-are separate. Optional-feature tests and system dependencies depend on your
+workspace test commands intentionally; its Rust tests link the active
+environment's libpython, and its installed-package tests are separate.
+Optional-feature tests and system dependencies depend on your
 platform—consult the manifests and CI jobs before enabling serial, Ethernet,
 SC, or capture features.
 

@@ -9,7 +9,8 @@ name: CI
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features),
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
-#           and the Python bindings built with maturin and their unittest suite.
+#           and the Python bindings built with maturin, their unittest suite
+#           and the PyO3 crate's own Rust tests.
 #   Heavy — PRs to main, push to main, v* tags, weekly schedule, manual:
 #           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
 #   CI OK — single required status that fails if any job above failed.
@@ -150,10 +151,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The SC hub and endpoint tests generate certificates with the openssl CLI.
+      # The crate's Rust tests link libpython: libpython3-dev brings the shared
+      # library and its unversioned .so symlink for the image's python3 (#919).
       - name: System packages
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends python3 python3-venv openssl
+          apt-get install -y -qq --no-install-recommends python3 python3-venv libpython3-dev openssl
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.TOOLCHAIN }}
@@ -177,11 +180,15 @@ jobs:
         run: |
           . /tmp/venv/bin/activate
           python -m unittest discover -s crates/rusty-bacnet/tests
-      # The crate's Rust integration tests. Its lib unit tests can't link while
-      # the workspace forces pyo3's extension-module feature (#919).
-      - name: Rust integration tests
+      # The crate's lib unit tests and integration tests, linked against libpython
+      # (#919). PYO3_PYTHON pins the apt python3 that libpython3-dev matches;
+      # pyo3 would otherwise try `python` on PATH first. Not using the venv keeps
+      # this step independent of the maturin build.
+      - name: Rust tests
         if: ${{ !cancelled() }}
-        run: cargo nextest run -p rusty-bacnet --test endpoint_lifecycle --locked --profile ci
+        env:
+          PYO3_PYTHON: /usr/bin/python3
+        run: cargo nextest run -p rusty-bacnet --locked --profile ci
 
   msrv:
     name: MSRV (Linux native)

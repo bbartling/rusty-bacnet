@@ -125,6 +125,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_configuration_before_open() {
+        Python::initialize();
         assert_py_error(
             validate_mstp_config(None, 38_400, 1, 127, 1),
             "serial_port is required for transport='mstp'",
@@ -164,6 +165,7 @@ mod tests {
 
     #[test]
     fn valid_configuration_reaches_serial_open() {
+        Python::initialize();
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

@@ -277,6 +277,7 @@ mod tests {
 
     #[test]
     fn pending_lookup_uses_file_identity_and_reverse_replacement_order() {
+        Python::initialize();
         let server = test_server();
         server
             .push_pending(Box::new(file(4, "FIRST", b"first")))
@@ -315,6 +316,7 @@ mod tests {
 
     #[test]
     fn missing_wrong_capability_invalid_method_and_mode_errors_are_atomic() {
+        Python::initialize();
         let server = test_server();
         server
             .push_pending(Box::new(BinaryValueObject::new(5, "NON-FILE").unwrap()))
@@ -381,6 +383,7 @@ mod tests {
 
     #[test]
     fn started_and_drained_states_reject_without_mutation() {
+        Python::initialize();
         let started = test_server();
         started
             .push_pending(Box::new(file(8, "STARTED", b"kept")))
