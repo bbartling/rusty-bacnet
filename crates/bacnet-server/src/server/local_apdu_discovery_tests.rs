@@ -3,8 +3,7 @@ use super::*;
 
 #[tokio::test]
 async fn who_is_rechecks_selected_device_raw_capacity_and_recovers() {
-    let (transport, _tx) = MockDiscoveryTransport::new();
-    let capture = transport.clone();
+    let (transport, capture, _tx) = discovery_transport();
     let mut db = ObjectDatabase::new();
     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 893).unwrap();
     db.add(Box::new(
@@ -65,12 +64,12 @@ async fn who_is_rechecks_selected_device_raw_capacity_and_recovers() {
             },
         )
         .await;
-        assert_eq!(capture.unicast_count(), expected_sends);
+        assert_eq!(capture.unicasts().len(), expected_sends);
         assert_eq!(server.discovery_counters().i_am_sent, expected_sends as u64);
     }
-    for (_, bytes) in capture.unicasts.lock().unwrap().iter() {
+    for frame in capture.unicasts() {
         let Apdu::UnconfirmedRequest(request) =
-            decode_apdu(decode_npdu(bytes.clone()).unwrap().payload).unwrap()
+            decode_apdu(decode_npdu(frame.npdu).unwrap().payload).unwrap()
         else {
             panic!("I-Am expected")
         };

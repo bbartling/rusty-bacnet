@@ -7,9 +7,10 @@ use bacnet_endpoint_core::coordinator::{
 };
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 use bytes::Bytes;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 
 use super::notification_transactions::NotificationReserveError;
+use super::test_transport::{TestTransport, BIP_LOCAL_MAC};
 use super::*;
 use bacnet_transport::port::TransportProvenance;
 
@@ -331,46 +332,9 @@ async fn close_drains_waiters_and_rejects_reserve_and_rearm() {
     ));
 }
 
-#[derive(Clone)]
-struct IdleTransport {
-    local_mac: Vec<u8>,
-}
-
-impl Default for IdleTransport {
-    fn default() -> Self {
-        Self {
-            local_mac: vec![127, 0, 0, 1, 0xba, 0xc0],
-        }
-    }
-}
-
-impl TransportPort for IdleTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_sender, receiver) = mpsc::channel(1);
-        Ok(receiver)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+/// A closed B/IP-shaped link whose sends succeed.
+fn idle_transport() -> TestTransport {
+    TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build()
 }
 
 #[tokio::test]
@@ -381,7 +345,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
         .reserve(canonical_direct_peer(source_mac.as_slice()), COV_SERVICE)
         .unwrap();
     let invoke_id = operation.invoke_id();
-    let network = Arc::new(NetworkLayer::new(IdleTransport::default()));
+    let network = Arc::new(NetworkLayer::new(idle_transport()));
     let context = DispatchContext::for_test(RequestServices {
         notification_transactions: Arc::clone(&transactions),
         cov_in_flight: Arc::new(Semaphore::new(255)),
@@ -394,7 +358,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
         complex_ack(invoke_id, false),
         complex_ack(invoke_id, true),
     ] {
-        BACnetServer::<IdleTransport>::dispatch(
+        BACnetServer::<TestTransport>::dispatch(
             &context,
             source_mac.as_slice(),
             apdu,
@@ -429,7 +393,7 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
     let mut server = BACnetServer::start(
         ServerConfig::default(),
         ObjectDatabase::new(),
-        IdleTransport::default(),
+        idle_transport(),
     )
     .await
     .unwrap();
@@ -442,7 +406,7 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
     let server = BACnetServer::start(
         ServerConfig::default(),
         ObjectDatabase::new(),
-        IdleTransport::default(),
+        idle_transport(),
     )
     .await
     .unwrap();

@@ -2,10 +2,10 @@ use super::device_bindings::{
     BindingFreshness, DeviceBindingTable, DeviceResolution, ObservationOutcome,
     MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
 };
+use super::test_transport::TestTransport;
 use super::*;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
-use tokio::sync::mpsc;
 
 const LOCAL_PEER: &[u8] = &[0x10, 0x11];
 const UPDATED_PEER: &[u8] = &[0x20, 0x21];
@@ -253,38 +253,13 @@ fn capacity_rejection_stale_reclamation_and_configured_retention_are_bounded() {
     );
 }
 
-#[derive(Default)]
-struct PassiveTransport;
-
-impl TransportPort for PassiveTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        LOCAL_PEER
-    }
-
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        test_broadcast(mac)
-    }
+/// A closed link at `LOCAL_PEER` whose sends succeed and whose literal
+/// broadcast MAC is `BROADCAST`.
+fn transport() -> TestTransport {
+    TestTransport::builder()
+        .local_mac(LOCAL_PEER)
+        .broadcast_mac(BROADCAST)
+        .build()
 }
 
 fn i_am_request(identifier: ObjectIdentifier) -> UnconfirmedRequestPdu {
@@ -323,7 +298,7 @@ fn received(
 #[tokio::test]
 async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_blocks_refresh() {
     let db = Arc::new(RwLock::new(ObjectDatabase::new()));
-    let network = Arc::new(NetworkLayer::new(PassiveTransport));
+    let network = Arc::new(NetworkLayer::new(transport()));
     let config = ServerConfig::default();
     let comm_state = Arc::new(AtomicU8::new(0));
     let bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
@@ -332,7 +307,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     let local_device = device(100);
     let routed_device = device(101);
 
-    BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
             comm_state: Arc::clone(&comm_state),
@@ -345,7 +320,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &received(LOCAL_PEER, None),
     )
     .await;
-    BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
             comm_state: Arc::clone(&comm_state),
@@ -385,7 +360,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     ));
     drop(table);
 
-    BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
             comm_state: Arc::clone(&comm_state),
@@ -398,7 +373,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &received(LOCAL_PEER, None),
     )
     .await;
-    BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
             comm_state: Arc::clone(&comm_state),
@@ -417,7 +392,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     assert_eq!(bindings.read().await.len(), 2);
 
     comm_state.store(1, Ordering::Release);
-    BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
             comm_state: Arc::clone(&comm_state),
@@ -430,7 +405,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &received(UPDATED_PEER, None),
     )
     .await;
-    BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
             comm_state: Arc::clone(&comm_state),
@@ -456,54 +431,15 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     ));
 }
 
-#[derive(Clone)]
-struct StartTrackingTransport {
-    started: Arc<AtomicBool>,
-}
-
-impl TransportPort for StartTrackingTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.started.store(true, Ordering::Release);
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        LOCAL_PEER
-    }
-
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        test_broadcast(mac)
-    }
-}
-
 #[tokio::test]
 async fn concrete_broadcast_validation_rejects_before_transport_start() {
-    let started = Arc::new(AtomicBool::new(false));
-    let transport = StartTrackingTransport {
-        started: Arc::clone(&started),
-    };
-    let builder = BACnetServer::<StartTrackingTransport>::generic_builder()
+    let transport = transport();
+    let handle = transport.handle();
+    let builder = BACnetServer::<TestTransport>::generic_builder()
         .transport(transport)
         .device_binding(DeviceBinding::local(device(200), BROADCAST).unwrap())
         .unwrap();
 
     assert!(builder.build().await.is_err());
-    assert!(!started.load(Ordering::Acquire));
+    assert_eq!(handle.starts(), 0);
 }

@@ -78,7 +78,7 @@ async fn segmented_child_keeps_pending_after_parent_returns_through_final_ack() 
 // Isolated response owner controls below use the same child/send implementation
 // as the full-server test above, with an explicit retry clock and tracker owner.
 struct Child {
-    network: Arc<NetworkLayer<GatedPort>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     registry: Arc<segmented_send::SegmentedSendRegistry>,
     permits: Arc<Semaphore>,
     tracker: Arc<confirmed_request_tracker::ConfirmedRequestTracker>,
@@ -88,10 +88,7 @@ impl Child {
     fn new() -> Self {
         let (issued, receive) = mpsc::unbounded_channel();
         Self {
-            network: Arc::new(NetworkLayer::new(GatedPort {
-                incoming: None,
-                issued,
-            })),
+            network: Arc::new(NetworkLayer::new(gated_port(None, issued))),
             registry: Arc::default(),
             permits: Arc::new(Semaphore::new(1)),
             tracker: Arc::default(),
