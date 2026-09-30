@@ -234,7 +234,7 @@ impl LimitEnable {
 /// transition is cancelled and no notification is sent.
 ///
 /// The countdown advances once per elapsed wall-clock second via
-/// the detector's `tick` (for example [`OutOfRangeDetector::tick`]), never per detector call — so a fast poll
+/// the detector's `tick` (for example [`OutOfRangeDetector::tick`]), never per `probe` call — so a fast poll
 /// loop writing the same out-of-range value cannot shorten the delay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingTransition {

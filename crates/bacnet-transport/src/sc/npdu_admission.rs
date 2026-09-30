@@ -83,8 +83,8 @@ pub(crate) const DEFAULT_NPDU_PER_ORIGIN_LIMIT: usize = 4;
 /// Startup-validated SC NPDU admission limits (builder-style).
 ///
 /// Only the per-origin quota is configurable; the aggregate cap is the fixed
-/// 64-item NPDU channel. See the `sc::npdu_admission` module docs for the ratio and the
-/// measured tradeoff behind the default.
+/// 64-item NPDU channel. The default quota of 4 scales the network layer's 16-of-256
+/// per-origin ratio to that 64-item queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScNpduAdmissionPolicy {
     /// Maximum queued, unconsumed NPDUs per `(ingress path, source)` key.
@@ -118,7 +118,7 @@ impl ScNpduAdmissionPolicy {
 
 /// Saturating lifetime NPDU drop counts for one SC NPDU queue.
 ///
-/// Count-only diagnostics mirroring [`ScHubBroadcastDropCounts`](crate::sc_hub)
+/// Count-only diagnostics mirroring the hub's `ScHubBroadcastDropCounts`
 /// and the network-layer `QueueAdmissionSnapshot`: each admission drop
 /// increments exactly one field in **Closed > fairness > Full** order, values
 /// saturate at `u64::MAX`, and no field is ever an input to an admission

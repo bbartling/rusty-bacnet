@@ -31,12 +31,14 @@ own process. Its settings live in [`.config/nextest.toml`](../.config/nextest.to
 CI uses the `ci` profile, and nextest does not run doctests, so a separate
 `cargo test --doc` step covers them. The Linux test commands are below, with
 `$LINUX_FEATURES` as set in `ci.yml`: every optional feature that builds on
-Linux, including per-crate ones such as `bacnet-client/sc-tls` and
-`bacnet-cli/pcap`.
+Linux, including per-crate ones such as `bacnet-endpoint/sc-tls` and
+`bacnet-cli/pcap`. A last step runs the `bacnet-cli` tests with default
+features, because a few exist only when `sc-tls` or `pcap` is off.
 
 ```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES" --profile ci
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
+cargo nextest run -p bacnet-cli --locked --profile ci
 ```
 
 Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
@@ -70,10 +72,11 @@ bash scripts/ci/local-macos.sh --quick  # lint, clippy and rustdoc only
 ```
 
 `serial` and `ethernet` are Linux-only features, so macOS uses every other
-optional feature. That includes the ones crates gate on their own features,
-such as `bacnet-client/sc-tls`, which a transport-only list never builds
-(#906). CI's `LINUX_FEATURES` is the same list plus `serial`, `serial-gpio`
-and `ethernet`.
+optional feature. That includes per-crate features such as
+`bacnet-endpoint/sc-tls` and `bacnet-cli/{sc-tls,pcap}`, which nothing else in
+the workspace turns on, so a transport-only list never built them (#906). CI's
+`LINUX_FEATURES` is the same list plus `bacnet-transport/{serial,serial-gpio,ethernet}`
+and `bacnet-integration-tests/ethernet`.
 
 Clippy and rustdoc deny warnings (#902). Every public item must be documented:
 `missing_docs` is `deny`, and only the unpublished `bacnet-benchmarks` opts out.
@@ -81,18 +84,22 @@ Clippy runs three ways:
 
 - the workspace with every feature;
 - the PyO3 crate on its own;
-- each published crate alone with default features
-  (`scripts/ci/clippy-default-features.sh`).
+- each published crate alone with default features, plus the `no_std` build of
+  `bacnet-types` (`scripts/ci/check-default-features.sh`). This also runs
+  rustdoc, which is how docs.rs builds.
 
 The last catches code that compiles only when another crate's feature unifies
-in. The individual gates are also runnable anywhere:
+in. The individual gates are also runnable anywhere. `FEATURES` is
+`LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:
 
 ```bash
+FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .forgejo/workflows/ci.yml)
 cargo fmt --all --check
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-bash scripts/ci/clippy-default-features.sh
+bash scripts/ci/check-default-features.sh
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$FEATURES"
+cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 bash scripts/ci/check-file-size.sh
 bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
 python3 scripts/ci/test-check-msrv.py

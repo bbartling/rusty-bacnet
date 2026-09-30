@@ -34,8 +34,9 @@ features=bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet
 step "clippy (every macOS feature)"
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$features" -- -D warnings
 step "clippy (PyO3 bindings)"; cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-step "clippy (each published crate, default features)"; bash scripts/ci/clippy-default-features.sh
-step "rustdoc"
+step "clippy and rustdoc (each published crate, default features; no_std bacnet-types)"
+bash scripts/ci/check-default-features.sh
+step "rustdoc (every macOS feature)"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$features"
 if ! "$quick"; then
   cargo nextest --version >/dev/null 2>&1 \
@@ -44,5 +45,7 @@ if ! "$quick"; then
   cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$features"
   step "doctests"
   cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$features"
+  step "bacnet-cli tests (default features)"
+  cargo nextest run -p bacnet-cli --locked
 fi
 step "OK: macOS checks passed"

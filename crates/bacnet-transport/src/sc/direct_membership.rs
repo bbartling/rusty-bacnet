@@ -222,7 +222,7 @@ impl Drop for Reservation {
 pub(crate) struct Membership {
     owner: Arc<DirectMembership>,
     pub(crate) generation: u64,
-    // Read by the sc-tls direct response path.
+    // Read on the sc-tls direct intake and response paths.
     #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
     pub(crate) vmac: Vmac,
     pub(crate) egress: DirectEgress,
