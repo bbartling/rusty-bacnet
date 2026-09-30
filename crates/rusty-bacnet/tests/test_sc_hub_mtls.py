@@ -31,6 +31,15 @@ HUB_VMAC = b"\x02\0\0\0\0\1"
 
 class MtlsFixture(unittest.IsolatedAsyncioTestCase):
     """Shared fixture only: no inherited test methods or duplicate discovery."""
+    @staticmethod
+    async def close_raw(writer):
+        """Close a raw test socket. The hub may already have reset it after its Close frame."""
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), 3)
+        except ConnectionResetError:
+            pass  # Terminal cleanup only, never a protocol-read failure.
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="bacnet-hub-mtls-")
@@ -597,8 +606,7 @@ class NodeIdentityMtlsTests(MtlsFixture):
                             pass
                     await asyncio.wait_for(drain_until_closed(), 3)
                 finally:
-                    writer.close()
-                    await asyncio.wait_for(writer.wait_closed(), 3)
+                    await self.close_raw(writer)
 
             listener = await asyncio.start_server(peer, "127.0.0.1", 0, ssl=context)
             url = f"wss://localhost:{listener.sockets[0].getsockname()[1]}"
@@ -644,8 +652,7 @@ class NodeIdentityMtlsTests(MtlsFixture):
             self.assertEqual(accepted[10:26], hub_uuid)
             return reader, writer
         except BaseException:
-            writer.close()
-            await asyncio.wait_for(writer.wait_closed(), 3)
+            await self.close_raw(writer)
             raise
 
     async def test_hub_owned_identity_survives_stop_start_and_fresh_object(self):
@@ -670,8 +677,7 @@ class NodeIdentityMtlsTests(MtlsFixture):
                     await self.stop_hub(hub)
                     self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"")
                 finally:
-                    writer.close()
-                    await asyncio.wait_for(writer.wait_closed(), 3)
+                    await self.close_raw(writer)
             finally:
                 await self.stop_hub(hub)
             with socket.socket() as probe:
@@ -718,8 +724,7 @@ class NodeIdentityMtlsTests(MtlsFixture):
                             self.fail("same-identity incumbent did not close")
                         await self.read_value(node if api is BACnetClient else other)
                     finally:
-                        writer.close()
-                        await asyncio.wait_for(writer.wait_closed(), 3)
+                        await self.close_raw(writer)
                         await self.stop_server(node)
             finally:
                 await self.stop_server(node)
