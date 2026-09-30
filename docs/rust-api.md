@@ -1957,8 +1957,9 @@ replay guarantee.
 Timestamped SubscribeCOVPropertyMultiple references (§13.16.3.1.2.3) record each
 qualifying change together with the Device clock frame of its commit. The capture
 runs under the database write guard of network WriteProperty, `write_local`,
-Binary Lighting terminal transitions and committed intrinsic transitions (both
-write-triggered and those confirmed by the periodic Time_Delay task). Changes queue
+Binary Lighting terminal transitions, committed intrinsic transitions (both
+write-triggered and those confirmed by the periodic Time_Delay task),
+fault-detection reliability changes and schedule writes. Changes queue
 per reference until a notification carrying them is transmitted. Any notification
 to a context also carries the pending changes of that context's other references
 (§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`.
@@ -1986,12 +1987,21 @@ rather than delivered as stale state. These drops increment
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
 the bound (the full server uses its configured capacity).
 
-WritePropertyMultiple, staging and source-completion writes and Life Safety fanout
-are not captured yet. Their changes still report through the builder's
+WritePropertyMultiple, staging and source-completion writes are not captured yet,
+and neither are Life Safety objects on any path. Their changes still report through the builder's
 current-state fallback, stamped when the notification is prepared (#856).
-Transitions from the periodic intrinsic task are captured but trigger no COV
-notification of their own; they are conveyed with the context's next notification.
 `Max_Notification_Delay` remains reported but not acted on.
+
+Background commits fan COV out as a network write does, once their database guard
+is dropped, to ordinary, SubscribeCOVProperty and Multiple subscribers alike: the
+periodic intrinsic task's transitions (after their event notifications),
+fault-detection reliability changes and schedule writes to controlled objects. Life
+Safety objects report exactly the properties the pass changed. The bundled Event
+Enrollment objects accept no COV subscriptions, so their periodic evaluation fans
+nothing out. The usual COV criteria and DCC suppression apply. The criteria report
+only an actual change: a missing or non-positive COV increment means any change,
+and a value equal to the last one sent is not reported again, however often its
+object is fanned out, unless a Status_Flags change carries it.
 
 The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
 Set or relinquish a priority slot by writing a value or NULL to `Present_Value`
@@ -2016,14 +2026,16 @@ PROPERTY/NOT_COV_PROPERTY whether an increment is present or absent. Indexed
 non-arrays that pass existing read validation return PROPERTY_IS_NOT_AN_ARRAY.
 
 For matching finite numeric values, nonpositive increments (including negative
-infinity) remain eligible on observation; NaN and positive infinity increments
-do not trigger numeric deltas. Initial reporting and type transitions still
+infinity) report any change, and an unchanged value reports nothing; NaN and
+positive infinity increments do not trigger numeric deltas. Initial reporting and type transitions still
 report. Same-type nonfinite samples compare IEEE bits; identical NaN payloads and
 infinities are stable. Structural equality also preserves float bits, while finite
 numeric signed zeros compare equal. These are explicit local exceptional-value
-policies, not Standard-prescribed arithmetic. Existing ordinary whole-object
-numeric/nonnumeric eligibility, Life Safety committed-delta triggers and
-confirmed-admission versus unconfirmed-success baseline timing are preserved.
+policies, not Standard-prescribed arithmetic. Ordinary whole-object values follow
+the same rule (#889): a numeric Present_Value must move by the increment, and a
+non-numeric or increment-less one must change. Life Safety committed-delta
+triggers and confirmed-admission versus unconfirmed-success baseline timing are
+preserved.
 
 Applicable Status_Flags changes independently trigger ordinary and property COV.
 Property reports include the selected value and declared-present flags; explicit
@@ -2042,7 +2054,7 @@ selected values under the same DB/snapshot borrow, then releasing it before
 transport. Separate contexts may sample at different times; custom interior-mutability
 callbacks are not promised atomic hardware sampling. Only references surviving
 late lifetime/ownership checks authorize companions, timestamps and paired baseline
-completion. Ordinary nonnumeric/no-increment fanout retains its existing behavior.
+completion. Ordinary nonnumeric/no-increment values report only on change (#889).
 
 This profile does not add empty finite Multiple contexts, delayed Multiple
 notifications, live Device subscription-property projection, general numeric

@@ -64,7 +64,7 @@ fn multiple_subscribers_same_object() {
 }
 
 #[test]
-fn should_notify_no_increment_always_fires() {
+fn should_notify_no_increment_first_report_fires() {
     let sub = make_sub(&[1, 2, 3], 1, ai1());
     // Binary/multi-state objects have no COV_Increment
     assert!(CovSubscriptionTable::should_notify(
@@ -158,7 +158,7 @@ fn should_notify_exact_increment() {
 }
 
 #[test]
-fn should_notify_zero_increment_always_fires() {
+fn should_notify_zero_increment_fires_on_any_change() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.last_notified_observation = Some(
         crate::cov::CovObservation::new(
@@ -177,6 +177,27 @@ fn should_notify_zero_increment_always_fires() {
         ),
         Some(0.0)
     ));
+}
+
+#[test]
+fn should_notify_ignores_an_unchanged_value() {
+    use bacnet_types::primitives::PropertyValue;
+    // Without an increment, or with a zero one, only a change reports, however
+    // often the object is fanned out.
+    for (value, increment) in [
+        (PropertyValue::Real(72.0), Some(0.0)),
+        (PropertyValue::Real(72.0), None),
+        (PropertyValue::Enumerated(1), None),
+    ] {
+        let mut sub = make_sub(&[1, 2, 3], 1, ai1());
+        let sample = crate::cov::CovSample::new(&value).unwrap();
+        sub.last_notified_observation =
+            Some(crate::cov::CovObservation::new(sample.clone(), None).unwrap());
+        assert!(
+            !CovSubscriptionTable::should_notify(&sub, Some(&sample), increment),
+            "{value:?} with {increment:?}"
+        );
+    }
 }
 
 #[test]

@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `bacnet_server::schedule::tick_schedules` drops its unused UTC-offset argument;
+  evaluation already used the database clock frame. It only evaluates schedules.
+  A running server evaluates them itself and fans COV out for the objects they
+  write (#889).
+
 - Move the pre-1.0 `bacnet_objects::network_port::NetworkNumber` helper directly to `bacnet_types::network_number::NetworkNumber`. `configured` now returns `None` for reserved 65535; default construction is UNKNOWN. Shared nonrouter packet handling lives in `bacnet_network::network_number` (#879).
 
 - Remove the pre-1.0 Rust `BACnetClient::builder()` and
@@ -27,6 +32,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unchanged (#873).
 
 ### Fixed
+
+- Changes committed by background tasks now reach COV subscribers without waiting
+  for an unrelated later write (#889). Before, periodic Time_Delay alarm
+  confirmations, fault-detection reliability changes and schedule writes updated
+  objects silently. A subscriber missed the IN_ALARM or FAULT Status_Flags change,
+  or a scheduled Present_Value, until something else fanned COV out for that object.
+  Each of these commits now fans COV out after its database guard is dropped, using
+  the same post-write path as a network write, and records timestamped
+  COV-multiple history at commit time. The bundled Event Enrollment objects accept
+  no COV subscriptions, so their evaluation needs no fanout.
+
+- COV criteria now report only an actual change (#889). A missing COV increment,
+  or one of zero or less (the analog default is 0), means any change. Before,
+  subscribers to binary, multi-state and zero-increment objects were re-sent the
+  same value whenever the object was fanned out again, for example by a repeated
+  write or a schedule write masked by a higher priority. A numeric Present_Value
+  that is not Real, such as the Accumulator's Unsigned count, is now gated by its
+  COV increment as the property path already was. Before, it reported on every
+  fanout. Status_Flags changes and the first report after subscription still
+  always notify.
 
 - B/IP and B/IPv6 transports bound to port 0 no longer set `SO_REUSEADDR` (#892).
   On Linux the kernel could give such a socket an ephemeral port that another

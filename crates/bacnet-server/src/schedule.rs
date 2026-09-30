@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use crate::committed_cov::{BackgroundCommit, CommittedCov};
+use crate::cov::CovSubscriptionTable;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -19,80 +21,76 @@ pub(crate) fn current_time_components(frame: ClockFrame) -> Option<(u8, u8, u8)>
 
 /// Evaluate all Schedule objects and write to their controlled properties.
 ///
-/// Called periodically by the server (every 60 seconds). The offset argument
-/// remains for source compatibility; evaluation uses the database clock frame.
-pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>, _utc_offset_minutes: i16) {
-    let _ = tick_schedules_with_life_safety_cov(db, _utc_offset_minutes).await;
+/// A running server evaluates schedules itself every 60 seconds and fans COV
+/// out for the objects they write; this entry point only evaluates.
+pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
+    evaluate(&mut *db.write().await);
 }
 
-/// Evaluate schedules while retaining exact Life Safety changes for the live
-/// server's post-lock COV route.
-pub(crate) async fn tick_schedules_with_life_safety_cov(
+/// Evaluate schedules for the live server, returning the COV fanout owed for
+/// the objects they wrote once the database guard is dropped.
+pub(crate) async fn tick_schedules_committed(
     db: &Arc<RwLock<ObjectDatabase>>,
-    _utc_offset_minutes: i16,
-) -> Vec<crate::life_safety_cov::LifeSafetyCovChange> {
-    let frame = db.read().await.clock_frame();
-    let Some((day_of_week, hour, minute)) = frame.and_then(current_time_components) else {
+    cov_table: &RwLock<CovSubscriptionTable>,
+) -> CommittedCov {
+    let mut db_w = db.write().await;
+    let commit = evaluate(&mut db_w);
+    commit.finish(&db_w, cov_table).await
+}
+
+fn evaluate(db_w: &mut ObjectDatabase) -> BackgroundCommit {
+    let mut commit = BackgroundCommit::new();
+    let Some((day_of_week, hour, minute)) = db_w.clock_frame().and_then(current_time_components)
+    else {
         debug!("Skipping Schedule evaluation without a valid Device clock");
-        return Vec::new();
+        return commit;
     };
 
     let mut writes = Vec::new();
-    let changes = {
-        let mut db_w = db.write().await;
-        let schedule_oids = db_w.find_by_type(ObjectType::SCHEDULE);
-        for oid in schedule_oids {
-            if let Some(obj) = db_w.get_mut(&oid) {
-                if let Some((value, refs)) = obj.tick_schedule(day_of_week, hour, minute) {
-                    debug!(
-                        schedule = %oid,
-                        refs = refs.len(),
-                        "Schedule value changed, writing to controlled properties"
-                    );
-                    for reference in refs {
-                        writes.push((oid, reference, value.clone()));
-                    }
+    for oid in db_w.find_by_type(ObjectType::SCHEDULE) {
+        if let Some(obj) = db_w.get_mut(&oid) {
+            if let Some((value, refs)) = obj.tick_schedule(day_of_week, hour, minute) {
+                debug!(
+                    schedule = %oid,
+                    refs = refs.len(),
+                    "Schedule value changed, writing to controlled properties"
+                );
+                for reference in refs {
+                    writes.push((oid, reference, value.clone()));
                 }
             }
         }
+    }
 
-        let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oids(
-            &db_w,
-            writes
-                .iter()
-                .map(|(_, reference, _)| reference.object_identifier),
-        );
-        let mut successful_oids = Vec::new();
-        for (initiator, reference, value) in writes {
-            let origin = crate::command_source::resolve_local(
-                &db_w,
-                crate::LocalCommandSource::Object(initiator),
-            )
-            .ok();
-            let target_oid = reference.object_identifier;
-            let prop_id = reference.property_identifier;
-            if let Some(target_obj) = db_w.get_mut(&target_oid) {
-                let prop = PropertyIdentifier::from_raw(prop_id);
-                if let Err(e) = crate::command_source::write_target(
-                    target_obj,
-                    prop,
-                    reference.property_array_index,
-                    value,
-                    None,
-                    origin.as_ref(),
-                ) {
-                    warn!(
-                        target = %target_oid,
-                        property = prop_id,
-                        error = %e,
-                        "Schedule failed to write to controlled property"
-                    );
-                } else if !successful_oids.contains(&target_oid) {
-                    successful_oids.push(target_oid);
-                }
+    for (initiator, reference, value) in writes {
+        let origin = crate::command_source::resolve_local(
+            db_w,
+            crate::LocalCommandSource::Object(initiator),
+        )
+        .ok();
+        let target_oid = reference.object_identifier;
+        let prop_id = reference.property_identifier;
+        commit.before_change(db_w, target_oid);
+        if let Some(target_obj) = db_w.get_mut(&target_oid) {
+            let prop = PropertyIdentifier::from_raw(prop_id);
+            if let Err(e) = crate::command_source::write_target(
+                target_obj,
+                prop,
+                reference.property_array_index,
+                value,
+                None,
+                origin.as_ref(),
+            ) {
+                warn!(
+                    target = %target_oid,
+                    property = prop_id,
+                    error = %e,
+                    "Schedule failed to write to controlled property"
+                );
+            } else {
+                commit.changed(target_oid);
             }
         }
-        snapshots.changes(&db_w, &successful_oids)
-    };
-    changes
+    }
+    commit
 }

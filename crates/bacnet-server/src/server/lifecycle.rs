@@ -1,6 +1,7 @@
 use super::*;
 #[path = "intrinsic_reporting_lifecycle.rs"]
 mod intrinsic;
+use crate::committed_cov::BackgroundCommit;
 
 #[path = "lifecycle_period.rs"]
 mod period;
@@ -612,23 +613,41 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         });
 
+        // Background commits fan COV out like a network write (#889).
+        let cov_fanout = super::cov_fanout::CovFanout::new(
+            &db,
+            &network,
+            &cov_table,
+            &cov_in_flight,
+            &notification_transactions,
+            &comm_state,
+            &config,
+        );
+
         let fault_detection_task = if config.enable_fault_detection {
-            let db_fault = Arc::clone(&db);
+            let fanout = cov_fanout.clone();
             Some(spawn_owned(audit_owner.clone(), async move {
                 let detector = crate::fault_detection::FaultDetector::default();
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
                 loop {
                     interval.tick().await;
-                    let mut db_guard = db_fault.write().await;
-                    let changes = detector.evaluate(&mut db_guard);
-                    for change in &changes {
-                        debug!(
-                            object = %change.object_id,
-                            old = change.old_reliability,
-                            new = change.new_reliability,
-                            "Fault detection: reliability changed"
-                        );
-                    }
+                    let committed = {
+                        let mut db_guard = fanout.db.write().await;
+                        // The detector mutates objects in place, so snapshot
+                        // Life Safety state up front.
+                        let mut commit = BackgroundCommit::snapshot_all(&db_guard);
+                        for change in detector.evaluate(&mut db_guard) {
+                            debug!(
+                                object = %change.object_id,
+                                old = change.old_reliability,
+                                new = change.new_reliability,
+                                "Fault detection: reliability changed"
+                            );
+                            commit.changed(change.object_id);
+                        }
+                        commit.finish(&db_guard, &fanout.cov_table).await
+                    };
+                    fanout.fire(&committed).await;
                 }
             }))
         } else {
@@ -662,33 +681,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             crate::trend_log::run(Arc::clone(&db)),
         ));
 
-        let db_schedule = Arc::clone(&db);
-        let network_schedule = Arc::clone(&network);
-        let cov_table_schedule = Arc::clone(&cov_table);
-        let cov_in_flight_schedule = Arc::clone(&cov_in_flight);
-        let notification_transactions_schedule = Arc::clone(&notification_transactions);
-        let comm_state_schedule = Arc::clone(&comm_state);
-        let schedule_config = config.clone();
+        let schedule_fanout = cov_fanout.clone();
         let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                let changes =
-                    crate::schedule::tick_schedules_with_life_safety_cov(&db_schedule, 0).await;
-                for change in changes {
-                    Self::fire_life_safety_cov_notifications(
-                        &db_schedule,
-                        &network_schedule,
-                        &cov_table_schedule,
-                        &cov_in_flight_schedule,
-                        &notification_transactions_schedule,
-                        &comm_state_schedule,
-                        &schedule_config,
-                        &change.object_identifier,
-                        &change.changed_properties,
-                    )
-                    .await;
-                }
+                let committed = crate::schedule::tick_schedules_committed(
+                    &schedule_fanout.db,
+                    &schedule_fanout.cov_table,
+                )
+                .await;
+                schedule_fanout.fire(&committed).await;
             }
         }));
 
@@ -703,18 +706,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // It is also what carries Reliability into event-state-detection. Per
         // Clause 13.2.2 the FAULT determination is a standing condition, so each
         // tick re-derives it from the object's current `Reliability` rather than
-        // reacting to a change event. That is why the fault detector above can
-        // keep merely *logging* its `ReliabilityChange` records: whoever writes
-        // Reliability — an object's opt-in evaluation hook, a local write, or a
-        // network write — reaches detection through this tick, and no route
-        // needs to notify anything. `enable_fault_detection` therefore governs
-        // only whether those object-owned hooks run every 10 seconds, never
-        // whether an existing Reliability is honored.
+        // reacting to a change event. Whoever writes Reliability — an object's
+        // opt-in evaluation hook, a local write, or a network write — reaches
+        // detection through this tick. The fault detector above only fans COV
+        // out for the Status_Flags change it causes (#889); it signals nothing
+        // to event detection. `enable_fault_detection` therefore governs only
+        // whether those object-owned hooks run every 10 seconds, never whether
+        // an existing Reliability is honored.
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
-        let db_intrinsic = Arc::clone(&db);
-        let cov_table_intrinsic = Arc::clone(&cov_table);
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
         let learned_routers_intrinsic = Arc::clone(&learned_routers);
@@ -725,8 +726,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let intrinsic_reporting_task = Some(spawn_owned(
             audit_owner.clone(),
             intrinsic::run(
-                db_intrinsic,
-                cov_table_intrinsic,
+                cov_fanout,
                 network_intrinsic,
                 comm_state_intrinsic,
                 learned_routers_intrinsic,

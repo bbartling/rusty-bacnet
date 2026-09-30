@@ -346,13 +346,13 @@ async fn cov_status_snapshot_captures_companion_without_live_db_fallback() {
 }
 
 #[tokio::test]
-async fn cov_status_ordinary_preserves_successful_nonnumeric_and_no_increment_fanout() {
+async fn cov_status_ordinary_reports_nonnumeric_and_no_increment_values_only_on_change() {
     for nonnumeric in [true, false] {
         let (f, s, sub) = fixture(CovNotificationKind::Single, true).await;
         if nonnumeric {
             s.lock().unwrap().selected = PropertyValue::Boolean(false);
         } else {
-            // Omitted subscription and object increments preserve ordinary fanout.
+            // Omitted subscription and object increments: any change reports.
             s.lock().unwrap().increment = None;
             let mut sub = (*sub).clone();
             sub.cov_increment = None;
@@ -360,7 +360,18 @@ async fn cov_status_ordinary_preserves_successful_nonnumeric_and_no_increment_fa
         }
         f.fire(false, &[]).await;
         f.fire(false, &[]).await;
-        assert_eq!(f.sent.lock().unwrap().len(), 2);
+        assert_eq!(
+            f.sent.lock().unwrap().len(),
+            1,
+            "a repeated fanout of an unchanged value reports nothing"
+        );
+        s.lock().unwrap().selected = if nonnumeric {
+            PropertyValue::Boolean(true)
+        } else {
+            PropertyValue::Real(10.5)
+        };
+        f.fire(false, &[]).await;
+        assert_eq!(f.sent.lock().unwrap().len(), 2, "any change reports");
         f.finish(false).await;
     }
 }

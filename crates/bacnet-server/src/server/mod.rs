@@ -546,6 +546,7 @@ mod confirmed_issuance_tests;
 mod confirmed_request_tracker;
 mod cov_clock;
 mod cov_encoding;
+mod cov_fanout;
 mod cov_notifications;
 mod cov_snapshot;
 mod dcc_disable_rate;
@@ -643,6 +644,8 @@ mod audit_log_query_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod cov_background_tests;
+#[cfg(test)]
 mod cov_budget_tests;
 #[cfg(test)]
 mod cov_notifications_tests;
@@ -650,6 +653,8 @@ mod cov_notifications_tests;
 mod cov_quota_tests;
 #[cfg(test)]
 mod cov_timed_multiple_tests;
+#[cfg(test)]
+mod cov_wire_test_support;
 #[cfg(test)]
 mod dcc_event_detection_tests;
 #[cfg(test)]
