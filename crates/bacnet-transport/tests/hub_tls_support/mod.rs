@@ -87,6 +87,8 @@ pub async fn bounded<T>(future: impl Future<Output = T>) -> T {
 
 pub async fn websocket(address: SocketAddr, config: Arc<rustls::ClientConfig>) -> Peer {
     let tcp = bounded(TcpStream::connect(address)).await.unwrap();
+    // Like production SC sockets (#900): no Nagle delay between messages.
+    tcp.set_nodelay(true).unwrap();
     let tls = bounded(
         TlsConnector::from(config).connect(ServerName::try_from("localhost").unwrap(), tcp),
     )

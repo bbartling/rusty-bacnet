@@ -116,6 +116,7 @@ impl TestTls {
         let address = listener.local_addr().unwrap();
         let server = async {
             let (tcp, peer) = listener.accept().await.unwrap();
+            crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
             let tls = self.acceptor.accept(tcp).await.unwrap();
             #[allow(clippy::result_large_err)]
             let ws = tokio_tungstenite::accept_hdr_async(tls, |_: &_, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
@@ -150,6 +151,9 @@ impl TestTls {
         &self,
         tcp: tokio::net::TcpStream,
     ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+        // Like production SC sockets (#900): with Nagle on, a test that sends
+        // two messages before reading waits on the hub's delayed ACK.
+        tcp.set_nodelay(true).unwrap();
         tokio_rustls::TlsConnector::from(self.client.clone())
             .connect(
                 rustls::pki_types::ServerName::try_from("localhost").unwrap(),

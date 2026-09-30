@@ -25,6 +25,17 @@ use crate::sc_frame::{BACNET_SC_DIRECT_SUBPROTOCOL, BACNET_SC_HUB_SUBPROTOCOL};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// Turn off Nagle's algorithm on an SC TCP stream before TLS. SC traffic is
+/// small WebSocket messages; with Nagle on, a message written before the
+/// previous one is acknowledged waits for that ACK, which a peer with nothing
+/// to send back can delay by tens of milliseconds (#900). A failure only costs
+/// latency, so it is logged and the connection proceeds.
+pub(crate) fn disable_nagle(stream: &TcpStream) {
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::debug!(%error, "SC TCP stream keeps Nagle's algorithm");
+    }
+}
+
 /// A TLS-secured WebSocket connection implementing [`WebSocketPort`].
 ///
 /// Created via [`TlsWebSocket::connect`], which performs the TLS handshake and
@@ -104,6 +115,7 @@ impl TlsWebSocket {
             .into_bacnet_error_with_io_kind(e.kind())
         })?;
 
+        disable_nagle(&socket);
         let peer_address = socket.peer_addr().map_err(Error::Transport)?;
         let tls_stream = tls_config
             .into_connector()
@@ -405,6 +417,20 @@ mod tests {
     use tokio_rustls::rustls::pki_types::pem::PemObject;
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use tokio_rustls::TlsAcceptor;
+
+    #[tokio::test]
+    async fn disable_nagle_sets_tcp_nodelay_on_both_ends() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dialed = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (accepted, _) = listener.accept().await.unwrap();
+        for stream in [&dialed, &accepted] {
+            assert!(!stream.nodelay().unwrap(), "Nagle is on by default");
+            disable_nagle(stream);
+            assert!(stream.nodelay().unwrap());
+        }
+    }
 
     #[test]
     fn parse_wss_uri_accepts_secure_websocket_scheme() {
