@@ -243,9 +243,9 @@ impl VTDataRequest {
 /// VT-Data-Ack service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VTDataAck {
-    /// [0] allNewDataAccepted OPTIONAL
+    /// \[0\] allNewDataAccepted OPTIONAL
     pub all_new_data_accepted: Option<bool>,
-    /// [1] acceptedOctetCount OPTIONAL
+    /// \[1\] acceptedOctetCount OPTIONAL
     pub accepted_octet_count: Option<u32>,
 }
 

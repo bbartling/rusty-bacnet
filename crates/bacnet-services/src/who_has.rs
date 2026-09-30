@@ -13,9 +13,9 @@ use bytes::BytesMut;
 /// The object to search for: by identifier or by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WhoHasObject {
-    /// Search by object identifier ([2] context tag).
+    /// Search by object identifier (\[2\] context tag).
     Identifier(ObjectIdentifier),
-    /// Search by object name ([3] context tag).
+    /// Search by object name (\[3\] context tag).
     Name(String),
 }
 

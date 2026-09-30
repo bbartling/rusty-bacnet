@@ -114,7 +114,7 @@ pub enum Commandability {
 /// Borrowed from a running [`EndpointSession`](crate::session::EndpointSession)
 /// via `client()` / `cloned_client_handle()`. No lifecycle methods: after the
 /// owning session stops or drops, every call returns
-/// [`Error::Encoding`](bacnet_types::error::Error::Encoding) (`"endpoint
+/// [`Error::Encoding`] (`"endpoint
 /// shutdown"`). `Send + Sync`, so clones may outlive the session borrow and
 /// move across tasks.
 ///

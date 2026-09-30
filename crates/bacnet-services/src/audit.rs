@@ -5,9 +5,9 @@
 //! errata page 3 under its page-1 convention (strikeout = removed, italics =
 //! added) and recorded by RB-01. Item 7 (Clause 21.6, printed p. 886)
 //! corrects the by-target/by-source `successful-actions-only` fields from
-//! BOOLEAN to `BACnetSuccessFilter` at unchanged tags [7]/[4]; item 8
+//! BOOLEAN to `BACnetSuccessFilter` at unchanged tags \[7\]/\[4\]; item 8
 //! (Clause 21.2.3, printed p. 865) corrects `start-at-sequence-number` from
-//! Unsigned32 to Unsigned64 at unchanged optional tag [2]. Unsigned values
+//! Unsigned32 to Unsigned64 at unchanged optional tag \[2\]. Unsigned values
 //! use the library's `u64` implementation limit (1-8 octet canonical forms).
 
 pub use bacnet_types::constructed::{

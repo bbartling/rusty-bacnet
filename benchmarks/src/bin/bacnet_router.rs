@@ -13,7 +13,7 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(name = "bacnet-router", about = "BACnet multi-port router")]
 struct Args {
-    /// Comma-separated port specs: bip:<ip>:<port>:<broadcast>:<network>
+    /// Comma-separated port specs: `bip:<ip>:<port>:<broadcast>:<network>`
     #[arg(long)]
     ports: String,
 }

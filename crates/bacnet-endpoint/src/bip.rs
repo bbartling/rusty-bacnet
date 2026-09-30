@@ -17,7 +17,7 @@
 //! Broader BBMD/foreign behavior remains experimental. Management ACL,
 //! persistence and fanout controls retain construction-only endpoint coverage.
 //! Live BVLC queries (`read_bdt` / `write_bdt` / `read_fdt` / …) stay on
-//! [`BipTransport`](bacnet_transport::bip::BipTransport).
+//! [`BipTransport`].
 //!
 //! ```no_run
 //! use std::net::Ipv4Addr;
@@ -189,7 +189,7 @@ impl BipEndpointBuilder {
     /// [`foreign_device_policy`](Self::foreign_device_policy) /
     /// [`bbmd_management_acl`](Self::bbmd_management_acl) without it fail
     /// [`build_transport`](Self::build_transport) with a typed
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding).
+    /// [`Error::Encoding`].
     pub fn enable_bbmd(mut self, bdt: Vec<BdtEntry>) -> Self {
         self.bbmd_bdt = Some(bdt);
         self
@@ -238,7 +238,7 @@ impl BipEndpointBuilder {
 
     /// Builds the concrete B/IP transport with all pre-start controls applied.
     ///
-    /// Returns a typed [`Error::Encoding`](bacnet_types::error::Error::Encoding)
+    /// Returns a typed [`Error::Encoding`]
     /// when BBMD-dependent controls are set without
     /// [`enable_bbmd`](Self::enable_bbmd), or a source Audit route data
     /// is set (it requires [`build_session`](Self::build_session), not a bare

@@ -27,7 +27,7 @@ impl ListElementRequest {
     ///
     /// Requires elements and a nonzero optional index. Tag headers, lengths and
     /// balanced context nesting use the shared parser limits, counting the outer
-    /// service [3] wrapper. Application Boolean has no payload octets. Primitive
+    /// service \[3\] wrapper. Application Boolean has no payload octets. Primitive
     /// value forms, vendor semantics and remote property types are not checked.
     pub fn validate(&self) -> Result<(), Error> {
         if self.property_array_index == Some(0) {

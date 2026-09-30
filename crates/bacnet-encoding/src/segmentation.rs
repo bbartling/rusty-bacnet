@@ -103,7 +103,7 @@ impl SegmentReceiver {
 
     /// Store a received segment.
     ///
-    /// Returns an error if the segment exceeds [`MAX_SEGMENT_SIZE`](Self::MAX_SEGMENT_SIZE).
+    /// Returns an error if the segment exceeds `MAX_SEGMENT_SIZE`.
     pub fn receive(&mut self, sequence_number: u8, data: Bytes) -> Result<(), Error> {
         if data.len() > Self::MAX_SEGMENT_SIZE {
             return Err(Error::Segmentation(format!(

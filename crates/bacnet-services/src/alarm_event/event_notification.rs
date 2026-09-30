@@ -23,7 +23,7 @@ pub struct EventNotificationRequest {
     pub priority: u8,
     /// Event type (e.g., OUT_OF_RANGE = 5).
     pub event_type: u32,
-    /// Optional message text ([7]).
+    /// Optional message text (\[7\]).
     pub message_text: Option<String>,
     /// Notify type: ALARM(0), EVENT(1), ACK_NOTIFICATION(2).
     pub notify_type: u32,
@@ -33,7 +33,7 @@ pub struct EventNotificationRequest {
     pub from_state: u32,
     /// Event state after this transition.
     pub to_state: u32,
-    /// Optional event values (tag [12]).
+    /// Optional event values (tag \[12\]).
     pub event_values: Option<NotificationParameters>,
 }
 

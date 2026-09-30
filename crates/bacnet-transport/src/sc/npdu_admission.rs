@@ -83,7 +83,7 @@ pub(crate) const DEFAULT_NPDU_PER_ORIGIN_LIMIT: usize = 4;
 /// Startup-validated SC NPDU admission limits (builder-style).
 ///
 /// Only the per-origin quota is configurable; the aggregate cap is the fixed
-/// 64-item NPDU channel. See the [module](self) docs for the ratio and the
+/// 64-item NPDU channel. See the `sc::npdu_admission` module docs for the ratio and the
 /// measured tradeoff behind the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScNpduAdmissionPolicy {
@@ -428,8 +428,8 @@ impl ScNpduAdmission {
 impl<W: WebSocketPort> ScTransport<W> {
     /// Set the per-origin queued-NPDU quota (builder-style).
     ///
-    /// Defaults to [`DEFAULT_NPDU_PER_ORIGIN_LIMIT`]: the network-layer
-    /// 16/256 ratio scaled to the 64-item SC queue. [`TransportPort::start`]
+    /// Defaults to `DEFAULT_NPDU_PER_ORIGIN_LIMIT`: the network-layer
+    /// 16/256 ratio scaled to the 64-item SC queue. [`TransportPort::start`](crate::port::TransportPort::start)
     /// validates the limit before any I/O or state change and rejects zero
     /// or above-capacity values; the aggregate cap stays the fixed channel
     /// capacity. Applies jointly to hub-relayed and merged-direct NPDUs,
@@ -442,7 +442,7 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 
     /// Read this transport's NPDU drop counts, including after
-    /// [`TransportPort::stop`].
+    /// [`TransportPort::stop`](crate::port::TransportPort::stop).
     ///
     /// Count-only and saturating: per-origin fairness drops, aggregate-full
     /// drops, and closed-receiver drops in Closed > fairness > Full order.

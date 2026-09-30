@@ -490,7 +490,7 @@ impl BipTransport {
     ///
     /// This is a low-level BVLC management operation. It does NOT configure this
     /// transport as a foreign device for broadcast behavior (use
-    /// [`register_as_foreign_device`] before `start()` for that).
+    /// [`register_as_foreign_device`](Self::register_as_foreign_device) before `start()` for that).
     pub async fn register_foreign_device_bvlc(
         &self,
         target: &[u8],

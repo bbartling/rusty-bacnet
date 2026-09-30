@@ -718,7 +718,7 @@ impl MasterNode {
     /// Queue an NPDU for transmission.
     ///
     /// Returns an error if the NPDU exceeds the supported standard-frame limit
-    /// or the TX queue has reached [`MAX_TX_QUEUE_DEPTH`].
+    /// or the TX queue has reached `MAX_TX_QUEUE_DEPTH`.
     pub fn queue_npdu(&mut self, dest: u8, npdu: Bytes) -> Result<(), Error> {
         self.queue_npdu_observed(dest, npdu, None)
     }

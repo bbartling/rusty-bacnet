@@ -18,6 +18,8 @@ type Uuid = [u8; 16];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DirectRole {
+    // Accepted connections exist only with the sc-tls direct listener.
+    #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
     Accepted,
     Outbound,
 }
@@ -220,6 +222,8 @@ impl Drop for Reservation {
 pub(crate) struct Membership {
     owner: Arc<DirectMembership>,
     pub(crate) generation: u64,
+    // Read by the sc-tls direct response path.
+    #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
     pub(crate) vmac: Vmac,
     pub(crate) egress: DirectEgress,
     writes: Mutex<Option<tokio::sync::mpsc::Receiver<DirectWrite>>>,

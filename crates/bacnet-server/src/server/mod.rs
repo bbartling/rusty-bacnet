@@ -1,7 +1,7 @@
 //! BACnetServer: builder, APDU dispatch, and lifecycle management.
 //!
 //! The server wraps a NetworkLayer behind Arc (shared with the dispatch task),
-//! owns an ObjectDatabase via Arc<Mutex>, and spawns a dispatch task that
+//! owns an ObjectDatabase via `Arc<Mutex>`, and spawns a dispatch task that
 //! routes incoming APDUs to service handlers.
 
 use std::collections::HashMap;

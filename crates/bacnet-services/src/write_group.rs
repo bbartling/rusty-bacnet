@@ -15,11 +15,11 @@ use crate::common::MAX_DECODED_ITEMS;
 /// A single entry in the WriteGroup change list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupChannelValue {
-    /// [0] channel OPTIONAL
+    /// \[0\] channel OPTIONAL
     pub channel: Option<ObjectIdentifier>,
-    /// [1] overridePriority OPTIONAL
+    /// \[1\] overridePriority OPTIONAL
     pub override_priority: Option<u8>,
-    /// [2] value — raw application-tagged bytes
+    /// \[2\] value — raw application-tagged bytes
     pub value: Vec<u8>,
 }
 

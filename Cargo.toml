@@ -92,10 +92,9 @@ getrandom = "0.3"
 # carries `#[allow(unsafe_code)]` and a `// SAFETY:` comment, so this
 # stays `deny` everywhere.
 unsafe_code = "deny"
-# Surface missing pub-item docs in CI logs. Counts (2026-05-08): 3,335
-# warnings across the workspace. Per-crate ratchet to `deny` planned
-# for 0.9.x once each crate drops below ~25.
-missing_docs = "warn"
+# Every public item is documented (#902); bacnet-benchmarks (publish = false)
+# opts out in its lib.rs.
+missing_docs = "deny"
 unused_must_use = "deny"
 
 [workspace.lints.clippy]

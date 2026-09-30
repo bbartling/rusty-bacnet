@@ -77,7 +77,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet error classes (Clause 18.1.1).
+    /// BACnet error classes (Clause 18).
     pub struct ErrorClass(u16);
 
     const DEVICE = 0;

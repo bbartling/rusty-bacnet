@@ -135,7 +135,7 @@ impl DeviceTable {
     /// Insert or update a discovered device.
     ///
     /// The row's `segmentation_supported` is treated as authoritative
-    /// capability (explicit configuration); see [`PeerSegmentation`].
+    /// capability (explicit configuration); see `PeerSegmentation`.
     /// This explicit administrative path replaces any row with the same
     /// instance regardless of endpoint identity.
     ///

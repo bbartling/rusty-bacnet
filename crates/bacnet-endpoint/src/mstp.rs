@@ -173,7 +173,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     ///
     /// Mirrors `MasterNode` addressing (`max_master <= 127`,
     /// `this_station <= max_master`); returns a typed
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) otherwise.
+    /// [`Error::Encoding`] otherwise.
     pub fn validate_only(&self) -> Result<(), Error> {
         Self::validate_addressing(self.this_station, self.max_master)
     }

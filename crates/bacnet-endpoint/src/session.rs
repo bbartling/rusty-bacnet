@@ -133,7 +133,7 @@ pub struct SessionConfig {
     /// Bounded capacity for each ingress queue + egress channel.
     ///
     /// Must be greater than zero; [`EndpointSession::new`] returns
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) otherwise.
+    /// [`Error::Encoding`] otherwise.
     pub queue_capacity: usize,
     /// Client APDU timeout (ms).
     pub apdu_timeout_ms: u64,
@@ -266,7 +266,7 @@ pub enum SessionExit {
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
-    /// Returns [`Error::Encoding`](bacnet_types::error::Error::Encoding) when
+    /// Returns [`Error::Encoding`] when
     /// `config.queue_capacity == 0`. Normally built via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
     /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
@@ -444,7 +444,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Starts ingress, roles and the single dispatch consumer once.
     ///
     /// Start-once: a second call returns
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) without
+    /// [`Error::Encoding`] without
     /// binding again. Takes `&mut self` so only the owner can start.
     /// Source-profile validation runs before lifecycle consumption or ingress
     /// startup; its errors leave the session ready for correction and retry.
@@ -506,7 +506,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Returns the dispatch [`SessionExit`]. A canceled stop retains its joins
     /// and sealed membership protection; a later call finishes teardown. Calling before
     /// `start()` or twice returns
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding). Takes
+    /// [`Error::Encoding`]. Takes
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {

@@ -261,7 +261,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// separate heuristic, so the PICS
     /// writable flags cannot drift from the actual write routes. The default
     /// reproduces the historical PICS heuristic (see
-    /// [`historical_writable_default`]) so unmigrated object types keep their
+    /// `historical_writable_default`) so unmigrated object types keep their
     /// current PICS output. Object implementations override to mirror their
     /// real write capabilities, including required command origin and ownership.
     ///
@@ -297,7 +297,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// PROPERTY_IS_NOT_AN_ARRAY (Clause 15.5.1.3, Clause 15.9.1.3).
     ///
     /// The default reproduces the standard's classification (see
-    /// [`array_property_default`]): identifier-stable arrays are admitted
+    /// `array_property_default`): identifier-stable arrays are admitted
     /// without consulting the object type, the identifiers whose datatype
     /// changes with the object type (ALARM_VALUES / FAULT_VALUES,
     /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE) classify by
