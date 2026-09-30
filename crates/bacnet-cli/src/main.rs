@@ -242,10 +242,12 @@ async fn execute_command<T: TransportPort + 'static>(
                 client,
                 &mac,
                 *file_instance,
-                *access,
-                *start,
-                *count,
-                output.as_deref(),
+                commands::file::FileReadOptions {
+                    access: *access,
+                    start_position: *start,
+                    count: *count,
+                    output_path: output.as_deref(),
+                },
                 format,
             )
             .await?;

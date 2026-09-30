@@ -27,10 +27,13 @@ use tokio::sync::mpsc;
 /// MAC. The MAC matters: a recipient on a remote network that is delivered as a
 /// local unicast reaches whichever device happens to hold that MAC on this link,
 /// which is the failure this module exists to catch.
+/// One recorded unicast send: destination MAC and NPDU bytes.
+type UnicastFrame = (Vec<u8>, Bytes);
+
 #[derive(Clone, Default)]
 pub(super) struct RoutingTransport {
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
+    unicasts: StdArc<StdMutex<Vec<UnicastFrame>>>,
 }
 
 impl TransportPort for RoutingTransport {
@@ -92,9 +95,7 @@ pub(super) fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipi
 
 /// Fire one TO_OFFNORMAL transition at an AnalogInput whose Notification Class
 /// holds exactly `destinations`, and return what reached the transport.
-async fn distribute_to(
-    destinations: Vec<BACnetDestination>,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_to(destinations: Vec<BACnetDestination>) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     distribute_with_priority([255, 255, 255], destinations).await
 }
 
@@ -103,7 +104,7 @@ async fn distribute_to(
 pub(super) async fn distribute_with_priority(
     priority: [u8; 3],
     destinations: Vec<BACnetDestination>,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     distribute_with_clock_mode(priority, destinations, true).await
 }
 
@@ -111,7 +112,7 @@ async fn distribute_with_clock_mode(
     priority: [u8; 3],
     destinations: Vec<BACnetDestination>,
     clocked: bool,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     let mut db = if clocked {
         clocked_test_database()
     } else {
@@ -126,7 +127,7 @@ async fn distribute_with_clock_mode(
     distribute_from_database(db).await
 }
 
-async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     distribute_from_database_with_bindings(
         db,
         Arc::new(RwLock::new(
@@ -139,7 +140,7 @@ async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u
 pub(super) async fn distribute_from_database_with_bindings(
     mut db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     let transport = RoutingTransport::default();
     let broadcasts = StdArc::clone(&transport.broadcasts);
     let unicasts = StdArc::clone(&transport.unicasts);
@@ -170,12 +171,16 @@ pub(super) async fn distribute_from_database_with_bindings(
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let notifications = NotificationTransactions::new();
     BACnetServer::<RoutingTransport>::build_and_send_event_notification_with_bindings(
-        &db,
-        &network,
-        &comm_state,
-        &learned_routers,
-        &notifications,
-        &device_bindings,
+        &EventDelivery {
+            db: &db,
+            network: &network,
+            comm_state: &comm_state,
+            learned_routers: &learned_routers,
+            notification_transactions: &notifications,
+            device_bindings: &device_bindings,
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &oid,
         (
             EventStateChange {
@@ -184,8 +189,6 @@ pub(super) async fn distribute_from_database_with_bindings(
             },
             EventType::OUT_OF_RANGE,
         ),
-        1000,
-        1476,
     )
     .await;
 
@@ -275,7 +278,7 @@ impl BACnetObject for TestNotificationClass {
     }
 }
 
-async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     let mut db = clocked_test_database();
     match case {
         "missing-class" => {}

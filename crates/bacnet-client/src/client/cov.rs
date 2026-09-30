@@ -4,6 +4,39 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::num::NonZeroU32;
 
+/// Parameters of a single-property COV subscription with an explicit finite lifetime.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CovPropertySubscription {
+    /// Subscriber process identifier echoed in notifications.
+    pub subscriber_process_identifier: u32,
+    /// Object whose property is monitored.
+    pub monitored_object_identifier: ObjectIdentifier,
+    /// Property to monitor.
+    pub monitored_property_identifier: PropertyIdentifier,
+    /// Optional array index of the monitored property.
+    pub monitored_property_array_index: Option<u32>,
+    /// Whether notifications are confirmed.
+    pub confirmed: bool,
+    /// Subscription lifetime in seconds; must be positive.
+    pub lifetime: NonZeroU32,
+    /// Optional COV increment for numeric properties.
+    pub cov_increment: Option<f32>,
+}
+
+impl CovPropertySubscription {
+    fn into_request(self) -> SubscribeCOVPropertyRequest {
+        SubscribeCOVPropertyRequest {
+            subscriber_process_identifier: self.subscriber_process_identifier,
+            monitored_object_identifier: self.monitored_object_identifier,
+            issue_confirmed_notifications: Some(self.confirmed),
+            lifetime: Some(self.lifetime.get()),
+            monitored_property_identifier: self.monitored_property_identifier,
+            monitored_property_array_index: self.monitored_property_array_index,
+            cov_increment: self.cov_increment,
+        }
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     fn subscribe_cov_request(
         subscriber_process_identifier: u32,
@@ -190,23 +223,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub async fn subscribe_cov_property(
         &self,
         destination_mac: &[u8],
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-        monitored_property_identifier: PropertyIdentifier,
-        monitored_property_array_index: Option<u32>,
-        confirmed: bool,
-        lifetime: NonZeroU32,
-        cov_increment: Option<f32>,
+        subscription: CovPropertySubscription,
     ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_property_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            Some(confirmed),
-            Some(lifetime.get()),
-            monitored_property_identifier,
-            monitored_property_array_index,
-            cov_increment,
-        );
+        let request = subscription.into_request();
 
         self.send_subscribe_cov_property_request(
             ConfirmedTarget::Local {
@@ -222,23 +241,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub async fn subscribe_cov_property_to_device(
         &self,
         device_instance: u32,
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-        monitored_property_identifier: PropertyIdentifier,
-        monitored_property_array_index: Option<u32>,
-        confirmed: bool,
-        lifetime: NonZeroU32,
-        cov_increment: Option<f32>,
+        subscription: CovPropertySubscription,
     ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_property_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            Some(confirmed),
-            Some(lifetime.get()),
-            monitored_property_identifier,
-            monitored_property_array_index,
-            cov_increment,
-        );
+        let request = subscription.into_request();
 
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;

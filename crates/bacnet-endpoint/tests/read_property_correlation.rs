@@ -51,7 +51,7 @@ use bacnet_encoding::{
     apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck},
     npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress},
 };
-use bacnet_endpoint::{EndpointSession, SessionConfig};
+use bacnet_endpoint::{EndpointApduDestination, EndpointSession, SessionConfig};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::{loopback::LoopbackTransport, port::TransportPort};
 use bacnet_types::{enums::ConfirmedServiceChoice, error::Error, MacAddr};
@@ -88,7 +88,17 @@ impl Reader {
                 session
                     .client()
                     .unwrap()
-                    .read_property_routed(&[2], 100, &[3], vec![], object, property, index)
+                    .read_property_with_destination(
+                        EndpointApduDestination::Routed {
+                            router_mac: MacAddr::from_slice(&[2]),
+                            destination_network: 100,
+                            destination_mac: MacAddr::from_slice(&[3]),
+                        },
+                        vec![],
+                        object,
+                        property,
+                        index,
+                    )
                     .await
             }
             Self::Endpoint(session) => {

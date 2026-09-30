@@ -116,12 +116,16 @@ async fn fire_event(server: &BACnetServer<HeldTransport>) {
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
         .unwrap();
     BACnetServer::<HeldTransport>::build_and_send_event_notification_with_bindings(
-        &Arc::new(RwLock::new(db)),
-        server.test_network(),
-        &server.comm_state,
-        &server.learned_routers,
-        &server.notification_transactions,
-        &server.device_bindings,
+        &EventDelivery {
+            db: &Arc::new(RwLock::new(db)),
+            network: server.test_network(),
+            comm_state: &server.comm_state,
+            learned_routers: &server.learned_routers,
+            notification_transactions: &server.notification_transactions,
+            device_bindings: &server.device_bindings,
+            retry_timeout_ms: 3000,
+            local_apdu_capacity: 1476,
+        },
         &ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
         (
             EventStateChange {
@@ -130,8 +134,6 @@ async fn fire_event(server: &BACnetServer<HeldTransport>) {
             },
             EventType::OUT_OF_RANGE,
         ),
-        3000,
-        1476,
     )
     .await;
 }

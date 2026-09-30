@@ -3,26 +3,32 @@
 use super::admission::{
     channel_provenance, connect_denied_nak, ScHubAdmissionDecision, ScHubAdmissionInput,
 };
+use super::context::{HubConnectionContext, PeerConnection};
 use super::relay_send::SocketIo;
 use super::*;
 use crate::sc::diagnostic_throttle::DiagnosticThrottle;
 
 pub(super) async fn run(
-    peer_addr: SocketAddr,
-    hub: (Vmac, DeviceUuid),
-    mut read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
-    write: Arc<Mutex<WsSink>>,
-    clients: (Clients, &mut super::retirement::Lease),
+    peer: PeerConnection,
+    ctx: HubConnectionContext,
+    lease: &mut super::retirement::Lease,
     deadline: &super::deadlines::ConnectDeadline,
     on_heartbeat_ack: impl Fn() + Send,
-    admission: Arc<super::admission::AdmissionRuntime>,
-    verified_leaf: Option<certificate_bindings::VerifiedLeaf>,
-    graceful: super::graceful::GracefulCtx,
-    timing: super::timing::HubTiming,
 ) {
+    let PeerConnection {
+        addr: peer_addr,
+        mut read,
+        write,
+        verified_leaf,
+    } = peer;
+    let HubConnectionContext {
+        hub: (hub_vmac, hub_uuid),
+        clients,
+        admission,
+        graceful,
+        timing,
+    } = ctx;
     let tls_client_verified = verified_leaf.is_some();
-    let (hub_vmac, hub_uuid) = hub;
-    let (clients, lease) = clients;
     let close_requested = lease.closed.clone();
     let close_notify = lease.notify.clone();
     let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(timing.now_ms()));
@@ -518,20 +524,7 @@ pub(super) async fn run(
                     lease.vmac = Some(vmac);
                 }
 
-                let mut accept_payload = Vec::with_capacity(26);
-                accept_payload.extend_from_slice(&hub_vmac);
-                accept_payload.extend_from_slice(&hub_uuid);
-                accept_payload.extend_from_slice(&HUB_MAX_BVLC_LENGTH.to_be_bytes());
-                accept_payload.extend_from_slice(&HUB_MAX_NPDU_LENGTH.to_be_bytes());
-                let accept = ScMessage {
-                    function: ScFunction::ConnectAccept,
-                    message_id: sc_msg.message_id,
-                    originating_vmac: None,
-                    destination_vmac: None,
-                    dest_options: Vec::new(),
-                    data_options: Vec::new(),
-                    payload: Bytes::from(accept_payload),
-                };
+                let accept = connect_accept_message(sc_msg.message_id, hub_vmac, hub_uuid);
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &accept);
 

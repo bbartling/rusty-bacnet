@@ -162,9 +162,11 @@
 //!   [`SessionRole`](session::SessionRole), [`SessionConfig`](session::SessionConfig),
 //!   [`PolicyCountersSnapshot`](session::PolicyCountersSnapshot),
 //!   [`SessionExit`](session::SessionExit).
-//! - [`roles`] — [`ClientRoleHandle`](roles::ClientRoleHandle) (`read_property*`
-//!   trio only) + [`ServerRoleHandle`](roles::ServerRoleHandle) (inbound /
-//!   liveness / suspend / notification admit-complete).
+//! - [`roles`] — [`ClientRoleHandle`](roles::ClientRoleHandle) (`read_property`
+//!   and `read_property_with_destination`, addressed by
+//!   [`EndpointApduDestination`]) +
+//!   [`ServerRoleHandle`](roles::ServerRoleHandle) (inbound / liveness / suspend /
+//!   notification admit-complete).
 //! - [`identity`] — [`DeviceIdentity`](identity::DeviceIdentity),
 //!   [`NetworkPortEntry`](identity::NetworkPortEntry),
 //!   [`build_database_with_extra`](identity::build_database_with_extra).
@@ -184,7 +186,7 @@ pub mod session;
 mod source_audit;
 
 pub use identity::{build_database_with_extra, DeviceIdentity, NetworkPortEntry};
-pub use roles::{ClientRoleHandle, ServerRoleHandle};
+pub use roles::{ClientRoleHandle, EndpointApduDestination, ServerRoleHandle};
 pub use session::{
     EndpointSession, PolicyCountersSnapshot, SessionConfig, SessionExit, SessionRole,
 };

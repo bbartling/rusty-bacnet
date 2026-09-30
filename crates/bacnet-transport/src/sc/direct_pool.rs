@@ -8,6 +8,8 @@ use super::direct_membership::{disconnect_request, Membership};
 use super::direct_receive::direct_npdu;
 use super::direct_receive::{direct_must_understand_decision, DirectMuDecision};
 use super::direct_socket::{DirectFrame, DirectSocket};
+#[cfg(feature = "sc-tls")]
+use super::npdu_admission::DirectPeer;
 use super::WebSocketPort;
 use crate::sc_frame::{
     decode_sc_message, encode_sc_message, validate_control, ControlRecipient, ScFunction,
@@ -144,10 +146,12 @@ impl PooledDirect {
                                                 &intake.tx,
                                                 &message,
                                                 npdu,
-                                                owner.vmac,
-                                                address,
-                                                identity,
-                                                Some(response.clone()),
+                                                DirectPeer {
+                                                    vmac: owner.vmac,
+                                                    addr: address,
+                                                    identity,
+                                                    response: Some(response.clone()),
+                                                },
                                             )
                                         });
                                     }

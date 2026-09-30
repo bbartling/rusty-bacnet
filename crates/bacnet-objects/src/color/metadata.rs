@@ -338,7 +338,9 @@ mod tests {
 
     #[test]
     fn property_metadata_color_pair_write_capabilities_match_dispatch() {
-        let cases: [(fn() -> Box<dyn BACnetObject>, &[P]); 2] = [
+        // Constructor paired with the properties it must accept writes for.
+        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P]);
+        let cases: [WriteCase; 2] = [
             (
                 || Box::new(ColorObject::new(1, "CLR-1").unwrap()),
                 &[

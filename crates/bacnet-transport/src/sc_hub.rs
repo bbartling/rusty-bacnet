@@ -37,6 +37,7 @@ mod broadcast_rate;
 mod certificate_bindings;
 mod client;
 mod connection;
+mod context;
 mod deadlines;
 mod graceful;
 mod handler;
@@ -69,6 +70,7 @@ pub use timing::ScHubProbePolicy;
 pub use tls_config::ScHubTlsConfig;
 
 use client::HubClient;
+use context::{HubConnectionContext, HubListener, PeerConnection};
 use helpers::*;
 
 #[cfg(test)]
@@ -305,11 +307,13 @@ impl ScHub {
         let mut tasks = tasks.with_probe_policy(probe_policy);
         tasks.timing.relay_send_budget = relay_send_budget;
         let task = tokio::spawn(connection::accept_loop_with_counter(
-            listener,
-            tls_acceptor,
+            HubListener {
+                listener,
+                tls_acceptor,
+                timeouts,
+            },
             (hub_vmac, hub_uuid),
             clients.clone(),
-            timeouts,
             active.clone(),
             tasks.clone(),
             admission.clone(),
@@ -463,33 +467,12 @@ impl Drop for ScHub {
 }
 
 async fn handle_client(
-    peer_addr: SocketAddr,
-    hub_vmac: Vmac,
-    hub_uuid: DeviceUuid,
-    read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
-    write: Arc<Mutex<WsSink>>,
-    clients: Clients,
+    peer: PeerConnection,
+    ctx: HubConnectionContext,
     expires: tokio::time::Instant,
-    admission: Arc<admission::AdmissionRuntime>,
-    verified_leaf: Option<certificate_bindings::VerifiedLeaf>,
-    graceful: graceful::GracefulCtx,
-    timing: timing::HubTiming,
 ) {
     let deadline = Arc::new(deadlines::ConnectDeadline::new(expires));
-    deadlines::serve(
-        peer_addr,
-        (hub_vmac, hub_uuid),
-        read,
-        write,
-        clients,
-        deadline,
-        || {},
-        admission,
-        verified_leaf,
-        graceful,
-        timing,
-    )
-    .await;
+    deadlines::serve(peer, ctx, deadline, || {}).await;
 }
 
 // Private ACK observer preserves the existing heartbeat test seam.
@@ -514,17 +497,21 @@ async fn handle_client_observed(
     let graceful = tasks.graceful_ctx();
     let timing = heartbeat_test_support::probe_runtime();
     deadlines::serve(
-        peer_addr,
-        (hub_vmac, hub_uuid),
-        read,
-        write,
-        clients,
+        PeerConnection {
+            addr: peer_addr,
+            read,
+            write,
+            verified_leaf: None,
+        },
+        HubConnectionContext {
+            hub: (hub_vmac, hub_uuid),
+            clients,
+            admission,
+            graceful,
+            timing,
+        },
         deadline,
         on_heartbeat_ack,
-        admission,
-        None,
-        graceful,
-        timing,
     )
     .await;
 }

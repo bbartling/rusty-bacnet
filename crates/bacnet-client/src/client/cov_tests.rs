@@ -295,13 +295,15 @@ async fn subscribe_cov_property_sends_property_request() {
         let result = client
             .subscribe_cov_property(
                 &device_mac,
-                79,
-                monitored_object,
-                PropertyIdentifier::PRESENT_VALUE,
-                Some(2),
-                false,
-                std::num::NonZeroU32::new(300).unwrap(),
-                Some(0.25),
+                CovPropertySubscription {
+                    subscriber_process_identifier: 79,
+                    monitored_object_identifier: monitored_object,
+                    monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    monitored_property_array_index: Some(2),
+                    confirmed: false,
+                    lifetime: std::num::NonZeroU32::new(300).unwrap(),
+                    cov_increment: Some(0.25),
+                },
             )
             .await;
         client.stop().await.unwrap();
@@ -361,13 +363,15 @@ async fn subscribe_cov_property_to_device_uses_routed_addressing() {
         let result = client
             .subscribe_cov_property_to_device(
                 2003,
-                80,
-                monitored_object,
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                true,
-                std::num::NonZeroU32::new(600).unwrap(),
-                Some(1.5),
+                CovPropertySubscription {
+                    subscriber_process_identifier: 80,
+                    monitored_object_identifier: monitored_object,
+                    monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    monitored_property_array_index: None,
+                    confirmed: true,
+                    lifetime: std::num::NonZeroU32::new(600).unwrap(),
+                    cov_increment: Some(1.5),
+                },
             )
             .await;
         client.stop().await.unwrap();

@@ -506,17 +506,32 @@ where
     Ok(summary)
 }
 
+/// How much of a file to read and where to put it.
+pub struct FileReadOptions<'a> {
+    /// Stream or record access.
+    pub access: FileReadAccess,
+    /// Starting octet or record position.
+    pub start_position: i32,
+    /// Octets or records requested per window.
+    pub count: u32,
+    /// Destination file; `None` prints stream data to the terminal.
+    pub output_path: Option<&'a str>,
+}
+
 /// Read a complete file from a remote device via successive AtomicReadFile ACKs.
 pub async fn file_read_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
     file_instance: u32,
-    access: FileReadAccess,
-    start_position: i32,
-    count: u32,
-    output_path: Option<&str>,
+    options: FileReadOptions<'_>,
     format: OutputFormat,
 ) -> Result<(), BoxError> {
+    let FileReadOptions {
+        access,
+        start_position,
+        count,
+        output_path,
+    } = options;
     let output_path = output_path.map(Path::new);
     validate_file_read_options(access, start_position, count, output_path)?;
     let file_oid = ObjectIdentifier::new(ObjectType::FILE, file_instance)?;

@@ -2,6 +2,7 @@ use super::response_admission::{
     admit_terminal_during_reassembly, complete_terminal_response, current_reassembly_owner,
     log_coordinated_mismatch, take_current_reassembly, TerminalDispatchOutcome,
 };
+use super::segmentation_context::InboundSegmentSource;
 use super::*;
 use crate::tsm::{CompletionOutcome, CoordinatedCompletion};
 
@@ -101,9 +102,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         tsm,
                         network,
                         seg_state,
-                        source_mac,
-                        source_network,
-                        provenance,
+                        InboundSegmentSource {
+                            mac: source_mac,
+                            network: source_network,
+                            provenance,
+                        },
                         ack,
                         limits,
                     )

@@ -4,10 +4,24 @@ use std::time::Duration;
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 
-use super::ingress::original_destination_matches;
+use super::ingress::{original_destination_matches, LocalBinding};
 use super::vmac_table::derive_vmac_from_device_instance;
 use super::*;
 use crate::port::TransportPort;
+
+fn binding(
+    ip: Ipv6Addr,
+    vmac: [u8; 3],
+    unicast_ips: &[Ipv6Addr],
+    wildcard_bind: bool,
+) -> LocalBinding<'_> {
+    LocalBinding {
+        ip,
+        vmac,
+        unicast_ips,
+        wildcard_bind,
+    }
+}
 
 #[test]
 fn original_function_requires_matching_ip_destination_and_vmac() {
@@ -18,50 +32,35 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         Bvlc6Function::OriginalUnicast,
         local_ip.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         None,
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::OriginalUnicast,
         BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         None,
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::OriginalUnicast,
         local_ip.into(),
         Some([9, 9, 9]),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         None,
     ));
     assert!(original_destination_matches(
         Bvlc6Function::OriginalBroadcast,
         BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
         None,
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         None,
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::AddressResolutionAck,
         BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         Some(true),
     ));
 
@@ -69,70 +68,54 @@ fn original_function_requires_matching_ip_destination_and_vmac() {
         Bvlc6Function::OriginalUnicast,
         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9).into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip, Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9),],
-        true,
+        &binding(
+            local_ip,
+            local_vmac,
+            &[local_ip, Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9),],
+            true
+        ),
         None,
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::OriginalUnicast,
         BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        true,
+        &binding(local_ip, local_vmac, &[local_ip], true),
         Some(true),
     ));
     assert!(original_destination_matches(
         Bvlc6Function::AddressResolution,
         BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         Some(true),
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::AddressResolution,
         local_ip.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         Some(false),
     ));
     assert!(original_destination_matches(
         Bvlc6Function::VirtualAddressResolution,
         local_ip.into(),
         None,
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         Some(false),
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::VirtualAddressResolution,
         BACNET_IPV6_MULTICAST_LINK_LOCAL.into(),
         None,
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         Some(true),
     ));
     assert!(!original_destination_matches(
         Bvlc6Function::ForwardedAddressResolution,
         local_ip.into(),
         Some(local_vmac),
-        local_ip,
-        local_vmac,
-        &[local_ip],
-        false,
+        &binding(local_ip, local_vmac, &[local_ip], false),
         Some(false),
     ));
 }

@@ -1,17 +1,34 @@
 use super::event_notifications::resolve_committed_event_enrollment_transition;
 use super::*;
 
+/// Owned handles and settings the event-enrollment task moves into its loop.
+pub(super) struct EventEnrollmentTask<T: TransportPort + 'static> {
+    pub(super) db: Arc<RwLock<ObjectDatabase>>,
+    pub(super) network: Arc<NetworkLayer<T>>,
+    pub(super) comm_state: Arc<AtomicU8>,
+    pub(super) learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    pub(super) notification_transactions: Arc<NotificationTransactions>,
+    pub(super) device_bindings: Arc<RwLock<DeviceBindingTable>>,
+    /// Evaluation period, already clamped by the caller.
+    pub(super) period: Duration,
+    pub(super) retry_ms: u64,
+    pub(super) local_apdu_capacity: u32,
+}
+
 pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
-    db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<T>>,
-    comm_state: Arc<AtomicU8>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
-    notification_transactions: Arc<NotificationTransactions>,
-    device_bindings: Arc<RwLock<DeviceBindingTable>>,
-    period: Duration,
-    retry_ms: u64,
-    local_apdu_capacity: u32,
+    task: EventEnrollmentTask<T>,
 ) -> JoinHandle<()> {
+    let EventEnrollmentTask {
+        db,
+        network,
+        comm_state,
+        learned_routers,
+        notification_transactions,
+        device_bindings,
+        period,
+        retry_ms,
+        local_apdu_capacity,
+    } = task;
     let evaluation_interval_secs = period.as_secs().max(1);
     let owner = notification_transactions.audit_owner_lease();
     tokio::spawn(async move {
@@ -57,16 +74,18 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
             crate::event_enrollment::log_evaluation_report(&report);
             for (oid, transition) in outbound {
                 BACnetServer::<T>::build_and_send_event_notification_with_bindings(
-                    &db,
-                    &network,
-                    &comm_state,
-                    &learned_routers,
-                    &notification_transactions,
-                    &device_bindings,
+                    &EventDelivery {
+                        db: &db,
+                        network: &network,
+                        comm_state: &comm_state,
+                        learned_routers: &learned_routers,
+                        notification_transactions: &notification_transactions,
+                        device_bindings: &device_bindings,
+                        retry_timeout_ms: retry_ms,
+                        local_apdu_capacity,
+                    },
                     &oid,
                     transition,
-                    retry_ms,
-                    local_apdu_capacity,
                 )
                 .await;
             }

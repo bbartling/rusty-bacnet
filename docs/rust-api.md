@@ -2063,9 +2063,15 @@ whole-array reduction or specialized object-specific report sets.
 
 ```rust
 // Subscribe to one property with an explicit finite lifetime.
-client.subscribe_cov_property(&mac, process_id, oid,
-    PropertyIdentifier::PRESENT_VALUE, None, false,
-    std::num::NonZeroU32::new(28_800).unwrap(), Some(0.5)).await?;
+client.subscribe_cov_property(&mac, CovPropertySubscription {
+    subscriber_process_identifier: process_id,
+    monitored_object_identifier: oid,
+    monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
+    monitored_property_array_index: None,
+    confirmed: false,
+    lifetime: std::num::NonZeroU32::new(28_800).unwrap(),
+    cov_increment: Some(0.5),
+}).await?;
 client.unsubscribe_cov_property(&mac, process_id, oid,
     PropertyIdentifier::PRESENT_VALUE, None).await?;
 

@@ -412,34 +412,6 @@ impl EndpointRequester {
         .into_range()
     }
 
-    /// Performs one routed ReadProperty transaction via a known router.
-    ///
-    /// `data_attributes` pass through unchanged.
-    #[doc(hidden)]
-    pub async fn read_property_routed(
-        &self,
-        router_mac: &[u8],
-        destination_network: u16,
-        destination_mac: &[u8],
-        data_attributes: Vec<DataAttribute>,
-        object_identifier: ObjectIdentifier,
-        property_identifier: PropertyIdentifier,
-        property_array_index: Option<u32>,
-    ) -> Result<ReadPropertyACK, Error> {
-        self.read_property_with_destination(
-            EndpointApduDestination::Routed {
-                destination_network,
-                destination_mac: MacAddr::from_slice(destination_mac),
-                router_mac: MacAddr::from_slice(router_mac),
-            },
-            data_attributes,
-            object_identifier,
-            property_identifier,
-            property_array_index,
-        )
-        .await
-    }
-
     /// Handles a response already admitted by the shared coordinator.
     ///
     /// Direct and routed responses are both accepted: the TSM key and

@@ -1,3 +1,4 @@
+use super::segmentation_context::SegmentedRequestLimits;
 use super::*;
 use bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE;
 
@@ -223,10 +224,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     target,
                     service_choice,
                     service_data,
-                    remote_max_apdu,
-                    remote_max_segments,
-                    routed_forwarded_npci_len,
-                    path_lease.as_ref(),
+                    SegmentedRequestLimits {
+                        remote_max_apdu,
+                        remote_max_segments,
+                        routed_forwarded_npci_len,
+                        routed_path_lease: path_lease.as_ref(),
+                    },
                 )
                 .await;
         }

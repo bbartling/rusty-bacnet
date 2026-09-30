@@ -1,5 +1,6 @@
 //! Absolute handshake waits. Expiry wins readiness ties.
 
+use super::context::{HubConnectionContext, PeerConnection};
 use super::*;
 use std::future::Future;
 use tokio::time::{sleep_until, Instant};
@@ -65,35 +66,18 @@ impl ConnectDeadline {
 }
 
 pub(super) async fn serve(
-    peer_addr: SocketAddr,
-    hub: (Vmac, DeviceUuid),
-    read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
-    write: Arc<Mutex<WsSink>>,
-    clients: Clients,
+    peer: PeerConnection,
+    ctx: HubConnectionContext,
     deadline: Arc<ConnectDeadline>,
     on_heartbeat_ack: impl Fn() + Send,
-    admission: Arc<super::admission::AdmissionRuntime>,
-    verified_leaf: Option<certificate_bindings::VerifiedLeaf>,
-    graceful: super::graceful::GracefulCtx,
-    timing: super::timing::HubTiming,
 ) {
+    let write = peer.write.clone();
+    let clients = ctx.clients.clone();
     let mut lease = super::retirement::Lease::new();
     let closed = lease.closed.clone();
     let notify = lease.notify.clone();
     let expired = {
-        let dispatch = super::handler::run(
-            peer_addr,
-            hub,
-            read,
-            write.clone(),
-            (clients.clone(), &mut lease),
-            &deadline,
-            on_heartbeat_ack,
-            admission,
-            verified_leaf,
-            graceful,
-            timing,
-        );
+        let dispatch = super::handler::run(peer, ctx, &mut lease, &deadline, on_heartbeat_ack);
         let handler = async {
             tokio::select! {
                 biased;

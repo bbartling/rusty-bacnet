@@ -17,6 +17,28 @@ use super::{
     RelayLimitDecision, WsSink,
 };
 
+/// Build the hub's Connect-Accept advertising its VMAC, UUID and size limits.
+pub(super) fn connect_accept_message(
+    message_id: u16,
+    hub_vmac: Vmac,
+    hub_uuid: DeviceUuid,
+) -> ScMessage {
+    let mut payload = Vec::with_capacity(26);
+    payload.extend_from_slice(&hub_vmac);
+    payload.extend_from_slice(&hub_uuid);
+    payload.extend_from_slice(&super::HUB_MAX_BVLC_LENGTH.to_be_bytes());
+    payload.extend_from_slice(&super::HUB_MAX_NPDU_LENGTH.to_be_bytes());
+    ScMessage {
+        function: ScFunction::ConnectAccept,
+        message_id,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from(payload),
+    }
+}
+
 pub(super) fn offers_websocket_subprotocol(
     request: &tokio_tungstenite::tungstenite::handshake::server::Request,
     expected: &str,

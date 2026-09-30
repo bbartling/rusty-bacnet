@@ -21,13 +21,15 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         tcp,
         address,
         tls.acceptor,
-        ([0x10; 6], [0x10; 16]),
-        clients(),
+        super::context::HubConnectionContext {
+            hub: ([0x10; 6], [0x10; 16]),
+            clients: clients(),
+            admission: Arc::new(super::admission::AdmissionRuntime::default()),
+            graceful: super::tasks::Tasks::new().graceful_ctx(),
+            timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
+        },
         ScHubHandshakeTimeouts::default(),
         admission,
-        Arc::new(super::admission::AdmissionRuntime::default()),
-        super::tasks::Tasks::new().graceful_ctx(),
-        super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
     ));
     // Current-thread runtime: no await occurs between spawn and abort.
     task.abort();
@@ -53,13 +55,15 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         tcp,
         address,
         tls.acceptor,
-        ([0x10; 6], [0x10; 16]),
-        clients(),
+        super::context::HubConnectionContext {
+            hub: ([0x10; 6], [0x10; 16]),
+            clients: clients(),
+            admission: Arc::new(super::admission::AdmissionRuntime::default()),
+            graceful: super::tasks::Tasks::new().graceful_ctx(),
+            timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
+        },
         ScHubHandshakeTimeouts::default(),
         admission,
-        Arc::new(super::admission::AdmissionRuntime::default()),
-        super::tasks::Tasks::new().graceful_ctx(),
-        super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
     ));
     assert!(futures_util::poll!(&mut operation).is_pending()); // actual TLS wait has started
     assert_eq!(active.load(Ordering::Acquire), 1);
@@ -95,11 +99,13 @@ impl CountedHub {
         let mut tasks = super::tasks::Tasks::new();
         tasks.timing = super::heartbeat_test_support::probe_runtime();
         let task = tokio::spawn(super::connection::accept_loop_with_counter(
-            listener,
-            tls.acceptor.clone(),
+            super::context::HubListener {
+                listener,
+                tls_acceptor: tls.acceptor.clone(),
+                timeouts,
+            },
             ([0x10; 6], [0x10; 16]),
             clients.clone(),
-            timeouts,
             active.clone(),
             tasks.clone(),
             admission.clone(),

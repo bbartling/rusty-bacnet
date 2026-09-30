@@ -276,18 +276,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         Self::fire_event_notifications_with_bindings(
-            &self.db,
+            &EventDelivery {
+                db: &self.db,
+                network: self
+                    .network
+                    .as_ref()
+                    .expect("running local mutation owns network"),
+                comm_state: &self.comm_state,
+                learned_routers: &self.learned_routers,
+                notification_transactions: &self.notification_transactions,
+                device_bindings: &self.device_bindings,
+                retry_timeout_ms: self.config.cov_retry_timeout_ms,
+                local_apdu_capacity: self.config.max_apdu_length,
+            },
             &self.cov_table,
-            self.network
-                .as_ref()
-                .expect("running local mutation owns network"),
-            &self.comm_state,
-            &self.learned_routers,
-            &self.notification_transactions,
-            &self.device_bindings,
             oid,
-            self.config.cov_retry_timeout_ms,
-            self.config.max_apdu_length,
         )
         .await;
         if life_safety {
@@ -440,16 +443,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     TargetResult::Failed => all_succeeded = false,
                     TargetResult::Applied => {
                         Self::fire_event_notifications_with_bindings(
-                            db,
+                            &EventDelivery {
+                                db,
+                                network,
+                                comm_state,
+                                learned_routers,
+                                notification_transactions,
+                                device_bindings,
+                                retry_timeout_ms: config.cov_retry_timeout_ms,
+                                local_apdu_capacity: config.max_apdu_length,
+                            },
                             cov_table,
-                            network,
-                            comm_state,
-                            learned_routers,
-                            notification_transactions,
-                            device_bindings,
                             &target.object_identifier,
-                            config.cov_retry_timeout_ms,
-                            config.max_apdu_length,
                         )
                         .await;
                         Self::fire_cov_notifications(
@@ -475,16 +480,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
             if reliability_changed {
                 Self::fire_event_notifications_with_bindings(
-                    db,
+                    &EventDelivery {
+                        db,
+                        network,
+                        comm_state,
+                        learned_routers,
+                        notification_transactions,
+                        device_bindings,
+                        retry_timeout_ms: config.cov_retry_timeout_ms,
+                        local_apdu_capacity: config.max_apdu_length,
+                    },
                     cov_table,
-                    network,
-                    comm_state,
-                    learned_routers,
-                    notification_transactions,
-                    device_bindings,
                     &plan.source,
-                    config.cov_retry_timeout_ms,
-                    config.max_apdu_length,
                 )
                 .await;
                 Self::fire_cov_notifications(

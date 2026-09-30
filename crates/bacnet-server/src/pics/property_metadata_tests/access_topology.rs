@@ -1,12 +1,9 @@
 use super::*;
-use bacnet_objects::{
-    access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject},
-    traits::BACnetObject,
-};
+use bacnet_objects::access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
-fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
+fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     match kind {
         ObjectType::ACCESS_DOOR => vec![
@@ -65,7 +62,7 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
 
 #[test]
 fn pics_access_topology_property_metadata_is_exact() {
-    let fresh: [fn() -> (Box<dyn BACnetObject>, ObjectType); 3] = [
+    let fresh: [FreshObject; 3] = [
         || {
             (
                 Box::new(AccessDoorObject::new(7, "DOOR-7").unwrap()),

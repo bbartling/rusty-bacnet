@@ -26,7 +26,7 @@ use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_endpoint_core::coordinator::{
     AdmissionOutcome, CanonicalPeer, OutboundTransactionCoordinator,
 };
-use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
+pub use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_transport::port::DataAttribute;
 use bacnet_types::enums::PropertyIdentifier;
@@ -268,40 +268,10 @@ impl ClientRoleHandle {
         .await
     }
 
-    /// Routed ReadProperty with pass-through data attributes.
-    ///
-    /// `router_mac` is the immediate neighbor; `destination_network` +
-    /// `destination_mac` address the routed target. Attributes ride along
-    /// unchanged. Same fail-closed shutdown semantics as
-    /// [`read_property`](Self::read_property).
-    pub async fn read_property_routed(
-        &self,
-        router_mac: &[u8],
-        destination_network: u16,
-        destination_mac: &[u8],
-        data_attributes: Vec<DataAttribute>,
-        object_identifier: ObjectIdentifier,
-        property_identifier: PropertyIdentifier,
-        property_array_index: Option<u32>,
-    ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
-        self.read_property_with_destination(
-            EndpointApduDestination::Routed {
-                router_mac: bacnet_types::MacAddr::from_slice(router_mac),
-                destination_network,
-                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
-            },
-            data_attributes,
-            object_identifier,
-            property_identifier,
-            property_array_index,
-        )
-        .await
-    }
-
     /// Explicit-destination ReadProperty with pass-through attributes.
     ///
-    /// Covers local-broadcast and addressed destinations the direct/routed
-    /// shorthands cannot spell. Same fail-closed shutdown semantics as
+    /// Covers routed, local-broadcast and addressed destinations the direct
+    /// shorthand cannot spell. Same fail-closed shutdown semantics as
     /// [`read_property`](Self::read_property).
     pub async fn read_property_with_destination(
         &self,

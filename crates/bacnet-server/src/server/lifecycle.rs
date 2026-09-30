@@ -661,15 +661,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // clamped interval — not the raw config value.
             Some(
                 super::event_enrollment_lifecycle::spawn_event_enrollment_task(
-                    Arc::clone(&db),
-                    Arc::clone(&network),
-                    Arc::clone(&comm_state),
-                    Arc::clone(&learned_routers),
-                    Arc::clone(&notification_transactions),
-                    Arc::clone(&device_bindings),
-                    ee_period,
-                    config.cov_retry_timeout_ms,
-                    config.max_apdu_length,
+                    super::event_enrollment_lifecycle::EventEnrollmentTask {
+                        db: Arc::clone(&db),
+                        network: Arc::clone(&network),
+                        comm_state: Arc::clone(&comm_state),
+                        learned_routers: Arc::clone(&learned_routers),
+                        notification_transactions: Arc::clone(&notification_transactions),
+                        device_bindings: Arc::clone(&device_bindings),
+                        period: ee_period,
+                        retry_ms: config.cov_retry_timeout_ms,
+                        local_apdu_capacity: config.max_apdu_length,
+                    },
                 ),
             )
         } else {

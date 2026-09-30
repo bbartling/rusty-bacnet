@@ -1,3 +1,4 @@
+use super::cov_notify_context::CovNotifyContext;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -14,13 +15,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         snapshot: &dyn bacnet_objects::traits::BACnetObject,
     ) {
         Self::fire_cov_notifications_inner(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
+            &CovNotifyContext {
+                db,
+                network,
+                cov_table,
+                cov_in_flight,
+                notification_transactions,
+                comm_state,
+                config,
+            },
             oid,
             Some(snapshot),
         )

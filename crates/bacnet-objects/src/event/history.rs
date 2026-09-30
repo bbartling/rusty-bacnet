@@ -360,19 +360,9 @@ mod tests {
         state: &mut EventState,
         acked: &mut u8,
         history: &mut EventHistory,
-        change: EventStateChange,
-        coordinate: EventTransition,
-        ack_required: bool,
-        timestamp: BACnetTimeStamp,
-        message_text: Option<&str>,
+        commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
-        EventTransitionState::new(state, acked, history).commit(EventTransitionCommit {
-            change,
-            coordinate,
-            ack_required,
-            timestamp,
-            message_text: message_text.map(str::to_owned),
-        })
+        EventTransitionState::new(state, acked, history).commit(commit)
     }
 
     #[test]
@@ -413,14 +403,16 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::NORMAL,
-                to: EventState::HIGH_LIMIT,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::HIGH_LIMIT,
+                },
+                coordinate: EventTransition::ToOffnormal,
+                ack_required: true,
+                timestamp: time(1),
+                message_text: Some("high-limit".to_owned()),
             },
-            EventTransition::ToOffnormal,
-            true,
-            time(1),
-            Some("high-limit"),
         )
         .unwrap();
         assert_eq!(state, EventState::HIGH_LIMIT);
@@ -443,14 +435,16 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::HIGH_LIMIT,
-                to: EventState::FAULT,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::HIGH_LIMIT,
+                    to: EventState::FAULT,
+                },
+                coordinate: EventTransition::ToFault,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(0),
+                message_text: Some("fault".to_owned()),
             },
-            EventTransition::ToFault,
-            false,
-            BACnetTimeStamp::SequenceNumber(0),
-            Some("fault"),
         )
         .unwrap();
         assert_eq!(state, EventState::FAULT);
@@ -470,14 +464,16 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::FAULT,
-                to: EventState::NORMAL,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::FAULT,
+                    to: EventState::NORMAL,
+                },
+                coordinate: EventTransition::ToNormal,
+                ack_required: true,
+                timestamp: date_time(27),
+                message_text: Some("normal".to_owned()),
             },
-            EventTransition::ToNormal,
-            true,
-            date_time(27),
-            Some("normal"),
         )
         .unwrap();
         assert_eq!(state, EventState::NORMAL);
@@ -531,14 +527,16 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::NORMAL,
-                to: EventState::NORMAL,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::NORMAL,
+                },
+                coordinate: EventTransition::ToNormal,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(u16::MAX),
+                message_text: None,
             },
-            EventTransition::ToNormal,
-            false,
-            BACnetTimeStamp::SequenceNumber(u16::MAX),
-            None,
         )
         .unwrap();
 
@@ -590,14 +588,16 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::HIGH_LIMIT,
-                to: EventState::NORMAL,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::HIGH_LIMIT,
+                    to: EventState::NORMAL,
+                },
+                coordinate: EventTransition::ToOffnormal,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(99),
+                message_text: Some("must-not-commit".to_owned()),
             },
-            EventTransition::ToOffnormal,
-            false,
-            BACnetTimeStamp::SequenceNumber(99),
-            Some("must-not-commit"),
         )
         .unwrap_err();
 

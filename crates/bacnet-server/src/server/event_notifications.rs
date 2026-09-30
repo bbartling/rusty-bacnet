@@ -204,6 +204,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// seeds a pending transition (returning `None`, so no notification is
     /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
     /// advances the countdown and sends the notification on expiry.
+    // Test-only convenience wrapper over `fire_event_notifications_with_bindings`
+    // that supplies default COV and binding tables; a struct would only rename
+    // the arguments the test call sites already pass.
+    #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
     pub(super) async fn fire_event_notifications(
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -216,33 +220,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         local_apdu_capacity: u32,
     ) {
         Self::fire_event_notifications_with_bindings(
-            db,
+            &EventDelivery {
+                db,
+                network,
+                comm_state,
+                learned_routers,
+                notification_transactions,
+                device_bindings: &Arc::new(RwLock::new(DeviceBindingTable::new())),
+                retry_timeout_ms,
+                local_apdu_capacity,
+            },
             &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-            network,
-            comm_state,
-            learned_routers,
-            notification_transactions,
-            &Arc::new(RwLock::new(DeviceBindingTable::new())),
             oid,
-            retry_timeout_ms,
-            local_apdu_capacity,
         )
         .await;
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fire_event_notifications_with_bindings(
-        db: &Arc<RwLock<ObjectDatabase>>,
+        ctx: &EventDelivery<'_, T>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         oid: &ObjectIdentifier,
-        retry_timeout_ms: u64,
-        local_apdu_capacity: u32,
     ) {
+        let db = ctx.db;
         let resolved = {
             let mut db = db.write().await;
             let outcome = db
@@ -263,19 +262,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // external distribution (Clauses 13.2.2.1.4 and 13.2.5).
         if let Some(resolved) = resolved {
             if resolved.distribute && resolved.event_values.is_some() {
-                Self::build_and_send_event_notification_with_bindings(
-                    db,
-                    network,
-                    comm_state,
-                    learned_routers,
-                    notification_transactions,
-                    device_bindings,
-                    oid,
-                    resolved,
-                    retry_timeout_ms,
-                    local_apdu_capacity,
-                )
-                .await;
+                Self::build_and_send_event_notification_with_bindings(ctx, oid, resolved).await;
             }
         }
     }
@@ -288,6 +275,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
+    // Test-only convenience wrapper over `build_and_send_event_notification_with_bindings`
+    // that supplies a default binding table; a struct would only rename the
+    // arguments the test call sites already pass.
+    #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
     pub(super) async fn build_and_send_event_notification(
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -301,32 +292,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         local_apdu_capacity: u32,
     ) {
         Self::build_and_send_event_notification_with_bindings(
-            db,
-            network,
-            comm_state,
-            learned_routers,
-            notification_transactions,
-            &Arc::new(RwLock::new(DeviceBindingTable::new())),
+            &EventDelivery {
+                db,
+                network,
+                comm_state,
+                learned_routers,
+                notification_transactions,
+                device_bindings: &Arc::new(RwLock::new(DeviceBindingTable::new())),
+                retry_timeout_ms,
+                local_apdu_capacity,
+            },
             oid,
             transition,
-            retry_timeout_ms,
-            local_apdu_capacity,
         )
         .await;
     }
 
     pub(super) async fn build_and_send_event_notification_with_bindings(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        ctx: &EventDelivery<'_, T>,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
-        retry_timeout_ms: u64,
-        local_apdu_capacity: u32,
     ) {
+        let &EventDelivery {
+            db,
+            network,
+            comm_state,
+            learned_routers,
+            notification_transactions,
+            device_bindings,
+            retry_timeout_ms,
+            local_apdu_capacity,
+        } = ctx;
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
@@ -733,15 +729,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Distribute a successfully accepted acknowledgment after its requester
     /// response path has completed.
     pub(super) async fn send_acknowledgment_notification_with_bindings(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        ctx: &EventDelivery<'_, T>,
         accepted: handlers::AcceptedAcknowledgeAlarm,
-        retry_timeout_ms: u64,
-        local_apdu_capacity: u32,
     ) {
         let Some(notification) = accepted.notification else {
             return;
@@ -750,16 +739,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
         Self::build_and_send_event_notification_with_bindings(
-            db,
-            network,
-            comm_state,
-            learned_routers,
-            notification_transactions,
-            device_bindings,
+            ctx,
             &accepted.event_object_identifier,
             NotificationTransition::acknowledgment(notification.change, notification.event_type),
-            retry_timeout_ms,
-            local_apdu_capacity,
         )
         .await;
     }

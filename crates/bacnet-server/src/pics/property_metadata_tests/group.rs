@@ -1,12 +1,9 @@
 use super::*;
-use bacnet_objects::{
-    group::{GlobalGroupObject, GroupObject, StructuredViewObject},
-    traits::BACnetObject,
-};
+use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
-fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
+fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     match kind {
         ObjectType::GROUP => vec![
@@ -53,7 +50,7 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
 
 #[test]
 fn pics_group_property_metadata_is_exact() {
-    let fresh: [fn() -> (Box<dyn BACnetObject>, ObjectType); 3] = [
+    let fresh: [FreshObject; 3] = [
         || {
             (
                 Box::new(GroupObject::new(7, "GRP-7").unwrap()),

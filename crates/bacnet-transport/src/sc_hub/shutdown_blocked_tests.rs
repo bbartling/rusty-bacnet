@@ -26,17 +26,21 @@ impl ControlledPeer {
         let admission = connection::Admission::new(hub.active.clone(), Duration::from_secs(10));
         // Real mutual-TLS pair: the client certificate is CA-verified.
         let operation = deadlines::serve(
-            address,
-            ([0x10; 6], [0x10; 16]),
-            read,
-            sink.clone(),
-            hub.clients.clone(),
+            super::context::PeerConnection {
+                addr: address,
+                read,
+                write: sink.clone(),
+                verified_leaf,
+            },
+            super::context::HubConnectionContext {
+                hub: ([0x10; 6], [0x10; 16]),
+                clients: hub.clients.clone(),
+                admission: hub.admission.clone(),
+                graceful: hub.hub.tasks.graceful_ctx(),
+                timing: hub.hub.tasks.timing,
+            },
             deadline.clone(),
             || {},
-            hub.admission.clone(),
-            verified_leaf,
-            hub.hub.tasks.graceful_ctx(),
-            hub.hub.tasks.timing,
         );
         assert!(hub.hub.tasks.spawner().spawn(async move {
             let _admission = admission;
