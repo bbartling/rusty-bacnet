@@ -944,6 +944,25 @@ class MessagePriority:
     def __hash__(self) -> int: ...
 
 
+class VTClass:
+    """BACnet virtual terminal class for VT-Open (Clause 17.2)."""
+
+    DEFAULT_TERMINAL: VTClass
+    ANSI_X3_64: VTClass
+    DEC_VT52: VTClass
+    DEC_VT100: VTClass
+    DEC_VT220: VTClass
+    HP_700_94: VTClass
+    IBM_3130: VTClass
+
+    @staticmethod
+    def from_raw(value: int) -> VTClass: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
 class LifeSafetyOperation:
     """BACnet life safety operation codes (Clause 12.15.13, Table 12-54)."""
 
@@ -2116,12 +2135,24 @@ class BACnetClient:
 
     # --- Virtual terminal ---
 
-    def vt_open(self, address: str, vt_class: int) -> Awaitable[int]:
-        """Open a virtual terminal session. Returns the remote session identifier."""
+    def vt_open(
+        self,
+        address: str,
+        vt_class: VTClass,
+        local_vt_session_identifier: int,
+    ) -> Awaitable[int]:
+        """Open a virtual terminal session. Returns the remote session identifier.
+
+        ``local_vt_session_identifier`` (0-255) is the caller's own number for
+        the session, which the peer quotes when it sends data back.
+        """
         ...
 
     def vt_close(self, address: str, session_ids: list[int]) -> Awaitable[None]:
-        """Close one or more virtual terminal sessions."""
+        """Close one or more virtual terminal sessions.
+
+        ``session_ids`` must not be empty (``ValueError``).
+        """
         ...
 
     def vt_data(
@@ -2133,7 +2164,11 @@ class BACnetClient:
     ) -> Awaitable[dict[str, Any]]:
         """Send data over a virtual terminal session.
 
-        Returns ``{"all_new_data_accepted": bool, "accepted_octet_count": int}``.
+        ``data_flag`` is the sequence flag that alternates on each new request
+        for a session; it is sent as an Unsigned 0 or 1.
+
+        Returns ``{"all_new_data_accepted": bool, "accepted_octet_count": int | None}``;
+        the count is an ``int`` only when ``all_new_data_accepted`` is ``False``.
         """
         ...
 

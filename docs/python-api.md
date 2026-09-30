@@ -157,6 +157,14 @@ For text message services. Constants: `NORMAL`, `URGENT`.
 mp = MessagePriority.URGENT
 ```
 
+### VTClass
+
+Terminal class for `vt_open`. Constants: `DEFAULT_TERMINAL`, `ANSI_X3_64`, `DEC_VT52`, `DEC_VT100`, `DEC_VT220`, `HP_700_94`, `IBM_3130`.
+
+```python
+vc = VTClass.DEFAULT_TERMINAL
+```
+
 ---
 
 ## ObjectIdentifier
@@ -1083,33 +1091,47 @@ await client.write_group(
 
 ### Virtual Terminal
 
-#### `vt_open(address, vt_class) -> bytes`
+#### `vt_open(address, vt_class, local_vt_session_identifier) -> int`
 
-Open a virtual terminal session.
+Open a virtual terminal session. `vt_class` is a `VTClass`;
+`local_vt_session_identifier` (0-255) is your own number for the session,
+which the peer uses when it sends data back. Returns the remote session
+identifier the peer assigned.
 
 ```python
-raw = await client.vt_open("192.168.1.100:47808", vt_class=1)
+remote_id = await client.vt_open(
+    "192.168.1.100:47808",
+    vt_class=VTClass.DEFAULT_TERMINAL,
+    local_vt_session_identifier=5,
+)
 ```
 
 #### `vt_close(address, session_ids)`
 
-Close one or more virtual terminal sessions.
+Close one or more virtual terminal sessions. `session_ids` must contain at
+least one identifier; an empty list raises `ValueError`.
 
 ```python
 await client.vt_close("192.168.1.100:47808", session_ids=[1, 2])
 ```
 
-#### `vt_data(address, session_id, data, data_flag) -> bytes`
+#### `vt_data(address, session_id, data, data_flag) -> dict`
 
-Send data on a virtual terminal session.
+Send data on a virtual terminal session. `data_flag` is the sequence flag that
+alternates between `False` and `True` with each new request on a session (it is
+sent as an Unsigned 0 or 1). The result always has a boolean
+`all_new_data_accepted`; `accepted_octet_count` is an `int` only when the peer
+accepted part of the data, and `None` when it accepted all of it.
 
 ```python
-raw = await client.vt_data(
+ack = await client.vt_data(
     "192.168.1.100:47808",
     session_id=1,
     data=b"Hello VT",
     data_flag=False,
 )
+if not ack["all_new_data_accepted"]:
+    sent = ack["accepted_octet_count"]
 ```
 
 ---

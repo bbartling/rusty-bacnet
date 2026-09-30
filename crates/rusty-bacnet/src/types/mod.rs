@@ -95,6 +95,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMessagePriority>()?;
     PyMessagePriority::register_constants(&m.getattr("MessagePriority")?)?;
 
+    m.add_class::<PyVTClass>()?;
+    PyVTClass::register_constants(&m.getattr("VTClass")?)?;
+
     // Composite types
     m.add_class::<PyObjectIdentifier>()?;
     m.add_class::<PyPropertyValue>()?;

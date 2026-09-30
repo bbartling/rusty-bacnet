@@ -39,7 +39,7 @@ assert_eq!(ot.to_raw(), 0);
 assert_eq!(ObjectType::from_raw(0), ot);
 ```
 
-**Key enums:** `ObjectType` (u32), `PropertyIdentifier` (u32), `ErrorClass` (u16), `ErrorCode` (u16), `EnableDisable` (u32), `ReinitializedState` (u32), `Segmentation` (u8), `EventState` (u32), `EventType` (u32), `NotifyType` (u32), `Polarity` (u32), `Reliability` (u32), `LifeSafetyOperation` (u32), `MessagePriority` (u32)
+**Key enums:** `ObjectType` (u32), `PropertyIdentifier` (u32), `ErrorClass` (u16), `ErrorCode` (u16), `EnableDisable` (u32), `ReinitializedState` (u32), `Segmentation` (u8), `EventState` (u32), `EventType` (u32), `NotifyType` (u32), `Polarity` (u32), `Reliability` (u32), `LifeSafetyOperation` (u32), `MessagePriority` (u32), `VTClass` (u32)
 
 ### Primitives
 
@@ -407,7 +407,9 @@ use bacnet_services::write_group::WriteGroupRequest;
 ### Virtual Terminal
 
 ```rust
-use bacnet_services::vt::{VtOpenRequest, VtCloseRequest, VtDataRequest};
+use bacnet_services::virtual_terminal::{
+    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
+};
 ```
 
 ### Audit
@@ -2215,10 +2217,57 @@ client.write_group(&mac, group_number, write_priority, change_list, Some(false))
 
 ### Virtual Terminal
 
+The client has no VT-specific methods. Build the `bacnet_services` request and
+send it with `confirmed_request`. VT-Open carries both the terminal class and
+the caller's own session number (Clause 17.2.1); VT-Close needs at least one
+identifier and `encode` returns an error for an empty list; the VT-Data flag
+goes out as an Unsigned 0 or 1; and a VT-Data ACK is either `AllAccepted` or
+`Partial` with the accepted octet count (Clause 17.4.1.2).
+
 ```rust
-let raw = client.vt_open(&mac, vt_class).await?;
-client.vt_close(&mac, &session_ids).await?;
-let raw = client.vt_data(&mac, session_id, &data, data_flag).await?;
+use bacnet_services::virtual_terminal::{
+    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
+};
+use bacnet_types::enums::{ConfirmedServiceChoice, VTClass};
+use bytes::BytesMut;
+
+let mut buf = BytesMut::new();
+VTOpenRequest {
+    vt_class: VTClass::DEFAULT_TERMINAL,
+    local_vt_session_identifier: 5,
+}
+.encode(&mut buf);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::VT_OPEN, &buf)
+    .await?;
+let remote_id = VTOpenAck::decode(&raw)?.remote_vt_session_identifier;
+
+let mut buf = BytesMut::new();
+VTDataRequest {
+    vt_session_identifier: remote_id,
+    vt_new_data: b"hello".to_vec(),
+    vt_data_flag: false,
+}
+.encode(&mut buf);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::VT_DATA, &buf)
+    .await?;
+match VTDataAck::decode(&raw)? {
+    VTDataAck::AllAccepted => {}
+    VTDataAck::Partial { accepted_octet_count } => {
+        // Resend the octets after the first `accepted_octet_count`.
+        let _ = accepted_octet_count;
+    }
+}
+
+let mut buf = BytesMut::new();
+VTCloseRequest {
+    list_of_remote_vt_session_identifiers: vec![remote_id],
+}
+.encode(&mut buf)?;
+client
+    .confirmed_request(&mac, ConfirmedServiceChoice::VT_CLOSE, &buf)
+    .await?;
 ```
 
 ### Audit Services
