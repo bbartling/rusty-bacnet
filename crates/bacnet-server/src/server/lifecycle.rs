@@ -633,7 +633,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     interval.tick().await;
                     let committed = {
                         let mut db_guard = fanout.db.write().await;
-                        let mut commit = BackgroundCommit::begin(&db_guard);
+                        // The detector mutates objects in place, so snapshot
+                        // Life Safety state up front.
+                        let mut commit = BackgroundCommit::snapshot_all(&db_guard);
                         for change in detector.evaluate(&mut db_guard) {
                             debug!(
                                 object = %change.object_id,
@@ -704,13 +706,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // It is also what carries Reliability into event-state-detection. Per
         // Clause 13.2.2 the FAULT determination is a standing condition, so each
         // tick re-derives it from the object's current `Reliability` rather than
-        // reacting to a change event. That is why the fault detector above can
-        // keep merely *logging* its `ReliabilityChange` records: whoever writes
-        // Reliability — an object's opt-in evaluation hook, a local write, or a
-        // network write — reaches detection through this tick, and no route
-        // needs to notify anything. `enable_fault_detection` therefore governs
-        // only whether those object-owned hooks run every 10 seconds, never
-        // whether an existing Reliability is honored.
+        // reacting to a change event. Whoever writes Reliability — an object's
+        // opt-in evaluation hook, a local write, or a network write — reaches
+        // detection through this tick. The fault detector above only fans COV
+        // out for the Status_Flags change it causes (#889); it signals nothing
+        // to event detection. `enable_fault_detection` therefore governs only
+        // whether those object-owned hooks run every 10 seconds, never whether
+        // an existing Reliability is honored.
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).

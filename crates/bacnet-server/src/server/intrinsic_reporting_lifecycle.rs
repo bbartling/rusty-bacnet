@@ -34,16 +34,22 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let (fired, committed) = {
             let mut db = fanout.db.write().await;
             let mut out = Vec::new();
-            let mut commit = BackgroundCommit::begin(&db);
+            let mut commit = BackgroundCommit::new();
             for oid in db.list_objects() {
-                let outcome = db
+                let Some(outcome) = db
                     .get_mut(&oid)
-                    .and_then(|object| object.tick_intrinsic_reporting());
-                let resolved = outcome.and_then(|outcome| {
-                    BACnetServer::<T>::commit_intrinsic_transition(&mut db, &oid, outcome)
-                });
+                    .and_then(|object| object.tick_intrinsic_reporting())
+                else {
+                    continue;
+                };
+                // A proposal can commit and still have its projection rejected,
+                // so owe the fanout for every proposal; COV criteria drop it if
+                // nothing changed.
+                commit.before_change(&db, oid);
+                commit.changed(oid);
+                let resolved =
+                    BACnetServer::<T>::commit_intrinsic_transition(&mut db, &oid, outcome);
                 if let Some(resolved) = resolved {
-                    commit.changed(oid);
                     if resolved.distribute && resolved.event_values.is_some() {
                         out.push((oid, resolved));
                     }

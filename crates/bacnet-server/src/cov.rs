@@ -322,30 +322,26 @@ impl CovSubscriptionTable {
             .is_some()
     }
 
-    /// Ordinary whole-object trigger policy: preserve its Real PV increment gate.
-    /// Property subscriptions compare their prepared selected sample instead.
+    /// Ordinary whole-object trigger policy: a numeric Present_Value must move
+    /// by the increment, any other value must change, and the first report
+    /// always fires. Status_Flags changes are checked separately by the caller.
+    /// An unchanged object therefore reports nothing, however often it is
+    /// fanned out. Property subscriptions compare their prepared sample instead.
     pub fn should_notify(
         sub: &CovSubscription,
         current_value: Option<&CovSample>,
         cov_increment: Option<f32>,
     ) -> bool {
-        match (cov_increment, current_value) {
-            (Some(increment), Some(current)) => {
-                match (
-                    current.value(),
-                    sub.last_notified_observation
-                        .as_ref()
-                        .map(|o| o.sample().value()),
-                ) {
-                    (
-                        bacnet_types::primitives::PropertyValue::Real(current),
-                        Some(bacnet_types::primitives::PropertyValue::Real(last)),
-                    ) => (current - last).abs() >= increment,
-                    _ => true,
-                }
-            }
-            _ => true,
-        }
+        let Some(current) = current_value else {
+            return true;
+        };
+        current.reports(
+            sub.last_notified_observation
+                .as_ref()
+                .map(|observation| observation.sample()),
+            cov_increment,
+            true,
+        )
     }
 
     /// Number of active subscriptions.

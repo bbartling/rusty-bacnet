@@ -1987,8 +1987,8 @@ rather than delivered as stale state. These drops increment
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
 the bound (the full server uses its configured capacity).
 
-WritePropertyMultiple, staging and source-completion writes and Life Safety fanout
-are not captured yet. Their changes still report through the builder's
+WritePropertyMultiple, staging and source-completion writes are not captured yet,
+and neither are Life Safety objects on any path. Their changes still report through the builder's
 current-state fallback, stamped when the notification is prepared (#856).
 `Max_Notification_Delay` remains reported but not acted on.
 
@@ -1996,10 +1996,12 @@ Background commits fan COV out as a network write does, once their database guar
 is dropped, to ordinary, SubscribeCOVProperty and Multiple subscribers alike: the
 periodic intrinsic task's transitions (after their event notifications),
 fault-detection reliability changes and schedule writes to controlled objects. Life
-Safety objects report exactly the properties the pass changed. Event Enrollment
-objects accept no COV subscriptions, so their periodic evaluation fans nothing out.
-The usual COV criteria and DCC suppression apply, so a change a write already
-reported is not reported again.
+Safety objects report exactly the properties the pass changed. The bundled Event
+Enrollment objects accept no COV subscriptions, so their periodic evaluation fans
+nothing out. The usual COV criteria and DCC suppression apply. The criteria report
+only an actual change: a missing or non-positive COV increment means any change,
+and a value the subscriber was already sent is not reported again, however often
+its object is fanned out.
 
 The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
 Set or relinquish a priority slot by writing a value or NULL to `Present_Value`

@@ -10,17 +10,29 @@ use crate::life_safety_cov::{is_life_safety_object, LifeSafetyCovChange, LifeSaf
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
+use std::collections::HashSet;
 use tokio::sync::RwLock;
 
 /// Objects one background pass changed, collected under its database guard.
 pub(crate) struct BackgroundCommit {
     life_safety: LifeSafetyCovSnapshots,
     changed: Vec<ObjectIdentifier>,
+    marked: HashSet<ObjectIdentifier>,
 }
 
 impl BackgroundCommit {
-    /// Snapshot Life Safety state before the pass mutates anything.
-    pub(crate) fn begin(db: &ObjectDatabase) -> Self {
+    /// A pass that calls [`Self::before_change`] ahead of each mutation.
+    pub(crate) fn new() -> Self {
+        Self {
+            life_safety: LifeSafetyCovSnapshots::default(),
+            changed: Vec::new(),
+            marked: HashSet::new(),
+        }
+    }
+
+    /// A pass whose mutations can't be observed one by one: snapshot every
+    /// Life Safety object up front.
+    pub(crate) fn snapshot_all(db: &ObjectDatabase) -> Self {
         let life_safety = db
             .find_by_type(ObjectType::LIFE_SAFETY_POINT)
             .into_iter()
@@ -28,11 +40,19 @@ impl BackgroundCommit {
         Self {
             life_safety: LifeSafetyCovSnapshots::capture_oids(db, life_safety),
             changed: Vec::new(),
+            marked: HashSet::new(),
         }
     }
 
+    /// Keep a Life Safety object's state from before the pass mutates it.
+    pub(crate) fn before_change(&mut self, db: &ObjectDatabase, oid: ObjectIdentifier) {
+        self.life_safety.capture(db, oid);
+    }
+
+    /// Owe a fanout for `oid`. Marking an object that did not actually change
+    /// is harmless, since the COV criteria then report nothing.
     pub(crate) fn changed(&mut self, oid: ObjectIdentifier) {
-        if !self.changed.contains(&oid) {
+        if self.marked.insert(oid) {
             self.changed.push(oid);
         }
     }

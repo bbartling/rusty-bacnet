@@ -65,7 +65,7 @@ impl Eq for CovSample {}
 fn integer_delta(delta: u64, increment: Option<f32>) -> bool {
     match increment {
         None => delta != 0,
-        Some(i) if i <= 0.0 => true,
+        Some(i) if i <= 0.0 => delta != 0,
         Some(i) if i.is_nan() || i >= 18_446_744_073_709_551_616.0 => false,
         Some(i) => delta >= f64::from(i).ceil() as u64,
     }
@@ -73,7 +73,7 @@ fn integer_delta(delta: u64, increment: Option<f32>) -> bool {
 fn float_delta(delta: f64, increment: Option<f32>) -> bool {
     match increment {
         None => delta != 0.0,
-        Some(i) if i <= 0.0 => true,
+        Some(i) if i <= 0.0 => delta != 0.0,
         Some(i) if !i.is_finite() => false,
         Some(i) => delta >= f64::from(i),
     }

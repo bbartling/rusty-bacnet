@@ -8,7 +8,9 @@ use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::common::PropertyReference;
-use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
+use bacnet_services::cov::{
+    COVNotificationRequest, SubscribeCOVPropertyRequest, SubscribeCOVRequest,
+};
 use bacnet_services::cov_multiple::{
     COVNotificationMultipleRequest, COVNotificationValue, COVReference,
     COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
@@ -365,6 +367,24 @@ impl Harness {
             )
             .await;
         COVNotificationRequest::decode(&body).unwrap()
+    }
+
+    /// SubscribeCOVProperty for one property of AV-1.
+    pub(super) async fn subscribe_cov_property(&mut self, property: PropertyIdentifier) {
+        let mut body = BytesMut::new();
+        SubscribeCOVPropertyRequest {
+            subscriber_process_identifier: 890,
+            monitored_object_identifier: av1(),
+            issue_confirmed_notifications: Some(false),
+            lifetime: Some(300),
+            monitored_property_identifier: property,
+            monitored_property_array_index: None,
+            cov_increment: None,
+        }
+        .encode(&mut body)
+        .unwrap();
+        self.request(ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY, body)
+            .await;
     }
 
     /// SubscribeCOV for AV-1: an ordinary, untimestamped subscription.

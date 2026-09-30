@@ -40,8 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a scheduled Present_Value, until something else fanned COV out for that object.
   Each of these commits now fans COV out after its database guard is dropped, using
   the same post-write path as a network write, and records timestamped
-  COV-multiple history at commit time. Event Enrollment objects accept no COV
-  subscriptions, so their evaluation needs no fanout.
+  COV-multiple history at commit time. The bundled Event Enrollment objects accept
+  no COV subscriptions, so their evaluation needs no fanout.
+
+- COV criteria now report only an actual change (#889). A missing COV increment,
+  or one of zero or less (the analog default is 0), means any change. Before,
+  subscribers to binary, multi-state and zero-increment objects were re-sent the
+  same value whenever the object was fanned out again, for example by a repeated
+  write or a schedule write masked by a higher priority. Status_Flags changes and
+  the first report after subscription still always notify.
 
 - B/IP and B/IPv6 transports bound to port 0 no longer set `SO_REUSEADDR` (#892).
   On Linux the kernel could give such a socket an ephemeral port that another

@@ -46,12 +46,19 @@ fn cov_sample_exact_integer_thresholds_and_numeric_types() {
 #[test]
 fn cov_sample_exceptional_thresholds_and_stable_nonfinite_values() {
     for value in [Unsigned(5), Signed(5), Real(5.0), Double(5.0)] {
+        // A non-positive increment reports any change, and only a change.
         for inc in [0.0, -0.0, -1.0, f32::NEG_INFINITY] {
-            assert!(reports(value.clone(), value.clone(), Some(inc)));
+            assert!(!reports(value.clone(), value.clone(), Some(inc)));
         }
         for inc in [f32::NAN, f32::INFINITY] {
             assert!(!reports(value.clone(), value.clone(), Some(inc)));
         }
+    }
+    for inc in [0.0, -1.0, f32::NEG_INFINITY] {
+        assert!(reports(Unsigned(5), Unsigned(6), Some(inc)));
+        assert!(reports(Signed(5), Signed(4), Some(inc)));
+        assert!(reports(Real(5.0), Real(5.001), Some(inc)));
+        assert!(reports(Double(5.0), Double(5.0 + 1e-9), Some(inc)));
     }
     assert!(!reports(Real(0.0), Real(-0.0), None));
     assert!(!reports(Double(0.0), Double(-0.0), None));

@@ -39,7 +39,7 @@ pub(crate) async fn tick_schedules_committed(
 }
 
 fn evaluate(db_w: &mut ObjectDatabase) -> BackgroundCommit {
-    let mut commit = BackgroundCommit::begin(db_w);
+    let mut commit = BackgroundCommit::new();
     let Some((day_of_week, hour, minute)) = db_w.clock_frame().and_then(current_time_components)
     else {
         debug!("Skipping Schedule evaluation without a valid Device clock");
@@ -70,6 +70,7 @@ fn evaluate(db_w: &mut ObjectDatabase) -> BackgroundCommit {
         .ok();
         let target_oid = reference.object_identifier;
         let prop_id = reference.property_identifier;
+        commit.before_change(db_w, target_oid);
         if let Some(target_obj) = db_w.get_mut(&target_oid) {
             let prop = PropertyIdentifier::from_raw(prop_id);
             if let Err(e) = crate::command_source::write_target(
