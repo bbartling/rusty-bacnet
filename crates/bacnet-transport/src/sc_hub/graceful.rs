@@ -469,11 +469,10 @@ async fn await_ack(
                                     debug!("Hub graceful: {peer_addr} requested first, closing");
                                     return AckOutcome::Failed;
                                 }
-                                ScFunction::Result
-                                    if is_nak_for_disconnect(&decoded) => {
-                                        debug!("Hub graceful: NAK to Disconnect from {peer_addr}");
-                                        return AckOutcome::Failed;
-                                    }
+                                ScFunction::Result if is_nak_for_disconnect(&decoded) => {
+                                    debug!("Hub graceful: NAK to Disconnect from {peer_addr}");
+                                    return AckOutcome::Failed;
+                                }
                                 _ => {}
                             }
                         }

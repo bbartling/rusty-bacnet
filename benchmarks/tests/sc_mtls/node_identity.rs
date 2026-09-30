@@ -26,7 +26,9 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
 fn accept_hub_subprotocol(_: &Request, mut response: Response) -> Result<Response, ErrorResponse> {
     response.headers_mut().insert(
         "Sec-WebSocket-Protocol",
-        "hub.bsc.bacnet.org".parse().unwrap(),
+        bacnet_transport::sc_frame::BACNET_SC_HUB_SUBPROTOCOL
+            .parse()
+            .unwrap(),
     );
     Ok(response)
 }

@@ -1,5 +1,7 @@
 //! Standalone client Number wire evidence in isolated Linux BBMD/foreign modes.
 #![cfg(target_os = "linux")]
+#![allow(clippy::print_stderr)] // the evidence helpers log each observed wire frame
+
 // Reuse only the independent UDP/byte helpers; no full server is constructed.
 #[allow(dead_code)]
 #[path = "bip_network_numbers/support.rs"]

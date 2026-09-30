@@ -809,13 +809,11 @@ pub(crate) fn write_cov_increment(
 // PICS writability helpers
 // ──────────────────────────────────────────────────────────────────────────
 //
-// Shared property-set predicates used by the `is_writable_property` overrides
-// on the core object types. Each predicate mirrors the arms of the matching
-// `write_property` implementation (via the `write_generic_event_properties!` and
-// `write_analog_event_properties!` macros and
-// the `write_priority_array!` macro) so PICS
-// and runtime dispatch share one truth source. Keep these in lock-step with
-// the macros below.
+// `is_common_writable` is the property set shared by the core object types'
+// `is_writable_property` overrides; it mirrors the out-of-service, name and
+// description write arms, so PICS and runtime dispatch agree. The
+// commandable predicate is test-only: property-metadata tests use it to
+// check commandable objects against their `write_priority_array!` arms.
 
 /// Writable commandable-object properties shared by all commandable types
 /// (AnalogOutput, AnalogValue, BinaryOutput, BinaryValue, MultiStateOutput,

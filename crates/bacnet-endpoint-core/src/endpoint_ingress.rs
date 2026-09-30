@@ -408,9 +408,12 @@ enum EgressDrive {
     Exit(ClassifierExit),
 }
 
+// A select! result consumed on the spot, never stored: boxing the APDU would
+// add a heap allocation per APDU received while a send is in flight.
+#[allow(clippy::large_enum_variant)]
 enum PendingEvent {
     Cancelled,
-    Received(Option<Box<ReceivedApdu>>),
+    Received(Option<ReceivedApdu>),
     Sent(Result<(), Error>),
 }
 
@@ -521,7 +524,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                         return EgressDrive::Complete;
                     },
                     _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
-                    received = apdu_rx.recv() => PendingEvent::Received(received.map(Box::new)),
+                    received = apdu_rx.recv() => PendingEvent::Received(received),
                     result = &mut send => PendingEvent::Sent(result),
                 }
             } else {
@@ -536,7 +539,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                     },
                     _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
                     result = &mut send => PendingEvent::Sent(result),
-                    received = apdu_rx.recv() => PendingEvent::Received(received.map(Box::new)),
+                    received = apdu_rx.recv() => PendingEvent::Received(received),
                 }
             };
 
@@ -544,8 +547,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 PendingEvent::Cancelled => break EgressDrive::Cancelled,
                 PendingEvent::Received(Some(received)) => {
                     *prefer_ingress = !*prefer_ingress;
-                    if let Some(exit) =
-                        route_received(*received, inbound_tx, terminal_tx, policy_tx)
+                    if let Some(exit) = route_received(received, inbound_tx, terminal_tx, policy_tx)
                     {
                         break EgressDrive::Exit(exit);
                     }

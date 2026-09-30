@@ -12,10 +12,8 @@ use super::mutation_tests::{
 };
 use super::*;
 #[cfg(feature = "sc-tls")]
-use crate::mutation::MutationTrust;
-use crate::mutation::{
-    MutationAuthorizationContext, MutationAuthorizer, MutationDecisionCounters, MutationPolicy,
-};
+use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationTrust};
+use crate::mutation::{MutationDecisionCounters, MutationPolicy};
 use crate::server::request_admission::{Class, RequestAdmissionPolicy};
 use crate::server::request_peer::canonical_requester;
 use bacnet_encoding::apdu::decode_apdu;
@@ -33,6 +31,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::EnableDisable;
 use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "sc-tls")]
 use std::sync::Mutex as StdMutex;
 
 fn confirmed(service: ConfirmedServiceChoice, bytes: Bytes, id: u8) -> ConfirmedRequestPdu {
