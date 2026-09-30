@@ -2,8 +2,9 @@
 //! sent APDUs and moves a shared Device clock at chosen points, plus request,
 //! subscription and notification helpers.
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use crate::server::test_transport::{SentFrame, TestTransport};
+use bacnet_encoding::apdu::encode_apdu;
+use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -62,8 +63,10 @@ impl ClockReader for SharedClock {
 
 pub(super) type Frames = Arc<StdMutex<Vec<Apdu>>>;
 
-pub(super) struct ClockTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// Send side of the harness link: records unicast APDUs and moves the shared
+/// Device clock at chosen points.
+#[derive(Clone)]
+struct ClockLink {
     frames: Frames,
     clock: SharedClock,
     /// Device time once a SimpleACK has been sent.
@@ -73,19 +76,19 @@ pub(super) struct ClockTransport {
     fail_notifications: Arc<AtomicBool>,
 }
 
-impl TransportPort for ClockTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        let apdu = decode_apdu(decode_npdu(Bytes::copy_from_slice(npdu)).unwrap().payload).unwrap();
+impl ClockLink {
+    async fn send(self, frame: SentFrame) -> Result<(), Error> {
+        if frame.broadcast {
+            if let Some(next) = self.after_broadcast.lock().unwrap().take() {
+                *self.clock.0.lock().unwrap() = next;
+            }
+            return Ok(());
+        }
+        let apdu = frame.apdu();
         match &apdu {
             Apdu::SimpleAck(_) => {
-                if let Some(frame) = self.after_ack.lock().unwrap().take() {
-                    *self.clock.0.lock().unwrap() = frame;
+                if let Some(next) = self.after_ack.lock().unwrap().take() {
+                    *self.clock.0.lock().unwrap() = next;
                 }
             }
             Apdu::UnconfirmedRequest(_) | Apdu::ConfirmedRequest(_)
@@ -98,22 +101,10 @@ impl TransportPort for ClockTransport {
         self.frames.lock().unwrap().push(apdu);
         Ok(())
     }
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        if let Some(frame) = self.after_broadcast.lock().unwrap().take() {
-            *self.clock.0.lock().unwrap() = frame;
-        }
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-    fn local_mac(&self) -> &[u8] {
-        &[10, 0, 0, 2, 0xBA, 0xC0]
-    }
 }
 
 pub(super) struct Harness {
-    pub(super) server: BACnetServer<ClockTransport>,
+    pub(super) server: BACnetServer<TestTransport>,
     pub(super) tx: mpsc::Sender<ReceivedNpdu>,
     pub(super) frames: Frames,
     pub(super) clock: SharedClock,
@@ -152,14 +143,18 @@ impl Harness {
         let after_ack = Arc::new(StdMutex::new(None));
         let after_broadcast = Arc::new(StdMutex::new(None));
         let fail_notifications = Arc::new(AtomicBool::new(false));
-        let transport = ClockTransport {
-            incoming: Some(rx),
+        let link = ClockLink {
             frames: Arc::clone(&frames),
             clock: clock.clone(),
             after_ack: Arc::clone(&after_ack),
             after_broadcast: Arc::clone(&after_broadcast),
             fail_notifications: Arc::clone(&fail_notifications),
         };
+        let transport = TestTransport::builder()
+            .local_mac(&[10, 0, 0, 2, 0xBA, 0xC0])
+            .inbound(rx)
+            .on_send(move |frame| link.clone().send(frame))
+            .build();
         let server = BACnetServer::start(config, db, transport).await.unwrap();
         // Start installs the system clock; replace it with the test clock.
         server

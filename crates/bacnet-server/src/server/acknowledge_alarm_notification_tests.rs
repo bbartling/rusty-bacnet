@@ -1,5 +1,6 @@
 use super::super::*;
 
+use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogInputObject;
@@ -9,67 +10,41 @@ use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCo
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, EventNotificationRequest};
-use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
 const REQUESTER: &[u8] = &[10, 0, 0, 1, 0xba, 0xc0];
 const UNCONFIRMED_RECIPIENT: &[u8] = &[10, 0, 0, 2, 0xba, 0xc0];
 const CONFIRMED_RECIPIENT: &[u8] = &[10, 0, 0, 3, 0xba, 0xc0];
-type RecordedFrames = StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>;
 type FailedPeers = StdArc<StdMutex<Vec<Vec<u8>>>>;
 
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sends: RecordedFrames,
-    failures: FailedPeers,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sends
-            .lock()
-            .unwrap()
-            .push((mac.to_vec(), Bytes::copy_from_slice(npdu)));
-        if self.failures.lock().unwrap().iter().any(|item| item == mac) {
-            Err(Error::Transport(std::io::Error::other(
-                "injected send failure",
-            )))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sends
-            .lock()
-            .unwrap()
-            .push((Vec::new(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xba, 0xc0]
-    }
+/// Records every send; a unicast to a MAC listed in `failures` fails after it
+/// is recorded.
+fn recording_transport(failures: &FailedPeers) -> TestTransport {
+    let failures = StdArc::clone(failures);
+    TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .on_send(move |frame| {
+            let failed = !frame.broadcast
+                && failures
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.as_slice() == frame.mac.as_slice());
+            async move {
+                if failed {
+                    Err(Error::Transport(std::io::Error::other(
+                        "injected send failure",
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .build()
 }
 
 struct FixedClock;
@@ -134,13 +109,13 @@ fn local_recipient(mac: &[u8], process_identifier: u32, confirmed: bool) -> BACn
 
 struct Harness {
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     tracker: Arc<ConfirmedRequestTracker>,
     transactions: Arc<NotificationTransactions>,
     bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
     config: ServerConfig,
-    sends: RecordedFrames,
+    sent: SendLog,
     failures: FailedPeers,
     oid: ObjectIdentifier,
     acknowledged_state: EventState,
@@ -148,9 +123,9 @@ struct Harness {
 
 impl Harness {
     fn new(destinations: Vec<BACnetDestination>, event_enable: u8, retry_ms: u64) -> Self {
-        let transport = RecordingTransport::default();
-        let sends = StdArc::clone(&transport.sends);
-        let failures = StdArc::clone(&transport.failures);
+        let failures = FailedPeers::default();
+        let transport = recording_transport(&failures);
+        let sent = transport.sent();
         let mut db = ObjectDatabase::new();
         db.set_clock_reader(Some(StdArc::new(FixedClock)));
 
@@ -224,7 +199,7 @@ impl Harness {
                 cov_retry_timeout_ms: retry_ms,
                 ..ServerConfig::default()
             },
-            sends,
+            sent,
             failures,
             oid,
             acknowledged_state: EventState::HIGH_LIMIT,
@@ -257,7 +232,7 @@ impl Harness {
     }
 
     async fn dispatch(&self, invoke_id: u8, reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>) {
-        BACnetServer::<RecordingTransport>::handle_confirmed_request(
+        BACnetServer::<TestTransport>::handle_confirmed_request(
             &RequestServices {
                 db: Arc::clone(&self.db),
                 notification_transactions: Arc::clone(&self.transactions),
@@ -288,7 +263,11 @@ impl Harness {
     }
 
     fn frames(&self) -> Vec<(Vec<u8>, Bytes)> {
-        self.sends.lock().unwrap().clone()
+        self.sent
+            .frames()
+            .into_iter()
+            .map(|frame| (frame.mac.to_vec(), frame.npdu))
+            .collect()
     }
 
     async fn acknowledged(&self) -> bool {

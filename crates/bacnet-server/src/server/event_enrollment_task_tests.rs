@@ -9,50 +9,23 @@
 //! for the intrinsic `Time_Delay` path.
 
 use super::*;
+use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::{EventState, EventType};
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
 /// Records broadcasts and discards unicasts; the same minimal harness the
 /// other server notification tests use.
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sent_broadcast: StdArc<StdMutex<Vec<bytes::Bytes>>>,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent_broadcast
-            .lock()
-            .unwrap()
-            .push(bytes::Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
-    }
+fn recording_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .unicast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
 /// Time_Delay=2 on a one-second evaluation interval: the first pass of the
@@ -65,8 +38,7 @@ impl TransportPort for RecordingTransport {
 /// 1s) and the countdown stands at 1; by 2.6s the 2s tick has fired it.
 #[tokio::test(start_paused = true)]
 async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
-    let transport = RecordingTransport::default();
-    let sent = StdArc::clone(&transport.sent_broadcast);
+    let (transport, sent) = recording_transport();
 
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     ai.set_present_value(85.0); // above the high limit below
@@ -148,7 +120,7 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
     );
 
     assert_eq!(
-        sent.lock().unwrap().len(),
+        sent.len(),
         1,
         "the committed delayed Event Enrollment transition must distribute once"
     );
@@ -165,13 +137,8 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
 /// already above the high limit) using the given Time_Delay.
 async fn default_interval_server(
     time_delay: u32,
-) -> (
-    BACnetServer<RecordingTransport>,
-    ObjectIdentifier,
-    StdArc<StdMutex<Vec<bytes::Bytes>>>,
-) {
-    let transport = RecordingTransport::default();
-    let sent = StdArc::clone(&transport.sent_broadcast);
+) -> (BACnetServer<TestTransport>, ObjectIdentifier, SendLog) {
+    let (transport, sent) = recording_transport();
 
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     ai.set_present_value(85.0);
