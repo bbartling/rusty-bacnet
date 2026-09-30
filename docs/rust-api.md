@@ -39,7 +39,7 @@ assert_eq!(ot.to_raw(), 0);
 assert_eq!(ObjectType::from_raw(0), ot);
 ```
 
-**Key enums:** `ObjectType` (u32), `PropertyIdentifier` (u32), `ErrorClass` (u16), `ErrorCode` (u16), `EnableDisable` (u32), `ReinitializedState` (u32), `Segmentation` (u8), `EventState` (u32), `EventType` (u32), `NotifyType` (u32), `Polarity` (u32), `Reliability` (u32), `LifeSafetyOperation` (u32), `MessagePriority` (u32)
+**Key enums:** `ObjectType` (u32), `PropertyIdentifier` (u32), `ErrorClass` (u16), `ErrorCode` (u16), `EnableDisable` (u32), `ReinitializedState` (u32), `Segmentation` (u8), `EventState` (u32), `EventType` (u32), `NotifyType` (u32), `Polarity` (u32), `Reliability` (u32), `LifeSafetyOperation` (u32), `MessagePriority` (u32), `VTClass` (u32)
 
 ### Primitives
 
@@ -401,13 +401,37 @@ use bacnet_services::life_safety::LifeSafetyOperationRequest;
 ### Write Group
 
 ```rust
-use bacnet_services::write_group::WriteGroupRequest;
+use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 ```
+
+`WriteGroupRequest` follows the WriteGroup-Request production (Clause 21.3.2).
+`group_number` is a `NonZeroU32` (group 0 is reserved) and `write_priority` is 1 to 16.
+Each `GroupChannelValue` carries a `u16` channel number, an optional override priority
+(1 to 16) and the already-encoded BACnetChannelValue in `value`: one
+application-tagged primitive, or a context-0 lighting command, with no wrapper tag.
+`encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
+a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
+buffer unchanged. `decode` enforces the same rules and rejects trailing data.
+Nothing in the bundled server executes inbound WriteGroup.
+
+### Who-Am-I and You-Are
+
+```rust
+use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
+```
+
+`WhoAmIRequest` has three mandatory application-tagged fields: `vendor_id` (`u16`),
+`model_name` and `serial_number`. `YouAreRequest` has the same three plus optional
+`device_identifier` (which must name a Device object) and `device_mac_address`; at
+least one of those two must be present. Both `encode` methods are fallible and both
+`decode` methods reject missing fields, context-tagged layouts and trailing data.
 
 ### Virtual Terminal
 
 ```rust
-use bacnet_services::vt::{VtOpenRequest, VtCloseRequest, VtDataRequest};
+use bacnet_services::virtual_terminal::{
+    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
+};
 ```
 
 ### Audit
@@ -2130,7 +2154,6 @@ the bundled server materializes an empty subscription context.
 ```rust
 client.who_is(None, None).await?;                       // broadcast
 client.who_has(WhoHasObject::Name("Zone Temp".into()), None, None).await?;
-client.who_am_i().await?;                               // network path verification
 
 let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>
 let device = client.get_device(1234).await;              // Option<DiscoveredDevice>
@@ -2156,14 +2179,57 @@ client.delete_object(&mac, oid).await?;
 ```rust
 client.acknowledge_alarm(&mac, process_id, oid, event_state, "operator").await?;
 let raw = client.get_event_information(&mac, None).await?;
-let raw = client.get_alarm_summary(&mac).await?;
-let raw = client.get_enrollment_summary(&mac, ack_filter, event_state, event_type, min_pri, max_pri, notif_class).await?;
+```
+
+GetAlarmSummary and GetEnrollmentSummary have no dedicated client methods.
+Send them with `confirmed_request` and decode the ACK with `bacnet_services`:
+
+```rust
+use bacnet_services::alarm_summary::GetAlarmSummaryAck;
+use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
+use bacnet_types::enums::ConfirmedServiceChoice;
+use bytes::BytesMut;
+
+// GetAlarmSummary takes no parameters.
+let raw = client.confirmed_request(&mac, ConfirmedServiceChoice::GET_ALARM_SUMMARY, &[]).await?;
+let alarms = GetAlarmSummaryAck::decode(&raw)?;
+
+let request = GetEnrollmentSummaryRequest {
+    acknowledgment_filter: 0, // all
+    enrollment_filter: None,
+    event_state_filter: None,
+    event_type_filter: None,
+    priority_filter: None,
+    notification_class_filter: None,
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY, &service_data)
+    .await?;
+let enrollments = GetEnrollmentSummaryAck::decode(&raw)?;
 ```
 
 ### Life Safety
 
+No dedicated client method: build the request and send it with `confirmed_request`.
+
 ```rust
-client.life_safety_operation(&mac, process_id, "operator", LifeSafetyOperation::SILENCE, Some(oid)).await?;
+use bacnet_services::life_safety::LifeSafetyOperationRequest;
+use bacnet_types::enums::{ConfirmedServiceChoice, LifeSafetyOperation};
+use bytes::BytesMut;
+
+let request = LifeSafetyOperationRequest {
+    requesting_process_identifier: process_id,
+    requesting_source: "operator".into(),
+    request: LifeSafetyOperation::SILENCE,
+    object_identifier: Some(oid),
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data)?;
+client
+    .confirmed_request(&mac, ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, &service_data)
+    .await?;
 ```
 
 ### File Services
@@ -2195,30 +2261,163 @@ client.remove_list_element(&mac, oid, PropertyIdentifier::OBJECT_LIST, None, ele
 
 ### Private Transfer
 
+No dedicated client methods: both forms share `PrivateTransferRequest`.
+
 ```rust
-let raw = client.confirmed_private_transfer(&mac, vendor_id, service_number, Some(params)).await?;
-client.unconfirmed_private_transfer(&mac, vendor_id, service_number, Some(params)).await?;
+use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
+use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bytes::BytesMut;
+
+let request = PrivateTransferRequest {
+    vendor_id,
+    service_number,
+    service_parameters: Some(params), // already-encoded parameter bytes
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER, &service_data)
+    .await?;
+let ack = PrivateTransferAck::decode(&raw)?;
+
+client
+    .unconfirmed_request(&mac, UnconfirmedServiceChoice::UNCONFIRMED_PRIVATE_TRANSFER, &service_data)
+    .await?;
 ```
 
 ### Text Messages
 
+No dedicated client methods: both forms share `TextMessageRequest`.
+
 ```rust
-let raw = client.confirmed_text_message(&mac, device_oid, priority, "Fire alarm", class_type, class_value).await?;
-client.unconfirmed_text_message(&mac, device_oid, priority, "Status update", None, None).await?;
+use bacnet_services::text_message::{MessageClass, TextMessageRequest};
+use bacnet_types::enums::{ConfirmedServiceChoice, MessagePriority, UnconfirmedServiceChoice};
+use bytes::BytesMut;
+
+let request = TextMessageRequest {
+    source_device: device_oid,
+    message_class: Some(MessageClass::Text("fire".into())),
+    message_priority: MessagePriority::URGENT,
+    message: "Fire alarm".into(),
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data)?;
+client
+    .confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE, &service_data)
+    .await?;
+
+let status = TextMessageRequest {
+    message_class: None,
+    message_priority: MessagePriority::NORMAL,
+    message: "Status update".into(),
+    ..request
+};
+let mut service_data = BytesMut::new();
+status.encode(&mut service_data)?;
+client
+    .unconfirmed_request(&mac, UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE, &service_data)
+    .await?;
 ```
 
-### Write Group
+### Write Group and Who-Am-I
+
+The client has no dedicated methods for these services. Build the
+`bacnet_services` request and send it through the generic unconfirmed-request API.
 
 ```rust
-client.write_group(&mac, group_number, write_priority, change_list, Some(false)).await?;
+use std::num::NonZeroU32;
+
+use bacnet_services::who_am_i::WhoAmIRequest;
+use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
+use bacnet_types::enums::UnconfirmedServiceChoice;
+use bytes::BytesMut;
+
+// Channel 5 gets REAL 72.0; channel 6 gets NULL at priority 10.
+let request = WriteGroupRequest {
+    group_number: NonZeroU32::new(1).unwrap(),
+    write_priority: 8,
+    change_list: vec![
+        GroupChannelValue {
+            channel: 5,
+            override_priority: None,
+            value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
+        },
+        GroupChannelValue {
+            channel: 6,
+            override_priority: Some(10),
+            value: vec![0x00],
+        },
+    ],
+    inhibit_delay: Some(false),
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data)?;
+client.unconfirmed_request(&mac, UnconfirmedServiceChoice::WRITE_GROUP, &service_data).await?;
+
+// Who-Am-I is usually broadcast.
+let who_am_i = WhoAmIRequest {
+    vendor_id: 260,
+    model_name: "Controller-X".into(),
+    serial_number: "SN-0001".into(),
+};
+let mut service_data = BytesMut::new();
+who_am_i.encode(&mut service_data)?;
+client.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_AM_I, &service_data).await?;
 ```
 
 ### Virtual Terminal
 
+The client has no VT-specific methods. Build the `bacnet_services` request and
+send it with `confirmed_request`. VT-Open carries both the terminal class and
+the caller's own session number (Clause 17.2.1); VT-Close needs at least one
+identifier and `encode` returns an error for an empty list; the VT-Data flag
+goes out as an Unsigned 0 or 1; and a VT-Data ACK is either `AllAccepted` or
+`Partial` with the accepted octet count (Clause 17.4.1.2).
+
 ```rust
-let raw = client.vt_open(&mac, vt_class).await?;
-client.vt_close(&mac, &session_ids).await?;
-let raw = client.vt_data(&mac, session_id, &data, data_flag).await?;
+use bacnet_services::virtual_terminal::{
+    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
+};
+use bacnet_types::enums::{ConfirmedServiceChoice, VTClass};
+use bytes::BytesMut;
+
+let mut buf = BytesMut::new();
+VTOpenRequest {
+    vt_class: VTClass::DEFAULT_TERMINAL,
+    local_vt_session_identifier: 5,
+}
+.encode(&mut buf);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::VT_OPEN, &buf)
+    .await?;
+let remote_id = VTOpenAck::decode(&raw)?.remote_vt_session_identifier;
+
+let mut buf = BytesMut::new();
+VTDataRequest {
+    vt_session_identifier: remote_id,
+    vt_new_data: b"hello".to_vec(),
+    vt_data_flag: false,
+}
+.encode(&mut buf);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::VT_DATA, &buf)
+    .await?;
+match VTDataAck::decode(&raw)? {
+    VTDataAck::AllAccepted => {}
+    VTDataAck::Partial { accepted_octet_count } => {
+        // Resend the octets after the first `accepted_octet_count`.
+        let _ = accepted_octet_count;
+    }
+}
+
+let mut buf = BytesMut::new();
+VTCloseRequest {
+    list_of_remote_vt_session_identifiers: vec![remote_id],
+}
+.encode(&mut buf)?;
+client
+    .confirmed_request(&mac, ConfirmedServiceChoice::VT_CLOSE, &buf)
+    .await?;
 ```
 
 ### Audit Services

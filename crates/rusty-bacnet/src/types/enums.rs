@@ -116,3 +116,4 @@ py_bacnet_enum!(
     bacnet_enums::MessagePriority,
     u32
 );
+py_bacnet_enum!("VTClass", PyVTClass, bacnet_enums::VTClass, u32);

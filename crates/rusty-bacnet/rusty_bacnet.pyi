@@ -944,6 +944,25 @@ class MessagePriority:
     def __hash__(self) -> int: ...
 
 
+class VTClass:
+    """BACnet virtual terminal class for VT-Open (Clause 17.2)."""
+
+    DEFAULT_TERMINAL: VTClass
+    ANSI_X3_64: VTClass
+    DEC_VT52: VTClass
+    DEC_VT100: VTClass
+    DEC_VT220: VTClass
+    HP_700_94: VTClass
+    IBM_3130: VTClass
+
+    @staticmethod
+    def from_raw(value: int) -> VTClass: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
 class LifeSafetyOperation:
     """BACnet life safety operation codes (Clause 12.15.13, Table 12-54)."""
 
@@ -1662,8 +1681,18 @@ class BACnetClient:
         """Clear the discovered device table."""
         ...
 
-    def who_am_i(self) -> Awaitable[None]:
-        """Broadcast a Who-Am-I request."""
+    def who_am_i(
+        self,
+        vendor_id: int,
+        model_name: str,
+        serial_number: str,
+    ) -> Awaitable[None]:
+        """Broadcast a Who-Am-I request announcing this device's identity.
+
+        The three arguments should match the sender's Device object properties
+        (``vendor_id`` is 0-65535). Raises ``ValueError`` if a string cannot be
+        encoded, or ``OverflowError`` for a ``vendor_id`` that doesn't fit.
+        """
         ...
 
     def who_is_directed(
@@ -2104,24 +2133,44 @@ class BACnetClient:
         address: str,
         group_number: int,
         write_priority: int,
-        change_list: list[tuple[Optional[ObjectIdentifier], Optional[int], bytes]],
+        change_list: list[tuple[int, Optional[int], bytes]],
         inhibit_delay: Optional[bool] = None,
     ) -> Awaitable[None]:
         """Send a WriteGroup request (unconfirmed).
 
-        ``change_list`` is ``[(channel_oid_or_none, override_priority_or_none, value_bytes), ...]``.
-        ``write_priority`` must be 1-16.
+        ``group_number`` is 1-4294967295 (group 0 is reserved) and
+        ``write_priority`` is 1-16. ``change_list`` is a non-empty list of
+        ``(channel, override_priority_or_none, value_bytes)`` tuples, where
+        ``channel`` is a channel number 0-65535, the override priority is 1-16 or
+        ``None``, and ``value_bytes`` is one encoded BACnetChannelValue: a single
+        application-tagged primitive or a context-0 lighting command, with no
+        wrapper tag. Raises ``ValueError``, or ``OverflowError`` for integers that
+        don't fit, for an argument outside those rules.
         """
         ...
 
     # --- Virtual terminal ---
 
-    def vt_open(self, address: str, vt_class: int) -> Awaitable[int]:
-        """Open a virtual terminal session. Returns the remote session identifier."""
+    def vt_open(
+        self,
+        address: str,
+        vt_class: VTClass,
+        local_vt_session_identifier: int,
+    ) -> Awaitable[int]:
+        """Open a virtual terminal session. Returns the remote session identifier.
+
+        ``local_vt_session_identifier`` (0-255) is the caller's own number for
+        the session, which the peer quotes when it sends data back.
+        """
         ...
 
     def vt_close(self, address: str, session_ids: list[int]) -> Awaitable[None]:
-        """Close one or more virtual terminal sessions."""
+        """Close one or more virtual terminal sessions.
+
+        ``session_ids`` must not be empty and each identifier is 0-255. Raises
+        ``ValueError`` for an empty list, or ``OverflowError`` for an integer that
+        doesn't fit, before anything is sent.
+        """
         ...
 
     def vt_data(
@@ -2133,7 +2182,11 @@ class BACnetClient:
     ) -> Awaitable[dict[str, Any]]:
         """Send data over a virtual terminal session.
 
-        Returns ``{"all_new_data_accepted": bool, "accepted_octet_count": int}``.
+        ``data_flag`` is the sequence flag that alternates on each new request
+        for a session; it is sent as an Unsigned 0 or 1.
+
+        Returns ``{"all_new_data_accepted": bool, "accepted_octet_count": int | None}``;
+        the count is an ``int`` only when ``all_new_data_accepted`` is ``False``.
         """
         ...
 

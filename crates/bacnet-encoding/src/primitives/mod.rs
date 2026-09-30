@@ -588,7 +588,14 @@ pub fn decode_application_value(
     Ok((value, content_end))
 }
 
-pub(crate) fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
+/// Check that an application-tagged value starts at `offset` and is structurally well formed,
+/// returning the offset just past it.
+///
+/// Unlike [`decode_application_value`] this accepts a CharacterString in any character set
+/// defined by Clause 20.2.9 (including DBCS and JIS X 0208, which [`decode_application_value`]
+/// rejects) and does not build a [`PropertyValue`]. Errors carry absolute offsets into
+/// `data`.
+pub fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
     let (tag, content_start) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.is_opening || tag.is_closing {
         return Err(Error::decoding(

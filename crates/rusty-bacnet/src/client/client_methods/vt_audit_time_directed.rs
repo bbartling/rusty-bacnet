@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::types::PyVTClass;
 
 #[pymethods]
 impl BACnetClient {
@@ -7,12 +8,17 @@ impl BACnetClient {
     // -----------------------------------------------------------------------
 
     /// Open a virtual terminal session. Returns the remote session identifier.
-    #[pyo3(signature = (address, vt_class))]
+    ///
+    /// `vt_class` is a `VTClass`; `local_vt_session_identifier` (0-255) is the
+    /// caller's own number for the session, which the peer quotes when it
+    /// sends data back.
+    #[pyo3(signature = (address, vt_class, local_vt_session_identifier))]
     fn vt_open<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        vt_class: u32,
+        vt_class: PyVTClass,
+        local_vt_session_identifier: u8,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -23,7 +29,10 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = VTOpenRequest { vt_class };
+            let req = VTOpenRequest {
+                vt_class: vt_class.to_rust(),
+                local_vt_session_identifier,
+            };
             let mut buf = BytesMut::new();
             req.encode(&mut buf);
             let resp = c
@@ -36,6 +45,10 @@ impl BACnetClient {
     }
 
     /// Close one or more virtual terminal sessions.
+    ///
+    /// `session_ids` must hold at least one identifier, each 0-255. An empty list raises
+    /// `ValueError`, or `OverflowError` for an integer that doesn't fit, before anything is
+    /// sent.
     #[pyo3(signature = (address, session_ids))]
     fn vt_close<'py>(
         &self,
@@ -43,6 +56,13 @@ impl BACnetClient {
         address: String,
         session_ids: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let req = VTCloseRequest {
+            list_of_remote_vt_session_identifiers: session_ids,
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+
         let inner = self.inner.clone();
         let future = async move {
             let mac = parse_address(&address)?;
@@ -52,11 +72,6 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = VTCloseRequest {
-                list_of_remote_vt_session_identifiers: session_ids,
-            };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
             c.confirmed_request(&mac, ConfirmedServiceChoice::VT_CLOSE, &buf)
                 .await
                 .map_err(to_py_err)?;
@@ -67,7 +82,12 @@ impl BACnetClient {
 
     /// Send data over a virtual terminal session.
     ///
-    /// Returns a dict with optional `all_new_data_accepted` and `accepted_octet_count`.
+    /// `data_flag` is the sequence flag (`False` = 0, `True` = 1) that
+    /// alternates on each new request for a session.
+    ///
+    /// Returns a dict with a boolean `all_new_data_accepted` and an
+    /// `accepted_octet_count` that is an `int` when the peer accepted only part
+    /// of the data and `None` when it accepted all of it.
     #[pyo3(signature = (address, session_id, data, data_flag))]
     fn vt_data<'py>(
         &self,
@@ -100,8 +120,8 @@ impl BACnetClient {
             let ack = VTDataAck::decode(&resp).map_err(to_py_err)?;
             Python::attach(|py| {
                 let dict = PyDict::new(py);
-                dict.set_item("all_new_data_accepted", ack.all_new_data_accepted)?;
-                dict.set_item("accepted_octet_count", ack.accepted_octet_count)?;
+                dict.set_item("all_new_data_accepted", ack.all_new_data_accepted())?;
+                dict.set_item("accepted_octet_count", ack.accepted_octet_count())?;
                 Ok(dict.into_any().unbind())
             })
         })
