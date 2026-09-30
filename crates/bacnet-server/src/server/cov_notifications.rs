@@ -1,3 +1,4 @@
+use super::cov_notify_context::CovNotifyContext;
 use super::*;
 use crate::cov::{AtomicCovCounters, CovInFlightTracker, InFlightAcquireError};
 
@@ -131,13 +132,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
     ) {
         Self::fire_cov_notifications_inner(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
+            &CovNotifyContext {
+                db,
+                network,
+                cov_table,
+                cov_in_flight,
+                notification_transactions,
+                comm_state,
+                config,
+            },
             oid,
             None,
         )
@@ -145,16 +148,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     pub(super) async fn fire_cov_notifications_inner(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        cov_in_flight: &Arc<Semaphore>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        comm_state: &Arc<AtomicU8>,
-        config: &ServerConfig,
+        ctx: &CovNotifyContext<'_, T>,
         oid: &ObjectIdentifier,
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
     ) {
+        let &CovNotifyContext {
+            db,
+            network,
+            cov_table,
+            cov_in_flight,
+            notification_transactions,
+            comm_state,
+            config,
+        } = ctx;
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }

@@ -1,14 +1,11 @@
 use super::*;
-use bacnet_objects::{
-    access_control::{
-        AccessCredentialObject, AccessRightsObject, AccessUserObject, CredentialDataInputObject,
-    },
-    traits::BACnetObject,
+use bacnet_objects::access_control::{
+    AccessCredentialObject, AccessRightsObject, AccessUserObject, CredentialDataInputObject,
 };
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
-fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
+fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     // PICS corrections vs the historical heuristic: Object_Name is required
     // and read-only; CDI Present_Value is required and read-only;
@@ -75,7 +72,7 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
 
 #[test]
 fn pics_access_identity_property_metadata_is_exact() {
-    let fresh: [fn() -> (Box<dyn BACnetObject>, ObjectType); 4] = [
+    let fresh: [FreshObject; 4] = [
         || {
             (
                 Box::new(AccessCredentialObject::new(7, "CRED-7").unwrap()),

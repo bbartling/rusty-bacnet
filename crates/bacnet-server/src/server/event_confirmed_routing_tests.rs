@@ -31,10 +31,13 @@ use tokio::sync::mpsc;
 
 mod learned_router_cache;
 
+/// One recorded unicast send: destination MAC and NPDU bytes.
+type UnicastFrame = (Vec<u8>, Bytes);
+
 #[derive(Clone, Default)]
 struct RecordingTransport {
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
+    unicasts: StdArc<StdMutex<Vec<UnicastFrame>>>,
 }
 
 impl TransportPort for RecordingTransport {
@@ -80,7 +83,7 @@ struct Harness {
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
+    unicasts: StdArc<StdMutex<Vec<UnicastFrame>>>,
     retry_timeout_ms: u64,
 }
 
@@ -144,12 +147,16 @@ impl Harness {
     async fn distribute(&self) {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
-            &self.db,
-            &self.network,
-            &self.comm_state,
-            &self.learned_routers,
-            &self.notification_transactions,
-            &self.device_bindings,
+            &EventDelivery {
+                db: &self.db,
+                network: &self.network,
+                comm_state: &self.comm_state,
+                learned_routers: &self.learned_routers,
+                notification_transactions: &self.notification_transactions,
+                device_bindings: &self.device_bindings,
+                retry_timeout_ms: self.retry_timeout_ms,
+                local_apdu_capacity: 1474,
+            },
             &oid,
             (
                 EventStateChange {
@@ -158,8 +165,6 @@ impl Harness {
                 },
                 EventType::OUT_OF_RANGE,
             ),
-            self.retry_timeout_ms,
-            1474,
         )
         .await;
         // The confirmed path spawns its send; yield until it reaches the
@@ -194,16 +199,18 @@ impl Harness {
             .commit_transition(EventState::NORMAL, EventState::HIGH_LIMIT)
             .await;
         BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
-            &self.db,
-            &self.network,
-            &self.comm_state,
-            &self.learned_routers,
-            &self.notification_transactions,
-            &self.device_bindings,
+            &EventDelivery {
+                db: &self.db,
+                network: &self.network,
+                comm_state: &self.comm_state,
+                learned_routers: &self.learned_routers,
+                notification_transactions: &self.notification_transactions,
+                device_bindings: &self.device_bindings,
+                retry_timeout_ms: self.retry_timeout_ms,
+                local_apdu_capacity: 1474,
+            },
             &oid,
             committed,
-            self.retry_timeout_ms,
-            1474,
         )
         .await;
         for _ in 0..16 {
@@ -216,7 +223,7 @@ impl Harness {
         self.broadcasts.lock().unwrap().clone()
     }
 
-    fn unicast_frames(&self) -> Vec<(Vec<u8>, Bytes)> {
+    fn unicast_frames(&self) -> Vec<UnicastFrame> {
         self.unicasts.lock().unwrap().clone()
     }
 

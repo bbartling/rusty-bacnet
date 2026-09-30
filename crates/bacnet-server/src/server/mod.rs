@@ -18,6 +18,8 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{debug, warn};
 
+use event_delivery::EventDelivery;
+
 use bacnet_encoding::apdu::{
     self, encode_apdu, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu,
     ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
@@ -548,6 +550,7 @@ mod cov_clock;
 mod cov_encoding;
 mod cov_fanout;
 mod cov_notifications;
+mod cov_notify_context;
 mod cov_snapshot;
 mod dcc_disable_rate;
 pub(crate) mod dcc_outcomes;
@@ -564,6 +567,7 @@ pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod dispatch;
+mod event_delivery;
 mod event_enrollment_lifecycle;
 mod event_message_policy;
 pub(crate) mod event_notification_payload;

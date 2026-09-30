@@ -32,9 +32,15 @@ mod network_port;
 mod schedule;
 mod timer;
 
+/// Expected (identifier, optional, writable) row for one property.
+type PropertyRow = (PropertyIdentifier, bool, bool);
+
+/// Constructor for a fresh object of a type, paired with that type.
+type FreshObject = fn() -> (Box<dyn bacnet_objects::traits::BACnetObject>, ObjectType);
+
 // Expected fixtures retain readable declaration order while the PICS contract
 // orders every type's output by raw property ID, including single instances.
-fn sorted_rows(rows: &[(PropertyIdentifier, bool, bool)]) -> Vec<(PropertyIdentifier, bool, bool)> {
+fn sorted_rows(rows: &[PropertyRow]) -> Vec<PropertyRow> {
     let mut rows = rows.to_vec();
     rows.sort_by_key(|row| row.0.to_raw());
     rows

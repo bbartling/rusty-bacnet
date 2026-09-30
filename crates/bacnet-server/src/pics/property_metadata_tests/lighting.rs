@@ -1,12 +1,9 @@
 use super::*;
-use bacnet_objects::{
-    lighting::{BinaryLightingOutputObject, LightingOutputObject},
-    traits::BACnetObject,
-};
+use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
-fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
+fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     match kind {
         ObjectType::LIGHTING_OUTPUT => vec![
@@ -51,7 +48,7 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
 
 #[test]
 fn pics_lighting_property_metadata_is_exact() {
-    let fresh: [fn() -> (Box<dyn BACnetObject>, ObjectType); 2] = [
+    let fresh: [FreshObject; 2] = [
         || {
             (
                 Box::new(LightingOutputObject::new(7, "LO-7").unwrap()),

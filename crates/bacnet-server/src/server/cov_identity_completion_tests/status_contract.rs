@@ -323,13 +323,15 @@ async fn cov_status_snapshot_captures_companion_without_live_db_fallback() {
         }));
         s.lock().unwrap().flags_fail = true;
         BACnetServer::<HeldTransport>::fire_cov_notifications_inner(
-            &f.db,
-            &f.network,
-            &f.table,
-            &f.permits,
-            &f.transactions,
-            &f.comm,
-            &f.config,
+            &crate::server::cov_notify_context::CovNotifyContext {
+                db: &f.db,
+                network: &f.network,
+                cov_table: &f.table,
+                cov_in_flight: &f.permits,
+                notification_transactions: &f.transactions,
+                comm_state: &f.comm,
+                config: &f.config,
+            },
             &object(),
             Some(&Probe(captured.clone())),
         )

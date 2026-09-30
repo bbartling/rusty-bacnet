@@ -63,16 +63,18 @@ pub(super) async fn run<T: TransportPort + 'static>(
         };
         for (oid, resolved) in fired {
             BACnetServer::<T>::build_and_send_event_notification_with_bindings(
-                &fanout.db,
-                &network_intrinsic,
-                &comm_state_intrinsic,
-                &learned_routers_intrinsic,
-                &notification_transactions_intrinsic,
-                &device_bindings_intrinsic,
+                &EventDelivery {
+                    db: &fanout.db,
+                    network: &network_intrinsic,
+                    comm_state: &comm_state_intrinsic,
+                    learned_routers: &learned_routers_intrinsic,
+                    notification_transactions: &notification_transactions_intrinsic,
+                    device_bindings: &device_bindings_intrinsic,
+                    retry_timeout_ms: intrinsic_retry_ms,
+                    local_apdu_capacity: intrinsic_apdu_capacity,
+                },
                 &oid,
                 resolved,
-                intrinsic_retry_ms,
-                intrinsic_apdu_capacity,
             )
             .await;
         }

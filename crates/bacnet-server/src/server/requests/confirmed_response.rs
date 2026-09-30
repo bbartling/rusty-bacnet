@@ -174,9 +174,11 @@ pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'sta
     send_response(
         network,
         response,
-        source_mac,
-        source_network,
-        route,
+        ResponseTarget {
+            source_mac,
+            source_network,
+            route,
+        },
         reply_tx,
         true,
         pending,
@@ -197,9 +199,11 @@ pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static
     send_response(
         network,
         response,
-        source_mac,
-        source_network,
-        route,
+        ResponseTarget {
+            source_mac,
+            source_network,
+            route,
+        },
         reply_tx,
         false,
         None,
@@ -289,16 +293,27 @@ async fn send_raw_response<T: TransportPort + 'static>(
     }
 }
 
+/// Where a confirmed-service response goes: the requester's MAC, its network
+/// address when routed, and the route the request arrived on.
+struct ResponseTarget<'a> {
+    source_mac: &'a [u8],
+    source_network: Option<&'a NpduAddress>,
+    route: &'a bacnet_network::response_route::ResponseRoute,
+}
+
 async fn send_response<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     response: &Apdu,
-    source_mac: &[u8],
-    source_network: Option<&NpduAddress>,
-    route: &bacnet_network::response_route::ResponseRoute,
+    target: ResponseTarget<'_>,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     log_errors: bool,
     pending: Option<PendingConfirmedRequest>,
 ) {
+    let ResponseTarget {
+        source_mac,
+        source_network,
+        route,
+    } = target;
     let mut buf = BytesMut::new();
     encode_apdu(&mut buf, response).expect("valid APDU encoding");
 

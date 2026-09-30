@@ -581,16 +581,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 for oid in &written_oids {
                     Self::fire_event_notifications_with_bindings(
-                        db,
+                        &EventDelivery {
+                            db,
+                            network,
+                            comm_state,
+                            learned_routers,
+                            notification_transactions,
+                            device_bindings,
+                            retry_timeout_ms: config.cov_retry_timeout_ms,
+                            local_apdu_capacity: config.max_apdu_length,
+                        },
                         cov_table,
-                        network,
-                        comm_state,
-                        learned_routers,
-                        notification_transactions,
-                        device_bindings,
                         oid,
-                        config.cov_retry_timeout_ms,
-                        config.max_apdu_length,
                     )
                     .await;
                 }
@@ -657,31 +659,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         if let Some(accepted) = accepted_acknowledgment {
             Self::send_acknowledgment_notification_with_bindings(
-                db,
-                network,
-                comm_state,
-                learned_routers,
-                notification_transactions,
-                device_bindings,
+                &EventDelivery {
+                    db,
+                    network,
+                    comm_state,
+                    learned_routers,
+                    notification_transactions,
+                    device_bindings,
+                    retry_timeout_ms: config.cov_retry_timeout_ms,
+                    local_apdu_capacity: config.max_apdu_length,
+                },
                 accepted,
-                config.cov_retry_timeout_ms,
-                config.max_apdu_length,
             )
             .await;
         }
 
         for oid in &written_oids {
             Self::fire_event_notifications_with_bindings(
-                db,
+                &EventDelivery {
+                    db,
+                    network,
+                    comm_state,
+                    learned_routers,
+                    notification_transactions,
+                    device_bindings,
+                    retry_timeout_ms: config.cov_retry_timeout_ms,
+                    local_apdu_capacity: config.max_apdu_length,
+                },
                 cov_table,
-                network,
-                comm_state,
-                learned_routers,
-                notification_transactions,
-                device_bindings,
                 oid,
-                config.cov_retry_timeout_ms,
-                config.max_apdu_length,
             )
             .await;
         }
