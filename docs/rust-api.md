@@ -1254,10 +1254,10 @@ In-process channel-based transport for composing a client and server without rea
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::mstp::NoSerial; // placeholder when serial feature is off
 
-let transport: AnyTransport<NoSerial> = AnyTransport::Bip(bip_transport);
+let transport: AnyTransport<NoSerial> = AnyTransport::Bip(Box::new(bip_transport));
 ```
 
-Variants: `Bip`, `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
+Variants: `Bip` (boxed), `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 
 ### BBMD
 

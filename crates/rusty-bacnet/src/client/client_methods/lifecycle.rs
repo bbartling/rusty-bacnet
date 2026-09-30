@@ -113,7 +113,7 @@ impl BACnetClient {
                     let broadcast: Ipv4Addr = broadcast_str
                         .parse()
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
-                    AnyTransport::Bip(BipTransport::new(interface, port, broadcast))
+                    AnyTransport::Bip(Box::new(BipTransport::new(interface, port, broadcast)))
                 }
                 "ipv6" => {
                     let iface_str = ipv6_interface.as_deref().unwrap_or("::");

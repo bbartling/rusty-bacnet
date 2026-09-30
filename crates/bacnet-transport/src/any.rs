@@ -25,8 +25,9 @@ use crate::sc_tls::TlsWebSocket;
 ///
 /// Enables mixed-transport routing (e.g., BIP + MS/TP on the same router).
 pub enum AnyTransport<S: SerialPort + 'static> {
-    /// BACnet/IP over UDP.
-    Bip(BipTransport),
+    /// BACnet/IP over UDP. Boxed, like `Sc`, because it is several times larger
+    /// than the other variants.
+    Bip(Box<BipTransport>),
     /// MS/TP over RS-485.
     Mstp(MstpTransport<S>),
     /// BACnet/IPv6 over UDP.
@@ -282,7 +283,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
 
 impl<S: SerialPort> From<BipTransport> for AnyTransport<S> {
     fn from(t: BipTransport) -> Self {
-        Self::Bip(t)
+        Self::Bip(Box::new(t))
     }
 }
 
@@ -328,7 +329,7 @@ mod tests {
     #[test]
     fn any_transport_bip_local_mac() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(bip);
+        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(Box::new(bip));
         assert_eq!(any.local_mac().len(), 6);
         assert!(any.supports_local_nonrouter_number_controls());
     }
@@ -336,7 +337,7 @@ mod tests {
     #[test]
     fn any_transport_bip_max_apdu() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(bip);
+        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(Box::new(bip));
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
