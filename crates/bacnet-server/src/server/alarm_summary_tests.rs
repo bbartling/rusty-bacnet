@@ -140,7 +140,6 @@ async fn alarm_summary_response(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn summary_response(
     count: u32,
     malformed: bool,
@@ -166,16 +165,7 @@ async fn summary_response(
         0,
         Ipv4Addr::BROADCAST,
     )));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(1));
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
-    let notification_transactions = NotificationTransactions::new();
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let confirmed = ConfirmedRequestPdu {
         segmented: false,
         more_follows: false,
@@ -195,19 +185,11 @@ async fn summary_response(
     });
 
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        &db,
-        &network,
-        &cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &learned_routers,
-        &notification_transactions,
+        &RequestServices {
+            db: Arc::clone(&db),
+            ..RequestServices::for_test(Arc::clone(&network), config.clone())
+        },
         &confirmed_request_tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        &config,
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &MacAddr::from_slice(&[1]),
         route.clone(),

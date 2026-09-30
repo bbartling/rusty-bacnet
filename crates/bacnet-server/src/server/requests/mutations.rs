@@ -17,6 +17,17 @@ pub(super) enum InitialCovNotification {
     Multiple(Vec<CovSubscriptionSnapshot>),
 }
 
+/// Post-write work a mutating service collects while it runs, consumed after
+/// the response is built: written objects for event evaluation, COV changes
+/// and staged writes to execute.
+#[derive(Default)]
+pub(super) struct MutationEffects {
+    pub(super) written_oids: Vec<ObjectIdentifier>,
+    pub(super) coarse_cov_oids: Vec<ObjectIdentifier>,
+    pub(super) life_safety_cov_changes: Vec<LifeSafetyCovChange>,
+    pub(super) staging_plans: Vec<StagingWritePlan>,
+}
+
 /// Borrowed dispatch inputs; constructed only after the DCC precheck.
 /// `provenance` is the reassembled ingress snapshot (fail-closed at
 /// reassembly on cross-segment mismatch), threaded unchanged into every
@@ -95,17 +106,19 @@ impl Request<'_> {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn write_property<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        written_oids: &mut Vec<ObjectIdentifier>,
-        coarse_cov_oids: &mut Vec<ObjectIdentifier>,
-        life_safety_cov_changes: &mut Vec<LifeSafetyCovChange>,
-        staging_plans: &mut Vec<StagingWritePlan>,
+        effects: &mut MutationEffects,
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
+        let MutationEffects {
+            written_oids,
+            coarse_cov_oids,
+            life_safety_cov_changes,
+            staging_plans,
+        } = effects;
         if let Err(error) = self.authorize(|| {
             WritePropertyRequest::decode(&self.req.service_request)
                 .map(MutationTarget::WriteProperty)
@@ -158,12 +171,15 @@ impl Request<'_> {
     pub(super) async fn write_property_multiple<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
-        written_oids: &mut Vec<ObjectIdentifier>,
-        coarse_cov_oids: &mut Vec<ObjectIdentifier>,
-        life_safety_cov_changes: &mut Vec<LifeSafetyCovChange>,
-        staging_plans: &mut Vec<StagingWritePlan>,
+        effects: &mut MutationEffects,
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
+        let MutationEffects {
+            written_oids,
+            coarse_cov_oids,
+            life_safety_cov_changes,
+            staging_plans,
+        } = effects;
         let (outcome, exact_changes, plans) = {
             let mut db = db.write().await;
             let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();

@@ -222,17 +222,23 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
         let router_mac = router_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                router_mac.as_slice(),
-                Some(&remote),
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                0x44,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: router_mac.as_slice(),
+                    source_network: Some(&remote),
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id: 0x44,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &service_ack_data,
-                50,
-                None,
                 None,
             )
             .await;

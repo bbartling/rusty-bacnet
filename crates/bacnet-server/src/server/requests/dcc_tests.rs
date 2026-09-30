@@ -213,19 +213,12 @@ async fn dispatch_wire(
     };
     let (tx, rx) = oneshot::channel();
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        &Arc::new(RwLock::new(ObjectDatabase::new())),
-        &network,
-        &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-        &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-        &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-        &Arc::new(Semaphore::new(1)),
-        &Arc::new(Mutex::new(LearnedRouterCache::new())),
-        &NotificationTransactions::new(),
+        &RequestServices {
+            comm_state: Arc::clone(comm_state),
+            dcc_timer: Arc::clone(dcc_timer),
+            ..RequestServices::for_test(Arc::clone(&network), config.clone())
+        },
         &Arc::new(ConfirmedRequestTracker::default()),
-        &Arc::new(RwLock::new(DeviceBindingTable::new())),
-        comm_state,
-        dcc_timer,
-        config,
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &[127, 0, 0, 1, 0xba, 0xc0],
         source,

@@ -295,10 +295,11 @@ async fn send_raw_response<T: TransportPort + 'static>(
 
 /// Where a confirmed-service response goes: the requester's MAC, its network
 /// address when routed, and the route the request arrived on.
-struct ResponseTarget<'a> {
-    source_mac: &'a [u8],
-    source_network: Option<&'a NpduAddress>,
-    route: &'a bacnet_network::response_route::ResponseRoute,
+#[derive(Clone, Copy)]
+pub(in crate::server) struct ResponseTarget<'a> {
+    pub(in crate::server) source_mac: &'a [u8],
+    pub(in crate::server) source_network: Option<&'a NpduAddress>,
+    pub(in crate::server) route: &'a bacnet_network::response_route::ResponseRoute,
 }
 
 async fn send_response<T: TransportPort + 'static>(

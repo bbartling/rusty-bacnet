@@ -46,15 +46,7 @@ async fn who_is_rechecks_selected_device_raw_capacity_and_recovers() {
             }
         }
         BACnetServer::handle_unconfirmed_request(
-            &server.db,
-            server.test_network(),
-            &server.config,
-            server._clock.as_ref(),
-            &server.comm_state,
-            &server.device_bindings,
-            &server.discovery_limiter,
-            &server.time_sync_limiter,
-            &server.notification_transactions,
+            &server.test_unconfirmed_services(),
             UnconfirmedRequestPdu {
                 service_choice: UnconfirmedServiceChoice::WHO_IS,
                 service_request: Bytes::new(),

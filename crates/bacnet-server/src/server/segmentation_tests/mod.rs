@@ -182,17 +182,23 @@ fn spawn_segmented_complex_ack_from_network_with_options(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         BACnetServer::<RecordingTransport>::send_segmented_complex_ack_with_options(
-            &network,
-            &seg_ack_senders,
-            &seg_send_permits,
-            request.source_mac.as_slice(),
-            request.source_network.as_ref(),
-            &bacnet_network::response_route::ResponseRoute::unverified(),
-            request.invoke_id,
-            ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            SegmentedSendResources {
+                network: &network,
+                seg_ack_senders: &seg_ack_senders,
+                seg_send_permits: &seg_send_permits,
+            },
+            ResponseTarget {
+                source_mac: request.source_mac.as_slice(),
+                source_network: request.source_network.as_ref(),
+                route: &bacnet_network::response_route::ResponseRoute::unverified(),
+            },
+            ComplexAckParams {
+                invoke_id: request.invoke_id,
+                service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                client_max_apdu: 50,
+                client_max_segments: None,
+            },
             &request.service_ack_data,
-            50,
-            None,
             request.options,
             None,
         )
@@ -277,38 +283,12 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
     source_network: Option<NpduAddress>,
     apdu: Apdu,
 ) {
-    let db = Arc::new(RwLock::new(ObjectDatabase::new()));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let cov_in_flight = Arc::new(Semaphore::new(255));
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
-    let notification_transactions = NotificationTransactions::new();
-    let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
-    let config = Arc::new(ServerConfig::default());
-
     BACnetServer::<T>::dispatch(
-        &db,
-        network,
-        &cov_table,
-        seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &learned_routers,
-        &notification_transactions,
-        &confirmed_request_tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        &Arc::new(dcc_outcomes::DccOutcomes::default()),
-        &Arc::new(crate::mutation::MutationDecisions::default()),
-        &config,
-        &None,
-        &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-        &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
-        &Arc::new(super::request_tasks::RequestTasks::default()),
+        &DispatchContext::for_test(RequestServices {
+            seg_ack_senders: Arc::clone(seg_ack_senders),
+            cov_in_flight: Arc::new(Semaphore::new(255)),
+            ..RequestServices::for_test(Arc::clone(network), ServerConfig::default())
+        }),
         source_mac.as_slice(),
         apdu,
         bacnet_network::layer::ReceivedApdu {

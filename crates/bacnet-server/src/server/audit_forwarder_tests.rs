@@ -174,19 +174,8 @@ impl Fixture {
         let s = &self.server;
         let (tx, rx) = oneshot::channel();
         BACnetServer::handle_confirmed_request(
-            &s.db,
-            s.test_network(),
-            &s.cov_table,
-            &s.seg_ack_senders,
-            &s.seg_send_permits,
-            &s.cov_in_flight,
-            &s.learned_routers,
-            &s.notification_transactions,
+            &s.test_services(),
             &s.confirmed_request_tracker,
-            &s.device_bindings,
-            &s.comm_state,
-            &s.dcc_timer,
-            &s.config,
             &s.request_tasks.spawner(),
             peer,
             None,
@@ -202,15 +191,7 @@ impl Fixture {
     async fn unconfirmed(&self, data: Bytes) {
         let s = &self.server;
         BACnetServer::handle_unconfirmed_request(
-            &s.db,
-            s.test_network(),
-            &s.config,
-            s._clock.as_ref(),
-            &s.comm_state,
-            &s.device_bindings,
-            &s.discovery_limiter,
-            &s.time_sync_limiter,
-            &s.notification_transactions,
+            &s.test_unconfirmed_services(),
             UnconfirmedRequestPdu {
                 service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
                 service_request: data,

@@ -4,17 +4,20 @@ use super::*;
 #[path = "dcc_disable_rate_tests.rs"]
 mod rate_tests;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn response<T: TransportPort + 'static>(
-    timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-    comm_state: &Arc<AtomicU8>,
-    outcomes: &dcc_outcomes::DccOutcomes,
-    config: &ServerConfig,
+    services: &RequestServices<T>,
     req: &ConfirmedRequestPdu,
     source_mac: &[u8],
     source: Option<&NpduAddress>,
     request_tasks: &super::super::request_tasks::RequestTaskSpawner,
 ) -> Apdu {
+    let RequestServices {
+        dcc_timer: timer,
+        comm_state,
+        dcc_outcomes: outcomes,
+        config,
+        ..
+    } = services;
     let result = super::super::dcc_timer::replace(
         timer,
         comm_state,

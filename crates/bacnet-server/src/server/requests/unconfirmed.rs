@@ -25,20 +25,23 @@ pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Handle an unconfirmed request (e.g., WhoIs).
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::server) async fn handle_unconfirmed_request(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        config: &ServerConfig,
-        clock: Option<&Arc<ServerClock>>,
-        comm_state: &Arc<AtomicU8>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        discovery_limiter: &Arc<DiscoveryLimiter>,
-        time_sync_limiter: &Arc<TimeSyncLimiter>,
-        notification_transactions: &Arc<NotificationTransactions>,
+        services: &UnconfirmedServices<T>,
         req: UnconfirmedRequestPdu,
         received: &bacnet_network::layer::ReceivedApdu,
     ) {
+        let UnconfirmedServices {
+            db,
+            network,
+            config,
+            clock,
+            comm_state,
+            device_bindings,
+            discovery_limiter,
+            time_sync_limiter,
+            notification_transactions,
+        } = services;
+        let clock = clock.as_ref();
         let comm = comm_state.load(Ordering::Acquire);
         if comm == 1 {
             tracing::debug!("Dropping unconfirmed service: DCC is DISABLE");

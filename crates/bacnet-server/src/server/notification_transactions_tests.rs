@@ -382,17 +382,11 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
         .unwrap();
     let invoke_id = operation.invoke_id();
     let network = Arc::new(NetworkLayer::new(IdleTransport::default()));
-    let db = Arc::new(RwLock::new(ObjectDatabase::new()));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(255));
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
-    let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
-    let config = Arc::new(ServerConfig::default());
+    let context = DispatchContext::for_test(RequestServices {
+        notification_transactions: Arc::clone(&transactions),
+        cov_in_flight: Arc::new(Semaphore::new(255)),
+        ..RequestServices::for_test(network, ServerConfig::default())
+    });
 
     for apdu in [
         segment_ack(invoke_id, false),
@@ -401,25 +395,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
         complex_ack(invoke_id, true),
     ] {
         BACnetServer::<IdleTransport>::dispatch(
-            &db,
-            &network,
-            &cov_table,
-            &seg_ack_senders,
-            &seg_send_permits,
-            &cov_in_flight,
-            &learned_routers,
-            &transactions,
-            &confirmed_request_tracker,
-            &device_bindings,
-            &comm_state,
-            &dcc_timer,
-            &Arc::new(dcc_outcomes::DccOutcomes::default()),
-            &Arc::new(crate::mutation::MutationDecisions::default()),
-            &config,
-            &None,
-            &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-            &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
-            &Arc::new(super::request_tasks::RequestTasks::default()),
+            &context,
             source_mac.as_slice(),
             apdu,
             bacnet_network::layer::ReceivedApdu {

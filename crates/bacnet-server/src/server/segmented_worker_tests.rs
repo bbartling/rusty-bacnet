@@ -28,17 +28,23 @@ fn direct_worker(server: &BACnetServer<HeldTransport>) -> JoinHandle<()> {
     let permits = Arc::clone(&server.seg_send_permits);
     tokio::spawn(async move {
         BACnetServer::<HeldTransport>::send_segmented_complex_ack(
-            &network,
-            &senders,
-            &permits,
-            &[1],
-            None,
-            &bacnet_network::response_route::ResponseRoute::unverified(),
-            7,
-            ConfirmedServiceChoice::READ_PROPERTY,
+            SegmentedSendResources {
+                network: &network,
+                seg_ack_senders: &senders,
+                seg_send_permits: &permits,
+            },
+            ResponseTarget {
+                source_mac: &[1],
+                source_network: None,
+                route: &bacnet_network::response_route::ResponseRoute::unverified(),
+            },
+            ComplexAckParams {
+                invoke_id: 7,
+                service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+                client_max_apdu: 50,
+                client_max_segments: None,
+            },
             &[0; 100],
-            50,
-            None,
             None,
         )
         .await;

@@ -53,25 +53,7 @@ async fn dispatch(
 ) -> Option<Bytes> {
     let (tx, rx) = oneshot::channel();
     BACnetServer::dispatch(
-        &server.db,
-        server.test_network(),
-        &server.cov_table,
-        &server.seg_ack_senders,
-        &server.seg_send_permits,
-        &server.cov_in_flight,
-        &server.learned_routers,
-        &server.notification_transactions,
-        &server.confirmed_request_tracker,
-        &server.device_bindings,
-        &server.comm_state,
-        &server.dcc_timer,
-        &server.dcc_outcomes,
-        &server.mutation_decisions,
-        &Arc::new(server.config.clone()),
-        &server._clock,
-        &server.discovery_limiter,
-        &server.time_sync_limiter,
-        &server.request_tasks,
+        &server.test_dispatch_context(),
         SOURCE,
         Apdu::ConfirmedRequest(request(service, bytes, id)),
         ReceivedApdu {
@@ -500,15 +482,18 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
         ))
         .unwrap();
     BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &server.db,
-        server.test_network(),
-        &server.config,
-        None,
-        &server.comm_state,
-        &server.device_bindings,
-        &server.discovery_limiter,
-        &server.time_sync_limiter,
-        &server.notification_transactions,
+        &UnconfirmedServices {
+            db: Arc::clone(&server.db),
+            comm_state: Arc::clone(&server.comm_state),
+            device_bindings: Arc::clone(&server.device_bindings),
+            discovery_limiter: Arc::clone(&server.discovery_limiter),
+            time_sync_limiter: Arc::clone(&server.time_sync_limiter),
+            notification_transactions: Arc::clone(&server.notification_transactions),
+            ..UnconfirmedServices::for_test(
+                Arc::clone(server.test_network()),
+                server.config.clone(),
+            )
+        },
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
             service_request: Bytes::new(),

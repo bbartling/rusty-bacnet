@@ -95,20 +95,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
         });
         let network_dispatch = Arc::clone(&network);
-        let db_dispatch = Arc::clone(&db);
-        let cov_dispatch = Arc::clone(&cov_table);
-        let seg_ack_dispatch = Arc::clone(&seg_ack_senders);
-        let seg_send_permits_dispatch = Arc::clone(&seg_send_permits);
-        let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
-        let learned_routers_dispatch = Arc::clone(&learned_routers);
-        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
-        let confirmed_request_tracker_dispatch = Arc::clone(&confirmed_request_tracker);
-        let device_bindings_dispatch = Arc::clone(&device_bindings);
         let comm_state_dispatch = Arc::clone(&comm_state);
-        let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
-        let clock_dispatch = clock.clone();
-        let limiters_dispatch = (discovery_limiter.clone(), time_sync_limiter.clone());
+        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
         let audit_owner = target_audit
             .as_ref()
@@ -117,6 +106,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             request_tasks.set_audit_owner(owner);
         }
         let requests = Arc::clone(&request_tasks);
+        let dispatch_context = DispatchContext {
+            services: RequestServices {
+                db: Arc::clone(&db),
+                network: Arc::clone(&network_dispatch),
+                cov_table: Arc::clone(&cov_table),
+                seg_ack_senders: Arc::clone(&seg_ack_senders),
+                seg_send_permits: Arc::clone(&seg_send_permits),
+                cov_in_flight: Arc::clone(&cov_in_flight),
+                learned_routers: Arc::clone(&learned_routers),
+                notification_transactions: Arc::clone(&notification_transactions_dispatch),
+                device_bindings: Arc::clone(&device_bindings),
+                comm_state: Arc::clone(&comm_state_dispatch),
+                dcc_timer: Arc::clone(&dcc_timer),
+                dcc_outcomes: Arc::clone(&dcc_outcomes_dispatch),
+                mutation_decisions: Arc::clone(&mutation_decisions_dispatch),
+                config: Arc::clone(&config_dispatch),
+            },
+            confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
+            clock: clock.clone(),
+            discovery_limiter: discovery_limiter.clone(),
+            time_sync_limiter: time_sync_limiter.clone(),
+            request_tasks: Arc::clone(&request_tasks),
+        };
         let dispatch_task = spawn_owned(audit_owner.clone(), async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
@@ -492,26 +504,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     "Reassembled segmented ConfirmedRequest"
                                                 );
                                                 Self::dispatch(
-                                                    &db_dispatch,
-                                                    &network_dispatch,
-                                                    &cov_dispatch,
-                                                    &seg_ack_dispatch,
-                                                    &seg_send_permits_dispatch,
-                                                    &cov_in_flight_dispatch,
-                                                    &learned_routers_dispatch,
-                                                    &notification_transactions_dispatch,
-                                                    &confirmed_request_tracker_dispatch,
-                                                    &device_bindings_dispatch,
-                                                    &comm_state_dispatch,
-                                                    &dcc_timer_dispatch,
-                                                    &dcc_outcomes_dispatch,
-                                                    &mutation_decisions_dispatch,
-                                                    &config_dispatch,
-                                                    &clock_dispatch,
-                                                    &limiters_dispatch.0,
-                                                    &limiters_dispatch.1,
-                                                    &requests,
-                                                    &source_mac,
+&dispatch_context,
+&source_mac,
                                                     Apdu::ConfirmedRequest(reassembled),
                                                     received.take().unwrap_or_else(|| {
                                                         warn!("received consumed twice - using empty fallback");
@@ -551,25 +545,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                         if !handled {
                             Self::dispatch(
-                                &db_dispatch,
-                                &network_dispatch,
-                                &cov_dispatch,
-                                &seg_ack_dispatch,
-                                &seg_send_permits_dispatch,
-                                &cov_in_flight_dispatch,
-                                &learned_routers_dispatch,
-                                &notification_transactions_dispatch,
-                                &confirmed_request_tracker_dispatch,
-                                &device_bindings_dispatch,
-                                &comm_state_dispatch,
-                                &dcc_timer_dispatch,
-                                &dcc_outcomes_dispatch,
-                                &mutation_decisions_dispatch,
-                                &config_dispatch,
-                                &clock_dispatch,
-                                &limiters_dispatch.0,
-                                &limiters_dispatch.1,
-                                &requests,
+                                &dispatch_context,
                                 &source_mac,
                                 decoded,
                                 received.take().unwrap_or_else(|| {

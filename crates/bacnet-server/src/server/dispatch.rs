@@ -79,31 +79,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Fast-path APDU types (SimpleAck, Error, Reject, Abort, SegmentAck)
     /// remain inline since they are sub-microsecond TSM lookups.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn dispatch(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
-        seg_send_permits: &Arc<Semaphore>,
-        cov_in_flight: &Arc<Semaphore>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
-        dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-        dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
-        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
-        config: &Arc<ServerConfig>,
-        clock: &Option<Arc<ServerClock>>,
-        discovery_limiter: &Arc<DiscoveryLimiter>,
-        time_sync_limiter: &Arc<TimeSyncLimiter>,
-        request_tasks: &Arc<super::request_tasks::RequestTasks>,
+        ctx: &DispatchContext<T>,
         source_mac: &[u8],
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
     ) {
+        let DispatchContext {
+            services,
+            confirmed_request_tracker,
+            clock: _,
+            discovery_limiter,
+            time_sync_limiter: _,
+            request_tasks,
+        } = ctx;
+        let RequestServices {
+            network,
+            seg_ack_senders,
+            learned_routers,
+            notification_transactions,
+            comm_state,
+            ..
+        } = services;
         if notification_transactions
             .application_sealed
             .load(Ordering::Acquire)
@@ -163,20 +160,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let abort_source = received.source_network.clone();
                     let abort_route = route.clone();
                     let mut reply_tx = received.reply_tx.take();
-                    let db = Arc::clone(db);
-                    let network = Arc::clone(network);
-                    let cov_table = Arc::clone(cov_table);
-                    let seg_ack_senders = Arc::clone(seg_ack_senders);
-                    let seg_send_permits = Arc::clone(seg_send_permits);
-                    let cov_in_flight = Arc::clone(cov_in_flight);
-                    let learned_routers = Arc::clone(learned_routers);
-                    let notification_transactions = Arc::clone(notification_transactions);
-                    let device_bindings = Arc::clone(device_bindings);
-                    let comm_state = Arc::clone(comm_state);
-                    let dcc_timer = Arc::clone(dcc_timer);
-                    let dcc_outcomes = Arc::clone(dcc_outcomes);
-                    let mutation_decisions = Arc::clone(mutation_decisions);
-                    let config = Arc::clone(config);
+                    let services = services.clone();
                     let source_mac = MacAddr::from_slice(source_mac);
                     let source_network = received.source_network.clone();
                     let descendants = request_tasks.spawner();
@@ -192,24 +176,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         let reply_tx = reply_tx.take();
                         async move {
                             Self::handle_admitted_confirmed_request(
-                                &db,
-                                &network,
-                                &cov_table,
-                                &seg_ack_senders,
-                                &seg_send_permits,
-                                &cov_in_flight,
-                                &learned_routers,
-                                &notification_transactions,
-                                &device_bindings,
-                                &comm_state,
-                                &dcc_timer,
-                                &dcc_outcomes,
-                                &mutation_decisions,
-                                &config,
+                                &services,
                                 &descendants,
-                                &source_mac,
-                                source_network,
-                                route,
+                                RequestOrigin {
+                                    mac: &source_mac,
+                                    network: source_network,
+                                    route,
+                                },
                                 req,
                                 reply_tx,
                                 Some(ConfirmedRequestOwnership::LifeSafety(lso_pending)),
@@ -268,20 +241,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let abort_source = received.source_network.clone();
                 let abort_route = route.clone();
                 let mut reply_tx = received.reply_tx.take();
-                let db = Arc::clone(db);
-                let network = Arc::clone(network);
-                let cov_table = Arc::clone(cov_table);
-                let seg_ack_senders = Arc::clone(seg_ack_senders);
-                let seg_send_permits = Arc::clone(seg_send_permits);
-                let cov_in_flight = Arc::clone(cov_in_flight);
-                let learned_routers = Arc::clone(learned_routers);
-                let notification_transactions = Arc::clone(notification_transactions);
-                let device_bindings = Arc::clone(device_bindings);
-                let comm_state = Arc::clone(comm_state);
-                let dcc_timer = Arc::clone(dcc_timer);
-                let dcc_outcomes = Arc::clone(dcc_outcomes);
-                let mutation_decisions = Arc::clone(mutation_decisions);
-                let config = Arc::clone(config);
+                let services = services.clone();
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
                 let descendants = request_tasks.spawner();
@@ -295,24 +255,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let reply_tx = reply_tx.take();
                     async move {
                         Self::handle_admitted_confirmed_request(
-                            &db,
-                            &network,
-                            &cov_table,
-                            &seg_ack_senders,
-                            &seg_send_permits,
-                            &cov_in_flight,
-                            &learned_routers,
-                            &notification_transactions,
-                            &device_bindings,
-                            &comm_state,
-                            &dcc_timer,
-                            &dcc_outcomes,
-                            &mutation_decisions,
-                            &config,
+                            &services,
                             &descendants,
-                            &source_mac,
-                            source_network,
-                            route,
+                            RequestOrigin {
+                                mac: &source_mac,
+                                network: source_network,
+                                route,
+                            },
                             req,
                             reply_tx,
                             Some(ConfirmedRequestOwnership::Generic(pending)),
@@ -404,34 +353,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 }
 
-                let db = Arc::clone(db);
-                let network = Arc::clone(network);
-                let config = Arc::clone(config);
-                let clock = clock.clone();
-                let comm_state = Arc::clone(comm_state);
-                let device_bindings = Arc::clone(device_bindings);
-                let discovery_limiter = Arc::clone(discovery_limiter);
-                let time_sync_limiter = Arc::clone(time_sync_limiter);
-                let notification_transactions = Arc::clone(notification_transactions);
+                let services = ctx.unconfirmed_services();
                 let peer = super::request_peer::canonical_requester(
                     source_mac,
                     received.source_network.as_ref(),
                 );
                 let _ = request_tasks.try_spawn(Class::Unconfirmed, peer, || async move {
-                    Self::handle_unconfirmed_request(
-                        &db,
-                        &network,
-                        &config,
-                        clock.as_ref(),
-                        &comm_state,
-                        &device_bindings,
-                        &discovery_limiter,
-                        &time_sync_limiter,
-                        &notification_transactions,
-                        req,
-                        &received,
-                    )
-                    .await;
+                    Self::handle_unconfirmed_request(&services, req, &received).await;
                 });
             }
             // Fast paths — remain inline (bounded synchronous admission)
