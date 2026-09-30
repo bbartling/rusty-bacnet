@@ -107,7 +107,8 @@ pub struct EventSummary {
     pub event_enable: u8,
     /// Priorities for TO_OFFNORMAL, TO_FAULT, TO_NORMAL
     pub event_priorities: [u32; 3],
-    /// Notification class used to route this object's event notifications.
+    /// Not part of the GetEventInformation wire format: encode ignores it and decode always
+    /// sets 0.
     pub notification_class: u32,
 }
 

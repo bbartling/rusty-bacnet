@@ -1,4 +1,4 @@
-//! Virtual Terminal (VT) services per ASHRAE 135-2020 Clauses 16.3–16.5.
+//! Virtual Terminal (VT) services per ASHRAE 135-2020 Clauses 17.2–17.4.
 //!
 //! Legacy services needed for full spec coverage. All fields use APPLICATION
 //! tags (not context-specific) unless noted.

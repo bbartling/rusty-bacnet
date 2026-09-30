@@ -50,9 +50,11 @@ pub struct SubscribeCOVPropertyMultipleRequest {
     pub subscriber_process_identifier: u32,
     /// `true` for confirmed notifications, `false` for unconfirmed.
     pub issue_confirmed_notifications: bool,
-    /// Lifetime in seconds; nonzero, and present only together with `max_notification_delay`.
+    /// Lifetime in seconds. A subscription needs it nonzero and paired with
+    /// `max_notification_delay`; both absent cancels. Encode enforces the pairing, decode does not.
     pub lifetime: Option<u32>,
-    /// Longest delay in seconds a notification may be held for batching; below `lifetime`.
+    /// Longest delay in seconds (at most 3600, below `lifetime`) a notification may be held for
+    /// batching; present exactly when `lifetime` is. Checked on encode only.
     pub max_notification_delay: Option<u32>,
     /// Objects and properties to subscribe to.
     pub list_of_cov_subscription_specifications: Vec<COVSubscriptionSpecification>,

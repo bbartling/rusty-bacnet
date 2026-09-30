@@ -1,7 +1,7 @@
-//! Device management services per ASHRAE 135-2020 Clauses 15-16.
+//! Device management services per ASHRAE 135-2020 Clause 16.
 //!
 //! - DeviceCommunicationControl (Clause 16.1)
-//! - ReinitializeDevice (Clause 15.4)
+//! - ReinitializeDevice (Clause 16.4)
 //! - TimeSynchronization (§16.7)
 //! - UTCTimeSynchronization (§16.8)
 
@@ -43,7 +43,8 @@ impl DeviceCommunicationControlRequest {
         Ok(())
     }
 
-    /// Decode the request from `data`; errors on malformed input or an out-of-range duration.
+    /// Decode the request from `data`; errors on malformed input, an out-of-range duration or a
+    /// password longer than 20 characters.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

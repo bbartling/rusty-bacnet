@@ -1,4 +1,4 @@
-//! COV (Change of Value) services per ASHRAE 135-2020 Clause 13 & 16.
+//! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -28,7 +28,8 @@ pub struct SubscribeCOVRequest {
     pub monitored_object_identifier: ObjectIdentifier,
     /// `true` confirmed, `false` unconfirmed notifications; `None` (with no lifetime) cancels.
     pub issue_confirmed_notifications: Option<bool>,
-    /// Subscription lifetime in seconds; `None` (with no confirmed flag) cancels, else no expiry.
+    /// Subscription lifetime in seconds, where `Some(0)` means no expiry. `None` together with
+    /// no confirmed flag cancels; `None` alone also means no expiry.
     pub lifetime: Option<u32>,
 }
 
@@ -131,7 +132,8 @@ pub struct SubscribeCOVPropertyRequest {
     pub monitored_object_identifier: ObjectIdentifier,
     /// `true` confirmed, `false` unconfirmed notifications; `None` (with no lifetime) cancels.
     pub issue_confirmed_notifications: Option<bool>,
-    /// Subscription lifetime in seconds; `None` (with no confirmed flag) cancels, else no expiry.
+    /// Subscription lifetime in seconds, where `Some(0)` means no expiry. `None` together with
+    /// no confirmed flag cancels; `None` alone also means no expiry.
     pub lifetime: Option<u32>,
     /// Property whose changes are reported.
     pub monitored_property_identifier: PropertyIdentifier,
@@ -296,9 +298,10 @@ pub struct COVNotificationRequest {
     pub initiating_device_identifier: ObjectIdentifier,
     /// Object whose value changed.
     pub monitored_object_identifier: ObjectIdentifier,
-    /// Seconds left before the subscription expires.
+    /// Seconds left before the subscription expires; 0 means it never expires (Clause 13.6.1).
     pub time_remaining: u32,
-    /// Changed properties with their new values, each as raw encoded BACnet bytes.
+    /// Property values the notification reports for the monitored object (Table 13-1 lists which
+    /// ones), each as raw encoded BACnet bytes; not only the ones that changed.
     pub list_of_values: Vec<BACnetPropertyValue>,
 }
 

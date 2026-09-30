@@ -59,7 +59,8 @@ pub struct WritePropertyRequest {
     pub property_array_index: Option<u32>,
     /// Application-tagged encoding of the value to write, opaque to this crate.
     pub property_value: Vec<u8>,
-    /// Priority (1-16) for commandable properties; `None` leaves the choice to the responder.
+    /// Priority (1-16) for commandable properties. `None` omits it, and the responder then
+    /// uses 16; a non-commandable property ignores it (Clause 15.9.1).
     pub priority: Option<u8>,
 }
 

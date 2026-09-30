@@ -1,5 +1,5 @@
 //! ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer services
-//! per ASHRAE 135-2020 Clauses 15.19 and 16.10.6.
+//! per ASHRAE 135-2020 Clauses 16.2 and 16.3.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;

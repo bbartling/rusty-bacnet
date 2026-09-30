@@ -48,7 +48,7 @@ pub enum NotificationParameters {
     },
     /// [4] Floating limit.
     FloatingLimit {
-        /// Current value of the monitored reference property.
+        /// Current value of the monitored property (not the setpoint reference).
         reference_value: f32,
         /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
         status_flags: u8,
@@ -119,7 +119,8 @@ pub enum NotificationParameters {
         status_flags: u8,
         /// Counter distinguishing access events, carried as the `access-event-tag` field.
         access_event_tag: u32,
-        /// Date and time at which the access event occurred.
+        /// Time of the access event; a BACnetTimeStamp on the wire, of which only the date-time
+        /// choice is accepted.
         access_event_time: (Date, Time),
         /// Credential object (with optional device) that was presented.
         access_credential: BACnetDeviceObjectReference,
@@ -165,7 +166,7 @@ pub enum NotificationParameters {
         changed_value: String,
         /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
         status_flags: u8,
-        /// Character-string value that is configured to count as alarming.
+        /// The configured alarm string that the new value matched.
         alarm_value: String,
     },
     /// [18] Change of status flags. `present_value` preserves absent and present-empty context [0].

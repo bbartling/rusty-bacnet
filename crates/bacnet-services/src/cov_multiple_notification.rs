@@ -47,7 +47,7 @@ pub struct COVNotificationMultipleRequest {
     pub subscriber_process_identifier: u32,
     /// Device that sent the notification.
     pub initiating_device_identifier: ObjectIdentifier,
-    /// Seconds left before the subscription expires.
+    /// Seconds left before the subscription expires; 0 means it never expires.
     pub time_remaining: u32,
     /// Date and time of the last conveyed timestamped change.
     pub timestamp: Option<(Date, Time)>,

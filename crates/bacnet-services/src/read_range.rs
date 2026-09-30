@@ -99,8 +99,9 @@ pub enum RangeSpec {
     ByTime {
         /// Timestamp that anchors the range; must be fully specified.
         reference_time: (Date, Time),
-        /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference and
-        /// negative reads backward, ending at the reference.
+        /// Signed INTEGER16 item count, never zero. The reference time itself is excluded:
+        /// positive reads forward from the first item newer than it, negative reads backward
+        /// ending at the newest item older than it (Clause 15.8.1.1.4.3).
         count: i32,
     },
 }

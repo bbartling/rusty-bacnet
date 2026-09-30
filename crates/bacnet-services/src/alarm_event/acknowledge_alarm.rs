@@ -16,7 +16,8 @@ fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
 /// AcknowledgeAlarm-Request service parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AcknowledgeAlarmRequest {
-    /// Process on the acknowledging device that handled the alarm (echoes the notification's id).
+    /// Identifies the process on the requesting device that performs the acknowledgment; how it
+    /// is assigned is a local matter (Clause 13.5.1).
     pub acknowledging_process_identifier: u32,
     /// Object whose event transition is being acknowledged.
     pub event_object_identifier: ObjectIdentifier,

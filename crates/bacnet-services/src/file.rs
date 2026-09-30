@@ -1,4 +1,4 @@
-//! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 15.1–15.2.
+//! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 14.1–14.2.
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -79,7 +79,7 @@ fn checked_unsigned_u32(
 /// AtomicReadFile-Request — stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicReadFileRequest {
-    /// File object to read from; must be of object type File.
+    /// File object to read from; should be of object type File (not checked here).
     pub file_identifier: ObjectIdentifier,
     /// Stream or record access, with the position and amount requested.
     pub access: FileAccessMethod,
@@ -88,7 +88,7 @@ pub struct AtomicReadFileRequest {
 /// AtomicWriteFile-Request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicWriteFileRequest {
-    /// File object to write to; must be of object type File.
+    /// File object to write to; should be of object type File (not checked here).
     pub file_identifier: ObjectIdentifier,
     /// Stream or record access, with the data to write.
     pub access: FileWriteAccessMethod,
@@ -130,7 +130,8 @@ pub enum FileWriteAccessMethod {
     Record {
         /// Record number at which writing starts, or -1 to append after the last record.
         file_start_record: i32,
-        /// Number of records supplied in `file_record_data`.
+        /// Number of records supplied in `file_record_data`. Encode writes it as given; decode
+        /// rejects a count that doesn't match the records.
         record_count: u32,
         /// Records to write, each one an opaque octet string.
         file_record_data: Vec<Vec<u8>>,
@@ -138,7 +139,7 @@ pub enum FileWriteAccessMethod {
 }
 
 impl AtomicReadFileRequest {
-    /// Encode the request parameters (Clause 14.1.1) into `buf`.
+    /// Encode the request parameters (Clause 14.1.2) into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.file_identifier);
         match &self.access {
@@ -216,7 +217,7 @@ impl AtomicReadFileRequest {
 }
 
 impl AtomicWriteFileRequest {
-    /// Encode the request parameters (Clause 14.2.1) into `buf`.
+    /// Encode the request parameters (Clause 14.2.2) into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.file_identifier);
         match &self.access {
