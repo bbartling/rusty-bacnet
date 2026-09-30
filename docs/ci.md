@@ -8,23 +8,40 @@
 
 ## Pipeline
 
-| Job | PR to `dev` | PR to `main` | Push to `main`, `v*` tag, weekly, manual |
-| --- | --- | --- | --- |
-| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ |
-| Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ |
-| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` | ✓ | ✓ | ✓ |
-| MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) | | ✓ | ✓ |
-| Cargo Audit + Cargo Deny | | ✓ | ✓ |
-| **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ |
+| Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
+| --- | --- | --- | --- | --- |
+| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
+| Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
+| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` | ✓ | ✓ | ✓ | ✓ |
+| MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
+| Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
+| **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
 
 `CI OK` is the single status to require in branch protection (its context is
 `CI / CI OK (pull_request)`); jobs skipped by tier count as passing. [`.forgejo/workflows/docs.yml`](../.forgejo/workflows/docs.yml)
 validates the website (Astro checks, unit tests, production build and Chromium
 tests) on PRs that change `website/**`.
 
-Merge pushes to `dev` do not start a pipeline: the PR already tested that head.
-The weekly scheduled run checks the default branch (`dev`).
+Merge pushes to `dev` run the Lean jobs, for two reasons (#904).
+
+- **Caches.** The runner scopes cache writes from `pull_request` events to that
+  PR. A PR's first run falls back only to caches from non-PR events: merges,
+  `main`, tags, the schedule or manual runs. Before this, those were rare, so
+  most new PRs started cold.
+- **Merge result.** A PR run checks out the PR head, not the merge. With the
+  repo's default merge commits, the `dev` run is the only test of the combined
+  code, and an outdated branch can still merge.
+
+A newer merge cancels the previous merge's run, since it tests a superset.
+**After merging, check the `dev` run.** It isn't a required status, so a red
+merge run is the only signal of merge skew; fix it forward on `dev` right away.
+The weekly scheduled run checks the default branch (`dev`) with the Heavy jobs
+too.
+
+Rust caches are keyed per job on the toolchain, `Cargo.lock`, the manifests,
+and, for Clippy and Test, `LINUX_FEATURES`. They're saved even when a job
+fails.
 A new push to a PR cancels its superseded run.
 
 Tests run with [cargo-nextest](https://nexte.st), which gives each test its

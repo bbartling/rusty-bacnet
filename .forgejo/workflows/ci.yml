@@ -4,22 +4,26 @@ name: CI
 # ghcr.io/catthehacker/ubuntu:act-24.04). macOS is checked locally with
 # scripts/ci/local-macos.sh; Windows is not currently tested. See docs/ci.md.
 #
-#   Lean  — every PR to dev/main, push to main, v* tags:
+#   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
 #           lint (fmt, file-size cap, no-secret scan, script regressions),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features),
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
 #           and the Python bindings built with maturin and their unittest suite.
-#   Heavy — PRs to main, push to main, v* tags, weekly schedule:
+#   Heavy — PRs to main, push to main, v* tags, weekly schedule, manual:
 #           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
 #   CI OK — single required status that fails if any job above failed.
+#
+# Pushes to dev (PR merges) run the Lean jobs so their caches are written from a
+# non-PR event, which every new PR's first run can restore (PR-event cache
+# writes are scoped to that PR), and so the merge result itself is tested (#904).
 
 on:
   pull_request:
     branches: [dev, main]
     types: [opened, synchronize, reopened]
   push:
-    branches: [main]
+    branches: [dev, main]
     tags: ["v*"]
   schedule:
     # Advisory databases change without code changes.
@@ -27,7 +31,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Per event, so a scheduled or manual run never cancels a push to main.
+  # Per event and ref: a scheduled or manual run never cancels a push to main,
+  # PR runs and dev-merge runs never cancel each other, and a newer merge to dev
+  # cancels the previous merge's run (the newer one tests a superset).
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -86,6 +92,8 @@ jobs:
         with:
           key: clippy
           cache-bin: false
+          cache-on-failure: true
+          env-vars: LINUX_FEATURES
       # Warnings are errors for workspace code only; dependencies are unaffected.
       - name: Clippy (every feature)
         run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$LINUX_FEATURES" -- -D warnings
@@ -119,6 +127,8 @@ jobs:
         with:
           key: test
           cache-bin: false
+          cache-on-failure: true
+          env-vars: LINUX_FEATURES
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.146
@@ -151,6 +161,7 @@ jobs:
         with:
           key: python
           cache-bin: false
+          cache-on-failure: true
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.146
@@ -174,7 +185,9 @@ jobs:
 
   msrv:
     name: MSRV (Linux native)
-    if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+    # Skip PRs to dev and dev merges; any other event (main, tags, schedule on
+    # dev, manual, or a trigger added later) runs it.
+    if: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -194,13 +207,16 @@ jobs:
         with:
           key: msrv
           cache-bin: false
+          cache-on-failure: true
       # Publishable crates with consumer-visible features, then the ethernet,
       # serial and serial-gpio transport checks and a linked bacnet-cli pcap build.
       - run: bash scripts/ci/check-msrv.sh --linux-native
 
   audit-deny:
     name: Cargo Audit + Deny
-    if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+    # Skip PRs to dev and dev merges; any other event (main, tags, schedule on
+    # dev, manual, or a trigger added later) runs it.
+    if: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
