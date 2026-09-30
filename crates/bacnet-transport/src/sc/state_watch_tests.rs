@@ -128,15 +128,12 @@ async fn sc_connection_state_changes_reports_bvlc_result_disconnect_without_stal
 
     transport.stop().await.unwrap();
 
-    match tokio::time::timeout(Duration::from_millis(100), ws_hub.recv()).await {
-        Ok(Ok(data)) => {
-            let msg = decode_sc_message(&data).unwrap();
-            assert_ne!(
-                msg.function,
-                ScFunction::DisconnectRequest,
-                "stop sent a stale Disconnect-Request after fatal disconnect"
-            );
-        }
-        Ok(Err(_)) | Err(_) => {}
+    if let Ok(Ok(data)) = tokio::time::timeout(Duration::from_millis(100), ws_hub.recv()).await {
+        let msg = decode_sc_message(&data).unwrap();
+        assert_ne!(
+            msg.function,
+            ScFunction::DisconnectRequest,
+            "stop sent a stale Disconnect-Request after fatal disconnect"
+        );
     }
 }

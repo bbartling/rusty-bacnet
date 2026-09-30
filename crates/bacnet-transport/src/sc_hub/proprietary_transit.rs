@@ -3,11 +3,11 @@
 //! relay mechanics (AB.5.3.2/AB.5.3.3 forwarding).
 use super::*;
 use crate::sc_frame::{
-    encode_sc_message, first_must_understand_destination_option_marker, proprietary_message_error,
-    BROADCAST_VMAC, UNKNOWN_VMAC,
+    first_must_understand_destination_option_marker, proprietary_message_error, BROADCAST_VMAC,
+    UNKNOWN_VMAC,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 
 pub(super) fn local_nak(msg: &ScMessage, wire: &[u8]) -> Option<ScMessage> {
     if msg.function != ScFunction::ProprietaryMessage {

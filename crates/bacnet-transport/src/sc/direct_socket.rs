@@ -11,7 +11,7 @@ pub(crate) enum DirectFrame {
 pub(crate) enum DirectSocket<W> {
     Custom(W),
     #[cfg(feature = "sc-tls")]
-    Verified(crate::sc_tls::TlsWebSocket),
+    Verified(Box<crate::sc_tls::TlsWebSocket>),
 }
 pub(crate) type CustomDialer<W> =
     Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<W, Error>> + Send>> + Send + Sync>;
@@ -36,7 +36,7 @@ impl<W: WebSocketPort> DirectDialer<W> {
             #[cfg(feature = "sc-tls")]
             Self::Tls(config) => crate::sc_tls::TlsWebSocket::connect_direct(&uri, config.clone())
                 .await
-                .map(DirectSocket::Verified),
+                .map(|ws| DirectSocket::Verified(Box::new(ws))),
         }
     }
 }

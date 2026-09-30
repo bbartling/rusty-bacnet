@@ -511,12 +511,13 @@ async fn sc_connect_duplicate_vmac_reseed_failure_does_not_try_failover() {
     );
     primary_task.await.unwrap();
 
-    match tokio::time::timeout(Duration::from_millis(100), failover_hub.recv()).await {
-        Ok(Ok(data)) => panic!(
+    if let Ok(Ok(data)) =
+        tokio::time::timeout(Duration::from_millis(100), failover_hub.recv()).await
+    {
+        panic!(
             "failover received stale-VMAC Connect-Request: {:02x?}",
             data
-        ),
-        Ok(Err(_)) | Err(_) => {}
+        )
     }
 
     let conn = transport.connection().unwrap();

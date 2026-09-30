@@ -3,11 +3,11 @@
 //! opaque via the shared relay mechanics (AB.5.3.2 forwarding).
 use super::*;
 use crate::sc_frame::{
-    advertisement_message_error, encode_sc_message,
-    first_must_understand_destination_option_marker, BROADCAST_VMAC, UNKNOWN_VMAC,
+    advertisement_message_error, first_must_understand_destination_option_marker, BROADCAST_VMAC,
+    UNKNOWN_VMAC,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 
 pub(super) fn local_nak(msg: &ScMessage, wire: &[u8]) -> Option<ScMessage> {
     if !matches!(

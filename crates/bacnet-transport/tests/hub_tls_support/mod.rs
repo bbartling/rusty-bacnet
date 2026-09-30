@@ -21,8 +21,12 @@ pub struct Fixture {
     pub ca: CertificateDer<'static>,
     pub server: Identity,
     pub good: Identity,
+    // Shared by several test binaries; only sc_hub_tls reads these.
+    #[allow(dead_code)]
     pub wrong: Identity,
+    #[allow(dead_code)]
     pub expired: Identity,
+    #[allow(dead_code)]
     pub future: Identity,
 }
 

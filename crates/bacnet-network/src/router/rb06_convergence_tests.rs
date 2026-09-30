@@ -377,7 +377,7 @@ fn ingress(npdu: Bytes) -> ReceivedNpdu {
 async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
     let (tx0, rx0) = mpsc::channel(16);
     let (out0, mut wire0) = mpsc::channel(16);
-    let (tx1, _rx1) = mpsc::channel(16);
+    let (_tx1, _rx1) = mpsc::channel(16);
     let (out1, mut wire1) = mpsc::channel(16);
     let ports = vec![
         RouterPort {
@@ -410,7 +410,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
                 let decoded = decode_npdu(npdu).unwrap();
                 if decoded.message_type
                     == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
-                    && decoded.payload.as_ref() == &[0x0b, 0xb8]
+                    && decoded.payload.as_ref() == [0x0b, 0xb8]
                 {
                     saw_who_is = true;
                 }
@@ -422,12 +422,12 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
                 if decoded.message_type
                     == Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
                     && decoded.payload.as_ref()
-                        == &[
+                        == [
                             RejectMessageReason::NOT_DIRECTLY_CONNECTED.to_raw(),
                             0x0b,
                             0xb8,
                         ]
-                    && mac.as_slice() == &[7]
+                    && mac.as_slice() == [7]
                 {
                     saw_reject = true;
                 }
@@ -452,7 +452,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
         tokio::task::yield_now().await;
         while let Ok(req) = wire1.try_recv() {
             if let SendRequest::Unicast { mac, .. } = req {
-                if mac.as_slice() == &[2] {
+                if mac.as_slice() == [2] {
                     forwarded = true;
                 }
             }
@@ -479,7 +479,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
 async fn stop_cancels_pending_discovery() {
     let (tx0, rx0) = mpsc::channel(16);
     let (out0, mut wire0) = mpsc::channel(16);
-    let (tx1, _rx1) = mpsc::channel(16);
+    let (_tx1, _rx1) = mpsc::channel(16);
     let (out1, _wire1) = mpsc::channel(16);
     let ports = vec![
         RouterPort {

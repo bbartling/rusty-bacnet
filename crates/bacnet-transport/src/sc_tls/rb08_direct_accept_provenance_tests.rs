@@ -7,6 +7,7 @@
 //!   connection with no `ReceivedNpdu` and therefore no verified value;
 //! - a colliding-VMAC Connect-Request is NAKed
 //!   (`COMMUNICATION`/`NODE_DUPLICATE_VMAC`) and closed with no delivery.
+//!
 //! Verified minters remain exactly `sc/mod.rs:624` (hub relayed,
 //! post-admission) and `sc_tls/direct_accept.rs:594` (direct, post-handshake),
 //! both `pub(crate)`; nothing here mints provenance.

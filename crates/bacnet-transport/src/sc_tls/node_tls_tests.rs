@@ -29,6 +29,8 @@ async fn observe_connections(rounds: usize) -> Vec<HandshakeKind> {
                 assert_eq!(tls.get_ref().1.protocol_version(), Some(ProtocolVersion::TLSv1_3));
                 assert!(tls.get_ref().1.peer_certificates().is_none());
                 kinds.push(tls.get_ref().1.handshake_kind().unwrap());
+                // The handshake callback signature is fixed by tungstenite.
+                #[allow(clippy::result_large_err)]
                 let mut ws = tokio_tungstenite::accept_hdr_async(tls,
                     |_: &_, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                         response.headers_mut().insert("Sec-WebSocket-Protocol", BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap());
