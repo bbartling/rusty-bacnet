@@ -43,10 +43,10 @@ use crate::errors::to_py_err;
 use crate::types::{
     audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
     parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyBACnetTimeStamp,
-    PyCovNotificationIterator, PyDiscoveredDevice, PyEnableDisable,
+    PyCovNotificationIterator, PyDeviceWrite, PyDiscoveredDevice, PyEnableDisable,
     PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType, PyLifeSafetyOperation,
     PyMessagePriority, PyObjectIdentifier, PyObjectType, PyPropertyIdentifier, PyPropertyValue,
-    PyReinitializedState,
+    PyPropertyWrite, PyReadAccessSpec, PyReinitializedState, PyWriteAccessSpec,
 };
 
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {

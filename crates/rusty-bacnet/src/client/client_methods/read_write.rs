@@ -58,7 +58,6 @@ impl BACnetClient {
     ///     priority: Optional priority (1-16); invalid u8 priorities raise ValueError synchronously.
     ///     array_index: Optional array index
     #[pyo3(signature = (address, object_id, property_id, value, priority=None, array_index=None))]
-    #[allow(clippy::too_many_arguments)]
     fn write_property<'py>(
         &self,
         py: Python<'py>,
@@ -157,12 +156,11 @@ impl BACnetClient {
 
     /// Read multiple properties from multiple objects in a single request.
     #[pyo3(signature = (address, specs))]
-    #[allow(clippy::type_complexity)]
     fn read_property_multiple<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        specs: Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
+        specs: Vec<PyReadAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let rust_specs = py_to_rpm_specs(specs);
@@ -185,20 +183,11 @@ impl BACnetClient {
 
     /// Write multiple properties to multiple objects in a single request.
     #[pyo3(signature = (address, specs))]
-    #[allow(clippy::type_complexity)]
     fn write_property_multiple<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        specs: Vec<(
-            PyObjectIdentifier,
-            Vec<(
-                PyPropertyIdentifier,
-                PyPropertyValue,
-                Option<u8>,
-                Option<u32>,
-            )>,
-        )>,
+        specs: Vec<PyWriteAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let rust_specs = py_to_wpm_specs(specs)?;
@@ -309,14 +298,10 @@ impl BACnetClient {
     /// Python result-construction failures raise from the whole call; cancellation
     /// returns no partial result list.
     #[pyo3(signature = (requests, max_concurrent=None))]
-    #[allow(clippy::type_complexity)]
     fn read_property_multiple_from_devices<'py>(
         &self,
         py: Python<'py>,
-        requests: Vec<(
-            u32,
-            Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
-        )>,
+        requests: Vec<(u32, Vec<PyReadAccessSpec>)>,
         max_concurrent: Option<NonZeroUsize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         use bacnet_services::common::PropertyReference;
@@ -399,18 +384,10 @@ impl BACnetClient {
     /// Python result-construction failures raise from the whole call; cancellation
     /// returns no partial result list.
     #[pyo3(signature = (requests, max_concurrent=None))]
-    #[allow(clippy::type_complexity)]
     fn write_property_to_devices<'py>(
         &self,
         py: Python<'py>,
-        requests: Vec<(
-            u32,
-            PyObjectIdentifier,
-            PyPropertyIdentifier,
-            PyPropertyValue,
-            Option<u8>,
-            Option<u32>,
-        )>,
+        requests: Vec<PyDeviceWrite>,
         max_concurrent: Option<NonZeroUsize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();

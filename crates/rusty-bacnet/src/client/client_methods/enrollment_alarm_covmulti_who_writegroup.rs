@@ -1,5 +1,10 @@
 use super::super::*;
 
+/// Python `(property, array_index, cov_increment, timestamped)` COV reference.
+type PyCovReference = (PyPropertyIdentifier, Option<u32>, Option<f32>, bool);
+/// Python `(object, [cov_reference, ...])` SubscribeCOVPropertyMultiple spec.
+type PyCovSubscriptionSpec = (PyObjectIdentifier, Vec<PyCovReference>);
+
 #[pymethods]
 impl BACnetClient {
     // -----------------------------------------------------------------------
@@ -11,7 +16,6 @@ impl BACnetClient {
     /// `acknowledgment_filter`: 0=all, 1=acked, 2=not-acked.
     /// Returns a list of dicts with `object_id`, `event_type`, `event_state`, `priority`, `notification_class`.
     #[pyo3(signature = (address, acknowledgment_filter=0, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None))]
-    #[allow(clippy::too_many_arguments)]
     fn get_enrollment_summary<'py>(
         &self,
         py: Python<'py>,
@@ -151,16 +155,12 @@ impl BACnetClient {
     /// For subscriptions and re-subscriptions, `lifetime` and `max_notification_delay` are both required.
     /// A whole-context cancellation uses an empty `specs` list and omits both timing fields.
     #[pyo3(signature = (address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None))]
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn subscribe_cov_property_multiple<'py>(
         &self,
         py: Python<'py>,
         address: String,
         subscriber_process_identifier: u32,
-        specs: Vec<(
-            PyObjectIdentifier,
-            Vec<(PyPropertyIdentifier, Option<u32>, Option<f32>, bool)>,
-        )>,
+        specs: Vec<PyCovSubscriptionSpec>,
         issue_confirmed_notifications: bool,
         max_notification_delay: Option<u32>,
         lifetime: Option<u32>,
@@ -247,7 +247,6 @@ impl BACnetClient {
     ///
     /// `change_list` is a list of `(channel_oid_or_none, override_priority_or_none, value_bytes)` tuples.
     #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None))]
-    #[allow(clippy::too_many_arguments)]
     fn write_group<'py>(
         &self,
         py: Python<'py>,

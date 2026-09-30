@@ -233,7 +233,6 @@ impl PyScHub {
     ///         Timeout does not retire, retry, or send a fabricated Result.
     #[new]
     #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, relay_send_budget_ms=5000, certificate_bindings=None))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         listen: &str,
         cert: &str,

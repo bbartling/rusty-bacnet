@@ -10,7 +10,6 @@ impl BACnetClient {
     ///
     /// `access_method` is `"stream"` or `"record"`.
     #[pyo3(signature = (address, file_identifier, access_method, start_position=0, requested_octet_count=0, start_record=0, requested_record_count=0))]
-    #[allow(clippy::too_many_arguments)]
     fn atomic_read_file<'py>(
         &self,
         py: Python<'py>,
@@ -61,7 +60,6 @@ impl BACnetClient {
     ///
     /// `access_method` is `"stream"` or `"record"`.
     #[pyo3(signature = (address, file_identifier, access_method, start_position=0, file_data=vec![], start_record=0, record_count=0, file_record_data=None))]
-    #[allow(clippy::too_many_arguments)]
     fn atomic_write_file<'py>(
         &self,
         py: Python<'py>,
@@ -116,7 +114,6 @@ impl BACnetClient {
 
     /// Add elements to a list property.
     #[pyo3(signature = (address, object_id, property_id, list_of_elements, array_index=None))]
-    #[allow(clippy::too_many_arguments)]
     fn add_list_element<'py>(
         &self,
         py: Python<'py>,
@@ -161,7 +158,6 @@ impl BACnetClient {
 
     /// Remove elements from a list property.
     #[pyo3(signature = (address, object_id, property_id, list_of_elements, array_index=None))]
-    #[allow(clippy::too_many_arguments)]
     fn remove_list_element<'py>(
         &self,
         py: Python<'py>,
@@ -309,7 +305,6 @@ impl BACnetClient {
     /// `message_class_type` is `"numeric"` or `"text"` (or None for no class).
     /// `message_class_value` is the numeric value or text string.
     #[pyo3(signature = (address, source_device, message_priority, message, message_class_type=None, message_class_value=None))]
-    #[allow(clippy::too_many_arguments)]
     fn confirmed_text_message<'py>(
         &self,
         py: Python<'py>,
@@ -351,7 +346,6 @@ impl BACnetClient {
 
     /// Send an UnconfirmedTextMessage request.
     #[pyo3(signature = (address, source_device, message_priority, message, message_class_type=None, message_class_value=None))]
-    #[allow(clippy::too_many_arguments)]
     fn unconfirmed_text_message<'py>(
         &self,
         py: Python<'py>,
@@ -401,7 +395,6 @@ impl BACnetClient {
 
     /// Send a LifeSafetyOperation request.
     #[pyo3(signature = (address, requesting_process_identifier, requesting_source, operation, object_identifier=None))]
-    #[allow(clippy::too_many_arguments)]
     fn life_safety_operation<'py>(
         &self,
         py: Python<'py>,

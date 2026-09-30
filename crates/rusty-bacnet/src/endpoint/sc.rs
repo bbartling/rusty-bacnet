@@ -141,7 +141,6 @@ impl PyScEndpoint {
         services=None,
         queue_capacity=16
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         device_instance: u32,
         sc_hub: &str,

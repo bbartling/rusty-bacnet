@@ -436,12 +436,11 @@ impl BACnetClient {
 
     /// Read multiple properties from a device by instance number (auto-routing).
     #[pyo3(signature = (device_instance, specs))]
-    #[allow(clippy::type_complexity)]
     fn read_property_multiple_from_device<'py>(
         &self,
         py: Python<'py>,
         device_instance: u32,
-        specs: Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
+        specs: Vec<PyReadAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let rust_specs = py_to_rpm_specs(specs);
@@ -464,7 +463,6 @@ impl BACnetClient {
     /// Write a property on a device by instance number (auto-routing).
     /// Priority must be omitted or 1-16; invalid u8 priorities raise ValueError synchronously.
     #[pyo3(signature = (device_instance, object_id, property_id, value, priority=None, array_index=None))]
-    #[allow(clippy::too_many_arguments)]
     fn write_property_to_device<'py>(
         &self,
         py: Python<'py>,
@@ -500,20 +498,11 @@ impl BACnetClient {
 
     /// Write multiple properties to a device by instance number (auto-routing).
     #[pyo3(signature = (device_instance, specs))]
-    #[allow(clippy::type_complexity)]
     fn write_property_multiple_to_device<'py>(
         &self,
         py: Python<'py>,
         device_instance: u32,
-        specs: Vec<(
-            PyObjectIdentifier,
-            Vec<(
-                PyPropertyIdentifier,
-                PyPropertyValue,
-                Option<u8>,
-                Option<u32>,
-            )>,
-        )>,
+        specs: Vec<PyWriteAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let rust_specs = py_to_wpm_specs(specs)?;

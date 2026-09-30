@@ -140,7 +140,6 @@ impl PyMstpEndpoint {
         apdu_timeout_ms=6000,
         apdu_retries=0
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         device_instance: u32,
         serial_port: &str,

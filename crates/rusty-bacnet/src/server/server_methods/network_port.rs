@@ -6,7 +6,6 @@ impl BACnetServer {
     /// Add a configured, unbound IPV4/NORMAL application Network Port snapshot.
     /// Configuration is read-only; this does not bind or inspect a socket.
     #[pyo3(signature = (instance, name, *, ip_address="0.0.0.0", udp_port=47808, network_number=0, apdu_length=1476, subnet_mask="0.0.0.0", default_gateway="0.0.0.0", dns_servers=None))]
-    #[allow(clippy::too_many_arguments)]
     fn add_bip_network_port(
         &self,
         instance: u32,

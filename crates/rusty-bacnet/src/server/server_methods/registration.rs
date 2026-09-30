@@ -56,7 +56,6 @@ impl BACnetServer {
         sc_device_uuid=None,
         registered_network_port=None
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         device_instance: u32,
         device_name: &str,
@@ -726,7 +725,6 @@ impl BACnetServer {
         target_references,
         stage_names=None
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn add_staging(
         &self,
         instance: u32,
@@ -774,7 +772,6 @@ impl BACnetServer {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn staging_config(
     present_value: f32,
     min_present_value: f32,

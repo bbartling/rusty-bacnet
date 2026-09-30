@@ -1,14 +1,40 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
+// Python-side RPM/WPM shapes, as PyO3 extracts them from method arguments
+// ---------------------------------------------------------------------------
+
+/// Python `(property, array_index)` reference in a ReadPropertyMultiple spec.
+pub(crate) type PyPropertyReference = (PyPropertyIdentifier, Option<u32>);
+/// Python `(object, [property_reference, ...])` ReadPropertyMultiple spec.
+pub(crate) type PyReadAccessSpec = (PyObjectIdentifier, Vec<PyPropertyReference>);
+/// Python `(property, value, priority, array_index)` write, used by
+/// WritePropertyMultiple specs and CreateObject initial values.
+pub(crate) type PyPropertyWrite = (
+    PyPropertyIdentifier,
+    PyPropertyValue,
+    Option<u8>,
+    Option<u32>,
+);
+/// Python `(object, [property_write, ...])` WritePropertyMultiple spec.
+pub(crate) type PyWriteAccessSpec = (PyObjectIdentifier, Vec<PyPropertyWrite>);
+/// Python `(device_instance, object, property, value, priority, array_index)`
+/// row for `write_property_to_devices`.
+pub(crate) type PyDeviceWrite = (
+    u32,
+    PyObjectIdentifier,
+    PyPropertyIdentifier,
+    PyPropertyValue,
+    Option<u8>,
+    Option<u32>,
+);
+
+// ---------------------------------------------------------------------------
 // RPM/WPM conversion helpers (crate-internal)
 // ---------------------------------------------------------------------------
 
 /// Convert Python RPM specs to Rust ReadAccessSpecification list.
-#[allow(clippy::type_complexity)]
-pub(crate) fn py_to_rpm_specs(
-    specs: Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
-) -> Vec<ReadAccessSpecification> {
+pub(crate) fn py_to_rpm_specs(specs: Vec<PyReadAccessSpec>) -> Vec<ReadAccessSpecification> {
     specs
         .into_iter()
         .map(|(oid, props)| ReadAccessSpecification {
@@ -70,17 +96,8 @@ pub(crate) fn rpm_ack_to_py(py: Python<'_>, ack: ReadPropertyMultipleACK) -> PyR
 }
 
 /// Convert Python WPM specs to Rust WriteAccessSpecification list.
-#[allow(clippy::type_complexity)]
 pub(crate) fn py_to_wpm_specs(
-    specs: Vec<(
-        PyObjectIdentifier,
-        Vec<(
-            PyPropertyIdentifier,
-            PyPropertyValue,
-            Option<u8>,
-            Option<u32>,
-        )>,
-    )>,
+    specs: Vec<PyWriteAccessSpec>,
 ) -> PyResult<Vec<WriteAccessSpecification>> {
     let specs = specs
         .into_iter()
