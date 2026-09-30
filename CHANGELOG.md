@@ -113,8 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Python: `vt_open` takes a `VTClass` and a local session ID; `vt_data`
     always returns `all_new_data_accepted`; `write_group` takes integer
     channels; `who_am_i` takes the three identity arguments.
-  - `docs/rust-api.md` no longer shows the nonexistent `vt_open`, `vt_data`,
-    `vt_close`, `who_am_i` and `write_group` client examples.
+  - `docs/rust-api.md` no longer calls client methods that don't exist. The
+    VT, Who-Am-I, WriteGroup, GetAlarmSummary, GetEnrollmentSummary,
+    LifeSafetyOperation, PrivateTransfer and TextMessage examples now build
+    the `bacnet_services` request and send it with `confirmed_request` or
+    `unconfirmed_request`.
 
 - BACnet/SC connections disable Nagle's algorithm on hub-accepted, direct-accepted
   and dialed TCP streams (#900). A small message sent before the previous one was

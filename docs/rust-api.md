@@ -2179,14 +2179,57 @@ client.delete_object(&mac, oid).await?;
 ```rust
 client.acknowledge_alarm(&mac, process_id, oid, event_state, "operator").await?;
 let raw = client.get_event_information(&mac, None).await?;
-let raw = client.get_alarm_summary(&mac).await?;
-let raw = client.get_enrollment_summary(&mac, ack_filter, event_state, event_type, min_pri, max_pri, notif_class).await?;
+```
+
+GetAlarmSummary and GetEnrollmentSummary have no dedicated client methods.
+Send them with `confirmed_request` and decode the ACK with `bacnet_services`:
+
+```rust
+use bacnet_services::alarm_summary::GetAlarmSummaryAck;
+use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
+use bacnet_types::enums::ConfirmedServiceChoice;
+use bytes::BytesMut;
+
+// GetAlarmSummary takes no parameters.
+let raw = client.confirmed_request(&mac, ConfirmedServiceChoice::GET_ALARM_SUMMARY, &[]).await?;
+let alarms = GetAlarmSummaryAck::decode(&raw)?;
+
+let request = GetEnrollmentSummaryRequest {
+    acknowledgment_filter: 0, // all
+    enrollment_filter: None,
+    event_state_filter: None,
+    event_type_filter: None,
+    priority_filter: None,
+    notification_class_filter: None,
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY, &service_data)
+    .await?;
+let enrollments = GetEnrollmentSummaryAck::decode(&raw)?;
 ```
 
 ### Life Safety
 
+No dedicated client method: build the request and send it with `confirmed_request`.
+
 ```rust
-client.life_safety_operation(&mac, process_id, "operator", LifeSafetyOperation::SILENCE, Some(oid)).await?;
+use bacnet_services::life_safety::LifeSafetyOperationRequest;
+use bacnet_types::enums::{ConfirmedServiceChoice, LifeSafetyOperation};
+use bytes::BytesMut;
+
+let request = LifeSafetyOperationRequest {
+    requesting_process_identifier: process_id,
+    requesting_source: "operator".into(),
+    request: LifeSafetyOperation::SILENCE,
+    object_identifier: Some(oid),
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data)?;
+client
+    .confirmed_request(&mac, ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, &service_data)
+    .await?;
 ```
 
 ### File Services
@@ -2218,16 +2261,62 @@ client.remove_list_element(&mac, oid, PropertyIdentifier::OBJECT_LIST, None, ele
 
 ### Private Transfer
 
+No dedicated client methods: both forms share `PrivateTransferRequest`.
+
 ```rust
-let raw = client.confirmed_private_transfer(&mac, vendor_id, service_number, Some(params)).await?;
-client.unconfirmed_private_transfer(&mac, vendor_id, service_number, Some(params)).await?;
+use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
+use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bytes::BytesMut;
+
+let request = PrivateTransferRequest {
+    vendor_id,
+    service_number,
+    service_parameters: Some(params), // already-encoded parameter bytes
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data);
+let raw = client
+    .confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER, &service_data)
+    .await?;
+let ack = PrivateTransferAck::decode(&raw)?;
+
+client
+    .unconfirmed_request(&mac, UnconfirmedServiceChoice::UNCONFIRMED_PRIVATE_TRANSFER, &service_data)
+    .await?;
 ```
 
 ### Text Messages
 
+No dedicated client methods: both forms share `TextMessageRequest`.
+
 ```rust
-let raw = client.confirmed_text_message(&mac, device_oid, priority, "Fire alarm", class_type, class_value).await?;
-client.unconfirmed_text_message(&mac, device_oid, priority, "Status update", None, None).await?;
+use bacnet_services::text_message::{MessageClass, TextMessageRequest};
+use bacnet_types::enums::{ConfirmedServiceChoice, MessagePriority, UnconfirmedServiceChoice};
+use bytes::BytesMut;
+
+let request = TextMessageRequest {
+    source_device: device_oid,
+    message_class: Some(MessageClass::Text("fire".into())),
+    message_priority: MessagePriority::URGENT,
+    message: "Fire alarm".into(),
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data)?;
+client
+    .confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE, &service_data)
+    .await?;
+
+let status = TextMessageRequest {
+    message_class: None,
+    message_priority: MessagePriority::NORMAL,
+    message: "Status update".into(),
+    ..request
+};
+let mut service_data = BytesMut::new();
+status.encode(&mut service_data)?;
+client
+    .unconfirmed_request(&mac, UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE, &service_data)
+    .await?;
 ```
 
 ### Write Group and Who-Am-I
