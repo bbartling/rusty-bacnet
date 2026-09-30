@@ -425,7 +425,9 @@ pub struct BACnetLogRecord {
 /// BACnet Scale: CHOICE { float-scale [0] Real, integer-scale [1] Integer }.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetScale {
+    /// Present_Value is multiplied by this factor to get engineering units.
     FloatScale(f32),
+    /// Present_Value is multiplied by ten raised to this power to get engineering units.
     IntegerScale(i32),
 }
 
@@ -436,7 +438,10 @@ pub enum BACnetScale {
 /// BACnet Prescale: SEQUENCE { multiplier Unsigned, modulo-divide Unsigned }.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetPrescale {
+    /// Numerator of the pulse-to-value conversion ratio, added to the accumulator per input pulse.
     pub multiplier: u32,
+    /// Denominator of the conversion ratio; each time the accumulator reaches it, the value steps
+    /// by one.
     pub modulo_divide: u32,
 }
 
@@ -558,30 +563,46 @@ pub enum FaultParameters {
     /// No fault detection.
     FaultNone,
     /// Fault on characterstring match.
-    FaultCharacterString { fault_values: Vec<String> },
+    FaultCharacterString {
+        /// Strings that, when the monitored value matches one, indicate a fault.
+        fault_values: Vec<String>,
+    },
     /// Vendor-defined fault algorithm.
     FaultExtended {
+        /// Vendor identifier that owns the extended algorithm.
         vendor_id: u16,
+        /// Vendor-defined identifier of the fault algorithm.
         extended_fault_type: u32,
+        /// Pre-encoded, vendor-specific parameter bytes carried opaquely.
         parameters: Vec<u8>,
     },
     /// Fault on life safety state match.
     FaultLifeSafety {
+        /// Life safety states (raw BACnetLifeSafetyState values) that indicate a fault.
         fault_values: Vec<u32>,
+        /// Reference to the mode property consulted when evaluating these states.
         mode_for_reference: BACnetDeviceObjectPropertyReference,
     },
     /// Fault on property state match.
     FaultState {
+        /// Property states that indicate a fault when the monitored property takes one of them.
         fault_values: Vec<BACnetPropertyStates>,
     },
     /// Fault on status flags change.
     FaultStatusFlags {
+        /// Reference to the StatusFlags property whose FAULT bit is monitored.
         reference: BACnetDeviceObjectPropertyReference,
     },
     /// Fault when value exceeds range.
-    FaultOutOfRange { min_normal: f64, max_normal: f64 },
+    FaultOutOfRange {
+        /// Lower bound of the normal range; values below it are a fault.
+        min_normal: f64,
+        /// Upper bound of the normal range; values above it are a fault.
+        max_normal: f64,
+    },
     /// Fault from listed reference.
     FaultListed {
+        /// BACnetLIST property whose entries carry the fault indications to watch.
         reference: BACnetDeviceObjectPropertyReference,
     },
 }
@@ -593,7 +614,9 @@ pub enum FaultParameters {
 /// BACnet Recipient Process — a recipient with an associated process identifier.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetRecipientProcess {
+    /// Device or address that receives the notifications.
     pub recipient: BACnetRecipient,
+    /// Process on the recipient that asked for the notifications; echoed back in each one.
     pub process_identifier: u32,
 }
 
@@ -607,10 +630,16 @@ pub struct BACnetRecipientProcess {
 /// (object + property + optional index).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetCOVSubscription {
+    /// Subscriber (device or address plus process identifier) that receives the notifications.
     pub recipient: BACnetRecipientProcess,
+    /// Object and property being watched.
     pub monitored_property_reference: BACnetObjectPropertyReference,
+    /// `true` for confirmed notifications, `false` for unconfirmed ones.
     pub issue_confirmed_notifications: bool,
+    /// Seconds left before the subscription lapses; 0 means it never lapses.
     pub time_remaining: u32,
+    /// COV increment in use for a numeric monitored property: the requested one, else the
+    /// object's COV_Increment. `None` when the monitored property isn't numeric.
     pub cov_increment: Option<f32>,
 }
 

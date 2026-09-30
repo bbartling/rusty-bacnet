@@ -22,8 +22,10 @@ use bacnet_transport::port::TransportProvenance;
 /// Wire-control authorization mode. Permissive preserves today's behavior.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ControlPolicy {
+    /// Wire controls are admitted unless an installed authorizer says otherwise.
     #[default]
     Permissive,
+    /// Protected controls are denied unless an installed authorizer approves them.
     Hardened,
 }
 
@@ -33,12 +35,17 @@ pub enum ControlPolicy {
 /// callback does (callback-only, no static allowlist).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlTrust {
+    /// Ingress arrived on a path with no channel or relay verification.
     Unverified,
+    /// Ingress arrived over a verified direct-peer or hub channel.
     VerifiedChannel,
+    /// Ingress was relayed from a verified origin behind another node.
     VerifiedRelay,
 }
 
 impl ControlTrust {
+    /// Map transport provenance to a trust scope: direct-peer or hub channels are
+    /// `VerifiedChannel`, relayed origins are `VerifiedRelay`, everything else is `Unverified`.
     pub fn from_provenance(p: TransportProvenance) -> Self {
         if p.is_direct_peer() || p.is_hub_channel() {
             Self::VerifiedChannel
@@ -53,16 +60,28 @@ impl ControlTrust {
 /// Immutable admission facts for one protected control. Claims only.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ControlAuthContext {
+    /// Index of the router port the control arrived on.
     pub port_idx: usize,
+    /// Network number of that port.
     pub port_network: u16,
+    /// Data-link source address of the sending node.
     pub source_mac: bacnet_types::MacAddr,
+    /// How the transport learned of the frame's origin (direct peer, hub, relayed).
     pub provenance: TransportProvenance,
+    /// Channel-level trust derived from `provenance`; says nothing about the leaf sender's
+    /// identity.
     pub trust: ControlTrust,
+    /// Network-layer message type code of the control (`0xFF` when the NPDU carries none).
     pub message_type: u8,
+    /// Vendor ID from a proprietary network message, if present.
     pub vendor_id: Option<u16>,
+    /// Source network number claimed in the NPDU, if any.
     pub source_net: Option<u16>,
+    /// Destination network number claimed in the NPDU, if any.
     pub dest_net: Option<u16>,
+    /// Network numbers the control refers to, after validation.
     pub target_nets: Vec<u16>,
+    /// True when the control omitted its network list, meaning every network served via the sender.
     pub targets_omitted: bool,
 }
 
@@ -95,12 +114,19 @@ pub type ControlAuthorizer = Arc<dyn Fn(&ControlAuthContext) -> bool + Send + Sy
 /// Protected control class. One counter row each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlClass {
+    /// I-Am-Router-To-Network announcement.
     IAm,
+    /// Initialize-Routing-Table-Ack response.
     InitAck,
+    /// Initialize-Routing-Table request that would update or purge entries.
     InitMgmt,
+    /// Router-Busy-To-Network mark.
     Busy,
+    /// Router-Available-To-Network mark.
     Available,
+    /// Reject-Message-To-Network transition.
     Reject,
+    /// I-Could-Be-Router-To-Network insert.
     ICouldBe,
 }
 
@@ -121,20 +147,30 @@ impl ControlClass {
 /// Saturating per-class decision totals. Count-only; never affects policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ControlServiceCounters {
+    /// Controls of this class that were admitted.
     pub allow_total: u64,
+    /// Controls of this class that were refused for any reason (includes `policy_deny_total`).
     pub deny_total: u64,
+    /// Refusals caused by hardened policy with no authorizer installed.
     pub policy_deny_total: u64,
 }
 
 /// Fixed-shape telemetry for the seven protected classes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ControlDecisionCounters {
+    /// Totals for I-Am-Router-To-Network.
     pub i_am: ControlServiceCounters,
+    /// Totals for Initialize-Routing-Table-Ack.
     pub init_ack: ControlServiceCounters,
+    /// Totals for Initialize-Routing-Table updates and purges.
     pub init_mgmt: ControlServiceCounters,
+    /// Totals for Router-Busy-To-Network.
     pub busy: ControlServiceCounters,
+    /// Totals for Router-Available-To-Network.
     pub available: ControlServiceCounters,
+    /// Totals for Reject-Message-To-Network.
     pub reject: ControlServiceCounters,
+    /// Totals for I-Could-Be-Router-To-Network.
     pub i_could_be: ControlServiceCounters,
 }
 
@@ -158,6 +194,7 @@ impl std::fmt::Debug for ControlDecisions {
 }
 
 impl ControlDecisions {
+    /// Copy the current totals; each counter is read independently, so the set is not atomic.
     pub fn snapshot(&self) -> ControlDecisionCounters {
         let rows = self.0.each_ref().map(|r| {
             let [a, d, p] = r.each_ref().map(|n| n.load(Ordering::Relaxed));
@@ -225,6 +262,7 @@ impl Default for ControlGate {
 }
 
 impl ControlGate {
+    /// Gate that admits every protected control (no authorizer).
     pub fn permissive() -> Self {
         Self {
             policy: ControlPolicy::Permissive,
@@ -233,6 +271,7 @@ impl ControlGate {
         }
     }
 
+    /// Gate that denies every protected control (no authorizer).
     pub fn hardened() -> Self {
         Self {
             policy: ControlPolicy::Hardened,
@@ -241,6 +280,8 @@ impl ControlGate {
         }
     }
 
+    /// Gate with an explicit policy and optional authorizer; a present authorizer decides every
+    /// protected control regardless of `policy`.
     pub fn new(policy: ControlPolicy, authorizer: Option<ControlAuthorizer>) -> Self {
         Self {
             policy,
@@ -249,10 +290,12 @@ impl ControlGate {
         }
     }
 
+    /// Configured policy mode.
     pub fn policy(&self) -> ControlPolicy {
         self.policy
     }
 
+    /// Snapshot of the allow/deny totals recorded by this gate.
     pub fn snapshot(&self) -> ControlDecisionCounters {
         self.decisions.snapshot()
     }

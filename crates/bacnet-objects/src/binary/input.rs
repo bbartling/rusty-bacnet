@@ -182,6 +182,7 @@ pub struct BinaryInputObject {
 }
 
 impl BinaryInputObject {
+    /// Create a new Binary Input object; fails if `instance` exceeds the object-identifier range.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::BINARY_INPUT, instance)?;
         Ok(Self {

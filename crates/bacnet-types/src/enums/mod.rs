@@ -26,7 +26,11 @@ macro_rules! bacnet_enum {
 
         impl $Name {
             $(
+                // Hand-written docs come first and stay the summary; the wire
+                // value follows as its own paragraph (#902).
                 $(#[$vmeta])*
+                #[doc = ""]
+                #[doc = concat!("Wire value `", stringify!($val), "`.")]
                 pub const $VARIANT: Self = Self($val);
             )*
 

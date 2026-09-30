@@ -36,6 +36,7 @@ pub struct CalendarObject {
 }
 
 impl CalendarObject {
+    /// Create a new Calendar object with Present_Value false and no date list.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::CALENDAR, instance)?;
         Ok(Self {
@@ -192,6 +193,8 @@ pub struct ScheduleObject {
 }
 
 impl ScheduleObject {
+    /// Create a new Schedule object; `schedule_default` is both Schedule_Default and the initial
+    /// Present_Value.
     pub fn new(
         instance: u32,
         name: impl Into<String>,

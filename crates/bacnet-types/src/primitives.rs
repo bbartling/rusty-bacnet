@@ -289,7 +289,12 @@ pub enum BACnetTimeStamp {
     /// Context tag 1: Unsigned sequence number in the required 0..=65535 range.
     SequenceNumber(u16),
     /// Context tag 2: BACnetDateTime (Date + Time)
-    DateTime { date: Date, time: Time },
+    DateTime {
+        /// Calendar date component.
+        date: Date,
+        /// Time-of-day component.
+        time: Time,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -300,9 +305,13 @@ bitflags::bitflags! {
     /// BACnet StatusFlags -- 4-bit bitstring present on most objects.
     #[derive(Clone, Copy, PartialEq, Eq, Hash)]
     pub struct StatusFlags: u8 {
+        /// Event_State is anything other than NORMAL.
         const IN_ALARM = 0b1000;
+        /// Reliability is present and is not NO_FAULT_DETECTED.
         const FAULT = 0b0100;
+        /// The value is being supplied by a local override rather than the physical input.
         const OVERRIDDEN = 0b0010;
+        /// Out_Of_Service is TRUE.
         const OUT_OF_SERVICE = 0b0001;
     }
 }
@@ -337,13 +346,21 @@ bitflags::bitflags! {
     /// Bit 0 (MSB=0x40) = Monday, Bit 6 (0x01) = Sunday.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct DaysOfWeek: u8 {
+        /// Monday.
         const MONDAY    = 0b0100_0000;
+        /// Tuesday.
         const TUESDAY   = 0b0010_0000;
+        /// Wednesday.
         const WEDNESDAY = 0b0001_0000;
+        /// Thursday.
         const THURSDAY  = 0b0000_1000;
+        /// Friday.
         const FRIDAY    = 0b0000_0100;
+        /// Saturday.
         const SATURDAY  = 0b0000_0010;
+        /// Sunday.
         const SUNDAY    = 0b0000_0001;
+        /// Every day of the week.
         const ALL       = 0b0111_1111;
     }
 }

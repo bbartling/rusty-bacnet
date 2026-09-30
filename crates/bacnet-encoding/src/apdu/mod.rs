@@ -180,89 +180,146 @@ fn decode_max_apdu(value: u8) -> Result<u16, Error> {
 /// Confirmed-Request PDU (Clause 20.1.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmedRequest {
+    /// Set when this PDU is one segment of a segmented request; adds the sequence and window
+    /// fields.
     pub segmented: bool,
+    /// Set on every segment except the last one of a segmented request.
     pub more_follows: bool,
+    /// Whether the requester can receive the reply as a segmented message.
     pub segmented_response_accepted: bool,
+    /// Most segments the requester will accept in a reply; `None` leaves the limit unspecified.
+    /// Must be `None` or at least 2; the 3-bit wire field rounds down to 2, 4, 8, 16, 32 or 64, and
+    /// anything above 64 encodes as "more than 64".
     pub max_segments: Option<u8>,
+    /// Largest APDU, in octets, the requester can receive; must be 50, 128, 206, 480, 1024 or 1476.
     pub max_apdu_length: u16,
+    /// Identifier the requester uses to match the reply to this request.
     pub invoke_id: u8,
+    /// Segment number within a segmented request; `None` for unsegmented PDUs. `None` on a
+    /// segmented PDU encodes as 0.
     pub sequence_number: Option<u8>,
+    /// Segments the sender proposes to send before waiting for a SegmentACK (1..=127); `None` for
+    /// unsegmented PDUs. `None` on a segmented PDU encodes as 1.
     pub proposed_window_size: Option<u8>,
+    /// Which confirmed service is being requested.
     pub service_choice: ConfirmedServiceChoice,
+    /// Raw encoded service request parameters (the bytes after the header).
     pub service_request: Bytes,
 }
 
 /// Unconfirmed-Request PDU (Clause 20.1.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnconfirmedRequest {
+    /// Which unconfirmed service this PDU carries.
     pub service_choice: UnconfirmedServiceChoice,
+    /// Raw encoded service request parameters.
     pub service_request: Bytes,
 }
 
 /// SimpleACK PDU (Clause 20.1.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimpleAck {
+    /// Invoke ID of the confirmed request being acknowledged.
     pub invoke_id: u8,
+    /// Confirmed service being acknowledged.
     pub service_choice: ConfirmedServiceChoice,
 }
 
 /// ComplexACK PDU (Clause 20.1.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComplexAck {
+    /// Set when this PDU is one segment of a segmented reply; adds the sequence and window fields.
     pub segmented: bool,
+    /// Set on every segment except the last one of a segmented reply.
     pub more_follows: bool,
+    /// Invoke ID of the confirmed request this reply answers.
     pub invoke_id: u8,
+    /// Segment number within a segmented reply; `None` for unsegmented PDUs. `None` on a
+    /// segmented PDU encodes as 0.
     pub sequence_number: Option<u8>,
+    /// Segments the sender proposes to send before waiting for a SegmentACK (1..=127); `None` for
+    /// unsegmented PDUs. `None` on a segmented PDU encodes as 1.
     pub proposed_window_size: Option<u8>,
+    /// Confirmed service this reply belongs to.
     pub service_choice: ConfirmedServiceChoice,
+    /// Raw encoded service acknowledgment parameters.
     pub service_ack: Bytes,
 }
 
 /// SegmentACK PDU (Clause 20.1.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentAck {
+    /// Set when a segment arrived out of order; the peer resends starting with the segment after
+    /// `sequence_number`.
     pub negative_ack: bool,
+    /// Set when the SegmentACK comes from the server side (the device answering a request), clear
+    /// when sent by the requester.
     pub sent_by_server: bool,
+    /// Invoke ID of the segmented transaction being acknowledged.
     pub invoke_id: u8,
+    /// Last segment received in order. It and every earlier segment are acknowledged; the peer
+    /// continues (or, on a negative ack, resends) from the next one, modulo 256.
     pub sequence_number: u8,
+    /// Window size, in segments (1..=127), the receiver will accept from now on.
     pub actual_window_size: u8,
 }
 
 /// Error PDU (Clause 20.1.7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorPdu {
+    /// Invoke ID of the confirmed request that failed.
     pub invoke_id: u8,
+    /// Confirmed service that produced the error.
     pub service_choice: ConfirmedServiceChoice,
+    /// Error class from the standard Error production.
     pub error_class: ErrorClass,
+    /// Error code from the standard Error production.
     pub error_code: ErrorCode,
+    /// Service-specific bytes following the error class and code; empty for a plain class/code
+    /// error. For WritePropertyMultiple it holds the whole error body when that decodes in the
+    /// formal form; a legacy class/code WPM error keeps only the bytes after the code.
     pub error_data: Bytes,
 }
 
 /// Reject PDU (Clause 20.1.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectPdu {
+    /// Invoke ID of the rejected request.
     pub invoke_id: u8,
+    /// Why the request was rejected as malformed or unsupported.
     pub reject_reason: RejectReason,
 }
 
 /// Abort PDU (Clause 20.1.9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbortPdu {
+    /// Set when the abort comes from the server side of the transaction, clear when sent by the
+    /// requester.
     pub sent_by_server: bool,
+    /// Invoke ID of the transaction being aborted.
     pub invoke_id: u8,
+    /// Why the transaction was aborted.
     pub abort_reason: AbortReason,
 }
 
 /// Sum type for all APDU PDU types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Apdu {
+    /// Confirmed service request.
     ConfirmedRequest(ConfirmedRequest),
+    /// Unconfirmed service request.
     UnconfirmedRequest(UnconfirmedRequest),
+    /// Acknowledgment carrying no result data.
     SimpleAck(SimpleAck),
+    /// Acknowledgment carrying result data, possibly segmented.
     ComplexAck(ComplexAck),
+    /// Flow-control acknowledgment of received segments.
     SegmentAck(SegmentAck),
+    /// Service failure reported with an error class and code.
     Error(ErrorPdu),
+    /// Request refused before execution.
     Reject(RejectPdu),
+    /// Transaction terminated early.
     Abort(AbortPdu),
 }
 

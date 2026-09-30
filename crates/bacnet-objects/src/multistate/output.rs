@@ -38,6 +38,7 @@ pub struct MultiStateOutputObject {
 }
 
 impl MultiStateOutputObject {
+    /// Create a new Multi-state Output object; `number_of_states` must be at least 1.
     pub fn new(
         instance: u32,
         name: impl Into<String>,

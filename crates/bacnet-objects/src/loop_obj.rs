@@ -38,6 +38,8 @@ pub struct LoopObject {
 }
 
 impl LoopObject {
+    /// Create a new Loop object; `output_units` is a raw BACnetEngineeringUnits value for the
+    /// output.
     pub fn new(instance: u32, name: impl Into<String>, output_units: u32) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LOOP, instance)?;
         Ok(Self {

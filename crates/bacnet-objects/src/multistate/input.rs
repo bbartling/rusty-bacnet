@@ -34,6 +34,7 @@ pub struct MultiStateInputObject {
 }
 
 impl MultiStateInputObject {
+    /// Create a new Multi-state Input object; `number_of_states` must be at least 1.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
