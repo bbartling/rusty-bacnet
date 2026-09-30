@@ -36,6 +36,24 @@ class PeerAdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                             return counters
                         await asyncio.sleep(0)
 
+            async def drained(sock):
+                # Idle counters also occur between two queued requests, so they
+                # alone can't show the burst is over (#883). One source's
+                # requests reach admission in order: once an unconfirmed marker
+                # sent after the burst is counted, every burst request that
+                # arrived was admitted or rejected. UDP may drop a marker while
+                # the server's socket is full, so repeat it until one counts.
+                def markers(counters):
+                    return (counters["unconfirmed_admitted_total"]
+                            + counters["unconfirmed_overloaded_total"])
+
+                seen = markers(await server.request_admission_counters())
+                async with asyncio.timeout(3):
+                    while markers(await server.request_admission_counters()) == seen:
+                        await send(sock, b"\x10\x04")  # unsupported service, ignored
+                        await asyncio.sleep(0.01)
+                return await quiescent()
+
             # Same logical peer, distinct requests. Do not assert exact UDP counts.
             counters = await server.request_admission_counters()
             for batch in range(8):
@@ -47,7 +65,7 @@ class PeerAdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 if counters["confirmed_peer_overloaded_total"]:
                     break
             self.assertGreater(counters["confirmed_peer_overloaded_total"], 0)
-            counters = await quiescent()
+            counters = await drained(sockets[0])
             self.assertEqual(counters["confirmed_global_overloaded_total"], 0)
             self.assertEqual(counters["confirmed_overloaded_total"], counters["confirmed_peer_overloaded_total"])
             self.assertEqual(counters["confirmed_overloaded_total"],
