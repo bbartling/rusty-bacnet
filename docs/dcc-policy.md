@@ -148,7 +148,7 @@ completed bounded #521 acceptance remain unchanged, not reopened.
 
 ### Standalone SC loopback evidence
 
-`cargo test -p bacnet-server --locked --features sc-tls sc_dcc_mtls` exercises
+`cargo nextest run -p bacnet-server --locked --features sc-tls sc_dcc_mtls` exercises
 the real standalone `BACnetServer::sc_builder`, TLS WebSocket transport and SC
 hub on `127.0.0.1:0`. Test-only certificates and distinct endpoint keys are
 generated in memory. The hub requires client certificates; clients verify the

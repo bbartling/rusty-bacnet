@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tests run with cargo-nextest: CI, the release gate and
+  `scripts/ci/local-macos.sh` use `cargo nextest run` (one process per test),
+  plus `cargo test --doc` for doctests, which nextest skips. `.config/nextest.toml`
+  recommends 0.9.145 or later, stops a test hung past two minutes as a timeout
+  failure, and gives CI a no-fail-fast `ci` profile. Older nextest on macOS
+  flagged unrelated passing tests as leaky (#751).
+
 - `bacnet_server::schedule::tick_schedules` drops its unused UTC-offset argument;
   evaluation already used the database clock frame. It only evaluates schedules.
   A running server evaluates them itself and fans COV out for the objects they

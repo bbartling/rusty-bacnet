@@ -1,0 +1,19 @@
+# cargo-nextest settings. nextest is this workspace's test runner: every test
+# runs in its own process. It does not run doctests; `cargo test --doc` does.
+# Reference: https://nexte.st/docs/configuration/
+
+# Before 0.9.145, nextest on macOS could hand a test process a sibling test's
+# half-created capture pipe, so unrelated passing tests showed as leaky (#751).
+nextest-version = { recommended = "0.9.145" }
+
+[profile.default]
+# Flag a test after 30 s and stop it after 2 min as a timeout failure, so a
+# hang is reported by name instead of stalling the run.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+# Report every failure in one run, repeat failure output at the end, and list
+# slow, skipped and leaky tests in the summary.
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "leak"

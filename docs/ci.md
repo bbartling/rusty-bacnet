@@ -26,11 +26,19 @@ Merge pushes to `dev` do not start a pipeline: the PR already tested that head.
 The weekly scheduled run checks the default branch (`dev`).
 A new push to a PR cancels its superseded run.
 
-The Linux test command is:
+Tests run with [cargo-nextest](https://nexte.st), which gives each test its
+own process. Its settings live in [`.config/nextest.toml`](../.config/nextest.toml);
+CI uses the `ci` profile, and nextest does not run doctests, so a separate
+`cargo test --doc` step covers them. The Linux test commands are:
 
 ```bash
-cargo test --workspace --exclude rusty-bacnet --locked --features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet
+cargo nextest run --workspace --exclude rusty-bacnet --locked --features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet --profile ci
+cargo test --doc --workspace --exclude rusty-bacnet --locked --features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet
 ```
+
+Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
+mark unrelated passing tests as leaky (#751), and the configuration warns
+about them.
 
 ### Runner
 
