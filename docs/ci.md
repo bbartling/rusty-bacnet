@@ -131,8 +131,9 @@ A PR that changes the Dockerfile therefore builds and tests its own image.
 **Storage:** images take space on Forgejo's data disk. Keep the last few tags
 with a package cleanup rule, set in the owner's Settings → Packages.
 
-**First runs:** the image moves Cargo's home to `/usr/local/cargo`, so the
-first run after an image change can miss the Rust caches.
+**Caches:** the image sets `CARGO_HOME=/usr/local/cargo`, so switching to it
+started every job with a cold Rust cache once. Later image changes keep the same
+paths, and the caches still hit while the toolchain stays the same.
 
 The workflow sets `CARGO_INCREMENTAL=0` and drops native debug info from dev and
 test builds (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`) to cut codegen, link time and
