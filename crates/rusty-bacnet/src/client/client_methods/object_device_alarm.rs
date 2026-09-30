@@ -1,6 +1,5 @@
 use super::super::*;
 
-#[allow(clippy::too_many_arguments)]
 fn build_acknowledge_alarm_request(
     acknowledging_process_identifier: u32,
     event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
@@ -56,20 +55,12 @@ impl BACnetClient {
     /// or an `ObjectIdentifier` (specific instance).
     /// `initial_values` is an optional list of `(PropertyIdentifier, PropertyValue, priority, array_index)` tuples.
     #[pyo3(signature = (address, object_specifier, initial_values=None))]
-    #[allow(clippy::type_complexity)]
     fn create_object<'py>(
         &self,
         py: Python<'py>,
         address: String,
         object_specifier: Bound<'py, PyAny>,
-        initial_values: Option<
-            Vec<(
-                PyPropertyIdentifier,
-                PyPropertyValue,
-                Option<u8>,
-                Option<u32>,
-            )>,
-        >,
+        initial_values: Option<Vec<PyPropertyWrite>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
@@ -185,7 +176,6 @@ impl BACnetClient {
     /// `timestamp` must exactly echo the original event-notification timestamp;
     /// `time_of_acknowledgment` is the caller-selected acknowledgment time.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment))]
-    #[allow(clippy::too_many_arguments)]
     fn acknowledge_alarm_request<'py>(
         &self,
         py: Python<'py>,
@@ -228,7 +218,7 @@ impl BACnetClient {
     /// This method fabricates SequenceNumber(0) for both timestamps. Use
     /// `acknowledge_alarm_request` with exact caller-supplied timestamps.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source))]
-    #[allow(clippy::too_many_arguments, deprecated)]
+    #[allow(deprecated)]
     fn acknowledge_alarm<'py>(
         &self,
         py: Python<'py>,
@@ -304,7 +294,6 @@ impl BACnetClient {
     ///
     /// `range_type` is `"position"`, `"sequence"`, or `None` (no range).
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None))]
-    #[allow(clippy::too_many_arguments)]
     fn read_range<'py>(
         &self,
         py: Python<'py>,

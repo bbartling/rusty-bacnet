@@ -95,15 +95,14 @@ async fn dispatch(
     data: Bytes,
 ) {
     BACnetServer::<SilentTransport>::handle_unconfirmed_request(
-        &Arc::new(RwLock::new(ObjectDatabase::new())),
-        &Arc::new(NetworkLayer::new(SilentTransport(None))),
-        config,
-        Some(clock),
-        &Arc::new(AtomicU8::new(0)),
-        &Arc::new(RwLock::new(DeviceBindingTable::new())),
-        &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-        limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            time_sync_limiter: Arc::clone(limiter),
+            clock: Some(Arc::clone(clock)),
+            ..UnconfirmedServices::for_test(
+                Arc::new(NetworkLayer::new(SilentTransport(None))),
+                config.clone(),
+            )
+        },
         UnconfirmedRequestPdu {
             service_choice: if is_utc {
                 UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION

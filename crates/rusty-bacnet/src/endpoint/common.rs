@@ -79,7 +79,6 @@ pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmen
 ///
 /// All Encoding failures (instance range, APDU table, duplicate ports) map
 /// to ValueError before any bind/dial. No post-start mutation exists.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_identity(
     device_instance: u32,
     device_name: &str,

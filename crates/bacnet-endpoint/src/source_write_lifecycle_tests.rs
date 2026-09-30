@@ -193,12 +193,14 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
         assert!(client
             .write_property(
                 peer.local_mac(),
-                target(),
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                vec![0],
-                None,
-                Commandability::Commandable
+                WritePropertyRequest {
+                    object_identifier: target(),
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    property_value: vec![0],
+                    priority: None,
+                },
+                Commandability::Commandable,
             )
             .await
             .is_err());

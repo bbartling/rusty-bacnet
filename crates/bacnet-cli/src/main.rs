@@ -171,12 +171,14 @@ async fn execute_command<T: TransportPort + 'static>(
             commands::write::write_property_cmd(
                 client,
                 &mac,
-                object_type,
-                instance,
-                prop,
-                index,
-                val,
-                pri,
+                commands::write::WritePropertyArgs {
+                    object_type,
+                    instance,
+                    property: prop,
+                    index,
+                    value: val,
+                    priority: pri,
+                },
                 format,
             )
             .await?;
@@ -287,12 +289,14 @@ async fn execute_command<T: TransportPort + 'static>(
             commands::device::acknowledge_alarm_cmd(
                 client,
                 &mac,
-                object_type,
-                instance,
-                *state,
-                source,
-                timestamp.clone(),
-                ack_time.clone(),
+                commands::device::AcknowledgeAlarmArgs {
+                    object_type,
+                    instance,
+                    event_state: *state,
+                    source,
+                    timestamp: timestamp.clone(),
+                    time_of_acknowledgment: ack_time.clone(),
+                },
                 format,
             )
             .await?;

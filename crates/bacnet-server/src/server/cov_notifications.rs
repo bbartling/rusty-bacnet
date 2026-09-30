@@ -1,6 +1,6 @@
-use super::cov_notify_context::CovNotifyContext;
+use super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
-use crate::cov::{AtomicCovCounters, CovInFlightTracker, InFlightAcquireError};
+use crate::cov::InFlightAcquireError;
 
 mod life_safety;
 mod multiple;
@@ -120,31 +120,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Fire COV notifications for all active subscriptions on the given object.
     /// Skipped when DCC is active (comm_state >= 1).
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fire_cov_notifications(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        cov_in_flight: &Arc<Semaphore>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        comm_state: &Arc<AtomicU8>,
-        config: &ServerConfig,
+        ctx: &CovNotifyContext<'_, T>,
         oid: &ObjectIdentifier,
     ) {
-        Self::fire_cov_notifications_inner(
-            &CovNotifyContext {
-                db,
-                network,
-                cov_table,
-                cov_in_flight,
-                notification_transactions,
-                comm_state,
-                config,
-            },
-            oid,
-            None,
-        )
-        .await;
+        Self::fire_cov_notifications_inner(ctx, oid, None).await;
     }
 
     pub(super) async fn fire_cov_notifications_inner(
@@ -152,20 +132,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
     ) {
-        let &CovNotifyContext {
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
-        } = ctx;
-        if comm_state.load(Ordering::Acquire) >= 1 {
+        if ctx.comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
         let (subs, counters, in_flight_tracker, dispatch_turn) = {
-            let mut table = cov_table.write().await;
+            let mut table = ctx.cov_table.write().await;
             (
                 table
                     .subscriptions_for(oid)
@@ -182,49 +153,53 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
+        let handles = CovFanoutHandles {
+            ctx,
+            in_flight_tracker: &in_flight_tracker,
+            counters: &counters,
+        };
+        Self::fire_cov_by_kind(&handles, dispatch_turn, oid, subs, snapshot, false).await;
+    }
+
+    /// Split `subs` into Single and Multiple notifications and fire both under
+    /// one shared event budget. When both kinds are present the kind that goes
+    /// first alternates per event and is capped at half the budget.
+    async fn fire_cov_by_kind(
+        handles: &CovFanoutHandles<'_, '_, T>,
+        dispatch_turn: usize,
+        oid: &ObjectIdentifier,
+        subs: Vec<CovSubscriptionSnapshot>,
+        snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
+        force: bool,
+    ) {
         let (single_subs, multiple_subs): (Vec<_>, Vec<_>) = subs
             .into_iter()
             .partition(|sub| sub.notification_kind == CovNotificationKind::Single);
 
-        let mut budget = EventBudget::new(&config.cov_policy);
+        let mut budget = EventBudget::new(&handles.ctx.config.cov_policy);
 
         if single_subs.is_empty() {
             Self::fire_cov_notification_multiple_for_subscriptions(
-                db,
-                network,
-                cov_table,
-                cov_in_flight,
-                &in_flight_tracker,
-                &counters,
-                notification_transactions,
-                comm_state,
-                config,
+                handles,
                 Some(oid),
                 &multiple_subs,
                 snapshot,
-                false,
+                force,
                 &mut budget,
             )
             .await;
         } else if multiple_subs.is_empty() {
             Self::fire_cov_notifications_for_subscriptions(
-                db,
-                network,
-                cov_table,
-                cov_in_flight,
-                &in_flight_tracker,
-                &counters,
-                notification_transactions,
-                config,
+                handles,
                 oid,
                 &single_subs,
                 snapshot,
-                false,
+                force,
                 &mut budget,
             )
             .await;
         } else {
-            let single_first = dispatch_turn % 2 == 0;
+            let single_first = dispatch_turn.is_multiple_of(2);
             let rem_notifs = budget.remaining_notifications();
             let first_notif_cap = (rem_notifs / 2) + (rem_notifs % 2);
             let rem_bytes = budget.remaining_bytes();
@@ -233,73 +208,43 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             if single_first {
                 Self::fire_cov_notifications_for_subscriptions(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    &in_flight_tracker,
-                    &counters,
-                    notification_transactions,
-                    config,
+                    handles,
                     oid,
                     &single_subs,
                     snapshot,
-                    false,
+                    force,
                     &mut first_budget,
                 )
                 .await;
                 budget.consume_sub_budget(&first_budget);
 
                 Self::fire_cov_notification_multiple_for_subscriptions(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    &in_flight_tracker,
-                    &counters,
-                    notification_transactions,
-                    comm_state,
-                    config,
+                    handles,
                     Some(oid),
                     &multiple_subs,
                     snapshot,
-                    false,
+                    force,
                     &mut budget,
                 )
                 .await;
             } else {
                 Self::fire_cov_notification_multiple_for_subscriptions(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    &in_flight_tracker,
-                    &counters,
-                    notification_transactions,
-                    comm_state,
-                    config,
+                    handles,
                     Some(oid),
                     &multiple_subs,
                     snapshot,
-                    false,
+                    force,
                     &mut first_budget,
                 )
                 .await;
                 budget.consume_sub_budget(&first_budget);
 
                 Self::fire_cov_notifications_for_subscriptions(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    &in_flight_tracker,
-                    &counters,
-                    notification_transactions,
-                    config,
+                    handles,
                     oid,
                     &single_subs,
                     snapshot,
-                    false,
+                    force,
                     &mut budget,
                 )
                 .await;
@@ -309,23 +254,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Fire the initial COV notification for a newly accepted subscription.
     /// Skipped when DCC is active (comm_state >= 1).
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fire_initial_cov_notification(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        cov_in_flight: &Arc<Semaphore>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        comm_state: &Arc<AtomicU8>,
-        config: &ServerConfig,
+        ctx: &CovNotifyContext<'_, T>,
         subscription: &CovSubscriptionSnapshot,
     ) {
-        if comm_state.load(Ordering::Acquire) >= 1 {
+        if ctx.comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
 
         let (counters, in_flight_tracker) = {
-            let table = cov_table.read().await;
+            let table = ctx.cov_table.read().await;
             if !table.is_current(subscription) {
                 return;
             }
@@ -334,17 +272,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Arc::clone(table.in_flight_tracker()),
             )
         };
-        let mut budget = EventBudget::new(&config.cov_policy);
+        let mut budget = EventBudget::new(&ctx.config.cov_policy);
 
         Self::fire_cov_notifications_for_subscriptions(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            &in_flight_tracker,
-            &counters,
-            notification_transactions,
-            config,
+            &CovFanoutHandles {
+                ctx,
+                in_flight_tracker: &in_flight_tracker,
+                counters: &counters,
+            },
             &subscription.monitored_object_identifier,
             std::slice::from_ref(subscription),
             None,
@@ -354,22 +289,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         .await;
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fire_cov_notifications_for_subscriptions(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        cov_in_flight: &Arc<Semaphore>,
-        in_flight_tracker: &Arc<CovInFlightTracker>,
-        counters: &Arc<AtomicCovCounters>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        config: &ServerConfig,
+        handles: &CovFanoutHandles<'_, '_, T>,
         oid: &ObjectIdentifier,
         subs: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
         force: bool,
         budget: &mut EventBudget,
     ) {
+        let &CovFanoutHandles {
+            ctx:
+                &CovNotifyContext {
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    notification_transactions,
+                    config,
+                    ..
+                },
+            in_flight_tracker,
+            counters,
+        } = handles;
         if budget.is_exhausted() {
             return;
         }

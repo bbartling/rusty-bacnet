@@ -25,7 +25,6 @@ impl BACnetClient {
         mstp_max_info_frames=1,
         sc_device_uuid=None
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         interface: &str,
         port: u16,

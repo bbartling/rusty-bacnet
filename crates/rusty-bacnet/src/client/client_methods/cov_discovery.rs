@@ -8,7 +8,6 @@ impl BACnetClient {
 
     /// Subscribe to COV notifications for an object.
     #[pyo3(signature = (address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None))]
-    #[allow(clippy::too_many_arguments)]
     fn subscribe_cov<'py>(
         &self,
         py: Python<'py>,

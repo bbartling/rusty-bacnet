@@ -1,3 +1,4 @@
+use super::cov_notify_context::CovNotifyContext;
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
@@ -52,15 +53,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
         for change in changes {
             Self::fire_life_safety_cov_notifications(
-                &self.db,
-                self.network
-                    .as_ref()
-                    .expect("running local mutation owns network"),
-                &self.cov_table,
-                &self.cov_in_flight,
-                &self.notification_transactions,
-                &self.comm_state,
-                &self.config,
+                &self.local_cov_context(),
                 &change.object_identifier,
                 &change.changed_properties,
             )
@@ -296,51 +289,55 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if life_safety {
             for change in exact_changes {
                 Self::fire_life_safety_cov_notifications(
-                    &self.db,
-                    self.network
-                        .as_ref()
-                        .expect("running local mutation owns network"),
-                    &self.cov_table,
-                    &self.cov_in_flight,
-                    &self.notification_transactions,
-                    &self.comm_state,
-                    &self.config,
+                    &self.local_cov_context(),
                     &change.object_identifier,
                     &change.changed_properties,
                 )
                 .await;
             }
         } else {
-            Self::fire_cov_notifications(
-                &self.db,
-                self.network
-                    .as_ref()
-                    .expect("running local mutation owns network"),
-                &self.cov_table,
-                &self.cov_in_flight,
-                &self.notification_transactions,
-                &self.comm_state,
-                &self.config,
-                oid,
-            )
-            .await;
+            Self::fire_cov_notifications(&self.local_cov_context(), oid).await;
         }
         Self::execute_staging_plans(
-            &self.db,
-            self.network
-                .as_ref()
-                .expect("running local mutation owns network"),
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.learned_routers,
-            &self.notification_transactions,
-            &self.device_bindings,
-            &self.comm_state,
-            &self.config,
+            &self.local_event_delivery(),
+            &self.local_cov_context(),
             staging_plans,
         )
         .await;
         Ok(())
+    }
+
+    /// Borrow the COV notification handles for a local mutation.
+    fn local_cov_context(&self) -> CovNotifyContext<'_, T> {
+        CovNotifyContext {
+            db: &self.db,
+            network: self
+                .network
+                .as_ref()
+                .expect("running local mutation owns network"),
+            cov_table: &self.cov_table,
+            cov_in_flight: &self.cov_in_flight,
+            notification_transactions: &self.notification_transactions,
+            comm_state: &self.comm_state,
+            config: &self.config,
+        }
+    }
+
+    /// Borrow the EventNotification handles for a local mutation.
+    fn local_event_delivery(&self) -> EventDelivery<'_, T> {
+        EventDelivery {
+            db: &self.db,
+            network: self
+                .network
+                .as_ref()
+                .expect("running local mutation owns network"),
+            comm_state: &self.comm_state,
+            learned_routers: &self.learned_routers,
+            notification_transactions: &self.notification_transactions,
+            device_bindings: &self.device_bindings,
+            retry_timeout_ms: self.config.cov_retry_timeout_ms,
+            local_apdu_capacity: self.config.max_apdu_length,
+        }
     }
 
     pub(super) async fn execute_initial_staging_plans(&self) {
@@ -353,17 +350,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Self::take_staging_plans(&mut database, &staging_oids)
         };
         Self::execute_staging_plans(
-            &self.db,
-            self.network
-                .as_ref()
-                .expect("running local mutation owns network"),
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.learned_routers,
-            &self.notification_transactions,
-            &self.device_bindings,
-            &self.comm_state,
-            &self.config,
+            &self.local_event_delivery(),
+            &self.local_cov_context(),
             staging_plans,
         )
         .await;
@@ -385,19 +373,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Every target mutation is generation-checked in the same database guard
     /// that applies it. Event/COV work runs only after that guard is released.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute_staging_plans(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        cov_in_flight: &Arc<Semaphore>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
-        config: &ServerConfig,
+        delivery: &EventDelivery<'_, T>,
+        cov: &CovNotifyContext<'_, T>,
         plans: Vec<StagingWritePlan>,
     ) {
+        let db = delivery.db;
         for plan in plans {
             let mut all_succeeded = true;
             for target in &plan.writes {
@@ -443,31 +424,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     TargetResult::Failed => all_succeeded = false,
                     TargetResult::Applied => {
                         Self::fire_event_notifications_with_bindings(
-                            &EventDelivery {
-                                db,
-                                network,
-                                comm_state,
-                                learned_routers,
-                                notification_transactions,
-                                device_bindings,
-                                retry_timeout_ms: config.cov_retry_timeout_ms,
-                                local_apdu_capacity: config.max_apdu_length,
-                            },
-                            cov_table,
+                            delivery,
+                            cov.cov_table,
                             &target.object_identifier,
                         )
                         .await;
-                        Self::fire_cov_notifications(
-                            db,
-                            network,
-                            cov_table,
-                            cov_in_flight,
-                            notification_transactions,
-                            comm_state,
-                            config,
-                            &target.object_identifier,
-                        )
-                        .await;
+                        Self::fire_cov_notifications(cov, &target.object_identifier).await;
                     }
                 }
             }
@@ -479,32 +441,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 })
             };
             if reliability_changed {
-                Self::fire_event_notifications_with_bindings(
-                    &EventDelivery {
-                        db,
-                        network,
-                        comm_state,
-                        learned_routers,
-                        notification_transactions,
-                        device_bindings,
-                        retry_timeout_ms: config.cov_retry_timeout_ms,
-                        local_apdu_capacity: config.max_apdu_length,
-                    },
-                    cov_table,
-                    &plan.source,
-                )
-                .await;
-                Self::fire_cov_notifications(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    notification_transactions,
-                    comm_state,
-                    config,
-                    &plan.source,
-                )
-                .await;
+                Self::fire_event_notifications_with_bindings(delivery, cov.cov_table, &plan.source)
+                    .await;
+                Self::fire_cov_notifications(cov, &plan.source).await;
             }
         }
     }

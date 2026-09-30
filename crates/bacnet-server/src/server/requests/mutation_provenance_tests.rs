@@ -52,24 +52,20 @@ async fn dispatch_admitted(
 ) -> Option<Bytes> {
     let (tx, rx) = oneshot::channel();
     BACnetServer::<TestTransport>::handle_admitted_confirmed_request(
-        &fixture.db,
-        &fixture.network,
-        &fixture.table,
-        &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-        &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-        &Arc::new(Semaphore::new(1)),
-        &Arc::new(Mutex::new(LearnedRouterCache::new())),
-        &NotificationTransactions::new(),
-        &Arc::new(RwLock::new(DeviceBindingTable::new())),
-        &fixture.state,
-        &Arc::new(Mutex::new(Default::default())),
-        &Arc::new(dcc_outcomes::DccOutcomes::default()),
-        decisions,
-        &fixture.config,
+        &RequestServices {
+            db: Arc::clone(&fixture.db),
+            cov_table: Arc::clone(&fixture.table),
+            comm_state: Arc::clone(&fixture.state),
+            dcc_timer: Arc::new(Mutex::new(Default::default())),
+            mutation_decisions: Arc::clone(decisions),
+            ..RequestServices::for_test(Arc::clone(&fixture.network), fixture.config.clone())
+        },
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
-        SOURCE,
-        route(),
-        bacnet_network::response_route::ResponseRoute::new(provenance, None),
+        RequestOrigin {
+            mac: SOURCE,
+            network: route(),
+            route: bacnet_network::response_route::ResponseRoute::new(provenance, None),
+        },
         confirmed(service, bytes, id),
         Some(tx),
         None,

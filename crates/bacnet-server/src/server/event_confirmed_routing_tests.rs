@@ -259,25 +259,15 @@ impl Harness {
     ) -> bool {
         let active_before = self.notification_transactions.active_count();
         BACnetServer::<RecordingTransport>::dispatch(
-            &self.db,
-            &self.network,
-            &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-            &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-            &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-            &Arc::new(Semaphore::new(255)),
-            &self.learned_routers,
-            &self.notification_transactions,
-            &Arc::new(ConfirmedRequestTracker::default()),
-            &self.device_bindings,
-            &self.comm_state,
-            &Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
-            &Arc::new(dcc_outcomes::DccOutcomes::default()),
-            &Arc::new(crate::mutation::MutationDecisions::default()),
-            &Arc::new(ServerConfig::default()),
-            &None,
-            &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-            &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
-            &Arc::new(super::request_tasks::RequestTasks::default()),
+            &DispatchContext::for_test(RequestServices {
+                db: Arc::clone(&self.db),
+                learned_routers: Arc::clone(&self.learned_routers),
+                notification_transactions: Arc::clone(&self.notification_transactions),
+                device_bindings: Arc::clone(&self.device_bindings),
+                comm_state: Arc::clone(&self.comm_state),
+                cov_in_flight: Arc::new(Semaphore::new(255)),
+                ..RequestServices::for_test(Arc::clone(&self.network), ServerConfig::default())
+            }),
             source_mac,
             apdu,
             bacnet_network::layer::ReceivedApdu {

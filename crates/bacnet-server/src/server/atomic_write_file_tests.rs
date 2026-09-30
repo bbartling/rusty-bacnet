@@ -42,19 +42,11 @@ async fn response(
     });
     let (tx, rx) = oneshot::channel();
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        db,
-        &network,
-        &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-        &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-        &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-        &Arc::new(Semaphore::new(1)),
-        &Arc::new(Mutex::new(LearnedRouterCache::new())),
-        &NotificationTransactions::new(),
+        &RequestServices {
+            db: Arc::clone(db),
+            ..RequestServices::for_test(Arc::clone(&network), ServerConfig::default())
+        },
         &Arc::new(ConfirmedRequestTracker::default()),
-        &Arc::new(RwLock::new(DeviceBindingTable::new())),
-        &Arc::new(AtomicU8::new(0)),
-        &Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
-        &ServerConfig::default(),
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &MacAddr::from_slice(&[1]),
         route.clone(),

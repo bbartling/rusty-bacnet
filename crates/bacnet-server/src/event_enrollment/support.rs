@@ -156,20 +156,33 @@ pub(super) fn classify_required_property_read_error(error: &Error) -> LocalConfi
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The enrollment under evaluation and the reliability, event state and
+/// Event_Enable it held when the pass read it.
+pub(super) struct ReliabilitySubject<'a> {
+    pub(super) db: &'a ObjectDatabase,
+    pub(super) enrollment: &'a dyn BACnetObject,
+    pub(super) enrollment_oid: ObjectIdentifier,
+    pub(super) previous: Reliability,
+    pub(super) current_state: EventState,
+    pub(super) event_enable: u8,
+}
+
 pub(super) fn queue_reliability_transition(
-    db: &ObjectDatabase,
-    enrollment: &dyn BACnetObject,
     updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    enrollment_oid: ObjectIdentifier,
+    subject: &ReliabilitySubject<'_>,
     monitored_oid: Option<ObjectIdentifier>,
-    previous: Reliability,
     desired: Reliability,
-    current_state: EventState,
-    event_enable: u8,
     cause: EventEnrollmentReliabilityCause,
     referenced_value: CapturedReferencedValue,
 ) {
+    let ReliabilitySubject {
+        db,
+        enrollment,
+        enrollment_oid,
+        previous,
+        current_state,
+        event_enable,
+    } = *subject;
     let target = if desired == Reliability::NO_FAULT_DETECTED {
         EventState::NORMAL
     } else {

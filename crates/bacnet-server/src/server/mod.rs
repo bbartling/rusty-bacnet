@@ -73,7 +73,10 @@ use notification_transactions::{
     canonical_direct_peer, canonical_routed_peer, run_notification_worker,
     NotificationTransactions, NotificationWorkerResult,
 };
+use request_services::{DispatchContext, RequestOrigin, RequestServices, UnconfirmedServices};
+use requests::confirmed_response::ResponseTarget;
 use requests::ConfirmedRequestOwnership;
+use segmentation::{ComplexAckParams, SegmentedSendResources};
 
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
@@ -635,6 +638,7 @@ mod atomic_write_file_tests;
 #[cfg(test)]
 mod enrollment_summary_tests;
 mod request_peer;
+mod request_services;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;

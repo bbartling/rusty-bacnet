@@ -63,24 +63,20 @@ async fn dispatch_admitted(
 ) -> Option<Bytes> {
     let (tx, rx) = oneshot::channel();
     BACnetServer::<TestTransport>::handle_admitted_confirmed_request(
-        &fixture.db,
-        &fixture.network,
-        &fixture.table,
-        &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-        &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-        &Arc::new(Semaphore::new(1)),
-        &Arc::new(Mutex::new(LearnedRouterCache::new())),
-        &NotificationTransactions::new(),
-        &Arc::new(RwLock::new(DeviceBindingTable::new())),
-        &fixture.state,
-        &Arc::new(Mutex::new(Default::default())),
-        &Arc::new(dcc_outcomes::DccOutcomes::default()),
-        decisions,
-        &fixture.config,
+        &RequestServices {
+            db: Arc::clone(&fixture.db),
+            cov_table: Arc::clone(&fixture.table),
+            comm_state: Arc::clone(&fixture.state),
+            dcc_timer: Arc::new(Mutex::new(Default::default())),
+            mutation_decisions: Arc::clone(decisions),
+            ..RequestServices::for_test(Arc::clone(&fixture.network), fixture.config.clone())
+        },
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
-        SOURCE,
-        route(),
-        bacnet_network::response_route::ResponseRoute::new(provenance, response),
+        RequestOrigin {
+            mac: SOURCE,
+            network: route(),
+            route: bacnet_network::response_route::ResponseRoute::new(provenance, response),
+        },
         confirmed(service, bytes, id),
         Some(tx),
         None,
@@ -208,25 +204,7 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
     let (service, bytes, _) = cases().remove(0);
     let (tx, rx) = oneshot::channel();
     BACnetServer::dispatch(
-        &server.db,
-        server.test_network(),
-        &server.cov_table,
-        &server.seg_ack_senders,
-        &server.seg_send_permits,
-        &server.cov_in_flight,
-        &server.learned_routers,
-        &server.notification_transactions,
-        &server.confirmed_request_tracker,
-        &server.device_bindings,
-        &server.comm_state,
-        &server.dcc_timer,
-        &server.dcc_outcomes,
-        &server.mutation_decisions,
-        &Arc::new(server.config.clone()),
-        &server._clock,
-        &server.discovery_limiter,
-        &server.time_sync_limiter,
-        &server.request_tasks,
+        &server.test_dispatch_context(),
         SOURCE,
         Apdu::ConfirmedRequest(confirmed(service, bytes, 18)),
         ReceivedApdu {
@@ -496,15 +474,18 @@ async fn read_only_controls_unaffected_under_deny_all() {
         UnconfirmedServiceChoice::WHO_HAS,
     ] {
         BACnetServer::<TestTransport>::handle_unconfirmed_request(
-            &fixture.db,
-            &fixture.network,
-            &fixture.config,
-            None,
-            &fixture.state,
-            &Arc::new(RwLock::new(DeviceBindingTable::new())),
-            &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), Some(1))),
-            &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
-            &NotificationTransactions::new(),
+            &UnconfirmedServices {
+                db: Arc::clone(&fixture.db),
+                comm_state: Arc::clone(&fixture.state),
+                discovery_limiter: Arc::new(DiscoveryLimiter::new(
+                    DiscoveryPolicy::default(),
+                    Some(1),
+                )),
+                ..UnconfirmedServices::for_test(
+                    Arc::clone(&fixture.network),
+                    fixture.config.clone(),
+                )
+            },
             UnconfirmedRequestPdu {
                 service_choice: service,
                 service_request: Bytes::new(),

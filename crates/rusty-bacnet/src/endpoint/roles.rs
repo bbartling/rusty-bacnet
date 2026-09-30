@@ -17,7 +17,9 @@ use pyo3::types::PyDict;
 use bacnet_encoding::primitives::decode_application_value;
 
 use crate::errors::to_py_err;
-use crate::types::{parse_address, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
+use crate::types::{
+    parse_address, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue, PyReadAccessSpec,
+};
 
 /// Client role: initiates ReadProperty/ReadRange/ReadPropertyMultiple/WriteProperty over the owner's single transport.
 ///
@@ -76,7 +78,6 @@ impl PyEndpointClient {
     /// `commandability` is a required caller assertion, including without a Reporter.
     /// Invalid commandability, priority, framing and APDU size fail synchronously.
     #[pyo3(signature = (address, object_id, property_id, value, priority=None, array_index=None, *, commandability))]
-    #[allow(clippy::too_many_arguments)]
     fn write_property<'py>(
         &self,
         py: Python<'py>,
@@ -119,15 +120,7 @@ impl PyEndpointClient {
         let handle = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             handle
-                .write_property(
-                    &mac,
-                    request.object_identifier,
-                    request.property_identifier,
-                    request.property_array_index,
-                    request.property_value,
-                    request.priority,
-                    commandability,
-                )
+                .write_property(&mac, request, commandability)
                 .await
                 .map_err(to_py_err)?;
             Ok(Python::attach(|py| py.None()))
@@ -137,12 +130,11 @@ impl PyEndpointClient {
     /// Read 1–64 explicit references on concrete objects, preserving ordered
     /// values and inline errors. Uses the standalone RPM dictionary conversion.
     #[pyo3(signature = (address, specs))]
-    #[allow(clippy::type_complexity)]
     fn read_property_multiple<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        specs: Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
+        specs: Vec<PyReadAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let specs = crate::types::py_to_rpm_specs(specs);
         let request = bacnet_client::EndpointReadRequest::Multiple(
@@ -171,7 +163,6 @@ impl PyEndpointClient {
     /// Read a list/log range; supports all-items, position and sequence forms.
     /// Returns raw item_data bytes and a three-boolean result_flags tuple.
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None))]
-    #[allow(clippy::too_many_arguments)]
     fn read_range<'py>(
         &self,
         py: Python<'py>,

@@ -43,15 +43,12 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
         ))
         .unwrap();
     BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &fixture.db,
-        &fixture.network,
-        &fixture.config,
-        None,
-        &fixture.state,
-        &Arc::new(RwLock::new(DeviceBindingTable::new())),
-        &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), Some(1))),
-        &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&fixture.db),
+            comm_state: Arc::clone(&fixture.state),
+            discovery_limiter: Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), Some(1))),
+            ..UnconfirmedServices::for_test(Arc::clone(&fixture.network), fixture.config.clone())
+        },
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
             service_request: Bytes::new(),

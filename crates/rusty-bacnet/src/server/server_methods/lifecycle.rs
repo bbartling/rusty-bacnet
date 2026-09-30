@@ -404,7 +404,6 @@ impl BACnetServer {
     /// to an unresponsive subscriber can therefore stall other Python calls
     /// for up to the COV retry timeout.
     #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None, *, source_object))]
-    #[allow(clippy::too_many_arguments)]
     fn write_property_local<'py>(
         &self,
         py: Python<'py>,

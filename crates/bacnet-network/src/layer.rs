@@ -94,6 +94,7 @@ use tokio::task::JoinHandle;
 
 #[path = "layer_issuance.rs"]
 mod issuance;
+pub use issuance::IssuedApdu;
 
 #[path = "layer_admission.rs"]
 mod admission;

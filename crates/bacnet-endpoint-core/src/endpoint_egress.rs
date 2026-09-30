@@ -20,6 +20,21 @@ pub(super) struct NetworkServiceCommand {
     pub(super) cancel_on_drop: bool,
 }
 
+/// One APDU send being admitted to the bounded command queue.
+struct ApduAdmission {
+    apdu: Vec<u8>,
+    destination: EndpointApduDestination,
+    expecting_reply: bool,
+    priority: NetworkPriority,
+    data_attributes: Vec<DataAttribute>,
+    /// Latest time the send may start, if bounded.
+    deadline: Option<tokio::time::Instant>,
+    /// Whether dropping the completion retracts the send.
+    cancel_on_drop: bool,
+    /// Immutable ingress authority a reply must follow, for response sends.
+    response_route: Option<ResponseRoute>,
+}
+
 /// Completion of an admitted endpoint send, without claiming remote receipt.
 #[doc(hidden)]
 pub struct EndpointSendOutcome {
@@ -116,16 +131,16 @@ impl EndpointEgress {
         data_attributes: Vec<DataAttribute>,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
-        self.admit(
+        self.admit(ApduAdmission {
             apdu,
             destination,
             expecting_reply,
             priority,
             data_attributes,
             deadline,
-            deadline.is_some(),
-            None,
-        )
+            cancel_on_drop: deadline.is_some(),
+            response_route: None,
+        })
     }
 
     /// Queue caller-owned work without a deadline. Dropping its completion retracts
@@ -140,16 +155,16 @@ impl EndpointEgress {
         priority: NetworkPriority,
         data_attributes: Vec<DataAttribute>,
     ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
-        self.admit(
+        self.admit(ApduAdmission {
             apdu,
             destination,
             expecting_reply,
             priority,
             data_attributes,
-            None,
-            true,
-            None,
-        )
+            deadline: None,
+            cancel_on_drop: true,
+            response_route: None,
+        })
     }
 
     /// Queue a caller-owned reply under its immutable ingress authority.
@@ -173,30 +188,29 @@ impl EndpointEgress {
                 destination_mac: next_hop,
             },
         };
-        self.admit(
+        self.admit(ApduAdmission {
             apdu,
             destination,
-            false,
-            NetworkPriority::NORMAL,
-            Vec::new(),
-            None,
-            true,
-            Some(route),
-        )
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
+            data_attributes: Vec::new(),
+            deadline: None,
+            cancel_on_drop: true,
+            response_route: Some(route),
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn admit(
-        &self,
-        apdu: Vec<u8>,
-        destination: EndpointApduDestination,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-        data_attributes: Vec<DataAttribute>,
-        deadline: Option<tokio::time::Instant>,
-        cancel_on_drop: bool,
-        response_route: Option<ResponseRoute>,
-    ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
+    fn admit(&self, send: ApduAdmission) -> Result<EndpointSend, EndpointEgressAdmissionError> {
+        let ApduAdmission {
+            apdu,
+            destination,
+            expecting_reply,
+            priority,
+            data_attributes,
+            deadline,
+            cancel_on_drop,
+            response_route,
+        } = send;
         if !self.open.load(Ordering::Acquire) {
             return Err(EndpointEgressAdmissionError::Closed);
         }

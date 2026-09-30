@@ -68,11 +68,13 @@ fn write_value(
         client
             .write_property(
                 &mac,
-                target(),
-                property,
-                index,
-                value,
-                priority,
+                WritePropertyRequest {
+                    object_identifier: target(),
+                    property_identifier: property,
+                    property_array_index: index,
+                    property_value: value,
+                    priority,
+                },
                 commandability,
             )
             .await

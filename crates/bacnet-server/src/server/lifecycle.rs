@@ -62,9 +62,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
             Arc::new(Mutex::new(Default::default()));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
-        let dcc_outcomes_dispatch = Arc::clone(&dcc_outcomes);
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
-        let mutation_decisions_dispatch = Arc::clone(&mutation_decisions);
 
         let target_audit = super::audit_recipient::TargetAudit::install(
             &mut *db.write().await,
@@ -95,20 +93,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
         });
         let network_dispatch = Arc::clone(&network);
-        let db_dispatch = Arc::clone(&db);
-        let cov_dispatch = Arc::clone(&cov_table);
-        let seg_ack_dispatch = Arc::clone(&seg_ack_senders);
-        let seg_send_permits_dispatch = Arc::clone(&seg_send_permits);
-        let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
-        let learned_routers_dispatch = Arc::clone(&learned_routers);
-        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
-        let confirmed_request_tracker_dispatch = Arc::clone(&confirmed_request_tracker);
-        let device_bindings_dispatch = Arc::clone(&device_bindings);
-        let comm_state_dispatch = Arc::clone(&comm_state);
-        let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
-        let clock_dispatch = clock.clone();
-        let limiters_dispatch = (discovery_limiter.clone(), time_sync_limiter.clone());
+        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
         let audit_owner = target_audit
             .as_ref()
@@ -117,6 +103,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             request_tasks.set_audit_owner(owner);
         }
         let requests = Arc::clone(&request_tasks);
+        let dispatch_context = DispatchContext {
+            services: RequestServices {
+                db: Arc::clone(&db),
+                network: Arc::clone(&network_dispatch),
+                cov_table: Arc::clone(&cov_table),
+                seg_ack_senders: Arc::clone(&seg_ack_senders),
+                seg_send_permits: Arc::clone(&seg_send_permits),
+                cov_in_flight: Arc::clone(&cov_in_flight),
+                learned_routers: Arc::clone(&learned_routers),
+                notification_transactions: Arc::clone(&notification_transactions_dispatch),
+                device_bindings: Arc::clone(&device_bindings),
+                comm_state: Arc::clone(&comm_state),
+                dcc_timer: Arc::clone(&dcc_timer),
+                dcc_outcomes: Arc::clone(&dcc_outcomes),
+                mutation_decisions: Arc::clone(&mutation_decisions),
+                config: Arc::clone(&config_dispatch),
+            },
+            confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
+            clock: clock.clone(),
+            discovery_limiter: discovery_limiter.clone(),
+            time_sync_limiter: time_sync_limiter.clone(),
+            request_tasks: Arc::clone(&request_tasks),
+        };
         let dispatch_task = spawn_owned(audit_owner.clone(), async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
@@ -492,25 +501,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     "Reassembled segmented ConfirmedRequest"
                                                 );
                                                 Self::dispatch(
-                                                    &db_dispatch,
-                                                    &network_dispatch,
-                                                    &cov_dispatch,
-                                                    &seg_ack_dispatch,
-                                                    &seg_send_permits_dispatch,
-                                                    &cov_in_flight_dispatch,
-                                                    &learned_routers_dispatch,
-                                                    &notification_transactions_dispatch,
-                                                    &confirmed_request_tracker_dispatch,
-                                                    &device_bindings_dispatch,
-                                                    &comm_state_dispatch,
-                                                    &dcc_timer_dispatch,
-                                                    &dcc_outcomes_dispatch,
-                                                    &mutation_decisions_dispatch,
-                                                    &config_dispatch,
-                                                    &clock_dispatch,
-                                                    &limiters_dispatch.0,
-                                                    &limiters_dispatch.1,
-                                                    &requests,
+                                                    &dispatch_context,
                                                     &source_mac,
                                                     Apdu::ConfirmedRequest(reassembled),
                                                     received.take().unwrap_or_else(|| {
@@ -551,25 +542,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                         if !handled {
                             Self::dispatch(
-                                &db_dispatch,
-                                &network_dispatch,
-                                &cov_dispatch,
-                                &seg_ack_dispatch,
-                                &seg_send_permits_dispatch,
-                                &cov_in_flight_dispatch,
-                                &learned_routers_dispatch,
-                                &notification_transactions_dispatch,
-                                &confirmed_request_tracker_dispatch,
-                                &device_bindings_dispatch,
-                                &comm_state_dispatch,
-                                &dcc_timer_dispatch,
-                                &dcc_outcomes_dispatch,
-                                &mutation_decisions_dispatch,
-                                &config_dispatch,
-                                &clock_dispatch,
-                                &limiters_dispatch.0,
-                                &limiters_dispatch.1,
-                                &requests,
+                                &dispatch_context,
                                 &source_mac,
                                 decoded,
                                 received.take().unwrap_or_else(|| {
@@ -718,36 +691,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
-        let network_intrinsic = Arc::clone(&network);
-        let comm_state_intrinsic = Arc::clone(&comm_state);
-        let learned_routers_intrinsic = Arc::clone(&learned_routers);
-        let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
-        let device_bindings_intrinsic = Arc::clone(&device_bindings);
-        let intrinsic_retry_ms = config.cov_retry_timeout_ms;
-        let intrinsic_apdu_capacity = config.max_apdu_length;
         let intrinsic_reporting_task = Some(spawn_owned(
             audit_owner.clone(),
             intrinsic::run(
-                cov_fanout,
-                network_intrinsic,
-                comm_state_intrinsic,
-                learned_routers_intrinsic,
-                notification_transactions_intrinsic,
-                device_bindings_intrinsic,
-                intrinsic_retry_ms,
-                intrinsic_apdu_capacity,
+                cov_fanout.clone(),
+                Arc::clone(&learned_routers),
+                Arc::clone(&device_bindings),
             ),
         ));
 
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
-                Arc::clone(&db),
-                Arc::clone(&network),
-                Arc::clone(&cov_table),
-                Arc::clone(&cov_in_flight),
-                Arc::clone(&notification_transactions),
-                Arc::clone(&comm_state),
-                config.clone(),
+                cov_fanout,
                 monotonic_origin,
             ),
         );

@@ -8,7 +8,7 @@ use bacnet_endpoint_core::coordinator::{
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bytes::Bytes;
 
-use super::coordinated::CoordinatedRegistrationError;
+use super::coordinated::{CoordinatedRegistrationError, SegmentedAckArrival};
 use super::*;
 
 fn coordinated_tsm() -> (Tsm, Arc<OutboundTransactionCoordinator>) {
@@ -375,10 +375,12 @@ fn segmented_progress_is_nonterminal_until_valid_reassembly() {
     });
     assert!(matches!(
         tsm.coordinated_admit_segmented_complex_ack_for_owner(
-            &mac,
-            invoke_id,
-            1,
-            true,
+            SegmentedAckArrival {
+                source_mac: &mac,
+                invoke_id,
+                sequence_number: 1,
+                segmented_response_accepted: true,
+            },
             &registration.owner,
             &peer,
             &final_segment,

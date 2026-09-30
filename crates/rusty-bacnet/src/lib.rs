@@ -1,5 +1,10 @@
 //! Python bindings for rusty-bacnet via PyO3.
 
+// Each #[pyo3(signature = ...)] method mirrors its Python keyword arguments, so
+// argument count is part of the Python API; a Rust parameter struct would
+// change what Python callers write (#902).
+#![allow(clippy::too_many_arguments)]
+
 use pyo3::prelude::*;
 
 mod client;

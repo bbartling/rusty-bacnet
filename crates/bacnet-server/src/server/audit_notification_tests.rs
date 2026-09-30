@@ -174,30 +174,13 @@ pub(super) async fn dispatch_confirmed(
         0,
         Ipv4Addr::BROADCAST,
     )));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(1));
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
-    let notification_transactions = NotificationTransactions::new();
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let (tx, rx) = oneshot::channel();
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        db,
-        &network,
-        &cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &learned_routers,
-        &notification_transactions,
+        &RequestServices {
+            db: Arc::clone(db),
+            ..RequestServices::for_test(Arc::clone(&network), config.clone())
+        },
         confirmed_request_tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        config,
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         source_mac,
         source_network,

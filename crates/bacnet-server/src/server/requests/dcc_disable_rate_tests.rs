@@ -12,7 +12,7 @@ struct Fixture {
     tasks: Arc<RequestTasks>,
     timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     state: Arc<AtomicU8>,
-    outcomes: dcc_outcomes::DccOutcomes,
+    outcomes: Arc<dcc_outcomes::DccOutcomes>,
 }
 
 impl Fixture {
@@ -67,11 +67,21 @@ impl Fixture {
             network: u16::from(peer) + 1,
             mac_address: MacAddr::from_slice(&[peer]),
         });
-        response::<BipTransport>(
-            &self.timer,
-            &self.state,
-            &self.outcomes,
-            &self.config,
+        let services = RequestServices {
+            dcc_timer: Arc::clone(&self.timer),
+            comm_state: Arc::clone(&self.state),
+            dcc_outcomes: Arc::clone(&self.outcomes),
+            ..RequestServices::for_test(
+                Arc::new(NetworkLayer::new(BipTransport::new(
+                    Ipv4Addr::LOCALHOST,
+                    0,
+                    Ipv4Addr::BROADCAST,
+                ))),
+                self.config.clone(),
+            )
+        };
+        response(
+            &services,
             &req,
             &[peer],
             source.as_ref(),

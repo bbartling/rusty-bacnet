@@ -129,17 +129,37 @@ pub(super) enum TerminalDispatchOutcome {
     PrematureSegmentedRequestAborted,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A terminal PDU received for a transaction, and how to complete it.
+pub(super) struct TerminalResponse<'a> {
+    /// TSM key MAC of the transaction.
+    pub(super) tsm_mac: &'a MacAddr,
+    /// Invoke ID of the transaction.
+    pub(super) invoke_id: u8,
+    /// Canonical identity of the responding peer.
+    pub(super) peer: &'a CanonicalPeer,
+    /// The received APDU, as presented to the outbound coordinator.
+    pub(super) apdu: &'a Apdu,
+    /// Response delivered to the waiting caller.
+    pub(super) response: TsmResponse,
+    /// Whether the completion is gated on the transaction's current phase.
+    pub(super) phase_gate: bool,
+    /// Owner the completion must match, when the caller already knows it.
+    pub(super) owner: Option<TransactionOwner>,
+}
+
 pub(super) async fn complete_terminal_response(
     tsm: &Arc<Mutex<Tsm>>,
-    tsm_mac: &MacAddr,
-    invoke_id: u8,
-    peer: &CanonicalPeer,
-    apdu: &Apdu,
-    response: TsmResponse,
-    phase_gate: bool,
-    owner: Option<TransactionOwner>,
+    terminal: TerminalResponse<'_>,
 ) -> TerminalDispatchOutcome {
+    let TerminalResponse {
+        tsm_mac,
+        invoke_id,
+        peer,
+        apdu,
+        response,
+        phase_gate,
+        owner,
+    } = terminal;
     let mut expected_owner = owner;
     let mut response = Some(response);
     loop {

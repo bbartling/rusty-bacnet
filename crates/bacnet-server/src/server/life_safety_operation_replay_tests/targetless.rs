@@ -1,40 +1,16 @@
 use super::*;
 
-#[allow(clippy::too_many_arguments)]
 async fn dispatch_lso_raw_recording(
-    db: &Arc<RwLock<ObjectDatabase>>,
-    network: &Arc<NetworkLayer<RecordingTransport>>,
-    cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+    services: &RequestServices<RecordingTransport>,
     tracker: &Arc<ConfirmedRequestTracker>,
-    config: &ServerConfig,
     source_mac: &MacAddr,
     sent: &Arc<StdMutex<Vec<(Bytes, MacAddr)>>>,
     invoke_id: u8,
     service_request: Bytes,
 ) -> Vec<Bytes> {
-    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(255));
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
-    let notification_transactions = NotificationTransactions::new();
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
-
     BACnetServer::<RecordingTransport>::handle_confirmed_request(
-        db,
-        network,
-        cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &learned_routers,
-        &notification_transactions,
+        services,
         tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        config,
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         source_mac,
         None,
@@ -144,6 +120,12 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
                 .unwrap();
         }
     }
+    let services = RequestServices {
+        db: Arc::clone(&db),
+        cov_table,
+        cov_in_flight: Arc::new(Semaphore::new(255)),
+        ..RequestServices::for_test(network, config)
+    };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
     let source = MacAddr::from_slice(&[9, 9, 9]);
 
@@ -153,18 +135,9 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
         .unwrap();
     let encoded = encoded.freeze();
 
-    let first = dispatch_lso_raw_recording(
-        &db,
-        &network,
-        &cov_table,
-        &tracker,
-        &config,
-        &source,
-        &sent,
-        0x51,
-        encoded.clone(),
-    )
-    .await;
+    let first =
+        dispatch_lso_raw_recording(&services, &tracker, &source, &sent, 0x51, encoded.clone())
+            .await;
     assert_eq!(
         first.len(),
         3,
@@ -194,10 +167,8 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
 
     // Identical confirmed bytes within the window: byte-identical SimpleACK,
     // no second executor actuation, no second authorization, no second COV.
-    let second = dispatch_lso_raw_recording(
-        &db, &network, &cov_table, &tracker, &config, &source, &sent, 0x51, encoded,
-    )
-    .await;
+    let second =
+        dispatch_lso_raw_recording(&services, &tracker, &source, &sent, 0x51, encoded).await;
     assert_eq!(
         second.len(),
         1,

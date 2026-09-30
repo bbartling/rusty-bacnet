@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_network::layer::IssuedApdu;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Terminal ordinary response: release the pending owner only after NPDU
@@ -13,11 +14,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         network
             .send_response_apdu_on_issuance(
-                apdu,
-                source_mac,
-                source_network,
-                false,
-                NetworkPriority::NORMAL,
+                IssuedApdu {
+                    apdu,
+                    next_hop: source_mac,
+                    destination: source_network,
+                    expecting_reply: false,
+                    priority: NetworkPriority::NORMAL,
+                },
                 route,
                 move || drop(pending),
             )
@@ -52,11 +55,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         network
             .send_response_apdu_on_issuance(
-                apdu,
-                source_mac,
-                source_network,
-                expecting_reply,
-                NetworkPriority::NORMAL,
+                IssuedApdu {
+                    apdu,
+                    next_hop: source_mac,
+                    destination: source_network,
+                    expecting_reply,
+                    priority: NetworkPriority::NORMAL,
+                },
                 route,
                 || {},
             )

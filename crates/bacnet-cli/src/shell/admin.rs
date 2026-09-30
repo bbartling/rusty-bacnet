@@ -106,12 +106,14 @@ pub(super) async fn handle_ack_alarm<T: TransportPort + 'static>(
     if let Err(e) = commands::device::acknowledge_alarm_cmd(
         client,
         &mac,
-        object_type,
-        instance,
-        arguments.state,
-        &arguments.source,
-        arguments.timestamp,
-        arguments.time_of_acknowledgment,
+        commands::device::AcknowledgeAlarmArgs {
+            object_type,
+            instance,
+            event_state: arguments.state,
+            source: &arguments.source,
+            timestamp: arguments.timestamp,
+            time_of_acknowledgment: arguments.time_of_acknowledgment,
+        },
         format,
     )
     .await

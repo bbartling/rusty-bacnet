@@ -1,4 +1,4 @@
-use super::segmentation_context::SegmentedRequestLimits;
+use super::segmentation_context::{ConfirmedWait, SegmentedRequestLimits};
 use super::*;
 use bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE;
 
@@ -311,13 +311,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let response = self
             .wait_for_confirmed_response(
-                target,
-                &tsm_mac,
-                invoke_id,
-                &owner,
+                ConfirmedWait {
+                    target,
+                    tsm_mac: &tsm_mac,
+                    invoke_id,
+                    owner: &owner,
+                    retry_apdu: Some(&buf),
+                },
                 registration.response,
                 registration.progress,
-                Some(&buf),
             )
             .await;
         if response.is_ok() {
@@ -331,17 +333,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
     /// their timers to cancel each other's phase.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn wait_for_confirmed_response(
         &self,
-        target: ConfirmedTarget<'_>,
-        tsm_mac: &MacAddr,
-        invoke_id: u8,
-        owner: &TransactionOwner,
+        wait_for: ConfirmedWait<'_>,
         mut response_rx: oneshot::Receiver<TsmResponse>,
         mut progress_rx: tokio::sync::watch::Receiver<TransactionProgress>,
-        retry_apdu: Option<&[u8]>,
     ) -> Result<TsmResponse, Error> {
+        let ConfirmedWait {
+            target,
+            tsm_mac,
+            invoke_id,
+            owner,
+            retry_apdu,
+        } = wait_for;
         let (request_timeout, segment_timeout, max_retries) = {
             let tsm = self.tsm.lock().await;
             let config = tsm.config();

@@ -4,6 +4,7 @@
 //! change. Provenance threading lives in the reassembly path, these helpers
 //! only send the wire Abort and complete the local transaction.
 
+use super::segmentation_context::ReassemblyAbortTarget;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -46,17 +47,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// The caller is responsible for having removed the `seg_state` entry —
     /// that removal implements the return to IDLE.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn abort_reassembly(
         tsm: &Arc<Mutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
-        tsm_mac: &MacAddr,
-        owner: &TransactionOwner,
-        reply_mac: &MacAddr,
-        reply_network: &Option<NpduAddress>,
+        target: ReassemblyAbortTarget<'_>,
         invoke_id: u8,
         reason: bacnet_types::enums::AbortReason,
     ) {
+        let ReassemblyAbortTarget {
+            tsm_mac,
+            owner,
+            reply_mac,
+            reply_network,
+        } = target;
         Self::send_client_abort(network, reply_mac, reply_network, invoke_id, reason).await;
         tsm.lock().await.complete_transaction_for_owner(
             tsm_mac,

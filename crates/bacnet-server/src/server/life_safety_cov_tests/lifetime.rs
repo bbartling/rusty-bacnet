@@ -156,13 +156,15 @@ async fn wire_case(family: Family, confirmed: bool, lifetime: Option<u32>, expec
     fixture.dispatch(92, service, request).await;
     take(&fixture, 2, family, expected).await;
     BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &fixture.config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &fixture.db,
+            network: &fixture.network,
+            cov_table: &fixture.cov_table,
+            cov_in_flight: &fixture.cov_in_flight,
+            notification_transactions: &fixture.transactions,
+            comm_state: &fixture.comm_state,
+            config: &fixture.config,
+        },
         &point_oid(),
         &[PropertyIdentifier::STATUS_FLAGS],
     )

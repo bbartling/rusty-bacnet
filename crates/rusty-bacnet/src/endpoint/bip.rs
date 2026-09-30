@@ -168,7 +168,6 @@ impl PyBipEndpoint {
         apdu_retries=0,
         registered_network_port=None
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         device_instance: u32,
         device_name: &str,

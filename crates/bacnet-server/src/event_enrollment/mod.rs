@@ -193,6 +193,14 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     continue;
                 }
             };
+        let subject = ReliabilitySubject {
+            db,
+            enrollment,
+            enrollment_oid: *oid,
+            previous: current_reliability,
+            current_state,
+            event_enable,
+        };
 
         // Local configuration is resolved before any target observation. A
         // malformed/missing required reference, malformed parameters, or an
@@ -220,15 +228,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 queue_eval_source_reset(&mut updates, *oid, eval_source);
             }
             queue_reliability_transition(
-                db,
-                enrollment,
                 &mut updates,
-                *oid,
+                &subject,
                 monitored_oid,
-                current_reliability,
                 Reliability::CONFIGURATION_ERROR,
-                current_state,
-                event_enable,
                 EventEnrollmentReliabilityCause::Configuration,
                 CapturedReferencedValue::Unavailable,
             );
@@ -290,15 +293,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
             queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
             queue_reliability_transition(
-                db,
-                enrollment,
                 &mut updates,
-                *oid,
+                &subject,
                 Some(monitored_oid),
-                current_reliability,
                 Reliability::CONFIGURATION_ERROR,
-                current_state,
-                event_enable,
                 EventEnrollmentReliabilityCause::Configuration,
                 CapturedReferencedValue::Unavailable,
             );
@@ -316,15 +314,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     Reliability::CONFIGURATION_ERROR,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::Configuration,
                     CapturedReferencedValue::NotEvaluated,
                 );
@@ -346,15 +339,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     Reliability::MONITORED_OBJECT_FAULT,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::MonitoredObject,
                     CapturedReferencedValue::NotEvaluated,
                 );
@@ -372,15 +360,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 {
                     queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
                     queue_reliability_transition(
-                        db,
-                        enrollment,
                         &mut updates,
-                        *oid,
+                        &subject,
                         Some(monitored_oid),
-                        current_reliability,
                         Reliability::CONFIGURATION_ERROR,
-                        current_state,
-                        event_enable,
                         EventEnrollmentReliabilityCause::Configuration,
                         CapturedReferencedValue::Unavailable,
                     );
@@ -404,15 +387,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     Reliability::CONFIGURATION_ERROR,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::Configuration,
                     CapturedReferencedValue::from_evaluated(monitored_value.as_ref()),
                 );
@@ -432,15 +410,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     reliability,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::FaultAlgorithm,
                     CapturedReferencedValue::from_evaluated(monitored_value.as_ref()),
                 );
@@ -469,15 +442,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 EventEnrollmentReliabilityCause::FaultAlgorithm
             };
             queue_reliability_transition(
-                db,
-                enrollment,
                 &mut updates,
-                *oid,
+                &subject,
                 Some(monitored_oid),
-                current_reliability,
                 Reliability::NO_FAULT_DETECTED,
-                current_state,
-                event_enable,
                 cause,
                 CapturedReferencedValue::from_evaluated(monitored_value.as_ref()),
             );
@@ -493,15 +461,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 {
                     queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
                     queue_reliability_transition(
-                        db,
-                        enrollment,
                         &mut updates,
-                        *oid,
+                        &subject,
                         Some(monitored_oid),
-                        current_reliability,
                         Reliability::CONFIGURATION_ERROR,
-                        current_state,
-                        event_enable,
                         EventEnrollmentReliabilityCause::Configuration,
                         CapturedReferencedValue::Unavailable,
                     );

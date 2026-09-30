@@ -143,37 +143,43 @@ impl Fixture {
     async fn fire(&self, initial: bool, snapshots: &[CovSubscriptionSnapshot]) {
         if !initial {
             BACnetServer::<HeldTransport>::fire_cov_notifications(
-                &self.db,
-                &self.network,
-                &self.table,
-                &self.permits,
-                &self.transactions,
-                &self.comm,
-                &self.config,
+                &crate::server::cov_notify_context::CovNotifyContext {
+                    db: &self.db,
+                    network: &self.network,
+                    cov_table: &self.table,
+                    cov_in_flight: &self.permits,
+                    notification_transactions: &self.transactions,
+                    comm_state: &self.comm,
+                    config: &self.config,
+                },
                 &object(),
             )
             .await;
         } else if snapshots[0].notification_kind == CovNotificationKind::Single {
             BACnetServer::<HeldTransport>::fire_initial_cov_notification(
-                &self.db,
-                &self.network,
-                &self.table,
-                &self.permits,
-                &self.transactions,
-                &self.comm,
-                &self.config,
+                &crate::server::cov_notify_context::CovNotifyContext {
+                    db: &self.db,
+                    network: &self.network,
+                    cov_table: &self.table,
+                    cov_in_flight: &self.permits,
+                    notification_transactions: &self.transactions,
+                    comm_state: &self.comm,
+                    config: &self.config,
+                },
                 &snapshots[0],
             )
             .await;
         } else {
             BACnetServer::<HeldTransport>::fire_initial_cov_notification_multiple(
-                &self.db,
-                &self.network,
-                &self.table,
-                &self.permits,
-                &self.transactions,
-                &self.comm,
-                &self.config,
+                &crate::server::cov_notify_context::CovNotifyContext {
+                    db: &self.db,
+                    network: &self.network,
+                    cov_table: &self.table,
+                    cov_in_flight: &self.permits,
+                    notification_transactions: &self.transactions,
+                    comm_state: &self.comm,
+                    config: &self.config,
+                },
                 snapshots,
             )
             .await;

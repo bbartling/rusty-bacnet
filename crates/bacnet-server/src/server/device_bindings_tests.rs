@@ -333,29 +333,27 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     let routed_device = device(101);
 
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
-        &db,
-        &network,
-        &config,
-        None,
-        &comm_state,
-        &bindings,
-        &discovery_limiter,
-        &time_sync_limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&db),
+            comm_state: Arc::clone(&comm_state),
+            device_bindings: Arc::clone(&bindings),
+            discovery_limiter: Arc::clone(&discovery_limiter),
+            time_sync_limiter: Arc::clone(&time_sync_limiter),
+            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+        },
         i_am_request(local_device),
         &received(LOCAL_PEER, None),
     )
     .await;
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
-        &db,
-        &network,
-        &config,
-        None,
-        &comm_state,
-        &bindings,
-        &discovery_limiter,
-        &time_sync_limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&db),
+            comm_state: Arc::clone(&comm_state),
+            device_bindings: Arc::clone(&bindings),
+            discovery_limiter: Arc::clone(&discovery_limiter),
+            time_sync_limiter: Arc::clone(&time_sync_limiter),
+            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+        },
         i_am_request(routed_device),
         &received(
             ROUTER,
@@ -388,29 +386,27 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     drop(table);
 
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
-        &db,
-        &network,
-        &config,
-        None,
-        &comm_state,
-        &bindings,
-        &discovery_limiter,
-        &time_sync_limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&db),
+            comm_state: Arc::clone(&comm_state),
+            device_bindings: Arc::clone(&bindings),
+            discovery_limiter: Arc::clone(&discovery_limiter),
+            time_sync_limiter: Arc::clone(&time_sync_limiter),
+            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+        },
         i_am_request(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()),
         &received(LOCAL_PEER, None),
     )
     .await;
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
-        &db,
-        &network,
-        &config,
-        None,
-        &comm_state,
-        &bindings,
-        &discovery_limiter,
-        &time_sync_limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&db),
+            comm_state: Arc::clone(&comm_state),
+            device_bindings: Arc::clone(&bindings),
+            discovery_limiter: Arc::clone(&discovery_limiter),
+            time_sync_limiter: Arc::clone(&time_sync_limiter),
+            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+        },
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::I_AM,
             service_request: Bytes::from_static(&[0xFF]),
@@ -422,29 +418,27 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
 
     comm_state.store(1, Ordering::Release);
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
-        &db,
-        &network,
-        &config,
-        None,
-        &comm_state,
-        &bindings,
-        &discovery_limiter,
-        &time_sync_limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&db),
+            comm_state: Arc::clone(&comm_state),
+            device_bindings: Arc::clone(&bindings),
+            discovery_limiter: Arc::clone(&discovery_limiter),
+            time_sync_limiter: Arc::clone(&time_sync_limiter),
+            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+        },
         i_am_request(local_device),
         &received(UPDATED_PEER, None),
     )
     .await;
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
-        &db,
-        &network,
-        &config,
-        None,
-        &comm_state,
-        &bindings,
-        &discovery_limiter,
-        &time_sync_limiter,
-        &NotificationTransactions::new(),
+        &UnconfirmedServices {
+            db: Arc::clone(&db),
+            comm_state: Arc::clone(&comm_state),
+            device_bindings: Arc::clone(&bindings),
+            discovery_limiter: Arc::clone(&discovery_limiter),
+            time_sync_limiter: Arc::clone(&time_sync_limiter),
+            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+        },
         i_am_request(device(102)),
         &received(LOCAL_PEER, None),
     )

@@ -123,17 +123,23 @@ impl Child {
         );
         tokio::spawn(async move {
             BACnetServer::send_segmented_complex_ack_with_options(
-                &network,
-                &registry,
-                &permits,
-                &[1],
-                None,
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                1,
-                ConfirmedServiceChoice::READ_PROPERTY,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &registry,
+                    seg_send_permits: &permits,
+                },
+                ResponseTarget {
+                    source_mac: &[1],
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id: 1,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+                    client_max_apdu: 50,
+                    client_max_segments: max_segments,
+                },
                 &[0; 70],
-                50,
-                max_segments,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_secs(5),
                     max_retries: 0,
@@ -258,36 +264,48 @@ async fn rejected_segmented_child_drops_owner_without_polling() {
     let spawner = tasks.spawner();
     tasks.close();
     BACnetServer::spawn_segmented_complex_ack(
-        &c.network,
-        &c.registry,
-        &c.permits,
+        SegmentedSendResources {
+            network: &c.network,
+            seg_ack_senders: &c.registry,
+            seg_send_permits: &c.permits,
+        },
         &spawner,
-        &[1],
-        None,
-        &bacnet_network::response_route::ResponseRoute::unverified(),
-        1,
-        ConfirmedServiceChoice::READ_PROPERTY,
+        ResponseTarget {
+            source_mac: &[1],
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id: 1,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            client_max_apdu: 50,
+            client_max_segments: None,
+        },
         Bytes::from_static(&[0; 70]),
-        50,
-        None,
         Some(c.owner()),
     );
     assert!(tasks.is_empty());
     c.clean();
     drop(tasks);
     BACnetServer::spawn_segmented_complex_ack(
-        &c.network,
-        &c.registry,
-        &c.permits,
+        SegmentedSendResources {
+            network: &c.network,
+            seg_ack_senders: &c.registry,
+            seg_send_permits: &c.permits,
+        },
         &spawner,
-        &[1],
-        None,
-        &bacnet_network::response_route::ResponseRoute::unverified(),
-        1,
-        ConfirmedServiceChoice::READ_PROPERTY,
+        ResponseTarget {
+            source_mac: &[1],
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id: 1,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            client_max_apdu: 50,
+            client_max_segments: None,
+        },
         Bytes::from_static(&[0; 70]),
-        50,
-        None,
         Some(c.owner()),
     );
     c.clean();

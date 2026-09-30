@@ -222,17 +222,23 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
         let router_mac = router_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                router_mac.as_slice(),
-                Some(&remote),
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                0x44,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: router_mac.as_slice(),
+                    source_network: Some(&remote),
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id: 0x44,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &service_ack_data,
-                50,
-                None,
                 None,
             )
             .await;
@@ -321,13 +327,15 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     }
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &NotificationTransactions::new(),
-        &Arc::new(AtomicU8::new(0)),
-        &ServerConfig::default(),
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &NotificationTransactions::new(),
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &ServerConfig::default(),
+        },
         &ao_oid,
     )
     .await;
@@ -454,13 +462,15 @@ async fn capture_timestamped_cov_multiple(
     }
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &NotificationTransactions::new(),
-        &Arc::new(AtomicU8::new(0)),
-        &ServerConfig::default(),
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &NotificationTransactions::new(),
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &ServerConfig::default(),
+        },
         &ao_oid,
     )
     .await;
@@ -573,13 +583,15 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
     };
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &config,
+        },
         &ao_oid,
     )
     .await;

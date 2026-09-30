@@ -106,13 +106,15 @@ impl ExactFixture {
 
     async fn fire(&self, changes: &[PropertyIdentifier]) {
         BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.transactions,
-            &self.comm_state,
-            &ServerConfig::default(),
+            &crate::server::cov_notify_context::CovNotifyContext {
+                db: &self.db,
+                network: &self.network,
+                cov_table: &self.cov_table,
+                cov_in_flight: &self.cov_in_flight,
+                notification_transactions: &self.transactions,
+                comm_state: &self.comm_state,
+                config: &ServerConfig::default(),
+            },
             &point_oid(),
             changes,
         )
@@ -427,19 +429,20 @@ impl DispatchFixture {
         service_request: Bytes,
     ) {
         BACnetServer::<RecordingTransport>::handle_confirmed_request(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.seg_ack_senders,
-            &self.seg_send_permits,
-            &self.cov_in_flight,
-            &self.learned_routers,
-            &self.transactions,
+            &RequestServices {
+                db: Arc::clone(&self.db),
+                cov_table: Arc::clone(&self.cov_table),
+                seg_ack_senders: Arc::clone(&self.seg_ack_senders),
+                seg_send_permits: Arc::clone(&self.seg_send_permits),
+                cov_in_flight: Arc::clone(&self.cov_in_flight),
+                learned_routers: Arc::clone(&self.learned_routers),
+                notification_transactions: Arc::clone(&self.transactions),
+                device_bindings: Arc::clone(&self.device_bindings),
+                comm_state: Arc::clone(&self.comm_state),
+                dcc_timer: Arc::clone(&self.dcc_timer),
+                ..RequestServices::for_test(Arc::clone(&self.network), self.config.clone())
+            },
             &self.tracker,
-            &self.device_bindings,
-            &self.comm_state,
-            &self.dcc_timer,
-            &self.config,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
             source,
             routed.cloned(),

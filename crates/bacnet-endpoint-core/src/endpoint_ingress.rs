@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
-use bacnet_network::layer::{NetworkLayer, ReceivedApdu, RoutedTarget};
+use bacnet_network::layer::{IssuedApdu, NetworkLayer, ReceivedApdu, RoutedTarget};
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
@@ -228,6 +228,11 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let (inbound_tx, inbound_requests) = mpsc::channel(self.queue_capacity);
         let (terminal_tx, terminal_or_segment) = mpsc::channel(self.queue_capacity);
         let (policy_tx, policy_outcomes) = mpsc::channel(self.queue_capacity);
+        let queues = IngressQueues {
+            inbound_tx,
+            terminal_tx,
+            policy_tx,
+        };
         let (egress_tx, egress_rx) = mpsc::channel(self.queue_capacity);
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let egress_open = Arc::new(AtomicBool::new(true));
@@ -243,9 +248,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.session_task = Some(tokio::spawn(session_task(
             network,
             apdu_rx,
-            inbound_tx,
-            terminal_tx,
-            policy_tx,
+            queues,
             egress_rx,
             cancel_rx,
             Arc::clone(&egress_open),
@@ -321,13 +324,17 @@ impl<T: TransportPort> Drop for EndpointIngress<T> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn session_task<T: TransportPort + 'static>(
-    mut network: NetworkLayer<T>,
-    mut apdu_rx: mpsc::Receiver<ReceivedApdu>,
+/// Senders for the queues a classified inbound APDU can be routed to.
+struct IngressQueues {
     inbound_tx: mpsc::Sender<ReceivedApdu>,
     terminal_tx: mpsc::Sender<ReceivedApdu>,
     policy_tx: mpsc::Sender<PolicyOutcome>,
+}
+
+async fn session_task<T: TransportPort + 'static>(
+    mut network: NetworkLayer<T>,
+    mut apdu_rx: mpsc::Receiver<ReceivedApdu>,
+    queues: IngressQueues,
     mut egress_rx: mpsc::Receiver<NetworkServiceCommand>,
     mut cancel_rx: oneshot::Receiver<()>,
     egress_open: Arc<AtomicBool>,
@@ -355,8 +362,7 @@ async fn session_task<T: TransportPort + 'static>(
             SessionEvent::Cancelled => break ClassifierExit::Cancelled,
             SessionEvent::Received(Some(received)) => {
                 prefer_ingress = !prefer_ingress;
-                if let Some(exit) = route_received(received, &inbound_tx, &terminal_tx, &policy_tx)
-                {
+                if let Some(exit) = route_received(received, &queues) {
                     break exit;
                 }
             }
@@ -367,9 +373,7 @@ async fn session_task<T: TransportPort + 'static>(
                     &network,
                     command,
                     &mut apdu_rx,
-                    &inbound_tx,
-                    &terminal_tx,
-                    &policy_tx,
+                    &queues,
                     &mut cancel_rx,
                     &mut prefer_ingress,
                 )
@@ -417,14 +421,11 @@ enum PendingEvent {
     Sent(Result<(), Error>),
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn drive_network_service<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     command: NetworkServiceCommand,
     apdu_rx: &mut mpsc::Receiver<ReceivedApdu>,
-    inbound_tx: &mpsc::Sender<ReceivedApdu>,
-    terminal_tx: &mpsc::Sender<ReceivedApdu>,
-    policy_tx: &mpsc::Sender<PolicyOutcome>,
+    queues: &IngressQueues,
     cancel_rx: &mut oneshot::Receiver<()>,
     prefer_ingress: &mut bool,
 ) -> EgressDrive {
@@ -485,11 +486,13 @@ async fn drive_network_service<T: TransportPort + 'static>(
                         };
                         network
                             .send_response_apdu_on_issuance(
-                                apdu,
-                                next_hop,
-                                destination.as_ref(),
-                                expecting_reply,
-                                priority,
+                                IssuedApdu {
+                                    apdu,
+                                    next_hop,
+                                    destination: destination.as_ref(),
+                                    expecting_reply,
+                                    priority,
+                                },
                                 route,
                                 || {},
                             )
@@ -547,8 +550,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 PendingEvent::Cancelled => break EgressDrive::Cancelled,
                 PendingEvent::Received(Some(received)) => {
                     *prefer_ingress = !*prefer_ingress;
-                    if let Some(exit) = route_received(received, inbound_tx, terminal_tx, policy_tx)
-                    {
+                    if let Some(exit) = route_received(received, queues) {
                         break EgressDrive::Exit(exit);
                     }
                 }
@@ -684,12 +686,12 @@ fn validate_effective_group_apdu(
     }
 }
 
-fn route_received(
-    received: ReceivedApdu,
-    inbound_tx: &mpsc::Sender<ReceivedApdu>,
-    terminal_tx: &mpsc::Sender<ReceivedApdu>,
-    policy_tx: &mpsc::Sender<PolicyOutcome>,
-) -> Option<ClassifierExit> {
+fn route_received(received: ReceivedApdu, queues: &IngressQueues) -> Option<ClassifierExit> {
+    let IngressQueues {
+        inbound_tx,
+        terminal_tx,
+        policy_tx,
+    } = queues;
     let route = match classify(&received) {
         Ok(route) => route,
         Err(reason) => return send_policy(policy_tx, PolicyOutcome { reason, received }),

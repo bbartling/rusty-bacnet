@@ -18,19 +18,44 @@ fn encode_value(value: &PropertyValue) -> Result<Vec<u8>, Box<dyn std::error::Er
     Ok(buf.to_vec())
 }
 
+/// The target and value of a single-property write.
+pub struct WritePropertyArgs {
+    /// Type of the object to write.
+    pub object_type: ObjectType,
+    /// Instance number of the object to write.
+    pub instance: u32,
+    /// Property to write.
+    pub property: PropertyIdentifier,
+    /// Array index within the property, if any.
+    pub index: Option<u32>,
+    /// Value to write.
+    pub value: PropertyValue,
+    /// Write priority (1-16), if any.
+    pub priority: Option<u8>,
+}
+
+/// One property write inside a WritePropertyMultiple object entry:
+/// property, array index, value and priority.
+pub type PropertyWrite = (PropertyIdentifier, Option<u32>, PropertyValue, Option<u8>);
+
+/// All property writes for one object: object type, instance and its property writes.
+pub type ObjectWrites = (ObjectType, u32, Vec<PropertyWrite>);
+
 /// Write a single property value.
-#[allow(clippy::too_many_arguments)]
 pub async fn write_property_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
-    object_type: ObjectType,
-    instance: u32,
-    property: PropertyIdentifier,
-    index: Option<u32>,
-    value: PropertyValue,
-    priority: Option<u8>,
+    args: WritePropertyArgs,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let WritePropertyArgs {
+        object_type,
+        instance,
+        property,
+        index,
+        value,
+        priority,
+    } = args;
     let oid = ObjectIdentifier::new(object_type, instance)?;
     let encoded = encode_value(&value)?;
 
@@ -43,15 +68,10 @@ pub async fn write_property_cmd<T: TransportPort + 'static>(
 }
 
 /// Write multiple properties to one or more objects.
-#[allow(clippy::type_complexity)]
 pub async fn write_property_multiple_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
-    specs: Vec<(
-        ObjectType,
-        u32,
-        Vec<(PropertyIdentifier, Option<u32>, PropertyValue, Option<u8>)>,
-    )>,
+    specs: Vec<ObjectWrites>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let access_specs: Vec<WriteAccessSpecification> = specs

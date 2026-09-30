@@ -170,17 +170,25 @@ fn encoded_confirmed_request() -> Vec<u8> {
     encoded.to_vec()
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn assert_command(
-    egress: &EndpointEgress,
-    handle: &mut CaptureHandle,
+/// One send through the endpoint egress and the wire it must produce.
+struct CommandCase {
     destination: EndpointApduDestination,
     expected_link_destination: LinkDestination,
     expected_npdu_destination: Option<NpduAddress>,
     attribute_type: u8,
     expecting_reply: bool,
     priority: NetworkPriority,
-) {
+}
+
+async fn assert_command(egress: &EndpointEgress, handle: &mut CaptureHandle, case: CommandCase) {
+    let CommandCase {
+        destination,
+        expected_link_destination,
+        expected_npdu_destination,
+        attribute_type,
+        expecting_reply,
+        priority,
+    } = case;
     let apdu = encoded_unconfirmed_request();
     let data_attributes = vec![DataAttribute {
         option_type: attribute_type,
@@ -226,14 +234,16 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::Direct {
-            destination_mac: MacAddr::from_slice(&[0x10]),
+        CommandCase {
+            destination: EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&[0x10]),
+            },
+            expected_link_destination: LinkDestination::Unicast(MacAddr::from_slice(&[0x10])),
+            expected_npdu_destination: None,
+            attribute_type: 1,
+            expecting_reply: true,
+            priority: NetworkPriority::URGENT,
         },
-        LinkDestination::Unicast(MacAddr::from_slice(&[0x10])),
-        None,
-        1,
-        true,
-        NetworkPriority::URGENT,
     )
     .await;
     let routed_destination = NpduAddress {
@@ -243,16 +253,18 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::Routed {
-            destination_network: routed_destination.network,
-            destination_mac: routed_destination.mac_address.clone(),
-            router_mac: MacAddr::from_slice(&[0x21]),
+        CommandCase {
+            destination: EndpointApduDestination::Routed {
+                destination_network: routed_destination.network,
+                destination_mac: routed_destination.mac_address.clone(),
+                router_mac: MacAddr::from_slice(&[0x21]),
+            },
+            expected_link_destination: LinkDestination::Unicast(MacAddr::from_slice(&[0x21])),
+            expected_npdu_destination: Some(routed_destination),
+            attribute_type: 2,
+            expecting_reply: false,
+            priority: NetworkPriority::CRITICAL_EQUIPMENT,
         },
-        LinkDestination::Unicast(MacAddr::from_slice(&[0x21])),
-        Some(routed_destination),
-        2,
-        false,
-        NetworkPriority::CRITICAL_EQUIPMENT,
     )
     .await;
     let unknown_router_destination = NpduAddress {
@@ -262,56 +274,64 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::RoutedViaLocalBroadcast {
-            destination_network: unknown_router_destination.network,
-            destination_mac: unknown_router_destination.mac_address.clone(),
+        CommandCase {
+            destination: EndpointApduDestination::RoutedViaLocalBroadcast {
+                destination_network: unknown_router_destination.network,
+                destination_mac: unknown_router_destination.mac_address.clone(),
+            },
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: Some(unknown_router_destination),
+            attribute_type: 3,
+            expecting_reply: true,
+            priority: NetworkPriority::LIFE_SAFETY,
         },
-        LinkDestination::Broadcast,
-        Some(unknown_router_destination),
-        3,
-        true,
-        NetworkPriority::LIFE_SAFETY,
     )
     .await;
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::LocalBroadcast,
-        LinkDestination::Broadcast,
-        None,
-        4,
-        false,
-        NetworkPriority::NORMAL,
-    )
-    .await;
-    assert_command(
-        &egress,
-        &mut handle,
-        EndpointApduDestination::RemoteBroadcast {
-            destination_network: 400,
+        CommandCase {
+            destination: EndpointApduDestination::LocalBroadcast,
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: None,
+            attribute_type: 4,
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
         },
-        LinkDestination::Broadcast,
-        Some(NpduAddress {
-            network: 400,
-            mac_address: MacAddr::new(),
-        }),
-        5,
-        true,
-        NetworkPriority::URGENT,
     )
     .await;
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::GlobalBroadcast,
-        LinkDestination::Broadcast,
-        Some(NpduAddress {
-            network: 0xffff,
-            mac_address: MacAddr::new(),
-        }),
-        6,
-        false,
-        NetworkPriority::CRITICAL_EQUIPMENT,
+        CommandCase {
+            destination: EndpointApduDestination::RemoteBroadcast {
+                destination_network: 400,
+            },
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: Some(NpduAddress {
+                network: 400,
+                mac_address: MacAddr::new(),
+            }),
+            attribute_type: 5,
+            expecting_reply: true,
+            priority: NetworkPriority::URGENT,
+        },
+    )
+    .await;
+    assert_command(
+        &egress,
+        &mut handle,
+        CommandCase {
+            destination: EndpointApduDestination::GlobalBroadcast,
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: Some(NpduAddress {
+                network: 0xffff,
+                mac_address: MacAddr::new(),
+            }),
+            attribute_type: 6,
+            expecting_reply: false,
+            priority: NetworkPriority::CRITICAL_EQUIPMENT,
+        },
     )
     .await;
 

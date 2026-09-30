@@ -1,3 +1,4 @@
+use super::cov_notify_context::CovNotifyContext;
 use super::*;
 
 mod acknowledge_alarm;
@@ -17,7 +18,7 @@ mod endpoint_shared_runtime_tests;
 mod enrollment_summary;
 mod event_information;
 mod mutations;
-use mutations::InitialCovNotification;
+use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
 mod executed;
 #[cfg(test)]
@@ -48,30 +49,35 @@ pub(super) enum ConfirmedRequestOwnership {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Execute admitted work with its single response owner. Direct handler
     /// tests may omit ownership; production dispatch always supplies it.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::server) async fn handle_admitted_confirmed_request(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
-        seg_send_permits: &Arc<Semaphore>,
-        cov_in_flight: &Arc<Semaphore>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
-        dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-        dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
-        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
-        config: &ServerConfig,
+        services: &RequestServices<T>,
         request_tasks: &super::request_tasks::RequestTaskSpawner,
-        source_mac: &[u8],
-        source_network: Option<NpduAddress>,
-        route: bacnet_network::response_route::ResponseRoute,
+        origin: RequestOrigin<'_>,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
         ownership: Option<ConfirmedRequestOwnership>,
     ) {
+        let RequestServices {
+            db,
+            network,
+            cov_table,
+            seg_ack_senders,
+            seg_send_permits,
+            cov_in_flight,
+            learned_routers: _,
+            notification_transactions,
+            device_bindings,
+            comm_state,
+            dcc_timer: _,
+            dcc_outcomes: _,
+            mutation_decisions,
+            config,
+        } = services;
+        let RequestOrigin {
+            mac: source_mac,
+            network: source_network,
+            route,
+        } = origin;
         let provenance = route.provenance();
         let (pending, lso_pending) = match ownership {
             Some(ConfirmedRequestOwnership::Generic(pending)) => (Some(pending), None),
@@ -93,9 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let device_transmits_segments =
             event_information::can_segment(config.segmentation_supported);
         let segmented_response_available = client_accepts_segmented && device_transmits_segments;
-        let (mut written_oids, mut coarse_cov_oids) = (Vec::new(), Vec::new());
-        let mut life_safety_cov_changes = Vec::new();
-        let mut staging_plans = Vec::new();
+        let mut effects = MutationEffects::default();
         let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
         let mut accepted_acknowledgment = None;
 
@@ -155,9 +159,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification_transactions,
             device_bindings,
             comm_state,
-            source_mac,
-            source_network.as_ref(),
-            invoke_id,
+            super::audit_reporter::RequestSource {
+                mac: source_mac,
+                network: source_network.as_ref(),
+                invoke_id,
+            },
         )
         .await;
         let mut read_audits = Vec::new();
@@ -190,15 +196,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
                 mutation
-                    .write_property::<T>(
-                        db,
-                        cov_table,
-                        &mut written_oids,
-                        &mut coarse_cov_oids,
-                        &mut life_safety_cov_changes,
-                        &mut staging_plans,
-                        &mut audit,
-                    )
+                    .write_property::<T>(db, cov_table, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
@@ -236,14 +234,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
                 mutation
-                    .write_property_multiple::<T>(
-                        db,
-                        &mut written_oids,
-                        &mut coarse_cov_oids,
-                        &mut life_safety_cov_changes,
-                        &mut staging_plans,
-                        &mut audit,
-                    )
+                    .write_property_multiple::<T>(db, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
@@ -263,11 +254,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 mutation.delete_object::<T>(db, cov_table, &mut audit).await
             }
             s if s == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL => {
-                dcc::response::<T>(
-                    dcc_timer,
-                    comm_state,
-                    dcc_outcomes,
-                    config,
+                dcc::response(
+                    services,
                     &req,
                     source_mac,
                     source_network.as_ref(),
@@ -468,7 +456,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                         match execution {
                             Ok(result) => {
-                                life_safety_cov_changes.extend(result);
+                                effects.life_safety_cov_changes.extend(result);
                                 simple_ack()
                             }
                             Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
@@ -497,6 +485,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
 
+        let MutationEffects {
+            written_oids,
+            coarse_cov_oids,
+            life_safety_cov_changes,
+            staging_plans,
+        } = effects;
+
         // LSO-only replay store (server level, never handler/object level).
         // Uniform rule: anything that reaches this admission point and produces
         // an LSO response — success SimpleACK, execution errors, denial, and
@@ -515,19 +510,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Non-LSO callers pass `None` (or an untracked guard whose completion
         // is a no-op); dropping here is intentional.
 
-        Self::execute_staging_plans(
+        let cov_ctx = CovNotifyContext {
             db,
             network,
             cov_table,
             cov_in_flight,
-            learned_routers,
             notification_transactions,
-            device_bindings,
             comm_state,
             config,
-            staging_plans,
-        )
-        .await;
+        };
+        Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await;
 
         if let Apdu::ComplexAck(ref ack) = response {
             let mut full_buf = BytesMut::new();
@@ -563,47 +555,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 } else {
                     Self::spawn_segmented_complex_ack(
-                        network,
-                        seg_ack_senders,
-                        seg_send_permits,
+                        SegmentedSendResources {
+                            network,
+                            seg_ack_senders,
+                            seg_send_permits,
+                        },
                         request_tasks,
-                        source_mac,
-                        source_network,
-                        &route,
-                        invoke_id,
-                        service_choice,
+                        ResponseTarget {
+                            source_mac,
+                            source_network: source_network.as_ref(),
+                            route: &route,
+                        },
+                        ComplexAckParams {
+                            invoke_id,
+                            service_choice,
+                            client_max_apdu: effective_max_apdu,
+                            client_max_segments,
+                        },
                         ack.service_ack.clone(),
-                        effective_max_apdu,
-                        client_max_segments,
                         pending,
                     );
                 }
 
                 for oid in &written_oids {
                     Self::fire_event_notifications_with_bindings(
-                        &EventDelivery {
-                            db,
-                            network,
-                            comm_state,
-                            learned_routers,
-                            notification_transactions,
-                            device_bindings,
-                            retry_timeout_ms: config.cov_retry_timeout_ms,
-                            local_apdu_capacity: config.max_apdu_length,
-                        },
+                        &services.event_delivery(),
                         cov_table,
                         oid,
                     )
                     .await;
                 }
                 Self::fire_post_write_cov_notifications(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    notification_transactions,
-                    comm_state,
-                    config,
+                    &cov_ctx,
                     &coarse_cov_oids,
                     &life_safety_cov_changes,
                 )
@@ -611,30 +594,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 for notification in &initial_cov_notifications {
                     match notification {
                         InitialCovNotification::Single(subscription) => {
-                            Self::fire_initial_cov_notification(
-                                db,
-                                network,
-                                cov_table,
-                                cov_in_flight,
-                                notification_transactions,
-                                comm_state,
-                                config,
-                                subscription,
-                            )
-                            .await;
+                            Self::fire_initial_cov_notification(&cov_ctx, subscription).await;
                         }
                         InitialCovNotification::Multiple(subscriptions) => {
-                            Self::fire_initial_cov_notification_multiple(
-                                db,
-                                network,
-                                cov_table,
-                                cov_in_flight,
-                                notification_transactions,
-                                comm_state,
-                                config,
-                                subscriptions,
-                            )
-                            .await;
+                            Self::fire_initial_cov_notification_multiple(&cov_ctx, subscriptions)
+                                .await;
                         }
                     }
                 }
@@ -659,16 +623,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         if let Some(accepted) = accepted_acknowledgment {
             Self::send_acknowledgment_notification_with_bindings(
-                &EventDelivery {
-                    db,
-                    network,
-                    comm_state,
-                    learned_routers,
-                    notification_transactions,
-                    device_bindings,
-                    retry_timeout_ms: config.cov_retry_timeout_ms,
-                    local_apdu_capacity: config.max_apdu_length,
-                },
+                &services.event_delivery(),
                 accepted,
             )
             .await;
@@ -676,16 +631,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         for oid in &written_oids {
             Self::fire_event_notifications_with_bindings(
-                &EventDelivery {
-                    db,
-                    network,
-                    comm_state,
-                    learned_routers,
-                    notification_transactions,
-                    device_bindings,
-                    retry_timeout_ms: config.cov_retry_timeout_ms,
-                    local_apdu_capacity: config.max_apdu_length,
-                },
+                &services.event_delivery(),
                 cov_table,
                 oid,
             )
@@ -693,13 +639,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         Self::fire_post_write_cov_notifications(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
+            &cov_ctx,
             &coarse_cov_oids,
             &life_safety_cov_changes,
         )
@@ -708,30 +648,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         for notification in &initial_cov_notifications {
             match notification {
                 InitialCovNotification::Single(subscription) => {
-                    Self::fire_initial_cov_notification(
-                        db,
-                        network,
-                        cov_table,
-                        cov_in_flight,
-                        notification_transactions,
-                        comm_state,
-                        config,
-                        subscription,
-                    )
-                    .await;
+                    Self::fire_initial_cov_notification(&cov_ctx, subscription).await;
                 }
                 InitialCovNotification::Multiple(subscriptions) => {
-                    Self::fire_initial_cov_notification_multiple(
-                        db,
-                        network,
-                        cov_table,
-                        cov_in_flight,
-                        notification_transactions,
-                        comm_state,
-                        config,
-                        subscriptions,
-                    )
-                    .await;
+                    Self::fire_initial_cov_notification_multiple(&cov_ctx, subscriptions).await;
                 }
             }
         }

@@ -18,7 +18,9 @@ mod segmented_response;
 pub(crate) use segmented_response::SegmentedResponseAdmission;
 mod completion;
 mod coordinated;
-pub(crate) use coordinated::{CoordinatedCompletion, CoordinatedTerminalPhase};
+pub(crate) use coordinated::{
+    CoordinatedCompletion, CoordinatedTerminalPhase, SegmentedAckArrival,
+};
 use coordinated::{PendingLease, PendingRelease};
 
 /// TSM configuration.

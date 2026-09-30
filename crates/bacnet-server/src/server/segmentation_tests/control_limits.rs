@@ -33,17 +33,23 @@ async fn non_rung_request_header_conservatively_bounds_server_response() {
     let source_mac = test_mac(9);
 
     BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-        &network,
-        &seg_ack_senders,
-        &seg_send_permits,
-        source_mac.as_slice(),
-        None,
-        &bacnet_network::response_route::ResponseRoute::unverified(),
-        0x49,
-        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+        SegmentedSendResources {
+            network: &network,
+            seg_ack_senders: &seg_ack_senders,
+            seg_send_permits: &seg_send_permits,
+        },
+        ResponseTarget {
+            source_mac: source_mac.as_slice(),
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id: 0x49,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            client_max_apdu: 50,
+            client_max_segments,
+        },
         &[0xA5; 256],
-        50,
-        client_max_segments,
         None,
     )
     .await;
@@ -124,17 +130,23 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF2; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
@@ -186,17 +198,23 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF3; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
@@ -266,17 +284,23 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF4; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
@@ -305,17 +329,23 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF5; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
@@ -365,17 +395,23 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
             BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                &bacnet_network::response_route::ResponseRoute::unverified(),
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF8; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
@@ -391,17 +427,23 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         .expect("first segment send should start");
 
     BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-        &network,
-        &seg_ack_senders,
-        &seg_send_permits,
-        source_mac.as_slice(),
-        None,
-        &bacnet_network::response_route::ResponseRoute::unverified(),
-        invoke_id,
-        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+        SegmentedSendResources {
+            network: &network,
+            seg_ack_senders: &seg_ack_senders,
+            seg_send_permits: &seg_send_permits,
+        },
+        ResponseTarget {
+            source_mac: source_mac.as_slice(),
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            client_max_apdu: 50,
+            client_max_segments: None,
+        },
         &[0xF9; 128],
-        50,
-        None,
         SegmentedSendOptions {
             segment_timeout: Duration::from_millis(500),
             max_retries: 0,
@@ -459,17 +501,23 @@ async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reach
     let source_mac = test_mac(200);
     let invoke_id = 0x60;
     BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-        &network,
-        &seg_ack_senders,
-        &seg_send_permits,
-        source_mac.as_slice(),
-        None,
-        &bacnet_network::response_route::ResponseRoute::unverified(),
-        invoke_id,
-        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+        SegmentedSendResources {
+            network: &network,
+            seg_ack_senders: &seg_ack_senders,
+            seg_send_permits: &seg_send_permits,
+        },
+        ResponseTarget {
+            source_mac: source_mac.as_slice(),
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            client_max_apdu: 50,
+            client_max_segments: None,
+        },
         &[0xF6; 128],
-        50,
-        None,
         None,
     )
     .await;

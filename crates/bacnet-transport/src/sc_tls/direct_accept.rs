@@ -247,17 +247,17 @@ impl DirectListener {
         let (shutdown, shutdown_rx) = watch::channel(false);
         let active = Arc::new(AtomicUsize::new(0));
         let pending = Arc::new(AtomicUsize::new(0));
-        let task = tokio::spawn(accept_loop(
+        let task = tokio::spawn(accept_loop(AcceptLoop {
             listener,
             config,
             npdu_tx,
-            shutdown_rx,
-            Arc::clone(&active),
-            ListenerStopped(shutdown.clone()),
-            Arc::clone(&npdu_admission),
-            Arc::clone(&pending),
-            Arc::clone(&membership),
-        ));
+            shutdown: shutdown_rx,
+            active: Arc::clone(&active),
+            stopped: ListenerStopped(shutdown.clone()),
+            npdu_admission: Arc::clone(&npdu_admission),
+            pending: Arc::clone(&pending),
+            membership: Arc::clone(&membership),
+        }));
         debug!("BACnet/SC direct listener on {local_addr}");
         Ok((
             Self {
@@ -385,18 +385,32 @@ fn direct_subprotocol_response(
     Ok(response)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn accept_loop(
+/// Everything the accept loop owns for the life of the listener.
+struct AcceptLoop {
     listener: TcpListener,
     config: DirectAcceptConfig,
     npdu_tx: mpsc::Sender<ReceivedNpdu>,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
     active: Arc<AtomicUsize>,
-    _stopped: ListenerStopped,
+    /// Signals listener stop to the handle when the loop ends.
+    stopped: ListenerStopped,
     npdu_admission: Arc<ScNpduAdmission>,
     pending: Arc<AtomicUsize>,
     membership: Arc<DirectMembership>,
-) {
+}
+
+async fn accept_loop(state: AcceptLoop) {
+    let AcceptLoop {
+        listener,
+        config,
+        npdu_tx,
+        mut shutdown,
+        active,
+        stopped: _stopped,
+        npdu_admission,
+        pending,
+        membership,
+    } = state;
     let mut peers = tokio::task::JoinSet::new();
     loop {
         let accepted = tokio::select! {

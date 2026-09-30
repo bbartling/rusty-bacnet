@@ -124,19 +124,14 @@ impl Fixture {
     ) -> Option<Bytes> {
         let (tx, rx) = oneshot::channel();
         BACnetServer::<TestTransport>::handle_confirmed_request(
-            &self.db,
-            &self.network,
-            &self.table,
-            &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-            &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-            &Arc::new(Semaphore::new(1)),
-            &Arc::new(Mutex::new(LearnedRouterCache::new())),
-            &NotificationTransactions::new(),
+            &RequestServices {
+                db: Arc::clone(&self.db),
+                cov_table: Arc::clone(&self.table),
+                comm_state: Arc::clone(&self.state),
+                dcc_timer: Arc::new(Mutex::new(Default::default())),
+                ..RequestServices::for_test(Arc::clone(&self.network), self.config.clone())
+            },
             &self.tracker,
-            &Arc::new(RwLock::new(DeviceBindingTable::new())),
-            &self.state,
-            &Arc::new(Mutex::new(Default::default())),
-            &self.config,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
             SOURCE,
             route(),

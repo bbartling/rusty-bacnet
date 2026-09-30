@@ -258,19 +258,14 @@ impl Harness {
 
     async fn dispatch(&self, invoke_id: u8, reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>) {
         BACnetServer::<RecordingTransport>::handle_confirmed_request(
-            &self.db,
-            &self.network,
-            &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-            &Arc::new(segmented_send::SegmentedSendRegistry::default()),
-            &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-            &Arc::new(Semaphore::new(1)),
-            &Arc::new(Mutex::new(LearnedRouterCache::new())),
-            &self.transactions,
+            &RequestServices {
+                db: Arc::clone(&self.db),
+                notification_transactions: Arc::clone(&self.transactions),
+                device_bindings: Arc::clone(&self.bindings),
+                comm_state: Arc::clone(&self.comm_state),
+                ..RequestServices::for_test(Arc::clone(&self.network), self.config.clone())
+            },
             &self.tracker,
-            &self.bindings,
-            &self.comm_state,
-            &Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
-            &self.config,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
             REQUESTER,
             None,

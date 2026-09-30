@@ -1,3 +1,4 @@
+use super::dispatch_context::{DispatchContext, InboundApdu};
 use super::*;
 
 const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
@@ -200,22 +201,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         match apdu::decode_apdu(received.apdu.clone()) {
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
-                                    &tsm_dispatch,
-                                    &device_table_dispatch,
-                                    &network_dispatch,
-                                    &cov_tx_dispatch,
-                                    &event_tx_dispatch,
-                                    &confirmed_cov_ack_policy,
-                                    &device_tx_dispatch,
-                                    &device_collision_tx_dispatch,
+                                    DispatchContext {
+                                        tsm: &tsm_dispatch,
+                                        device_table: &device_table_dispatch,
+                                        network: &network_dispatch,
+                                        cov_tx: &cov_tx_dispatch,
+                                        event_tx: &event_tx_dispatch,
+                                        confirmed_cov_ack_policy: &confirmed_cov_ack_policy,
+                                        device_tx: &device_tx_dispatch,
+                                        device_collision_tx: &device_collision_tx_dispatch,
+                                        seg_ack_senders: &seg_ack_senders_dispatch,
+                                    },
                                     &mut seg_state,
-                                    &seg_ack_senders_dispatch,
-                                    &received.source_mac,
-                                    &received.source_network,
-                                    received.provenance,
-                                    received.direct_response,
-                                    received.is_group,
-                                    received.reply_tx,
+                                    InboundApdu {
+                                        source_mac: &received.source_mac,
+                                        source_network: &received.source_network,
+                                        provenance: received.provenance,
+                                        direct_response: received.direct_response,
+                                        is_group: received.is_group,
+                                        reply_tx: received.reply_tx,
+                                    },
                                     decoded,
                                     response_limits,
                                 )

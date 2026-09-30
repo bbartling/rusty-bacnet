@@ -42,7 +42,10 @@ pub use device::PyDiscoveredDevice;
 pub use enums::*;
 pub use object_identifier::PyObjectIdentifier;
 pub use property_value::PyPropertyValue;
-pub(crate) use rpm_wpm::{py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py};
+pub(crate) use rpm_wpm::{
+    py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
+    PyReadAccessSpec, PyWriteAccessSpec,
+};
 pub use timestamp::PyBACnetTimeStamp;
 
 // Module registration

@@ -1,5 +1,6 @@
 //! Borrowed handles shared by the COV notification entry points.
 use super::*;
+use crate::cov::{AtomicCovCounters, CovInFlightTracker};
 
 /// The server handles a COV notification pass reads: object database,
 /// network, subscription table, in-flight permits, notification transactions,
@@ -12,4 +13,12 @@ pub(super) struct CovNotifyContext<'a, T: TransportPort + 'static> {
     pub(super) notification_transactions: &'a Arc<NotificationTransactions>,
     pub(super) comm_state: &'a Arc<AtomicU8>,
     pub(super) config: &'a ServerConfig,
+}
+
+/// A [`CovNotifyContext`] plus the subscription table's in-flight tracker and
+/// counters, both captured under the table lock before a fanout pass starts.
+pub(super) struct CovFanoutHandles<'a, 'b, T: TransportPort + 'static> {
+    pub(super) ctx: &'a CovNotifyContext<'b, T>,
+    pub(super) in_flight_tracker: &'a Arc<CovInFlightTracker>,
+    pub(super) counters: &'a Arc<AtomicCovCounters>,
 }

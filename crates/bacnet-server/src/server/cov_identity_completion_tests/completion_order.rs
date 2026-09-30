@@ -284,14 +284,19 @@ impl Dispatch {
     async fn send(&self, f: &Fixture, subs: &[CovSubscriptionSnapshot]) {
         let mut budget = super::super::cov_notifications::EventBudget::new(&f.config.cov_policy);
         BACnetServer::<HeldTransport>::fire_cov_notifications_for_subscriptions(
-            &f.db,
-            &f.network,
-            &f.table,
-            &f.permits,
-            &self.tracker,
-            &self.counters,
-            &f.transactions,
-            &f.config,
+            &crate::server::cov_notify_context::CovFanoutHandles {
+                ctx: &crate::server::cov_notify_context::CovNotifyContext {
+                    db: &f.db,
+                    network: &f.network,
+                    cov_table: &f.table,
+                    cov_in_flight: &f.permits,
+                    notification_transactions: &f.transactions,
+                    comm_state: &f.comm,
+                    config: &f.config,
+                },
+                in_flight_tracker: &self.tracker,
+                counters: &self.counters,
+            },
             &object(),
             subs,
             None,

@@ -1,5 +1,6 @@
 //! Replies to inbound confirmed requests, separate from outgoing client TSM controls.
 use super::*;
+use bacnet_network::layer::IssuedApdu;
 use bacnet_network::response_route::ResponseRoute;
 use bacnet_transport::port::DirectResponse;
 
@@ -115,13 +116,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             drop(reply.reply_tx);
             return network
                 .send_response_apdu_on_issuance(
-                    buf,
-                    reply_mac,
-                    reply_network
-                        .as_ref()
-                        .filter(|address| !address.mac_address.is_empty()),
-                    false,
-                    NetworkPriority::NORMAL,
+                    IssuedApdu {
+                        apdu: buf,
+                        next_hop: reply_mac,
+                        destination: reply_network
+                            .as_ref()
+                            .filter(|address| !address.mac_address.is_empty()),
+                        expecting_reply: false,
+                        priority: NetworkPriority::NORMAL,
+                    },
                     &route,
                     || {},
                 )

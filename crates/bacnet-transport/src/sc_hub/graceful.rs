@@ -303,18 +303,15 @@ pub(super) async fn exchange(
         ctx.note_failed();
         return;
     }
-    match await_ack(
-        peer_addr,
-        read,
+    let peer = AckPeer {
+        addr: peer_addr,
         write,
         clients,
         vmac,
-        &lease.closed,
-        &lease.notify,
-        ctx,
-    )
-    .await
-    {
+        closed: &lease.closed,
+        notify: &lease.notify,
+    };
+    match await_ack(peer, read, ctx).await {
         AckOutcome::Acked => {
             if close_handshake(peer_addr, read, write, ctx).await {
                 lease.note_peer_close();
@@ -377,19 +374,33 @@ async fn send_disconnect_request(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The connected peer whose DisconnectAck is awaited.
+struct AckPeer<'a> {
+    addr: SocketAddr,
+    write: &'a Arc<Mutex<WsSink>>,
+    clients: &'a Clients,
+    vmac: Vmac,
+    /// Set when the connection is retired by another path.
+    closed: &'a Arc<AtomicBool>,
+    /// Woken when `closed` is set.
+    notify: &'a Arc<Notify>,
+}
+
 async fn await_ack(
-    peer_addr: SocketAddr,
+    peer: AckPeer<'_>,
     read: &mut futures_util::stream::SplitStream<
         tokio_tungstenite::WebSocketStream<super::TlsStream>,
     >,
-    write: &Arc<Mutex<WsSink>>,
-    clients: &Clients,
-    vmac: Vmac,
-    closed: &Arc<AtomicBool>,
-    notify: &Arc<Notify>,
     ctx: &GracefulCtx,
 ) -> AckOutcome {
+    let AckPeer {
+        addr: peer_addr,
+        write,
+        clients,
+        vmac,
+        closed,
+        notify,
+    } = peer;
     let wait = async {
         loop {
             if closed.load(Ordering::Acquire) {

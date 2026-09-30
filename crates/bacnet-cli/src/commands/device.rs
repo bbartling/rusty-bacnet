@@ -185,19 +185,37 @@ fn build_acknowledge_alarm_request(
     })
 }
 
+/// The alarm being acknowledged and the acknowledgment metadata.
+pub struct AcknowledgeAlarmArgs<'a> {
+    /// Type of the object whose alarm is acknowledged.
+    pub object_type: ObjectType,
+    /// Instance number of the object whose alarm is acknowledged.
+    pub instance: u32,
+    /// Event state being acknowledged.
+    pub event_state: u32,
+    /// Free-text source of the acknowledgment.
+    pub source: &'a str,
+    /// Timestamp of the event transition being acknowledged.
+    pub timestamp: BACnetTimeStamp,
+    /// Timestamp recorded as the time of acknowledgment.
+    pub time_of_acknowledgment: BACnetTimeStamp,
+}
+
 /// Acknowledge an alarm on a remote device with exact caller-supplied timestamps.
-#[allow(clippy::too_many_arguments)]
 pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
-    object_type: ObjectType,
-    instance: u32,
-    event_state: u32,
-    source: &str,
-    timestamp: BACnetTimeStamp,
-    time_of_acknowledgment: BACnetTimeStamp,
+    args: AcknowledgeAlarmArgs<'_>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let AcknowledgeAlarmArgs {
+        object_type,
+        instance,
+        event_state,
+        source,
+        timestamp,
+        time_of_acknowledgment,
+    } = args;
     // Use PID as process identifier
     let process_id = std::process::id();
     let request = build_acknowledge_alarm_request(
