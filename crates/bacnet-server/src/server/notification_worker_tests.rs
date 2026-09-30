@@ -21,7 +21,7 @@ async fn reap_after_ingress_closure(hold_request: bool) {
             // The first report failed: wait out its hold-off (#896).
             tokio::time::advance(
                 Duration::from_millis(server.config.cov_retry_timeout_ms)
-                    * u32::from(DEFAULT_APDU_RETRIES),
+                    * (u32::from(DEFAULT_APDU_RETRIES) + 1),
             )
             .await;
             server

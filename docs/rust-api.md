@@ -1988,27 +1988,43 @@ fanout rather than deferred, so a held change waits for the coordinate's next
 fanout after communication is re-enabled.
 
 Exhausted retries and an Error, Reject or Abort answer leave the baseline where it
-was and hold the coordinate off for one retry cycle: the retry timeout times the
-number of retries. A fanout inside the hold-off skips the coordinate and schedules
-nothing; the first fanout after it reports the change again. Nothing re-sends by
-itself, so a subscriber that stopped answering, or keeps refusing, costs at most
-one delivery attempt per hold-off however often its objects change, and cannot
-keep the per-peer and global in-flight slots to itself. Shutdown and cancellation
-clear the mark without a hold-off. Each attempt, its transport send included, ends
-within the retry timeout, so a send that never finishes cannot hold a coordinate
-either. The standard ends delivery with the confirmed-request retries
-(Clause 5.4.4); reporting again after a hold-off is local policy.
+was and hold the coordinate off for one full retry cycle: the retry timeout times
+the attempts, the first one plus every retry. A fanout inside the hold-off skips
+the coordinate and schedules nothing. The first fanout after it reports the change
+again; for a context, whichever object that fanout was for, it hands the whole
+context to one follow-up, so changes held on every object go out together. Nothing
+re-sends by itself, so a subscriber that stopped answering, or keeps refusing,
+costs at most one delivery attempt per hold-off however often its objects change,
+and cannot keep the per-peer and global in-flight slots to itself. Shutdown and
+cancellation clear the mark without a hold-off. The retry timeout starts once each
+send has completed, and the transport bounds the send itself, so a report stays
+outstanding for the transport's send bounds plus the retry cycle. The standard
+ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
+after a hold-off is local policy.
 
 A replaced ordinary or SubscribeCOVProperty subscription starts unmarked, as does
 a context whose route changes or which is re-subscribed with a non-empty list
-while it is busy. The initial report of a renewal or re-subscription therefore
-goes out at once (Clauses 13.14.2, 13.16.2), even while the old incarnation's
-report is still retrying: that report can no longer complete or unmark the new
-one. When an outstanding context report is fenced this way, the references the
-request kept are fanned out again, since its Ack can no longer do it. The peer and
-global in-flight limits, event budgets and throttling counters apply to every
-report; a follow-up spends one event budget per object or context, as a natural
-fanout does.
+while it is busy. The old incarnation's report stops retrying and can no longer
+complete or unmark the new one, so the initial report of a renewal or
+re-subscription (Clauses 13.14.2, 13.16.2) is not held behind it. When a context
+report is fenced this way while outstanding, or while a failed one is still owed a
+follow-up, every reference of the context, kept or relisted, is evaluated again.
+Relisted references have no baseline yet, so whichever of that follow-up and the
+initial report goes first carries them as first reports, and the other finds the
+context busy. The fenced report may already have reached the subscriber, so the
+follow-up can repeat changes of the kept references.
+
+Known limitation (#923): if that fenced report did reach the subscriber, and an
+untimestamped kept reference then returns to its old baseline value before the
+follow-up runs, the follow-up sees no change and the subscriber keeps the value
+the fenced report carried until the reference changes again.
+
+The follow-up task handles each batch of references on its own. If evaluating a
+batch panics, the panic is caught (in unwind builds) and logged with the number of
+references, and those references wait for their next fanout; later batches still
+run. The peer and global in-flight limits, event budgets and throttling counters
+apply to every report; a follow-up spends one event budget per object or context,
+as a natural fanout does.
 
 This orders prepared observations, not original object mutations, transport byte
 order or remote receipt. In particular, a retained Binary Lighting terminal

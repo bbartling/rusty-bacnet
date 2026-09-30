@@ -100,17 +100,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 report.completion,
                 report.observations.iter().map(|(sub, _)| sub),
             );
-            if matches!(flight, Err(BeginRefusal::NotCurrent)) {
-                // A fence moved a reference since it was captured; look at its
-                // live state again. A busy coordinate needs nothing: its
-                // outstanding report, Ack or hold-off owns the follow-up.
-                table.revisits().request(report.keys());
-            }
             (flight, Arc::clone(table.revisits()))
         };
-        let Ok(flight) = flight else {
-            budget.refund(buf.len());
-            return;
+        let flight = match flight {
+            Ok(flight) => flight,
+            Err(refusal) => {
+                budget.refund(buf.len());
+                let keys: Vec<_> = report.keys().collect();
+                // Put drained history back before any follow-up can drain the
+                // same references again, so it stays in capture order.
+                drop(report);
+                if refusal == BeginRefusal::NotCurrent {
+                    // A fence moved a reference since it was captured; look at
+                    // its live state again. A busy coordinate needs nothing: its
+                    // outstanding report, Ack or hold-off owns the follow-up.
+                    revisits.request(keys);
+                }
+                return;
+            }
         };
 
         counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
@@ -126,9 +133,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let cov_table = Arc::clone(ctx.cov_table);
         let apdu_timeout = Duration::from_millis(ctx.config.cov_retry_timeout_ms);
         let apdu_retries = DEFAULT_APDU_RETRIES;
-        // After a failure the coordinate waits one retry cycle before it may
-        // report again, bounding a dead or refusing subscriber.
-        let hold_off = apdu_timeout * u32::from(apdu_retries);
+        // After a failure the coordinate waits one full retry cycle, the first
+        // attempt and every retry, before it may report again. That bounds a
+        // dead or refusing subscriber to half the in-flight time at most.
+        let hold_off = apdu_timeout * (u32::from(apdu_retries) + 1);
         ctx.notification_transactions.spawn(async move {
             let ConfirmedReport {
                 route,
@@ -137,7 +145,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 claim,
                 ..
             } = report;
-            let result = run_notification_worker(
+            let delivery = run_notification_worker(
                 operation,
                 result_rx,
                 apdu_timeout,
@@ -155,8 +163,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         result
                     }
                 },
-            )
-            .await;
+            );
+            // A renewal or route change replaced this report's incarnation: its
+            // retries would only land after the replacement's own report, and
+            // its Ack could complete nothing. Dropping the delivery cancels the
+            // transaction; there is no hold-off on the orphaned marker.
+            let result = tokio::select! {
+                result = delivery => result,
+                () = flight.fenced() => {
+                    debug!(invoke_id = id, "{label} superseded by a new incarnation");
+                    drop(claim);
+                    drop(flight);
+                    drop(guard);
+                    return;
+                }
+            };
             let revisit = match result {
                 NotificationWorkerResult::Ack => {
                     debug!(invoke_id = id, "{label} acknowledged");
@@ -173,13 +194,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .collect();
                     drop(flight);
                     // Changes to any reference of a context were held while the
-                    // report was outstanding, not only to those it carried.
+                    // report was outstanding, not only to those it carried, and
+                    // they still are if every carried reference has gone since.
                     match route.key().multiple_context() {
-                        Some(context) if !completed.is_empty() => table
+                        Some(context) => table
                             .multiple_context_references(context)
                             .map(|sub| sub.key().clone())
                             .collect(),
-                        _ => completed,
+                        None => completed,
                     }
                 }
                 NotificationWorkerResult::Error | NotificationWorkerResult::Exhausted => {

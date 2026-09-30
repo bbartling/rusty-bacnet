@@ -72,7 +72,7 @@ impl CovSubscriptionTable {
         self.check_admission_multiple(&peer, new_count, 0)?;
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
-        let (flight, fenced) = self.context_flight(context, route, !subscriptions.is_empty());
+        let (flight, replaced) = self.context_flight(context, route, !subscriptions.is_empty());
         let mut previously_indefinite = 0;
         for entry in self.subs.values_mut() {
             if entry.key.multiple_context() == Some(context) {
@@ -84,25 +84,13 @@ impl CovSubscriptionTable {
                 entry.flight = flight.clone();
             }
         }
-        if fenced {
-            // The fenced report's Ack can no longer complete the references this
-            // request keeps, and their held changes would wait for an unrelated
-            // fanout: evaluate them again (#896).
-            let retained: Vec<_> = self
-                .subs
-                .keys()
-                .filter(|key| key.multiple_context() == Some(context) && !keys.contains(*key))
-                .cloned()
-                .collect();
-            self.revisits.request(retained);
-        }
         if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
             *count -= previously_indefinite;
             if *count == 0 {
                 self.peer_indefinite_counts.remove(&peer);
             }
         }
-        Ok(subscriptions
+        let accepted = subscriptions
             .into_iter()
             .enumerate()
             .map(|(offset, sub)| {
@@ -114,7 +102,11 @@ impl CovSubscriptionTable {
                     Some(flight.clone()),
                 )
             })
-            .collect())
+            .collect();
+        if let Some(replaced) = replaced {
+            self.fence_context_flight(context, &replaced);
+        }
+        Ok(accepted)
     }
 
     /// Test fixture: admit one proposal through its family's production
@@ -192,6 +184,11 @@ impl CovSubscriptionTable {
         let peer = sub.recipient();
         let new_indefinite = sub.expires_at.is_none();
         if let Some(old) = self.subs.insert(snapshot.key.clone(), snapshot.clone()) {
+            if !old.flight.same(&snapshot.flight) {
+                // The replaced incarnation's outstanding report stops retrying;
+                // the replacement reports for itself (#896).
+                old.flight.fence();
+            }
             let old_indefinite = old.expires_at.is_none();
             if old_indefinite != new_indefinite {
                 if new_indefinite {

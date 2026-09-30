@@ -144,7 +144,7 @@ async fn a_failed_context_report_returns_its_history_to_the_next_report() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_resubscription_during_a_flight_reports_at_once_and_keeps_the_rest() {
+async fn a_resubscription_during_a_flight_reports_without_waiting_and_keeps_the_rest() {
     let mut h = start(3000).await;
     subscribe(&mut h, false).await;
     write_bv1(&h, ACTIVE).await;
@@ -153,22 +153,73 @@ async fn a_resubscription_during_a_flight_reports_at_once_and_keeps_the_rest() {
     let old = h.take_confirmed();
     h.write_local(1.0).await;
     h.no_notification().await;
-    // Re-subscribing to AV-1 alone: its initial report does not wait.
+    // Re-subscribing to AV-1 alone does not wait for the old report. Either the
+    // initial report or the fence follow-up goes first; both carry AV-1.
     h.subscribe_specs(true, vec![(av1(), vec![(PV, false)])])
         .await;
-    let initial = h.notification().await;
-    assert_eq!(pv(&initial, av1()), vec![(real(1.0), None)]);
-    assert!(pv(&initial, bv1()).is_empty());
+    let next = h.notification().await;
+    assert_eq!(pv(&next, av1()), vec![(real(1.0), None)]);
+    let mut kept = pv(&next, bv1());
     let new = h.take_confirmed();
-    // The fenced report's Ack completes nothing and sends nothing.
+    // The superseded report stopped; its Ack finds nothing to complete.
     h.ack_request(old).await;
     h.settle().await;
     h.no_notification().await;
-    // The initial report's Ack brings BV-1, which the re-subscription kept.
+    // BV-1, which the re-subscription kept, is reported by now or right after.
     h.ack_request(new).await;
+    if kept.is_empty() {
+        let follow_up = h.notification().await;
+        assert!(pv(&follow_up, av1()).is_empty(), "AV-1 is acknowledged");
+        kept = pv(&follow_up, bv1());
+        h.ack().await;
+    }
+    assert_eq!(kept, vec![(enumerated(ACTIVE), None)]);
+    h.settle().await;
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_ack_follows_up_the_context_when_its_carried_references_are_gone() {
+    let mut h = start(3000).await;
+    subscribe(&mut h, false).await;
+    h.write_local(1.0).await;
+    assert_eq!(pv(&h.notification().await, av1()), vec![(real(1.0), None)]);
+    write_bv1(&h, ACTIVE).await;
+    h.no_notification().await;
+    // AV-1's reference goes while its report is outstanding, as when AV-1 is
+    // deleted; BV-1's change is still held.
+    h.server.cov_table.write().await.remove_for_object(av1());
+    h.ack().await;
     let follow_up = h.notification().await;
     assert_eq!(pv(&follow_up, bv1()), vec![(enumerated(ACTIVE), None)]);
-    assert!(pv(&follow_up, av1()).is_empty(), "AV-1 is acknowledged");
+    assert!(pv(&follow_up, av1()).is_empty());
+    h.ack().await;
+    h.settle().await;
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn after_a_hold_off_one_fanout_reports_the_whole_context() {
+    let mut h = start(10).await;
+    subscribe(&mut h, false).await;
+    write_bv1(&h, ACTIVE).await;
+    assert_eq!(
+        pv(&h.notification().await, bv1()),
+        vec![(enumerated(ACTIVE), None)]
+    );
+    // No answer to any retry; wait out the hold-off, one full retry cycle.
+    h.workers_idle().await;
+    tokio::time::sleep(Duration::from_millis(
+        10 * (u64::from(DEFAULT_APDU_RETRIES) + 1),
+    ))
+    .await;
+    // A fanout on AV-1 alone brings BV-1's unacknowledged change along.
+    h.write_local(1.0).await;
+    let report = h.notification().await;
+    assert_eq!(pv(&report, av1()), vec![(real(1.0), None)]);
+    assert_eq!(pv(&report, bv1()), vec![(enumerated(ACTIVE), None)]);
     h.ack().await;
     h.settle().await;
     h.no_notification().await;

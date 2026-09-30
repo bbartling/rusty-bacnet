@@ -268,8 +268,9 @@ fn a_busy_context_resubscription_fences_the_report() {
     assert!(!table.complete_observation(&b, report, value(2.0)));
     assert_eq!(
         table.revisits().queued(),
-        HashSet::from([b.key().clone()]),
-        "only the reference the request kept"
+        HashSet::from([a.key().clone(), b.key().clone()]),
+        "the kept reference, and the relisted one as a first report in case this \
+         follow-up beats the initial report"
     );
     drop(flight);
 }
@@ -293,9 +294,10 @@ async fn a_resubscription_during_a_hold_off_starts_unmarked() {
         vec![reference(PropertyIdentifier::PRESENT_VALUE)],
     );
     assert!(table.context_idle(&context, &[live(&table, &a)]));
-    assert!(
-        table.revisits().queued().is_empty(),
-        "no outstanding report was fenced"
+    assert_eq!(
+        table.revisits().queued().len(),
+        2,
+        "the failed report's owed follow-up moves to the fresh marker"
     );
 }
 
@@ -312,4 +314,48 @@ async fn revisits_drain_once_and_forget_removed_references() {
     assert_eq!(revisits.next().await, vec![a.key().clone()]);
     revisits.request([a.key().clone()]);
     assert_eq!(revisits.next().await, vec![a.key().clone()]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_passed_hold_off_is_owed_once_per_context() {
+    let mut table = CovSubscriptionTable::new();
+    let (a, _) = context(&mut table);
+    let context = a.key().multiple_context().unwrap().clone();
+    assert!(!table.take_owed_context(&context), "nothing failed");
+    table
+        .begin_confirmed(ticket(&a), [&a])
+        .unwrap()
+        .failed(Duration::from_millis(30));
+    assert!(!table.take_owed_context(&context), "still holding off");
+    tokio::time::advance(Duration::from_millis(30)).await;
+    assert!(table.take_owed_context(&context));
+    assert!(!table.take_owed_context(&context), "owed once");
+    assert!(table.context_idle(&context, &[]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_replaced_marker_stops_its_flight() {
+    let mut table = CovSubscriptionTable::new();
+    let sub = table.subscribe(single()).unwrap();
+    let flight = table.begin_confirmed(ticket(&sub), [&sub]).unwrap();
+    assert!(futures_util::poll!(std::pin::pin!(flight.fenced())).is_pending());
+    table.subscribe(single()).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), flight.fenced())
+        .await
+        .expect("a renewal fences the old report");
+
+    let (a, b) = context(&mut table);
+    let flight = table.begin_confirmed(ticket(&a), [&a, &b]).unwrap();
+    // An empty same-route renewal keeps the report going.
+    refresh(&mut table, &a, &a.endpoint(), vec![]);
+    assert!(futures_util::poll!(std::pin::pin!(flight.fenced())).is_pending());
+    refresh(
+        &mut table,
+        &a,
+        &a.endpoint(),
+        vec![reference(PropertyIdentifier::PRESENT_VALUE)],
+    );
+    tokio::time::timeout(Duration::from_secs(1), flight.fenced())
+        .await
+        .expect("a busy re-subscription fences the old report");
 }

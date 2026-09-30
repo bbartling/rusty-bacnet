@@ -213,8 +213,8 @@ async fn confirmed_report_rejected_holds_off_then_is_reported_again() {
         write(&h, ACTIVE).await;
         h.no_notification().await;
         assert!(!idle(&h).await, "{family:?} holds off");
-        // One retry cycle: the 3 s timeout times the retries.
-        tokio::time::sleep(Duration::from_secs(9)).await;
+        // One full retry cycle: the 3 s timeout times four attempts.
+        tokio::time::sleep(Duration::from_secs(12)).await;
         assert!(idle(&h).await, "{family:?} hold-off over");
         write(&h, ACTIVE).await;
         assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
@@ -330,6 +330,38 @@ async fn confirmed_ack_for_a_replaced_subscription_leaves_the_new_one_alone() {
         h.ack().await;
         h.settle().await;
         assert_eq!(baseline(&h).await, Some(sample(INACTIVE)), "{family:?}");
+        h.server.stop().await.unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_superseded_report_stops_retrying() {
+    for family in FAMILIES {
+        let mut h = start(3000).await;
+        family.start(&mut h).await;
+        write(&h, ACTIVE).await;
+        assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
+        let (old, _) = h.take_confirmed();
+        // A renewal or re-subscription replaces the subscription while its
+        // report is outstanding; the replacement reports for itself.
+        family.subscribe(&mut h).await;
+        assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
+        h.ack().await;
+        h.settle().await;
+        assert_eq!(
+            h.server.notification_transactions.active_count(),
+            0,
+            "{family:?}: the superseded transaction ended"
+        );
+        // Past the old report's retry time, none of its retries went out.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert!(
+            !h.frames.lock().unwrap().iter().any(
+                |apdu| matches!(apdu, Apdu::ConfirmedRequest(request) if request.invoke_id == old)
+            ),
+            "{family:?}"
+        );
+        assert_eq!(baseline(&h).await, Some(sample(ACTIVE)), "{family:?}");
         h.server.stop().await.unwrap();
     }
 }

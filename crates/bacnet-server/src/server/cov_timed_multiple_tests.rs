@@ -147,8 +147,8 @@ async fn full_history_drops_the_oldest_changes_and_counts_them() {
 }
 
 /// Hold-off after a failed confirmed report with a 10 ms retry timeout: one
-/// retry cycle, the timeout times the retries.
-const HOLD_OFF: Duration = Duration::from_millis(10 * DEFAULT_APDU_RETRIES as u64);
+/// full retry cycle, the timeout times the first attempt and every retry.
+const HOLD_OFF: Duration = Duration::from_millis(10 * (DEFAULT_APDU_RETRIES as u64 + 1));
 
 #[tokio::test(start_paused = true)]
 async fn confirmed_changes_retire_once_acknowledged() {

@@ -191,6 +191,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 if !table.context_idle(&context, subscriptions) {
                     return;
                 }
+                // A failed report's changes can sit on any object of the
+                // context. The first fanout after its hold-off hands the whole
+                // context to one follow-up instead of reporting only its own
+                // object.
+                if table.take_owed_context(&context) {
+                    table.revisits().request(
+                        table
+                            .multiple_context_references(&context)
+                            .map(|sub| sub.key().clone()),
+                    );
+                    return;
+                }
                 let now = Instant::now();
                 let store = table.timed().clone();
                 let claim = claim.insert(TimedClaim::new(store.clone()));

@@ -307,34 +307,6 @@ async fn final_send_failure_and_worker_abort_clean_up() {
     assert_eq!(transactions.active_count(), 0);
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_send_that_never_finishes_ends_its_attempt_at_the_timeout() {
-    let transactions = NotificationTransactions::new();
-    let (operation, receiver) = transactions.reserve(direct_peer(9), COV_SERVICE).unwrap();
-    let attempts = StdArc::new(StdMutex::new(0u8));
-    let attempts_by_send = StdArc::clone(&attempts);
-    let started = tokio::time::Instant::now();
-    let result = run_notification_worker(
-        operation,
-        receiver,
-        Duration::from_millis(100),
-        3,
-        move |_| {
-            *attempts_by_send.lock().unwrap() += 1;
-            std::future::pending::<Result<(), ()>>()
-        },
-    )
-    .await;
-    assert_eq!(result, NotificationWorkerResult::Exhausted);
-    assert_eq!(
-        *attempts.lock().unwrap(),
-        4,
-        "each hung send ends as a failed attempt"
-    );
-    assert_eq!(started.elapsed(), Duration::from_millis(400));
-    assert_eq!(transactions.active_count(), 0);
-}
-
 #[tokio::test]
 async fn close_drains_waiters_and_rejects_reserve_and_rearm() {
     let transactions = NotificationTransactions::new();

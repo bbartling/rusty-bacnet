@@ -47,7 +47,11 @@ pub struct ServerConfig {
     pub segmentation_supported: Segmentation,
     /// Vendor identifier.
     pub vendor_id: u16,
-    /// Timeout in ms before retrying a failed confirmed COV notification send (default 3000ms).
+    /// APDU timeout in ms of confirmed COV and event notifications (default
+    /// 3000 ms): how long each attempt waits for the reply once its send has
+    /// completed, before the next retry. The transport bounds the send itself.
+    /// It is also the base of the COV hold-off after a failed confirmed report,
+    /// one full retry cycle: this timeout times the attempts (#896).
     pub cov_retry_timeout_ms: u64,
     /// Opt-in inbound time-sync restrictions; default allows all, with no step cap.
     pub time_sync_policy: TimeSyncPolicy,

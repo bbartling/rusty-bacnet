@@ -25,11 +25,19 @@ fn av1() -> ObjectIdentifier {
 
 /// A confirmed subscription to AV-1: whole-object, or one Multiple reference.
 fn proposal(kind: CovNotificationKind, property: PropertyIdentifier) -> CovSubscription {
+    proposal_on(av1(), kind, property)
+}
+
+fn proposal_on(
+    object: ObjectIdentifier,
+    kind: CovNotificationKind,
+    property: PropertyIdentifier,
+) -> CovSubscription {
     CovSubscription {
         subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
         subscriber_network: None,
         subscriber_process_identifier: 7,
-        monitored_object_identifier: av1(),
+        monitored_object_identifier: object,
         issue_confirmed_notifications: true,
         expires_at: Some(Instant::now() + Duration::from_secs(3600)),
         last_notified_observation: None,
@@ -261,5 +269,184 @@ async fn follow_ups_budget_each_object_and_context_separately() {
     );
     let counters = f.table.read().await.counters().snapshot();
     assert_eq!(counters.notifications_throttled_fanout, 0);
+    f.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fence_follow_up_that_beats_the_initial_report_carries_it() {
+    let f = Fixture::new(ServerConfig::default());
+    let a = f
+        .admit(proposal(
+            CovNotificationKind::Multiple,
+            PropertyIdentifier::PRESENT_VALUE,
+        ))
+        .await;
+    let b = f
+        .admit(proposal(
+            CovNotificationKind::Multiple,
+            PropertyIdentifier::STATUS_FLAGS,
+        ))
+        .await;
+    let outstanding = {
+        let mut table = f.table.write().await;
+        table
+            .begin_confirmed(a.prepare_completion().unwrap(), [&a, &b])
+            .unwrap()
+    };
+    // Re-subscribing to Present_Value alone while the context is busy fences
+    // its report and queues the whole context.
+    let relisted = f
+        .table
+        .write()
+        .await
+        .subscribe_multiple(
+            a.key().multiple_context().unwrap(),
+            &a.endpoint(),
+            a.expires_at.unwrap(),
+            0,
+            vec![(*a).clone()],
+        )
+        .unwrap();
+    let queued: Vec<_> = f
+        .table
+        .read()
+        .await
+        .revisits()
+        .queued()
+        .into_iter()
+        .collect();
+    assert_eq!(queued.len(), 2);
+    // The follow-up wins the race; the handler's initial report then finds the
+    // context busy and sends nothing.
+    BACnetServer::<TestTransport>::fire_cov_revisits(&f.ctx(), &queued).await;
+    BACnetServer::<TestTransport>::fire_initial_cov_notification_multiple(&f.ctx(), &relisted)
+        .await;
+    tokio::time::timeout(Duration::from_secs(1), f.sent.wait_for_len(1))
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), f.sent.wait_for_len(2))
+            .await
+            .is_err(),
+        "one report for the context"
+    );
+    let Apdu::ConfirmedRequest(request) = f.sent.frame(0).apdu() else {
+        panic!("confirmed COVNotificationMultiple");
+    };
+    let report = bacnet_services::cov_multiple::COVNotificationMultipleRequest::decode(
+        &request.service_request,
+    )
+    .unwrap();
+    let properties: HashSet<_> = report.list_of_cov_notifications[0]
+        .list_of_values
+        .iter()
+        .map(|value| value.property_identifier)
+        .collect();
+    assert!(
+        properties.contains(&PropertyIdentifier::PRESENT_VALUE),
+        "the relisted reference's first report rides with the follow-up"
+    );
+    drop(outstanding);
+    f.finish().await;
+}
+
+/// An analog value whose first Present_Value read panics.
+struct PanicsOnce {
+    panicked: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl bacnet_objects::traits::BACnetObject for PanicsOnce {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap()
+    }
+
+    fn object_name(&self) -> &str {
+        "PANICS-ONCE"
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[PropertyIdentifier::PRESENT_VALUE])
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        if property != PropertyIdentifier::PRESENT_VALUE {
+            return Err(Error::Protocol {
+                class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            });
+        }
+        assert!(
+            self.panicked.swap(true, Ordering::SeqCst),
+            "injected Present_Value read panic"
+        );
+        Ok(PropertyValue::Real(1.0))
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+            code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_panicking_follow_up_batch_leaves_the_task_running() {
+    let f = Fixture::new(ServerConfig::default());
+    let panicked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    f.db.write()
+        .await
+        .add(Box::new(PanicsOnce {
+            panicked: Arc::clone(&panicked),
+        }))
+        .unwrap();
+    let broken = f
+        .admit(proposal_on(
+            ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap(),
+            CovNotificationKind::Single,
+            PropertyIdentifier::PRESENT_VALUE,
+        ))
+        .await;
+    let healthy = f
+        .admit(proposal(
+            CovNotificationKind::Single,
+            PropertyIdentifier::PRESENT_VALUE,
+        ))
+        .await;
+    let fanout = crate::server::cov_fanout::CovFanout::new(
+        &f.db,
+        &f.network,
+        &f.table,
+        &f.permits,
+        &f.transactions,
+        &f.comm,
+        &f.config,
+    );
+    let task = tokio::spawn(fanout.run_revisits());
+    let revisits = Arc::clone(f.table.read().await.revisits());
+    revisits.request([broken.key().clone()]);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !panicked.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    revisits.request([healthy.key().clone()]);
+    tokio::time::timeout(Duration::from_secs(1), f.sent.wait_for_len(1))
+        .await
+        .expect("the follow-up task survived the panicking batch");
+    assert!(!task.is_finished());
+    task.abort();
     f.finish().await;
 }
