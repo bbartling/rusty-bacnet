@@ -31,10 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `send_apdu_routed_with_data_attributes` now takes a
   `RoutedTarget { network, mac, router_mac }`. Three helpers without production
   callers were removed: `ReceivedApdu::unverified` (build the struct instead),
-  and the `read_property_routed` wrappers on `bacnet-endpoint`'s `EndpointClient`
-  and on `bacnet-client`'s `EndpointRequester`, where it was hidden. Call
-  `read_property_with_destination` with `EndpointApduDestination::Routed`
-  instead. `BACnetClient::read_property_routed` is unchanged (#902).
+  and the `read_property_routed` wrappers on `bacnet-endpoint`'s
+  `ClientRoleHandle` and on `bacnet-client`'s `EndpointRequester`, where it was
+  hidden. Call `read_property_with_destination` with
+  `EndpointApduDestination::Routed` instead; `bacnet_endpoint` now re-exports
+  that type, so callers don't need `bacnet-endpoint-core` as a direct dependency.
+  `BACnetClient::read_property_routed` is unchanged (#902).
 
 - `clippy::print_stdout` and `clippy::print_stderr` are now `deny` across the
   workspace. The CLI, benchmark binaries, examples and tests allow printing, each

@@ -51,8 +51,7 @@ use bacnet_encoding::{
     apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck},
     npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress},
 };
-use bacnet_endpoint::{EndpointSession, SessionConfig};
-use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
+use bacnet_endpoint::{EndpointApduDestination, EndpointSession, SessionConfig};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::{loopback::LoopbackTransport, port::TransportPort};
 use bacnet_types::{enums::ConfirmedServiceChoice, error::Error, MacAddr};

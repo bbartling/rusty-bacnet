@@ -26,7 +26,7 @@ use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_endpoint_core::coordinator::{
     AdmissionOutcome, CanonicalPeer, OutboundTransactionCoordinator,
 };
-use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
+pub use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_transport::port::DataAttribute;
 use bacnet_types::enums::PropertyIdentifier;

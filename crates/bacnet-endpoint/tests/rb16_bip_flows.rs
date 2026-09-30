@@ -24,7 +24,7 @@ use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_endpoint::session::SessionRole;
-use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
+use bacnet_endpoint::EndpointApduDestination;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};

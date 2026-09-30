@@ -8,6 +8,7 @@ use super::direct_membership::{disconnect_request, Membership};
 use super::direct_receive::direct_npdu;
 use super::direct_receive::{direct_must_understand_decision, DirectMuDecision};
 use super::direct_socket::{DirectFrame, DirectSocket};
+#[cfg(feature = "sc-tls")]
 use super::npdu_admission::DirectPeer;
 use super::WebSocketPort;
 use crate::sc_frame::{
