@@ -79,6 +79,7 @@ pub enum ScFunction {
 }
 
 impl ScFunction {
+    /// Map a wire function-code octet to an `ScFunction`; unassigned values become `Unknown`.
     pub fn from_raw(val: u8) -> Self {
         match val {
             0x00 => Self::Result,
@@ -98,6 +99,7 @@ impl ScFunction {
         }
     }
 
+    /// Wire function-code octet for this function (the original value for `Unknown`).
     pub fn to_raw(self) -> u8 {
         match self {
             Self::Result => 0x00,
@@ -209,9 +211,13 @@ fn is_valid_sc_option_type(option_type: u8) -> bool {
 /// A decoded BACnet/SC BVLC message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScMessage {
+    /// BVLC function this message carries.
     pub function: ScFunction,
+    /// Message identifier, echoed by the peer in its reply.
     pub message_id: u16,
+    /// Originating VMAC, or `None` when the header omits it.
     pub originating_vmac: Option<Vmac>,
+    /// Destination VMAC, or `None` when the header omits it.
     pub destination_vmac: Option<Vmac>,
     /// Destination options (TLV-encoded).
     pub dest_options: Vec<ScOption>,

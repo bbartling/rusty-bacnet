@@ -23,17 +23,25 @@ pub const FDT_ENTRY_SIZE: usize = 10;
 /// A Broadcast Distribution Table entry — one peer BBMD.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BdtEntry {
+    /// IPv4 address of the peer BBMD.
     pub ip: [u8; 4],
+    /// UDP port of the peer BBMD.
     pub port: u16,
+    /// Mask applied to the peer's address to derive the directed-broadcast address used when
+    /// forwarding to it (all ones sends unicast).
     pub broadcast_mask: [u8; 4],
 }
 
 /// A Foreign Device Table entry — one registered foreign device.
 #[derive(Debug, Clone)]
 pub struct FdtEntry {
+    /// IPv4 address of the foreign device.
     pub ip: [u8; 4],
+    /// UDP port of the foreign device.
     pub port: u16,
+    /// Time-to-live in seconds requested at registration; expiry adds a 30-second grace period.
     pub ttl: u16,
+    /// When the registration was last created or renewed.
     pub registered_at: Instant,
 }
 
@@ -116,9 +124,13 @@ fn validate_bdt_entry(e: &BdtEntry) -> Result<(), Error> {
 /// only the wire-format TTL and seconds-remaining values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FdtEntryWire {
+    /// IPv4 address of the foreign device.
     pub ip: [u8; 4],
+    /// UDP port of the foreign device.
     pub port: u16,
+    /// Registration time-to-live in seconds.
     pub ttl: u16,
+    /// Seconds until the entry expires, as reported by the BBMD (includes the grace period).
     pub seconds_remaining: u16,
 }
 

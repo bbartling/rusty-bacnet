@@ -701,6 +701,8 @@ mod segmentation_tests;
 mod tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Start a server builder for a caller-supplied transport type, with default configuration and
+    /// an empty object database.
     pub fn generic_builder() -> ServerBuilder<T> {
         ServerBuilder {
             config: ServerConfig::default(),

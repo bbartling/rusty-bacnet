@@ -184,16 +184,20 @@ pub enum EventTransitionCommitError {
 /// Encoded as a BACnet BIT STRING: bit 0 = low_limit_enable, bit 1 = high_limit_enable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LimitEnable {
+    /// Low-limit detection is enabled.
     pub low_limit_enable: bool,
+    /// High-limit detection is enabled.
     pub high_limit_enable: bool,
 }
 
 impl LimitEnable {
+    /// Neither limit enabled.
     pub const NONE: Self = Self {
         low_limit_enable: false,
         high_limit_enable: false,
     };
 
+    /// Both limits enabled.
     pub const BOTH: Self = Self {
         low_limit_enable: true,
         high_limit_enable: true,
@@ -389,19 +393,29 @@ pub(crate) fn fault_precedence(
 /// countdown and fire on expiry.
 #[derive(Debug, Clone)]
 pub struct OutOfRangeDetector {
+    /// High_Limit; a present value above it is a HIGH_LIMIT condition.
     pub high_limit: f32,
+    /// Low_Limit; a present value below it is a LOW_LIMIT condition.
     pub low_limit: f32,
+    /// Deadband applied when returning toward NORMAL, in the monitored value's units.
     pub deadband: f32,
+    /// Which of the two limits are checked.
     pub limit_enable: LimitEnable,
+    /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
+    /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
     pub notify_type: u32,
+    /// Event_Enable bits; one bit per transition (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     pub event_enable: u8,
+    /// Seconds a non-normal condition must persist before its transition fires; 0 fires
+    /// immediately.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.6 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
     /// NORMAL event state is indicated. `None` is the not-configured case
     /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
+    /// Current event state.
     pub event_state: EventState,
     /// Acknowledged-transitions bitfield (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     /// A set bit means the corresponding transition has been acknowledged.
@@ -655,16 +669,23 @@ impl OutOfRangeDetector {
 pub struct ChangeOfStateDetector {
     /// Values that trigger an OFFNORMAL state.
     pub alarm_values: Vec<u32>,
+    /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
+    /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
     pub notify_type: u32,
+    /// Event_Enable bits; one bit per transition (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     pub event_enable: u8,
+    /// Seconds a non-normal condition must persist before its transition fires; 0 fires
+    /// immediately.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.2 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
     /// NORMAL event state is indicated. `None` is the not-configured case
     /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
+    /// Current event state.
     pub event_state: EventState,
+    /// Acknowledged-transitions bits (3 bits); a set bit means that transition was acknowledged.
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
@@ -834,16 +855,23 @@ impl ChangeOfStateDetector {
 /// entry points; see [`OutOfRangeDetector`] for the delay contract.
 #[derive(Debug, Clone)]
 pub struct CommandFailureDetector {
+    /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
+    /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
     pub notify_type: u32,
+    /// Event_Enable bits; one bit per transition (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     pub event_enable: u8,
+    /// Seconds a non-normal condition must persist before its transition fires; 0 fires
+    /// immediately.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.4 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
     /// NORMAL event state is indicated. `None` is the not-configured case
     /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
+    /// Current event state.
     pub event_state: EventState,
+    /// Acknowledged-transitions bits (3 bits); a set bit means that transition was acknowledged.
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,

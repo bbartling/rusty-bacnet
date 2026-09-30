@@ -77,6 +77,7 @@ impl ColorObject {
         })
     }
 
+    /// Set the CIE 1931 xy Present_Value and make Tracking_Value follow it immediately.
     pub fn set_present_value(&mut self, x: f32, y: f32) {
         self.present_value_x = x;
         self.present_value_y = y;
@@ -264,11 +265,13 @@ impl ColorTemperatureObject {
         })
     }
 
+    /// Set Present_Value in kelvin and make Tracking_Value follow it immediately.
     pub fn set_present_value(&mut self, kelvin: u32) {
         self.present_value = kelvin;
         self.tracking_value = kelvin;
     }
 
+    /// Set the Min_Pres_Value and Max_Pres_Value limits, in kelvin.
     pub fn set_min_max(&mut self, min: u32, max: u32) {
         self.min_pres_value = Some(min);
         self.max_pres_value = Some(max);

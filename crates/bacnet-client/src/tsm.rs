@@ -54,13 +54,27 @@ pub enum TsmResponse {
     /// SimpleACK — confirmed service completed with no return data.
     SimpleAck,
     /// ComplexACK — confirmed service returned data.
-    ComplexAck { service_data: Bytes },
+    ComplexAck {
+        /// Encoded service ACK parameters, without the APDU header.
+        service_data: Bytes,
+    },
     /// Error PDU.
-    Error { class: u32, code: u32 },
+    Error {
+        /// Raw BACnetErrorClass enumeration value.
+        class: u32,
+        /// Raw BACnetErrorCode enumeration value.
+        code: u32,
+    },
     /// Reject PDU.
-    Reject { reason: u8 },
+    Reject {
+        /// Raw BACnetRejectReason value.
+        reason: u8,
+    },
     /// Abort PDU.
-    Abort { reason: u8 },
+    Abort {
+        /// Raw BACnetAbortReason value.
+        reason: u8,
+    },
     /// A router rejected the active message as too long for its routed path.
     NetworkPathTooLong {
         /// Destination network named by the network-layer rejection.
@@ -222,6 +236,7 @@ pub struct Tsm {
 }
 
 impl Tsm {
+    /// Create a transaction state machine with the given timing and retry configuration.
     pub fn new(config: TsmConfig) -> Self {
         Self {
             config,
@@ -231,6 +246,7 @@ impl Tsm {
         }
     }
 
+    /// Timing and retry configuration in force.
     pub fn config(&self) -> &TsmConfig {
         &self.config
     }
@@ -712,6 +728,7 @@ impl Tsm {
         }
     }
 
+    /// Number of confirmed transactions currently awaiting a response.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }

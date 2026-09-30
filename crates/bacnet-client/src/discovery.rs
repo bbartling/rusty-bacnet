@@ -125,6 +125,7 @@ enum DeviceEndpoint<'a> {
 }
 
 impl DeviceTable {
+    /// Create an empty table.
     pub fn new() -> Self {
         Self {
             devices: HashMap::new(),

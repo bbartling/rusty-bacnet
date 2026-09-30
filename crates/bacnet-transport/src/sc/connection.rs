@@ -28,10 +28,13 @@ pub enum ScConnectionState {
 /// BACnet/SC hub connection manager.
 #[derive(Clone)]
 pub struct ScConnection {
+    /// Connection lifecycle state.
     pub state: ScConnectionState,
+    /// Virtual MAC address of this node.
     pub local_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     pub device_uuid: [u8; 16],
+    /// Hub's virtual MAC address, learned from Connect-Accept; `None` until connected.
     pub hub_vmac: Option<Vmac>,
     /// Maximum encoded BACnet/SC BVLC message length this node can accept.
     pub max_bvlc_length: u16,
@@ -60,6 +63,7 @@ pub struct ScConnection {
 }
 
 impl ScConnection {
+    /// Create a disconnected connection for this node's VMAC and device UUID, using default limits.
     pub fn new(local_vmac: Vmac, device_uuid: [u8; 16]) -> Self {
         Self {
             state: ScConnectionState::Disconnected,

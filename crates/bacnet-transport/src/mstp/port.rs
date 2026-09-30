@@ -125,6 +125,7 @@ pub struct MstpTransport<S: SerialPort> {
 }
 
 impl<S: SerialPort> MstpTransport<S> {
+    /// Create an MS/TP transport over `serial`; the node starts when the transport is started.
     pub fn new(serial: S, config: MstpConfig) -> Self {
         let mac = config.this_station;
         Self {

@@ -20,25 +20,40 @@ const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configu
 /// Complete PICS document per ASHRAE 135-2020 Annex A.
 #[derive(Debug, Clone)]
 pub struct Pics {
+    /// Vendor and device identification.
     pub vendor_info: VendorInfo,
+    /// Device profile claimed.
     pub device_profile: DeviceProfile,
+    /// Object types present in the database with their creation, deletion and property support.
     pub supported_object_types: Vec<ObjectTypeSupport>,
+    /// Services the server can initiate or execute.
     pub supported_services: Vec<ServiceSupport>,
+    /// Data-link layers the device supports.
     pub data_link_layers: Vec<DataLinkSupport>,
+    /// Network-layer roles the device fills.
     pub network_layer: NetworkLayerSupport,
+    /// Character sets the device supports.
     pub character_sets: Vec<CharacterSet>,
+    /// Free-text descriptions of special functionality.
     pub special_functionality: Vec<String>,
 }
 
 /// Vendor and device identification.
 #[derive(Debug, Clone)]
 pub struct VendorInfo {
+    /// Vendor identifier assigned by ASHRAE.
     pub vendor_id: u16,
+    /// Vendor name.
     pub vendor_name: String,
+    /// Product model name.
     pub model_name: String,
+    /// Firmware revision string.
     pub firmware_revision: String,
+    /// Application software version string.
     pub application_software_version: String,
+    /// BACnet protocol version implemented.
     pub protocol_version: u16,
+    /// BACnet protocol revision implemented.
     pub protocol_revision: u16,
 }
 
@@ -86,8 +101,11 @@ impl fmt::Display for DeviceProfile {
 /// true only when every present metadata row is optional; absent rows do not vote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PropertyAccess {
+    /// At least one instance can be read.
     pub readable: bool,
+    /// At least one instance can be written.
     pub writable: bool,
+    /// Every instance that has the property treats it as optional.
     pub optional: bool,
 }
 
@@ -103,15 +121,20 @@ impl fmt::Display for PropertyAccess {
 /// Supported property with its access flags.
 #[derive(Debug, Clone)]
 pub struct PropertySupport {
+    /// Property this row describes.
     pub property_id: PropertyIdentifier,
+    /// Aggregated access flags for the property.
     pub access: PropertyAccess,
 }
 
 /// Object type support declaration.
 #[derive(Debug, Clone)]
 pub struct ObjectTypeSupport {
+    /// Object type described.
     pub object_type: ObjectType,
+    /// Whether the type can be created remotely with CreateObject.
     pub createable: bool,
+    /// Whether the type can be deleted remotely with DeleteObject.
     pub deleteable: bool,
     /// Union of effective instance rows in ascending property-ID order.
     pub supported_properties: Vec<PropertySupport>,
@@ -120,18 +143,26 @@ pub struct ObjectTypeSupport {
 /// Service support declaration.
 #[derive(Debug, Clone)]
 pub struct ServiceSupport {
+    /// Service name.
     pub service_name: String,
+    /// Device can request the service.
     pub initiator: bool,
+    /// Device can execute the service.
     pub executor: bool,
 }
 
 /// Data link layer support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataLinkSupport {
+    /// BACnet/IP over IPv4.
     BipV4,
+    /// BACnet/IP over IPv6.
     BipV6,
+    /// MS/TP over RS-485.
     Mstp,
+    /// Raw BACnet Ethernet (802.3).
     Ethernet,
+    /// BACnet Secure Connect.
     BacnetSc,
 }
 
@@ -150,19 +181,28 @@ impl fmt::Display for DataLinkSupport {
 /// Network layer capabilities.
 #[derive(Debug, Clone)]
 pub struct NetworkLayerSupport {
+    /// Device routes between networks.
     pub router: bool,
+    /// Device acts as a BACnet Broadcast Management Device.
     pub bbmd: bool,
+    /// Device can register as a foreign device with a BBMD.
     pub foreign_device: bool,
 }
 
 /// Character set support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CharacterSet {
+    /// UTF-8.
     Utf8,
+    /// ANSI X3.4 (ASCII).
     Ansi,
+    /// IBM/Microsoft double-byte character set.
     DbcsIbm,
+    /// Microsoft double-byte character set variant (see `Display`, which prints a JIS label).
     DbcsMs,
+    /// JIS X 0208.
     Jisx0208,
+    /// ISO 8859-1 (Latin-1).
     Iso8859_1,
 }
 
@@ -184,16 +224,27 @@ impl fmt::Display for CharacterSet {
 /// Configuration for PICS generation that cannot be inferred from the database.
 #[derive(Debug, Clone)]
 pub struct PicsConfig {
+    /// Vendor name.
     pub vendor_name: String,
+    /// Product model name.
     pub model_name: String,
+    /// Firmware revision string.
     pub firmware_revision: String,
+    /// Application software version string.
     pub application_software_version: String,
+    /// BACnet protocol version implemented (default 1).
     pub protocol_version: u16,
+    /// BACnet protocol revision implemented (default 24).
     pub protocol_revision: u16,
+    /// Device profile claimed.
     pub device_profile: DeviceProfile,
+    /// Data-link layers the device supports.
     pub data_link_layers: Vec<DataLinkSupport>,
+    /// Network-layer roles the device fills.
     pub network_layer: NetworkLayerSupport,
+    /// Character sets the device supports.
     pub character_sets: Vec<CharacterSet>,
+    /// Free-text descriptions of special functionality.
     pub special_functionality: Vec<String>,
 }
 
@@ -232,6 +283,7 @@ pub struct PicsGenerator<'a> {
 }
 
 impl<'a> PicsGenerator<'a> {
+    /// Create a generator over the object database and the server and PICS configuration.
     pub fn new(
         db: &'a ObjectDatabase,
         server_config: &'a ServerConfig,

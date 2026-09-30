@@ -40,6 +40,7 @@ pub struct TrendLogObject {
 }
 
 impl TrendLogObject {
+    /// Create a new Trend Log object with logging enabled; `buffer_size` is the record capacity.
     pub fn new(instance: u32, name: impl Into<String>, buffer_size: u32) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::TREND_LOG, instance)?;
         Ok(Self {
@@ -316,6 +317,8 @@ pub struct TrendLogMultipleObject {
 }
 
 impl TrendLogMultipleObject {
+    /// Create a new Trend Log Multiple object with logging enabled; `buffer_size` is the record
+    /// capacity.
     pub fn new(instance: u32, name: impl Into<String>, buffer_size: u32) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::TREND_LOG_MULTIPLE, instance)?;
         Ok(Self {

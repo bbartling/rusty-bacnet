@@ -210,7 +210,9 @@ impl Default for MstpConfig {
 
 /// Internal state for the master node state machine.
 pub struct MasterNode {
+    /// Timing and addressing configuration this node runs with.
     pub config: MstpConfig,
+    /// Current state of the master-node state machine.
     pub state: MasterState,
     /// Next station to receive the token.
     pub next_station: u8,
@@ -246,6 +248,8 @@ pub struct MasterNode {
 const NPOLL: u8 = 50;
 
 impl MasterNode {
+    /// Create a master node in the `Idle` state; fails if `max_master` exceeds `MAX_MASTER` or
+    /// `this_station` exceeds `max_master`.
     pub fn new(config: MstpConfig) -> Result<Self, Error> {
         if config.max_master > MAX_MASTER {
             return Err(Error::Encoding(format!(
