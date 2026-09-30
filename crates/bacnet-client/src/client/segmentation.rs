@@ -1,3 +1,4 @@
+use super::segmentation_context::{InboundSegmentSource, SegmentedRequestLimits};
 use super::segmented_request::{OutgoingSegmentContext, OutgoingSegmentSend};
 use super::*;
 use crate::tsm::CompletionOutcome;
@@ -45,12 +46,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         tsm: &Arc<Mutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
-        source_mac: &[u8],
-        source_network: &Option<NpduAddress>,
-        provenance: TransportProvenance,
+        source: InboundSegmentSource<'_>,
         ack: bacnet_encoding::apdu::ComplexAck,
         limits: ResponseLimits,
     ) {
+        let InboundSegmentSource {
+            mac: source_mac,
+            network: source_network,
+            provenance,
+        } = source;
         let seq = ack.sequence_number.unwrap_or(0);
         let transaction_peer = response_transaction_peer(source_mac, source_network);
         let tsm_mac = transaction_peer.tsm_mac;
@@ -438,11 +442,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
-        remote_max_apdu: u16,
-        remote_max_segments: Option<u32>,
-        routed_forwarded_npci_len: Option<u16>,
-        routed_path_lease: Option<&RoutedPathLease>,
+        limits: SegmentedRequestLimits<'_>,
     ) -> Result<Bytes, Error> {
+        let SegmentedRequestLimits {
+            remote_max_apdu,
+            remote_max_segments,
+            routed_forwarded_npci_len,
+            routed_path_lease,
+        } = limits;
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;

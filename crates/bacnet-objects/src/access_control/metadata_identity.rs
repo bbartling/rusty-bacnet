@@ -424,7 +424,9 @@ mod tests {
 
     #[test]
     fn property_metadata_access_identity_write_capabilities_match_dispatch() {
-        let cases: [(fn() -> Box<dyn BACnetObject>, &[P]); 4] = [
+        // Constructor paired with the properties it must accept writes for.
+        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P]);
+        let cases: [WriteCase; 4] = [
             (
                 || Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
                 &[

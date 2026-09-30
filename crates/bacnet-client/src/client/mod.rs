@@ -857,12 +857,14 @@ mod response_admission;
 mod routed_path_limits;
 mod segmentation;
 mod segmentation_abort;
+mod segmentation_context;
 mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
 use routed_path_limits::{routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits};
 use transaction_peer::response_transaction_peer;
 
+pub use cov::CovPropertySubscription;
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
     ReceivedCOVNotification,

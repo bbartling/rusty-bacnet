@@ -9,6 +9,8 @@ use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::mpsc;
+
+use super::segmentation_context::InboundSegmentSource;
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 
@@ -256,9 +258,11 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
         &fixture.client.tsm,
         &fixture.client.network,
         &mut shadow_state,
-        SERVER_MAC,
-        &None,
-        TransportProvenance::unverified(),
+        InboundSegmentSource {
+            mac: SERVER_MAC,
+            network: &None,
+            provenance: TransportProvenance::unverified(),
+        },
         unsupported_ack,
         ResponseLimits {
             segmented_response_accepted: false,

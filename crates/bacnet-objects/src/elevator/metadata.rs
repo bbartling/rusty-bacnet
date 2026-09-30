@@ -344,7 +344,9 @@ mod tests {
 
     #[test]
     fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
-        let cases: [(fn() -> Box<dyn BACnetObject>, &[P]); 3] = [
+        // Constructor paired with the properties it must accept writes for.
+        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P]);
+        let cases: [WriteCase; 3] = [
             (
                 || Box::new(ElevatorGroupObject::new(1, "EG-1").unwrap()),
                 &[
