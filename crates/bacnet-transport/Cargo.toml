@@ -38,9 +38,15 @@ windows-sys = { version = "0.61", features = [
 [features]
 default = []
 ipv6 = []
-sc-tls = ["tokio-tungstenite", "tokio-rustls", "rustls", "futures-util", "dep:aws-lc-rs"]
-serial = ["tokio-serial", "tokio/io-util"]
-serial-gpio = ["serial", "gpiocdev"]
+sc-tls = [
+    "dep:tokio-tungstenite",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:futures-util",
+    "dep:aws-lc-rs",
+]
+serial = ["dep:tokio-serial", "tokio/io-util"]
+serial-gpio = ["serial", "dep:gpiocdev"]
 ethernet = []
 
 [dev-dependencies]

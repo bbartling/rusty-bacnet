@@ -24,7 +24,7 @@ futures-util = { workspace = true }
 
 [features]
 ipv6 = ["bacnet-transport/ipv6"]
-sc-tls = ["bacnet-transport/sc-tls", "tokio-rustls"]
+sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
 
 [dev-dependencies]
 bacnet-objects.workspace = true
