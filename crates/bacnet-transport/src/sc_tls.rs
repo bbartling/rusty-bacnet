@@ -28,11 +28,13 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// Turn off Nagle's algorithm on an SC TCP stream before TLS. SC traffic is
 /// small WebSocket messages; with Nagle on, a message written before the
 /// previous one is acknowledged waits for that ACK, which a peer with nothing
-/// to send back can delay by tens of milliseconds (#900). A failure only costs
-/// latency, so it is logged and the connection proceeds.
+/// to send back can delay by tens to hundreds of milliseconds, depending on the
+/// peer's OS (#900). A failure only costs latency, so it is logged and the
+/// connection proceeds.
 pub(crate) fn disable_nagle(stream: &TcpStream) {
     if let Err(error) = stream.set_nodelay(true) {
-        tracing::debug!(%error, "SC TCP stream keeps Nagle's algorithm");
+        let peer = stream.peer_addr().ok();
+        tracing::debug!(%error, ?peer, "SC TCP stream keeps Nagle's algorithm");
     }
 }
 

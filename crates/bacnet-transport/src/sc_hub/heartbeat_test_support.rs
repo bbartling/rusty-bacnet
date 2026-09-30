@@ -42,6 +42,7 @@ impl LiveClient {
             .with_sub_protocol(crate::sc_frame::BACNET_SC_HUB_SUBPROTOCOL);
         let accept = async {
             let (tcp, addr) = listener.accept().await.unwrap();
+            crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
             let tls = TlsAcceptor::from(Arc::new(server))
                 .accept(tcp)
                 .await
@@ -57,7 +58,7 @@ impl LiveClient {
         let dial = tokio_tungstenite::connect_async_tls_with_config(
             request,
             None,
-            false,
+            true, // disable_nagle, as SC dialers do
             Some(tokio_tungstenite::Connector::Rustls(Arc::new(client))),
         );
         let ((server, peer_addr), client) =

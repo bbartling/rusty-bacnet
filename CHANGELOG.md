@@ -42,11 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - BACnet/SC connections disable Nagle's algorithm on hub-accepted, direct-accepted
   and dialed TCP streams (#900). A small message sent before the previous one was
-  acknowledged could wait on the peer's delayed ACK: on Linux, two back-to-back
-  unicasts through a hub occasionally took about 42 ms instead of under 1 ms,
-  and the second one's median latency rises from 631 µs to 827 µs. The SC test
-  clients and hub harness match, which cuts the `bacnet-transport` suite on the
-  Linux CI runner from 115 s to 47 s.
+  acknowledged could wait on the peer's delayed ACK: on Linux, the second of two
+  back-to-back unicasts through a hub occasionally took about 42 ms, and its
+  median was 827 µs. Its worst case is now about 1 ms and its median 631 µs. With
+  the SC test clients and hub harness doing the same, the `bacnet-transport` suite
+  on the Linux CI runner drops from 115 s to 48 s, and the full CI test run from
+  about 110 s to 54 s.
 
 - Changes committed by background tasks now reach COV subscribers without waiting
   for an unrelated later write (#889). Before, periodic Time_Delay alarm
