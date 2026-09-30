@@ -8,10 +8,8 @@ use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
 
-type SentFrames = SendLog;
-
 /// Records unicasts and ignores broadcasts, from a B/IP-shaped local MAC.
-fn recording_transport() -> (TestTransport, SentFrames) {
+fn recording_transport() -> (TestTransport, SendLog) {
     let transport = TestTransport::builder()
         .local_mac(&BIP_LOCAL_MAC)
         .broadcast(SendMode::Ignore)
@@ -20,7 +18,7 @@ fn recording_transport() -> (TestTransport, SentFrames) {
     (transport, sent)
 }
 
-fn recording_network() -> (Arc<NetworkLayer<TestTransport>>, SentFrames) {
+fn recording_network() -> (Arc<NetworkLayer<TestTransport>>, SendLog) {
     let (transport, sent) = recording_transport();
     (Arc::new(NetworkLayer::new(transport)), sent)
 }
@@ -28,7 +26,7 @@ fn recording_network() -> (Arc<NetworkLayer<TestTransport>>, SentFrames) {
 /// [`recording_network`] whose first send is held until released.
 fn blocking_first_send_network() -> (
     Arc<NetworkLayer<TestTransport>>,
-    SentFrames,
+    SendLog,
     TestTransportHandle,
 ) {
     let (transport, sent) = recording_transport();
@@ -146,17 +144,8 @@ fn spawn_segmented_complex_ack_with_options(
     )
 }
 
-async fn wait_until_sent_len(sent: &SentFrames, expected: usize) {
-    loop {
-        if sent.len() >= expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
-async fn wait_for_sent_len(sent: &SentFrames, expected: usize) {
-    tokio::time::timeout(Duration::from_secs(1), wait_until_sent_len(sent, expected))
+async fn wait_for_sent_len(sent: &SendLog, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(1), sent.wait_for_len(expected))
         .await
         .expect("timed out waiting for segmented response frame");
 }
@@ -224,31 +213,23 @@ async fn dispatch_test_apdu_from_network(
     .await;
 }
 
-fn decoded_sent_apdu(sent: &SentFrames, index: usize) -> Apdu {
-    let npdu_bytes = sent.frame(index).npdu;
-    let npdu = decode_npdu(npdu_bytes).expect("sent frame should decode as NPDU");
-    decode_apdu(npdu.payload).expect("sent NPDU payload should decode as APDU")
+fn decoded_sent_apdu(sent: &SendLog, index: usize) -> Apdu {
+    sent.frame(index).apdu()
 }
 
-fn sent_npdu_destination(sent: &SentFrames, index: usize) -> Option<NpduAddress> {
-    let npdu_bytes = sent.frame(index).npdu;
-    decode_npdu(npdu_bytes)
-        .expect("sent frame should decode as NPDU")
-        .destination
+fn sent_npdu_destination(sent: &SendLog, index: usize) -> Option<NpduAddress> {
+    sent.frame(index).decode_npdu().destination
 }
 
-fn sent_link_destination(sent: &SentFrames, index: usize) -> MacAddr {
+fn sent_link_destination(sent: &SendLog, index: usize) -> MacAddr {
     sent.frame(index).mac
 }
 
-fn sent_expecting_reply(sent: &SentFrames, index: usize) -> bool {
-    let npdu_bytes = sent.frame(index).npdu;
-    decode_npdu(npdu_bytes)
-        .expect("sent frame should decode as NPDU")
-        .expecting_reply
+fn sent_expecting_reply(sent: &SendLog, index: usize) -> bool {
+    sent.frame(index).decode_npdu().expecting_reply
 }
 
-fn complex_ack_sequence(sent: &SentFrames, index: usize) -> u8 {
+fn complex_ack_sequence(sent: &SendLog, index: usize) -> u8 {
     match decoded_sent_apdu(sent, index) {
         Apdu::ComplexAck(ack) => {
             assert!(ack.segmented);
@@ -263,14 +244,14 @@ fn complex_ack_sequence(sent: &SentFrames, index: usize) -> u8 {
     }
 }
 
-fn abort_reason(sent: &SentFrames, index: usize) -> AbortReason {
+fn abort_reason(sent: &SendLog, index: usize) -> AbortReason {
     match decoded_sent_apdu(sent, index) {
         Apdu::Abort(abort) => abort.abort_reason,
         other => panic!("expected Abort, got {other:?}"),
     }
 }
 
-fn sent_count(sent: &SentFrames) -> usize {
+fn sent_count(sent: &SendLog) -> usize {
     sent.len()
 }
 

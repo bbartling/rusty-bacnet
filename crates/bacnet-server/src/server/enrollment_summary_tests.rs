@@ -1,14 +1,5 @@
 use super::*;
-use crate::server::test_transport::{StartMode, TestTransport};
-
-/// Startup panics, so reaching it means invalid limits were not refused first.
-fn never_start() -> TestTransport {
-    TestTransport::builder()
-        .start(StartMode::Panic(
-            "invalid enrollment budget reached startup",
-        ))
-        .build()
-}
+use crate::server::test_transport::TestTransport;
 
 #[tokio::test]
 async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
@@ -44,12 +35,12 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
                 ..Default::default()
             },
             ObjectDatabase::new(),
-            never_start(),
+            TestTransport::never_start(),
         )
         .await
         .err();
         let generic = BACnetServer::generic_builder()
-            .transport(never_start())
+            .transport(TestTransport::never_start())
             .get_enrollment_summary_budget(budget)
             .build()
             .await

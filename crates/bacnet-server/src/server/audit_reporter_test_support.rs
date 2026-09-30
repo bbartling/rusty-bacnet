@@ -1,8 +1,7 @@
 //! Shared fixture and wire helpers for the Audit Reporter behavioral tests.
 
 use super::super::*;
-pub(super) use crate::server::test_transport::TestTransport;
-use crate::server::test_transport::{SendMode, SentFrame, StartMode};
+use crate::server::test_transport::{SendMode, SentFrame, StartMode, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
     analog::AnalogInputObject,
@@ -70,7 +69,7 @@ impl AuditCapture {
                 .is_some_and(|broadcast| broadcast.as_slice() == mac)
     }
 
-    async fn send(self, frame: SentFrame) -> Result<(), Error> {
+    async fn send(self: Arc<Self>, frame: SentFrame) -> Result<(), Error> {
         let (bytes, mac) = (frame.npdu, frame.mac);
         if mac.as_slice() == SOURCE {
             self.responses.lock().unwrap().push(bytes);
@@ -96,7 +95,7 @@ impl AuditCapture {
     /// transport's state so helpers holding only the server can reach it.
     pub(super) fn port(&self) -> TestTransport {
         let start = match self.incoming.lock().unwrap().take() {
-            Some(incoming) => StartMode::Inbound(incoming),
+            Some(incoming) => StartMode::Inbound(Some(incoming)),
             None => StartMode::Closed,
         };
         let local_mac: &[u8] = if self.six_byte_mac {
@@ -104,17 +103,22 @@ impl AuditCapture {
         } else {
             &[1]
         };
-        let (started, routes, endpoint, sends) =
-            (self.clone(), self.clone(), self.clone(), self.clone());
+        let capture = Arc::new(self.clone());
+        let (on_start, on_routes, on_endpoint, on_send) = (
+            Arc::clone(&capture),
+            Arc::clone(&capture),
+            Arc::clone(&capture),
+            Arc::clone(&capture),
+        );
         TestTransport::builder()
             .local_mac(local_mac)
             .start(start)
             .broadcast(SendMode::Ignore)
-            .on_start(move || started.started.store(true, Ordering::Release))
-            .on_is_broadcast_mac(move |mac| routes.is_broadcast_mac(mac))
-            .on_bip_broadcast_endpoint(move || endpoint.bip_broadcast_endpoint())
-            .on_send(move |frame| sends.clone().send(frame))
-            .state(Arc::new(self.clone()))
+            .on_start(move || on_start.started.store(true, Ordering::Release))
+            .on_is_broadcast_mac(move |mac| on_routes.is_broadcast_mac(mac))
+            .on_bip_broadcast_endpoint(move || on_endpoint.bip_broadcast_endpoint())
+            .on_send(move |frame| Arc::clone(&on_send).send(frame))
+            .state(capture)
             .build()
     }
 }

@@ -1,8 +1,8 @@
 use super::audit_notification_tests::{
     confirmed_request, notification, oid, request_bytes, MemoryPersistence,
 };
-use super::test_transport::{SendMode, SentFrame, TestTransport};
 use super::*;
+use crate::server::test_transport::{SendMode, SentFrame, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
     audit::AuditLogObject,

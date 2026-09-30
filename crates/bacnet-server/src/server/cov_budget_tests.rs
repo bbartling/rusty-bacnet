@@ -1,6 +1,7 @@
 use super::*;
 use crate::cov::AtomicCovCounters;
-use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use crate::server::cov_notifications_tests::recording_transport;
+use crate::server::test_transport::TestTransport;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
@@ -11,16 +12,6 @@ use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_types::enums::ObjectType;
-
-/// Records unicasts and ignores broadcasts, from a B/IP-shaped local MAC.
-fn recording_transport() -> (TestTransport, SendLog) {
-    let transport = TestTransport::builder()
-        .local_mac(&BIP_LOCAL_MAC)
-        .broadcast(SendMode::Ignore)
-        .build();
-    let sent = transport.sent();
-    (transport, sent)
-}
 
 fn test_db_with_ao() -> (Arc<RwLock<ObjectDatabase>>, ObjectIdentifier) {
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();

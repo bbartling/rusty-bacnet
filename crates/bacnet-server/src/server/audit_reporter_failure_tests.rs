@@ -1,6 +1,7 @@
 //! Execution failures use the same bounded target-WRITE path as successes.
 
 use super::*;
+use crate::server::test_transport::TestTransport;
 
 pub(super) fn expected_value_write(
     value: u8,

@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::handlers::{handle_add_list_element, handle_remove_list_element};
-use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
@@ -144,12 +144,7 @@ impl Fixture {
         ))
         .unwrap();
 
-        // Records every broadcast NPDU and discards unicasts.
-        let transport = TestTransport::builder()
-            .local_mac(&BIP_LOCAL_MAC)
-            .unicast(SendMode::Ignore)
-            .build();
-        let sent = transport.sent();
+        let (transport, sent) = super::event_notifications_tests::recording_transport();
         Self {
             db: Arc::new(RwLock::new(db)),
             network: Arc::new(NetworkLayer::new(transport)),

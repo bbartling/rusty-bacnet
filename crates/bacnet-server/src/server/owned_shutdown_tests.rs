@@ -1,6 +1,6 @@
 //! Deterministic admission and custom-transport cleanup ownership boundaries.
-use super::test_transport::TestTransport;
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_transport::port::ReceivedNpdu;
 use std::sync::atomic::{AtomicUsize, Ordering};

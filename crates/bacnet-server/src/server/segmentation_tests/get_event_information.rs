@@ -158,7 +158,7 @@ async fn dispatch(
     client_max_apdu: u16,
     local_max_apdu: u32,
 ) -> (
-    SentFrames,
+    SendLog,
     Arc<segmented_send::SegmentedSendRegistry>,
     MacAddr,
     Arc<crate::server::request_tasks::RequestTasks>,
@@ -180,7 +180,7 @@ async fn dispatch_with_budget(
     local_max_apdu: u32,
     budget: GetEventInformationBudget,
 ) -> (
-    SentFrames,
+    SendLog,
     Arc<segmented_send::SegmentedSendRegistry>,
     MacAddr,
     Arc<crate::server::request_tasks::RequestTasks>,

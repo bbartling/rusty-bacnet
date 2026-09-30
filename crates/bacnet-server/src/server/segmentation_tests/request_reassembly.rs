@@ -29,8 +29,7 @@ const CSV_INSTANCE: u32 = 1;
 
 /// The server end of an injected routed link: the test feeds inbound NPDUs and
 /// reads recorded unicasts; broadcasts are ignored.
-pub(super) fn routed_injection_transport() -> (TestTransport, mpsc::Sender<ReceivedNpdu>, SentFrames)
-{
+pub(super) fn routed_injection_transport() -> (TestTransport, mpsc::Sender<ReceivedNpdu>, SendLog) {
     let (incoming_tx, incoming) = mpsc::channel(16);
     let transport = TestTransport::builder()
         .local_mac(SERVER_MAC)
@@ -44,7 +43,7 @@ pub(super) fn routed_injection_transport() -> (TestTransport, mpsc::Sender<Recei
 pub(super) async fn start_routed_reassembly_server() -> (
     BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
-    SentFrames,
+    SendLog,
 ) {
     let (transport, incoming, sent) = routed_injection_transport();
     let mut db = ObjectDatabase::new();
@@ -118,7 +117,7 @@ pub(super) async fn inject_routed_segment(
     .await;
 }
 
-pub(super) fn sent_routed_frame(sent: &SentFrames, index: usize) -> (Npdu, MacAddr) {
+pub(super) fn sent_routed_frame(sent: &SendLog, index: usize) -> (Npdu, MacAddr) {
     let frame = sent.frame(index);
     (
         decode_npdu(frame.npdu).expect("sent frame should decode as NPDU"),

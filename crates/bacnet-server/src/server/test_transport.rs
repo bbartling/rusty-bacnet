@@ -11,15 +11,14 @@
 //!
 //! Every send runs this pipeline:
 //! 1. The [`SendMode`] for its kind (unicast or broadcast): `Ignore` returns
-//!    `Ok(())` untouched and `Panic` panics.
-//! 2. The frame is appended to the [`SendLog`], then copied to the
-//!    [`TestTransportBuilder::report_to`] channel, if any.
+//!    `Ok(())` untouched, skipping every later step, and `Panic` panics.
+//! 2. The frame is appended to the [`SendLog`].
 //! 3. The [`TestTransportBuilder::on_send`] hook, if any, runs to completion;
 //!    its error ends the send.
-//! 4. Built-in controls: a pending `fail_next_send` is taken; a blocked send
-//!    (`block_sends` or `block_next_send`) signals `wait_blocked` and waits for
-//!    one `release_sends` permit; then the send fails if `fail_next_send` was
-//!    taken or `fail_sends` is set.
+//! 4. Built-in controls: a pending `fail_next_send` is taken; a held send
+//!    (`block_next_send`) signals `wait_blocked` and waits for one
+//!    `release_sends` permit; then the send fails if `fail_next_send` was
+//!    taken.
 
 use std::any::Any;
 use std::future::Future;
@@ -30,14 +29,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_encoding::npdu::{decode_npdu, Npdu};
-use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::{mpsc, Notify, Semaphore};
 
 /// The boxed future a send or stop hook returns.
-pub(crate) type HookFuture = Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>;
+type HookFuture = Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>;
 
 type SendHook = Arc<dyn Fn(SentFrame) -> HookFuture + Send + Sync>;
 type StopHook = Arc<dyn Fn() -> HookFuture + Send + Sync>;
@@ -57,8 +56,6 @@ pub(crate) struct SentFrame {
     pub(crate) mac: MacAddr,
     /// Whether this was `send_broadcast`.
     pub(crate) broadcast: bool,
-    /// Data attributes passed with the send (empty for the plain send calls).
-    pub(crate) data_attributes: Vec<DataAttribute>,
 }
 
 impl SentFrame {
@@ -77,12 +74,9 @@ impl SentFrame {
 pub(crate) enum StartMode {
     /// Return a receiver whose sender is already gone: the link is closed.
     Closed,
-    /// Return this receiver, which the test feeds. A second start fails.
-    Inbound(mpsc::Receiver<ReceivedNpdu>),
-    /// Never complete.
-    Pending,
-    /// Fail with `Error::Encoding` carrying this message.
-    Fail(&'static str),
+    /// Return this receiver, which the test feeds. `start` takes it, so a
+    /// second start fails.
+    Inbound(Option<mpsc::Receiver<ReceivedNpdu>>),
     /// Panic with this message, for tests proving startup is never reached.
     Panic(&'static str),
 }
@@ -111,9 +105,14 @@ struct LogInner {
 }
 
 impl SendLog {
-    /// Lock the underlying frames for in-place inspection or mutation.
+    /// Lock the underlying frames for in-place inspection or mutation. A
+    /// poisoned lock is recovered so a panicking assertion in one test thread
+    /// does not bury its failure under later pushes from the server.
     pub(crate) fn lock(&self) -> MutexGuard<'_, Vec<SentFrame>> {
-        self.inner.frames.lock().unwrap()
+        self.inner
+            .frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Append a frame. The transport does this itself; hooks may record extra.
@@ -137,7 +136,13 @@ impl SendLog {
 
     /// The frame at `index`, panicking when absent.
     pub(crate) fn frame(&self, index: usize) -> SentFrame {
-        self.lock()[index].clone()
+        let frame = self.lock().get(index).cloned();
+        frame.unwrap_or_else(|| {
+            panic!(
+                "no sent frame at index {index}; the log holds {}",
+                self.len()
+            )
+        })
     }
 
     /// Remove and return every recorded frame.
@@ -172,11 +177,6 @@ impl SendLog {
         self.lock().iter().map(|f| f.npdu.clone()).collect()
     }
 
-    /// Decoded APDU of every recorded frame.
-    pub(crate) fn apdus(&self) -> Vec<Apdu> {
-        self.lock().iter().map(SentFrame::apdu).collect()
-    }
-
     /// Wait until at least `len` frames are recorded. Callers add a timeout.
     pub(crate) async fn wait_for_len(&self, len: usize) {
         loop {
@@ -192,12 +192,7 @@ impl SendLog {
 struct Shared {
     sent: SendLog,
     starts: AtomicUsize,
-    stops: AtomicUsize,
-    aborts: AtomicUsize,
-    drops: AtomicUsize,
-    fail: AtomicBool,
     fail_next: AtomicBool,
-    block: AtomicBool,
     block_next: AtomicBool,
     blocked: Semaphore,
     release: Semaphore,
@@ -208,12 +203,7 @@ impl Default for Shared {
         Self {
             sent: SendLog::default(),
             starts: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-            aborts: AtomicUsize::new(0),
-            drops: AtomicUsize::new(0),
-            fail: AtomicBool::new(false),
             fail_next: AtomicBool::new(false),
-            block: AtomicBool::new(false),
             block_next: AtomicBool::new(false),
             blocked: Semaphore::new(0),
             release: Semaphore::new(0),
@@ -224,11 +214,11 @@ impl Default for Shared {
 impl Shared {
     async fn controls(&self) -> Result<(), Error> {
         let fail_once = self.fail_next.swap(false, Ordering::SeqCst);
-        if self.block_next.swap(false, Ordering::SeqCst) || self.block.load(Ordering::SeqCst) {
+        if self.block_next.swap(false, Ordering::SeqCst) {
             self.blocked.add_permits(1);
             self.release.acquire().await.unwrap().forget();
         }
-        if fail_once || self.fail.load(Ordering::SeqCst) {
+        if fail_once {
             return Err(Error::Encoding(
                 "injected test transport send failure".into(),
             ));
@@ -237,7 +227,7 @@ impl Shared {
     }
 }
 
-/// Cloneable view of a transport's log, counters and built-in send controls.
+/// Cloneable view of a transport's log, start counter and built-in send controls.
 ///
 /// Take it from the builder or the transport before the transport moves into
 /// the server; `server.test_network().transport().handle()` also works.
@@ -256,31 +246,9 @@ impl TestTransportHandle {
         self.shared.starts.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn stops(&self) -> usize {
-        self.shared.stops.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn aborts(&self) -> usize {
-        self.shared.aborts.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn drops(&self) -> usize {
-        self.shared.drops.load(Ordering::SeqCst)
-    }
-
-    /// Fail every recorded send while set.
-    pub(crate) fn fail_sends(&self, fail: bool) {
-        self.shared.fail.store(fail, Ordering::SeqCst);
-    }
-
     /// Fail the next recorded send only.
     pub(crate) fn fail_next_send(&self) {
         self.shared.fail_next.store(true, Ordering::SeqCst);
-    }
-
-    /// Hold every recorded send while set, until released.
-    pub(crate) fn block_sends(&self, block: bool) {
-        self.shared.block.store(block, Ordering::SeqCst);
     }
 
     /// Hold the next recorded send only, until released.
@@ -310,25 +278,13 @@ struct Hooks {
     bip_broadcast_endpoint: Option<EndpointHook>,
 }
 
-enum Start {
-    Closed,
-    Inbound(Option<mpsc::Receiver<ReceivedNpdu>>),
-    Pending,
-    Fail(&'static str),
-    Panic(&'static str),
-}
-
 /// The shared, non-generic test transport. See the module docs.
 pub(crate) struct TestTransport {
     local_mac: MacAddr,
-    receive_capacity: u16,
-    egress_limit: u16,
     broadcast_macs: Vec<MacAddr>,
-    bip_broadcast_endpoint: Option<SocketAddrV4>,
-    start: Start,
+    start: StartMode,
     unicast: SendMode,
     broadcast: SendMode,
-    report: Option<mpsc::UnboundedSender<SentFrame>>,
     hooks: Hooks,
     state: Option<Arc<dyn Any + Send + Sync>>,
     shared: Arc<Shared>,
@@ -347,13 +303,6 @@ impl TestTransport {
             .build()
     }
 
-    /// [`Self::new`] plus its send log.
-    pub(crate) fn recording() -> (Self, SendLog) {
-        let transport = Self::new();
-        let sent = transport.sent();
-        (transport, sent)
-    }
-
     /// [`Self::new`] fed by an inbound channel of `capacity`.
     pub(crate) fn inbound(capacity: usize) -> (Self, mpsc::Sender<ReceivedNpdu>) {
         let (tx, rx) = mpsc::channel(capacity);
@@ -364,14 +313,10 @@ impl TestTransport {
         TestTransportBuilder {
             transport: Self {
                 local_mac: MacAddr::from_slice(&[1]),
-                receive_capacity: 1476,
-                egress_limit: 1476,
                 broadcast_macs: Vec::new(),
-                bip_broadcast_endpoint: None,
-                start: Start::Closed,
+                start: StartMode::Closed,
                 unicast: SendMode::Record,
                 broadcast: SendMode::Record,
-                report: None,
                 hooks: Hooks::default(),
                 state: None,
                 shared: Arc::default(),
@@ -405,28 +350,23 @@ impl TestTransport {
             SendMode::Panic(message) => panic!("{message}"),
         }
         self.shared.sent.push(frame.clone());
-        if let Some(report) = &self.report {
-            let _ = report.send(frame.clone());
-        }
         if let Some(hook) = &self.hooks.on_send {
             hook(frame).await?;
         }
         self.shared.controls().await
     }
 
-    fn frame(npdu: &[u8], mac: &[u8], broadcast: bool, attributes: &[DataAttribute]) -> SentFrame {
+    fn frame(npdu: &[u8], mac: &[u8], broadcast: bool) -> SentFrame {
         SentFrame {
             npdu: Bytes::copy_from_slice(npdu),
             mac: MacAddr::from_slice(mac),
             broadcast,
-            data_attributes: attributes.to_vec(),
         }
     }
 }
 
 impl Drop for TestTransport {
     fn drop(&mut self) {
-        self.shared.drops.fetch_add(1, Ordering::SeqCst);
         if let Some(hook) = &self.hooks.on_drop {
             hook();
         }
@@ -435,10 +375,10 @@ impl Drop for TestTransport {
 
 impl TransportPort for TestTransport {
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
-        match &self.hooks.bip_broadcast_endpoint {
-            Some(hook) => hook(),
-            None => self.bip_broadcast_endpoint,
-        }
+        self.hooks
+            .bip_broadcast_endpoint
+            .as_ref()
+            .and_then(|hook| hook())
     }
 
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
@@ -447,55 +387,29 @@ impl TransportPort for TestTransport {
             hook();
         }
         match &mut self.start {
-            Start::Closed => Ok(mpsc::channel(1).1),
-            Start::Inbound(receiver) => receiver
+            StartMode::Closed => Ok(mpsc::channel(1).1),
+            StartMode::Inbound(receiver) => receiver
                 .take()
                 .ok_or_else(|| Error::Encoding("test transport already started".into())),
-            Start::Pending => std::future::pending().await,
-            Start::Fail(message) => Err(Error::Encoding((*message).into())),
-            Start::Panic(message) => panic!("{message}"),
+            StartMode::Panic(message) => panic!("{message}"),
         }
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
-        self.shared.stops.fetch_add(1, Ordering::SeqCst);
         match &self.hooks.on_stop {
             Some(hook) => hook().await,
             None => Ok(()),
         }
     }
 
-    fn abort(&mut self) {
-        self.shared.aborts.fetch_add(1, Ordering::SeqCst);
-    }
-
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.send_frame(self.unicast, Self::frame(npdu, mac, false, &[]))
+        self.send_frame(self.unicast, Self::frame(npdu, mac, false))
             .await
-    }
-
-    async fn send_unicast_with_data_attributes<'a>(
-        &'a self,
-        npdu: &'a [u8],
-        mac: &'a [u8],
-        data_attributes: &'a [DataAttribute],
-    ) -> Result<(), Error> {
-        let frame = Self::frame(npdu, mac, false, data_attributes);
-        self.send_frame(self.unicast, frame).await
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_frame(self.broadcast, Self::frame(npdu, &[], true, &[]))
+        self.send_frame(self.broadcast, Self::frame(npdu, &[], true))
             .await
-    }
-
-    async fn send_broadcast_with_data_attributes<'a>(
-        &'a self,
-        npdu: &'a [u8],
-        data_attributes: &'a [DataAttribute],
-    ) -> Result<(), Error> {
-        let frame = Self::frame(npdu, &[], true, data_attributes);
-        self.send_frame(self.broadcast, frame).await
     }
 
     fn local_mac(&self) -> &[u8] {
@@ -503,11 +417,7 @@ impl TransportPort for TestTransport {
     }
 
     fn local_receive_apdu_capacity(&self) -> u16 {
-        self.receive_capacity
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.egress_limit
+        1476
     }
 
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
@@ -518,9 +428,9 @@ impl TransportPort for TestTransport {
     }
 }
 
-/// Configures a [`TestTransport`]. Defaults: local MAC `[1]`, capacity and
-/// egress limit 1476, [`StartMode::Closed`], [`SendMode::Record`] for both
-/// kinds, no broadcast MACs, no B/IP endpoint, no hooks.
+/// Configures a [`TestTransport`]. Defaults: local MAC `[1]`, receive capacity
+/// 1476, [`StartMode::Closed`], [`SendMode::Record`] for both kinds, no
+/// broadcast MACs, no B/IP endpoint, no hooks.
 pub(crate) struct TestTransportBuilder {
     transport: TestTransport,
 }
@@ -528,16 +438,6 @@ pub(crate) struct TestTransportBuilder {
 impl TestTransportBuilder {
     pub(crate) fn local_mac(mut self, mac: &[u8]) -> Self {
         self.transport.local_mac = MacAddr::from_slice(mac);
-        self
-    }
-
-    pub(crate) fn receive_capacity(mut self, capacity: u16) -> Self {
-        self.transport.receive_capacity = capacity;
-        self
-    }
-
-    pub(crate) fn egress_limit(mut self, limit: u16) -> Self {
-        self.transport.egress_limit = limit;
         self
     }
 
@@ -556,12 +456,7 @@ impl TestTransportBuilder {
         self
     }
 
-    pub(crate) fn bip_broadcast_endpoint(mut self, endpoint: SocketAddrV4) -> Self {
-        self.transport.bip_broadcast_endpoint = Some(endpoint);
-        self
-    }
-
-    /// Answer `bip_broadcast_endpoint` with a hook instead of the fixed value.
+    /// Answer `bip_broadcast_endpoint` with a hook (default: `None`).
     pub(crate) fn on_bip_broadcast_endpoint(
         mut self,
         hook: impl Fn() -> Option<SocketAddrV4> + Send + Sync + 'static,
@@ -571,19 +466,13 @@ impl TestTransportBuilder {
     }
 
     pub(crate) fn start(mut self, mode: StartMode) -> Self {
-        self.transport.start = match mode {
-            StartMode::Closed => Start::Closed,
-            StartMode::Inbound(receiver) => Start::Inbound(Some(receiver)),
-            StartMode::Pending => Start::Pending,
-            StartMode::Fail(message) => Start::Fail(message),
-            StartMode::Panic(message) => Start::Panic(message),
-        };
+        self.transport.start = mode;
         self
     }
 
-    /// Shorthand for `start(StartMode::Inbound(receiver))`.
+    /// Shorthand for `start(StartMode::Inbound(Some(receiver)))`.
     pub(crate) fn inbound(self, receiver: mpsc::Receiver<ReceivedNpdu>) -> Self {
-        self.start(StartMode::Inbound(receiver))
+        self.start(StartMode::Inbound(Some(receiver)))
     }
 
     pub(crate) fn unicast(mut self, mode: SendMode) -> Self {
@@ -593,12 +482,6 @@ impl TestTransportBuilder {
 
     pub(crate) fn broadcast(mut self, mode: SendMode) -> Self {
         self.transport.broadcast = mode;
-        self
-    }
-
-    /// Also send a copy of every recorded frame here. Send errors are ignored.
-    pub(crate) fn report_to(mut self, report: mpsc::UnboundedSender<SentFrame>) -> Self {
-        self.transport.report = Some(report);
         self
     }
 
@@ -624,7 +507,7 @@ impl TestTransportBuilder {
         self
     }
 
-    /// Replace `stop`'s `Ok(())` with this hook's result (`stops` still counts).
+    /// Replace `stop`'s `Ok(())` with this hook's result.
     pub(crate) fn on_stop<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
     where
         F: Future<Output = Result<(), Error>> + Send + 'static,
@@ -634,7 +517,7 @@ impl TestTransportBuilder {
         self
     }
 
-    /// Run a callback when the transport is dropped (after `drops` counts).
+    /// Run a callback when the transport is dropped.
     pub(crate) fn on_drop(mut self, hook: impl Fn() + Send + Sync + 'static) -> Self {
         self.transport.hooks.on_drop = Some(Arc::new(hook));
         self
@@ -644,10 +527,6 @@ impl TestTransportBuilder {
     pub(crate) fn state<T: Any + Send + Sync>(mut self, state: Arc<T>) -> Self {
         self.transport.state = Some(state);
         self
-    }
-
-    pub(crate) fn handle(&self) -> TestTransportHandle {
-        self.transport.handle()
     }
 
     pub(crate) fn sent(&self) -> SendLog {

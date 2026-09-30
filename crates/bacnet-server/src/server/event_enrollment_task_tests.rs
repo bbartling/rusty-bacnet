@@ -9,24 +9,14 @@
 //! for the intrinsic `Time_Delay` path.
 
 use super::*;
-use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use crate::server::event_notifications_tests::recording_transport;
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::{EventState, EventType};
-
-/// Records broadcasts and discards unicasts; the same minimal harness the
-/// other server notification tests use.
-fn recording_transport() -> (TestTransport, SendLog) {
-    let transport = TestTransport::builder()
-        .local_mac(&BIP_LOCAL_MAC)
-        .unicast(SendMode::Ignore)
-        .build();
-    let sent = transport.sent();
-    (transport, sent)
-}
 
 /// Time_Delay=2 on a one-second evaluation interval: the first pass of the
 /// out-of-range condition seeds the countdown, and the transition fires on

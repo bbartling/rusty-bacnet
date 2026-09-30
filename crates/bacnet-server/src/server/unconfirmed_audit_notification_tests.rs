@@ -8,8 +8,8 @@ use bacnet_types::enums::AuditOperation;
 use super::audit_notification_tests::{
     count, database, database_with_device, notification, oid, request_bytes, MemoryPersistence,
 };
-use super::test_transport::{SendLog, TestTransport};
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 
 fn received(
     source_mac: &[u8],
@@ -76,7 +76,7 @@ async fn assert_silent_drop(
     )
     .await;
     assert_eq!(count(db, sink).await, before);
-    assert!(sends.is_empty());
+    assert_eq!(sends.len(), 0, "a silently dropped request must not send");
 }
 
 #[tokio::test]
@@ -136,7 +136,8 @@ async fn accepted_direct_and_routed_requests_commit_atomically_without_output() 
     )
     .await;
     assert_eq!(count(&db, sink).await, (2, 2));
-    assert!(routed_sends.is_empty() && direct_sends.is_empty());
+    assert_eq!(routed_sends.len(), 0, "the routed request must not send");
+    assert_eq!(direct_sends.len(), 0, "the direct request must not send");
     assert!(persistence
         .snapshot
         .lock()

@@ -66,14 +66,8 @@ impl ScServerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::test_transport::{StartMode, TestTransport};
+    use crate::server::test_transport::TestTransport;
 
-    /// Startup panics, so reaching it means invalid limits were not refused first.
-    fn never_start() -> TestTransport {
-        TestTransport::builder()
-            .start(StartMode::Panic("invalid budget reached startup"))
-            .build()
-    }
     #[tokio::test]
     async fn read_range_all_builders_validate_before_start_or_dial() {
         let default = ReadRangeBudget::default();
@@ -105,12 +99,12 @@ mod tests {
                     ..Default::default()
                 },
                 ObjectDatabase::new(),
-                never_start(),
+                TestTransport::never_start(),
             )
             .await
             .err();
             let generic = BACnetServer::generic_builder()
-                .transport(never_start())
+                .transport(TestTransport::never_start())
                 .read_range_budget(budget)
                 .build()
                 .await

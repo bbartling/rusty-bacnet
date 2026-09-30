@@ -1,6 +1,7 @@
 //! Wire-visible optional property, metadata/PICS, and network-write denial.
 
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_services::{
     common::PropertyReference,
     read_property::{ReadPropertyACK, ReadPropertyRequest},

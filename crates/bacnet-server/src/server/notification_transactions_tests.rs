@@ -10,8 +10,8 @@ use bytes::Bytes;
 use tokio::sync::Notify;
 
 use super::notification_transactions::NotificationReserveError;
-use super::test_transport::{TestTransport, BIP_LOCAL_MAC};
 use super::*;
+use crate::server::test_transport::{TestTransport, BIP_LOCAL_MAC};
 use bacnet_transport::port::TransportProvenance;
 
 const COV_SERVICE: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;

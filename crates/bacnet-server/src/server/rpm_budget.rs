@@ -66,16 +66,7 @@ impl ScServerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::test_transport::{StartMode, TestTransport};
-
-    /// Startup panics, so reaching it means invalid limits were not refused first.
-    fn never_start() -> TestTransport {
-        TestTransport::builder()
-            .start(StartMode::Panic(
-                "invalid RPM budget reached transport startup",
-            ))
-            .build()
-    }
+    use crate::server::test_transport::TestTransport;
 
     #[tokio::test]
     async fn rpm_defaults_builders_and_validation_before_start() {
@@ -111,11 +102,11 @@ mod tests {
                     ..Default::default()
                 },
                 ObjectDatabase::new(),
-                never_start(),
+                TestTransport::never_start(),
             )
             .await;
             let generic = BACnetServer::generic_builder()
-                .transport(never_start())
+                .transport(TestTransport::never_start())
                 .read_property_multiple_budget(budget)
                 .build()
                 .await;
@@ -132,10 +123,11 @@ mod tests {
                 read_property_multiple_budget: budget,
                 ..Default::default()
             };
-            let error = BACnetServer::start(config, ObjectDatabase::new(), never_start())
-                .await
-                .err()
-                .unwrap();
+            let error =
+                BACnetServer::start(config, ObjectDatabase::new(), TestTransport::never_start())
+                    .await
+                    .err()
+                    .unwrap();
             assert!(
                 !error.to_string().contains("rpm_max_"),
                 "preserve existing APDU validation priority"

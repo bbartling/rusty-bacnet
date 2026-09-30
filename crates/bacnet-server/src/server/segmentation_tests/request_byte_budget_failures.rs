@@ -14,7 +14,7 @@ use tokio::time::timeout;
 struct Fixture {
     server: BACnetServer<TestTransport>,
     incoming: mpsc::Sender<ReceivedNpdu>,
-    sent: SentFrames,
+    sent: SendLog,
     control: TestTransportHandle,
     router: MacAddr,
     remote: NpduAddress,

@@ -70,16 +70,7 @@ impl ScServerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::test_transport::{StartMode, TestTransport};
-
-    /// Startup panics, so reaching it means invalid limits were not refused first.
-    fn never_start() -> TestTransport {
-        TestTransport::builder()
-            .start(StartMode::Panic(
-                "invalid alarm summary budget reached startup",
-            ))
-            .build()
-    }
+    use crate::server::test_transport::TestTransport;
 
     #[tokio::test]
     async fn alarm_summary_defaults_builders_and_pre_start_validation() {
@@ -112,12 +103,12 @@ mod tests {
                     ..Default::default()
                 },
                 ObjectDatabase::new(),
-                never_start(),
+                TestTransport::never_start(),
             )
             .await
             .err();
             let generic = BACnetServer::generic_builder()
-                .transport(never_start())
+                .transport(TestTransport::never_start())
                 .get_alarm_summary_budget(budget)
                 .build()
                 .await

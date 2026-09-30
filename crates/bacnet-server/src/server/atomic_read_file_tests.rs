@@ -1,15 +1,8 @@
 use super::*;
-use crate::server::test_transport::{StartMode, TestTransport};
+use crate::server::test_transport::TestTransport;
 use bacnet_client::client::BACnetClient;
 use bacnet_objects::file::FileObject;
 use bacnet_services::file::{AtomicReadFileRequest, FileAccessMethod};
-
-/// Startup panics, so reaching it means invalid limits were not refused first.
-fn never_start() -> TestTransport {
-    TestTransport::builder()
-        .start(StartMode::Panic("invalid budget reached startup"))
-        .build()
-}
 
 #[tokio::test]
 async fn atomic_read_file_all_builders_validate_before_start_or_dial() {
@@ -51,12 +44,12 @@ async fn atomic_read_file_all_builders_validate_before_start_or_dial() {
                 ..Default::default()
             },
             ObjectDatabase::new(),
-            never_start(),
+            TestTransport::never_start(),
         )
         .await
         .err();
         let generic = BACnetServer::generic_builder()
-            .transport(never_start())
+            .transport(TestTransport::never_start())
             .atomic_read_file_budget(budget)
             .build()
             .await

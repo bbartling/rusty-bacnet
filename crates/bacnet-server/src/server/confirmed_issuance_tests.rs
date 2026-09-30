@@ -1,8 +1,8 @@
 //! Live server tests for the local encoded-response issuance boundary.
 //! A transport exposes an encoded NPDU, then holds its send Result unresolved.
 //! This is local operation observation, not physical delivery or peer receipt.
-use super::test_transport::{SendMode, SentFrame, StartMode, TestTransport};
 use super::*;
+use crate::server::test_transport::{SendMode, SentFrame, StartMode, TestTransport};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::value_types::CharacterStringValueObject;
@@ -104,7 +104,7 @@ fn gated_port(
     TestTransport::builder()
         .local_mac(&[2])
         .start(match incoming {
-            Some(incoming) => StartMode::Inbound(incoming),
+            Some(incoming) => StartMode::Inbound(Some(incoming)),
             None => StartMode::Panic("gated port has no inbound channel"),
         })
         .broadcast(SendMode::Ignore)

@@ -2,8 +2,8 @@ use super::device_bindings::{
     BindingFreshness, DeviceBindingTable, DeviceResolution, ObservationOutcome,
     MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
 };
-use super::test_transport::TestTransport;
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
 

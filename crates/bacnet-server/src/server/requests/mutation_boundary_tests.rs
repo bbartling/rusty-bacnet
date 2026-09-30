@@ -1,8 +1,7 @@
-use super::mutation_tests::{
-    apdu, assert_denied, cases, oid, route, Fixture, TestTransport, SOURCE,
-};
+use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
 use super::*;
 use crate::mutation::MutationTarget;
+use crate::server::test_transport::TestTransport;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};

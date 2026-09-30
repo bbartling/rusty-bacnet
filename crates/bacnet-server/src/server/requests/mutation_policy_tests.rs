@@ -1,8 +1,9 @@
 use super::*;
 use crate::mutation::{MutationAuthorizer, MutationDecisionCounters, MutationServiceCounters};
 use crate::server::requests::mutation_tests::{
-    apdu, assert_denied, cases, oid, route, value, wpm, Fixture, TestTransport, SOURCE,
+    apdu, assert_denied, cases, oid, route, value, wpm, Fixture, SOURCE,
 };
+use crate::server::test_transport::TestTransport;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;

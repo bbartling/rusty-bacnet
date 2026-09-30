@@ -24,8 +24,8 @@ use bacnet_types::enums::{
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
-use super::test_transport::{SendLog, TestTransport};
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 
 /// A link at `0A:00:00:01` fed by the returned inbound channel (capacity 256).
 /// Its log records every unicast and broadcast; a second start fails.
