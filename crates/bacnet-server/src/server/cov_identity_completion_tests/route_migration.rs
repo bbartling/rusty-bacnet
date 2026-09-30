@@ -148,9 +148,9 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
         .unwrap();
     let current = migrate(&fixture, &old).await;
     assert_eq!(
-        current.last_notified_observation.as_ref().unwrap().sample(),
-        &CovSample::new(&PropertyValue::Real(10.0)).unwrap(),
-        "confirmed admission established the baseline before route migration"
+        current.last_notified_observation,
+        Some(observation(1.0)),
+        "an unacknowledged confirmed report leaves the baseline alone (#896)"
     );
     assert!(fixture
         .table
@@ -176,6 +176,13 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
             service_choice: request.service_choice
         })
     ));
+    // Let the worker handle the ACK before shutdown can cancel it.
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), fixture.transactions.join_next())
+            .await
+            .unwrap(),
+        Some(Ok(()))
+    ));
     fixture.finish(false).await;
     assert_eq!(
         fixture
@@ -188,4 +195,74 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
         Some(observation(99.0)),
         "late old-route worker/ACK cannot replace a current observation"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cov_multiple_route_change_mid_flight_reports_the_held_change_on_the_new_route() {
+    let fixture = Fixture::new(true);
+    let old = fixture
+        .table
+        .write()
+        .await
+        .admit_for_test(routed(true), 0)
+        .unwrap();
+    fixture.fire(true, std::slice::from_ref(&old)).await;
+    tokio::time::timeout(Duration::from_secs(2), fixture.entered.notified())
+        .await
+        .unwrap();
+    // The move fences the outstanding report, whose Ack can no longer complete
+    // the reference, so the reference is queued for a fresh look (#896).
+    migrate(&fixture, &old).await;
+    let queued: Vec<_> = fixture
+        .table
+        .read()
+        .await
+        .revisits()
+        .queued()
+        .into_iter()
+        .collect();
+    assert_eq!(queued, vec![old.key().clone()]);
+    BACnetServer::<TestTransport>::fire_cov_revisits(
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &fixture.db,
+            network: &fixture.network,
+            cov_table: &fixture.table,
+            cov_in_flight: &fixture.permits,
+            notification_transactions: &fixture.transactions,
+            comm_state: &fixture.comm,
+            config: &fixture.config,
+        },
+        &queued,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(2), fixture.entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.routes.lock().unwrap().as_slice(),
+        [
+            old.subscriber_mac.clone(),
+            MacAddr::from_slice(&[127, 0, 0, 9, 0xba, 0xd0])
+        ],
+        "the held change goes to the new route"
+    );
+    let frame = fixture.sent.lock().unwrap()[1].clone();
+    let Apdu::ConfirmedRequest(request) = decode_apdu(decode_npdu(frame).unwrap().payload).unwrap()
+    else {
+        panic!("confirmed Multiple");
+    };
+    let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+    assert_eq!(
+        report.list_of_cov_notifications[0].list_of_values[0].value,
+        {
+            let mut encoded = BytesMut::new();
+            bacnet_encoding::primitives::encode_property_value(
+                &mut encoded,
+                &PropertyValue::Real(10.0),
+            )
+            .unwrap();
+            encoded.to_vec()
+        }
+    );
+    fixture.finish(false).await;
 }

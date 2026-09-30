@@ -18,6 +18,12 @@ async fn reap_after_ingress_closure(hold_request: bool) {
         if batch == 0 {
             fire_cov(&server, CovNotificationKind::Single).await;
         } else {
+            // The first report failed: wait out its hold-off (#896).
+            tokio::time::advance(
+                Duration::from_millis(server.config.cov_retry_timeout_ms)
+                    * (u32::from(DEFAULT_APDU_RETRIES) + 1),
+            )
+            .await;
             server
                 .write_local(
                     &ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
@@ -217,6 +223,13 @@ async fn stop_cov(kind: CovNotificationKind, service: ConfirmedServiceChoice) {
             .active_peer_count(),
         0
     );
+    // Stop ends the outstanding report without a hold-off, and the baseline
+    // still waits for an Ack (#896).
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
+    let mut table = server.cov_table.write().await;
+    let entry = table.subscriptions_for(&oid)[0].clone();
+    assert!(table.confirmed_idle(&entry), "{kind:?}");
+    assert_eq!(entry.last_notified_observation, None, "{kind:?}");
 }
 
 #[tokio::test]

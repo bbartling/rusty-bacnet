@@ -26,11 +26,19 @@ fn value(v: f32) -> CovObservation {
     CovObservation::new(CovSample::new(&PropertyValue::Real(v)).unwrap(), None).unwrap()
 }
 #[test]
-fn cov_order_counter_checked_exhaustion_and_confirmed_independence() {
+fn cov_order_counter_checked_exhaustion_covers_both_modes() {
     let mut table = CovSubscriptionTable::new();
     let sub = table
         .subscribe(proposal(CovNotificationKind::Single, false))
         .unwrap();
+    let mut other = proposal(CovNotificationKind::Single, true);
+    other.subscriber_process_identifier = 2;
+    let confirmed = table.subscribe(other).unwrap();
+    let first = confirmed.prepare_completion().unwrap();
+    assert!(
+        matches!(first, PreparedCovCompletion::Confirmed(ticket) if ticket.get() == 1),
+        "confirmed reports draw from the same counter (#896)"
+    );
     table.owner.issued.store(u64::MAX - 1, Ordering::Relaxed);
     let final_ticket = sub.prepare_completion().unwrap();
     assert!(table.complete_observation(&sub, final_ticket, value(10.0)));
@@ -42,6 +50,7 @@ fn cov_order_counter_checked_exhaustion_and_confirmed_independence() {
         u64::MAX
     );
     assert!(sub.prepare_completion().is_none());
+    assert!(confirmed.prepare_completion().is_none());
     assert_eq!(table.owner.issued.load(Ordering::Relaxed), u64::MAX);
     assert_eq!(
         table
@@ -50,25 +59,19 @@ fn cov_order_counter_checked_exhaustion_and_confirmed_independence() {
             .last_notified_observation,
         Some(value(10.0))
     );
-    let confirmed = table
-        .subscribe(proposal(CovNotificationKind::Single, true))
-        .unwrap();
-    assert!(table.complete_observation(
-        &confirmed,
-        confirmed.prepare_completion().unwrap(),
-        value(20.0)
-    ));
-    assert_eq!(table.owner.issued.load(Ordering::Relaxed), u64::MAX);
+    let flight = table.begin_confirmed(first, [&confirmed]).unwrap();
+    assert!(
+        !table.complete_observation(&confirmed, final_ticket, value(30.0)),
+        "mode mismatch fails closed"
+    );
+    assert!(table.complete_observation(&confirmed, first, value(20.0)));
+    drop(flight);
     assert_eq!(
         table
             .get_subscription(confirmed.key())
             .unwrap()
-            .last_successful_ticket,
-        0
-    );
-    assert!(
-        !table.complete_observation(&confirmed, final_ticket, value(30.0)),
-        "mode mismatch fails closed"
+            .last_notified_observation,
+        Some(value(20.0))
     );
 }
 #[test]

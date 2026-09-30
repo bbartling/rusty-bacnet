@@ -1,6 +1,6 @@
 //! Wire harness for server COV tests: an in-memory transport that records
 //! sent APDUs and moves a shared Device clock at chosen points, plus request,
-//! subscription and notification helpers.
+//! subscription, notification and subscriber-response helpers.
 use super::*;
 use crate::server::test_transport::{SentFrame, TestTransport};
 use bacnet_encoding::apdu::encode_apdu;
@@ -112,6 +112,11 @@ pub(super) struct Harness {
     pub(super) after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     pub(super) fail_notifications: Arc<AtomicBool>,
     pub(super) invoke_id: u8,
+    /// Invoke ID and service of the last confirmed notification taken.
+    last_confirmed: StdMutex<Option<(u8, ConfirmedServiceChoice)>>,
+    /// Every confirmed notification taken. Invoke IDs rotate, so a byte-equal
+    /// request with the same ID later is a retry, never a new report.
+    taken: StdMutex<Vec<ConfirmedRequestPdu>>,
 }
 
 impl Harness {
@@ -171,6 +176,8 @@ impl Harness {
             after_broadcast,
             fail_notifications,
             invoke_id: 0,
+            last_confirmed: StdMutex::new(None),
+            taken: StdMutex::new(Vec::new()),
         }
     }
 
@@ -309,8 +316,14 @@ impl Harness {
             .unwrap();
     }
 
-    /// Wait for the next notification carrying either service choice, leaving
-    /// other frames in place.
+    /// Whether `apdu` retries a confirmed notification already taken.
+    fn is_retry(&self, apdu: &Apdu) -> bool {
+        matches!(apdu, Apdu::ConfirmedRequest(request)
+            if self.taken.lock().unwrap().iter().any(|taken| taken == request))
+    }
+
+    /// Wait for the next new notification carrying either service choice,
+    /// discarding retries of those already taken and leaving other frames.
     async fn next_notification(
         &self,
         confirmed: ConfirmedServiceChoice,
@@ -321,6 +334,7 @@ impl Harness {
             loop {
                 let next = {
                     let mut frames = self.frames.lock().unwrap();
+                    frames.retain(|apdu| !self.is_retry(apdu));
                     let at = frames.iter().position(|apdu| match apdu {
                         Apdu::UnconfirmedRequest(request) => request.service_choice == unconfirmed,
                         Apdu::ConfirmedRequest(request) => request.service_choice == confirmed,
@@ -330,7 +344,13 @@ impl Harness {
                 };
                 match next {
                     Some(Apdu::UnconfirmedRequest(request)) => return request.service_request,
-                    Some(Apdu::ConfirmedRequest(request)) => return request.service_request,
+                    Some(Apdu::ConfirmedRequest(request)) => {
+                        *self.last_confirmed.lock().unwrap() =
+                            Some((request.invoke_id, request.service_choice));
+                        let body = request.service_request.clone();
+                        self.taken.lock().unwrap().push(request);
+                        return body;
+                    }
                     // Sleep rather than spin, so paused-time tests can advance.
                     _ => tokio::time::sleep(Duration::from_millis(1)).await,
                 }
@@ -397,18 +417,95 @@ impl Harness {
             .await;
     }
 
+    /// No new notification within 50 ms; retries of taken ones don't count.
     pub(super) async fn no_notification(&self) {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
             !self.frames.lock().unwrap().iter().any(|apdu| match apdu {
+                _ if self.is_retry(apdu) => false,
                 Apdu::UnconfirmedRequest(_) => true,
-                Apdu::ConfirmedRequest(request) =>
-                    request.service_choice
-                        == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                Apdu::ConfirmedRequest(request) => matches!(
+                    request.service_choice,
+                    ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+                        | ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+                ),
                 _ => false,
             }),
             "no notification expected"
         );
+    }
+
+    /// Invoke ID and service of the last confirmed notification taken, for a
+    /// later answer. Each notification is answered at most once.
+    pub(super) fn take_confirmed(&self) -> (u8, ConfirmedServiceChoice) {
+        self.last_confirmed
+            .lock()
+            .unwrap()
+            .take()
+            .expect("a confirmed notification to answer")
+    }
+
+    /// Deliver an answer from the subscriber.
+    async fn respond(&self, answer: Apdu) {
+        let mut payload = BytesMut::new();
+        encode_apdu(&mut payload, &answer).unwrap();
+        let mut npdu = BytesMut::new();
+        encode_npdu(
+            &mut npdu,
+            &Npdu {
+                payload: payload.freeze(),
+                ..Npdu::default()
+            },
+        )
+        .unwrap();
+        self.tx
+            .send(ReceivedNpdu {
+                direct_response: None,
+                npdu: npdu.freeze(),
+                source_mac: MacAddr::from_slice(&PEER),
+                link_layer_group: false,
+                data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
+                reply_tx: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    /// In paused time, return once the server has run all the work it has
+    /// ready, such as handling an Ack and the follow-up fanout it owes.
+    pub(super) async fn settle(&self) {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+
+    /// Acknowledge the last confirmed notification taken.
+    pub(super) async fn ack(&self) {
+        self.ack_request(self.take_confirmed()).await;
+    }
+
+    /// Acknowledge one confirmed notification.
+    pub(super) async fn ack_request(
+        &self,
+        (invoke_id, service_choice): (u8, ConfirmedServiceChoice),
+    ) {
+        self.respond(Apdu::SimpleAck(SimpleAck {
+            invoke_id,
+            service_choice,
+        }))
+        .await;
+    }
+
+    /// Answer the last confirmed notification taken with an Error.
+    pub(super) async fn reject(&self) {
+        let (invoke_id, service_choice) = self.take_confirmed();
+        self.respond(Apdu::Error(bacnet_encoding::apdu::ErrorPdu {
+            invoke_id,
+            service_choice,
+            error_class: bacnet_types::enums::ErrorClass::SERVICES,
+            error_code: bacnet_types::enums::ErrorCode::OTHER,
+            error_data: Bytes::new(),
+        }))
+        .await;
     }
 
     /// Wait until every confirmed notification worker has finished.

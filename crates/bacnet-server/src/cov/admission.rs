@@ -29,7 +29,9 @@ impl CovSubscriptionTable {
     /// context's (last write wins); the delay is reported, never acted on.
     /// The admitted route also replaces the route of every retained reference,
     /// including empty renewals. A changed route fences old snapshots while
-    /// preserving unreplaced observations; same-route refresh retains authority.
+    /// preserving unreplaced observations; same-route refresh retains authority,
+    /// unless it lists references while the context's confirmed report is
+    /// outstanding or holding off, which fences it the same way (#896).
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
@@ -70,13 +72,7 @@ impl CovSubscriptionTable {
         self.check_admission_multiple(&peer, new_count, 0)?;
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
-        let route_owner = self
-            .subs
-            .values()
-            .find(|entry| entry.key.multiple_context() == Some(context))
-            .filter(|entry| entry.endpoint() == *route)
-            .and_then(|entry| entry.route_owner.clone())
-            .unwrap_or_else(|| Arc::new(()));
+        let (flight, replaced) = self.context_flight(context, route, !subscriptions.is_empty());
         let mut previously_indefinite = 0;
         for entry in self.subs.values_mut() {
             if entry.key.multiple_context() == Some(context) {
@@ -85,7 +81,7 @@ impl CovSubscriptionTable {
                 entry.max_notification_delay = Some(max_notification_delay);
                 entry.subscription.subscriber_mac = route.mac.clone();
                 entry.subscription.subscriber_network = route.network.clone();
-                entry.route_owner = Some(Arc::clone(&route_owner));
+                entry.flight = flight.clone();
             }
         }
         if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
@@ -94,7 +90,7 @@ impl CovSubscriptionTable {
                 self.peer_indefinite_counts.remove(&peer);
             }
         }
-        Ok(subscriptions
+        let accepted = subscriptions
             .into_iter()
             .enumerate()
             .map(|(offset, sub)| {
@@ -103,10 +99,14 @@ impl CovSubscriptionTable {
                     sub,
                     first_generation + offset as u64,
                     Some(max_notification_delay),
-                    Some(Arc::clone(&route_owner)),
+                    Some(flight.clone()),
                 )
             })
-            .collect())
+            .collect();
+        if let Some(replaced) = replaced {
+            self.fence_context_flight(context, &replaced);
+        }
+        Ok(accepted)
     }
 
     /// Test fixture: admit one proposal through its family's production
@@ -162,14 +162,14 @@ impl CovSubscriptionTable {
         sub: CovSubscription,
         generation: u64,
         max_notification_delay: Option<u32>,
-        route_owner: Option<Arc<()>>,
+        context_flight: Option<super::confirmed::FlightMarker>,
     ) -> CovSubscriptionSnapshot {
         let snapshot = CovSubscriptionSnapshot {
             key,
             generation,
             owner: Arc::clone(&self.owner),
             last_successful_ticket: 0,
-            route_owner,
+            flight: context_flight.unwrap_or_default(),
             subscription: sub.clone(),
             max_notification_delay,
         };
@@ -184,6 +184,11 @@ impl CovSubscriptionTable {
         let peer = sub.recipient();
         let new_indefinite = sub.expires_at.is_none();
         if let Some(old) = self.subs.insert(snapshot.key.clone(), snapshot.clone()) {
+            if !old.flight.same(&snapshot.flight) {
+                // The replaced incarnation's outstanding report stops retrying;
+                // the replacement reports for itself (#896).
+                old.flight.fence();
+            }
             let old_indefinite = old.expires_at.is_none();
             if old_indefinite != new_indefinite {
                 if new_indefinite {

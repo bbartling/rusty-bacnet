@@ -1969,8 +1969,62 @@ local policy covers ordinary, Single and Multiple reports, including specialized
 Value_Source tuples; overlapping companions never complete unqualified references.
 Existing owner, generation, route and lifetime fences still apply. Same-route
 Multiple expiry refresh retains progress; reference replacement resets it.
-Ticket exhaustion suppresses further unconfirmed candidates for that table.
-Confirmed reports retain their admission-time baseline and consume no tickets.
+Ticket exhaustion suppresses further candidates of either form for that table.
+
+Confirmed reports draw tickets from the same counter but complete only on the
+subscriber's Ack (#896). Each coordinate has one outstanding confirmed report: an
+ordinary or SubscribeCOVProperty subscription, or a whole COV-multiple context.
+A context is one coordinate because every notification to it carries all the
+timestamped changes queued for it (Clauses 13.1, 13.16.3.1.2.3, 13.17.1.1.5), so
+one reference's report cannot be outstanding while a sibling's goes out. While a
+report is outstanding the coordinate is marked with its ticket and fanouts skip
+it, so later changes wait instead of going out as a second report. The Ack
+advances each carried reference's baseline to the acknowledged observation,
+clears the mark and fans the coordinate out again through the usual path; for a
+context that covers every live reference, held or carried. A change made in the
+meantime, Status_Flags included, then follows in one notification, and an
+unchanged value sends nothing. Under DCC that follow-up is dropped like any
+fanout rather than deferred, so a held change waits for the coordinate's next
+fanout after communication is re-enabled.
+
+Exhausted retries and an Error, Reject or Abort answer leave the baseline where it
+was and hold the coordinate off for one full retry cycle: the retry timeout times
+the attempts, the first one plus every retry. A fanout inside the hold-off skips
+the coordinate and schedules nothing. The first fanout after it reports the change
+again; for a context, whichever object that fanout was for, it hands the whole
+context to one follow-up, so changes held on every object go out together. Nothing
+re-sends by itself, so a subscriber that stopped answering, or keeps refusing,
+costs at most one delivery attempt per hold-off however often its objects change,
+and cannot keep the per-peer and global in-flight slots to itself. Shutdown and
+cancellation clear the mark without a hold-off. The retry timeout starts once each
+send has completed, and the transport bounds the send itself, so a report stays
+outstanding for the transport's send bounds plus the retry cycle. The standard
+ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
+after a hold-off is local policy.
+
+A replaced ordinary or SubscribeCOVProperty subscription starts unmarked, as does
+a context whose route changes or which is re-subscribed with a non-empty list
+while it is busy. The old incarnation's report stops retrying and can no longer
+complete or unmark the new one, so the initial report of a renewal or
+re-subscription (Clauses 13.14.2, 13.16.2) is not held behind it. When a context
+report is fenced this way while outstanding, or while a failed one is still owed a
+follow-up, every reference of the context, kept or relisted, is evaluated again.
+Relisted references have no baseline yet, so whichever of that follow-up and the
+initial report goes first carries them as first reports, and the other finds the
+context busy. The fenced report may already have reached the subscriber, so the
+follow-up can repeat changes of the kept references.
+
+Known limitation (#923): if that fenced report did reach the subscriber, and an
+untimestamped kept reference then returns to its old baseline value before the
+follow-up runs, the follow-up sees no change and the subscriber keeps the value
+the fenced report carried until the reference changes again.
+
+The follow-up task handles each batch of references on its own. If evaluating a
+batch panics, the panic is caught (in unwind builds) and logged with the number of
+references, and those references wait for their next fanout; later batches still
+run. The peer and global in-flight limits, event budgets and throttling counters
+apply to every report; a follow-up spends one event budget per object or context,
+as a natural fanout does.
 
 This orders prepared observations, not original object mutations, transport byte
 order or remote receipt. In particular, a retained Binary Lighting terminal
@@ -1984,9 +2038,12 @@ runs under the database write guard of network WriteProperty, `write_local`,
 Binary Lighting terminal transitions, committed intrinsic transitions (both
 write-triggered and those confirmed by the periodic Time_Delay task),
 fault-detection reliability changes and schedule writes. Changes queue
-per reference until a notification carrying them is transmitted. Any notification
+per reference until a notification carrying them is delivered: sent, for an
+unconfirmed context, or acknowledged, for a confirmed one (#896). Any notification
 to a context also carries the pending changes of that context's other references
-(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`.
+(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`. A
+confirmed context sends nothing while its report is outstanding, so the next
+notification carries everything held meanwhile (#896).
 Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
@@ -2005,7 +2062,7 @@ oldest in the context. Before sending, queued history is trimmed, oldest first, 
 fit the encoded request into the local maximum APDU. A reference's latest change is
 never dropped, so latest changes plus untimestamped values can still exceed it.
 Changes returned by a failed notification wait while a newer change of the same
-reference is in flight; once a newer change is transmitted, older ones are dropped
+reference is in flight; once a newer change is delivered, older ones are dropped
 rather than delivered as stale state. These drops increment
 `CovCounters::timed_changes_dropped` and log a warning. The subscriber's own
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
@@ -2058,8 +2115,8 @@ numeric signed zeros compare equal. These are explicit local exceptional-value
 policies, not Standard-prescribed arithmetic. Ordinary whole-object values follow
 the same rule (#889): a numeric Present_Value must move by the increment, and a
 non-numeric or increment-less one must change. Life Safety committed-delta
-triggers and confirmed-admission versus unconfirmed-success baseline timing are
-preserved.
+triggers are preserved, and a baseline still advances only when an unconfirmed
+report is sent or a confirmed one acknowledged (#896).
 
 Applicable Status_Flags changes independently trigger ordinary and property COV.
 Property reports include the selected value and declared-present flags; explicit

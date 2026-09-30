@@ -33,9 +33,28 @@ fn invalid_single_lifetime() -> (ConfirmedServiceChoice, BytesMut) {
     (ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY, bytes)
 }
 
+/// Answer every confirmed COV notification sent so far, as its subscriber would.
+fn acknowledge_confirmed(wire: &Wire) {
+    for frame in wire.sent.frames() {
+        let npdu = decode_npdu(frame.npdu.clone()).unwrap();
+        if let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload) {
+            wire.server.notification_transactions.admit_terminal(
+                &frame.mac,
+                npdu.destination.as_ref(),
+                &Apdu::SimpleAck(SimpleAck {
+                    invoke_id: request.invoke_id,
+                    service_choice: request.service_choice,
+                }),
+            );
+        }
+    }
+}
+
+/// A confirmed initial notification commits its observation on the Ack (#896).
 async fn initial_complete(wire: &Wire) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
+            acknowledge_confirmed(wire);
             let complete = {
                 let mut table = wire.server.cov_table.write().await;
                 let entries = table.subscriptions_for(&av(1));

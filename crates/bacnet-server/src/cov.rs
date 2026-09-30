@@ -15,12 +15,15 @@ mod identity;
 pub use identity::*;
 pub(crate) mod active;
 mod admission;
+mod confirmed;
+pub(crate) use confirmed::{BeginRefusal, CovRevisits};
 mod sample;
 pub use sample::CovSample;
 mod observation;
 mod observation_order;
 pub use observation::CovObservation;
 use observation_order::ObservationOwner;
+pub(crate) use observation_order::PreparedCovCompletion;
 pub(crate) mod flags;
 mod lifetime;
 pub(crate) mod multiple_reads;
@@ -100,6 +103,7 @@ pub struct CovSubscriptionTable {
     policy: CovPolicy,
     counters: Arc<AtomicCovCounters>,
     in_flight: Arc<CovInFlightTracker>,
+    revisits: Arc<CovRevisits>,
     dispatch_turn: usize,
     timed: timed::TimedStore,
 }
@@ -128,6 +132,7 @@ impl CovSubscriptionTable {
             policy: policy.sanitized(),
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
+            revisits: Arc::default(),
             dispatch_turn: 0,
             timed,
         }
@@ -201,6 +206,7 @@ impl CovSubscriptionTable {
     fn remove_internal(&mut self, key: &CovSubscriptionKey, was_cancelled: bool) -> bool {
         if let Some(sub) = self.subs.remove(key) {
             self.timed.lock().remove(key);
+            self.revisits.forget(key);
             let peer = sub.recipient();
             if let Some(count) = self.peer_counts.get_mut(&peer) {
                 *count = count.saturating_sub(1);

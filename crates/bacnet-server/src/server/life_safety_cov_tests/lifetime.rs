@@ -148,6 +148,18 @@ async fn take(fixture: &DispatchFixture, count: usize, family: Family, expected:
         };
         assert_eq!(remaining, expected);
     }
+    // Acknowledged workers complete their baselines (#896) before the caller
+    // fans out again.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !fixture.transactions.workers_empty() {
+            assert!(matches!(
+                fixture.transactions.join_next().await,
+                Some(Ok(()))
+            ));
+        }
+    })
+    .await
+    .unwrap();
 }
 
 async fn wire_case(family: Family, confirmed: bool, lifetime: Option<u32>, expected: u32) {

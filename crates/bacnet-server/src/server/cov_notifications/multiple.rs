@@ -1,4 +1,5 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
+use super::confirmed::ConfirmedReport;
 use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::build_items;
 use super::*;
@@ -35,7 +36,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 in_flight_tracker: &in_flight_tracker,
                 counters: &counters,
             },
-            None,
             &subscriptions,
             None,
             true,
@@ -46,7 +46,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     pub(in crate::server) async fn fire_cov_notification_multiple_for_subscriptions(
         handles: &CovFanoutHandles<'_, '_, T>,
-        changed_oid: Option<&ObjectIdentifier>,
         subscriptions: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
         force: bool,
@@ -76,14 +75,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         for subs in grouped.values() {
-            Self::send_cov_notification_multiple(
-                handles,
-                subs,
-                snapshot,
-                force || changed_oid.is_none(),
-                budget,
-            )
-            .await;
+            Self::send_cov_notification_multiple(handles, subs, snapshot, force, budget).await;
         }
     }
 
@@ -100,13 +92,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db,
                     network,
                     cov_table,
-                    cov_in_flight,
-                    notification_transactions,
                     config,
                     ..
                 },
-            in_flight_tracker,
             counters,
+            ..
         } = handles;
         if subscriptions.is_empty() {
             return;
@@ -194,6 +184,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .clone();
             let (retained, untimed) = {
                 let table = cov_table.read().await;
+                // A confirmed context has at most one outstanding report, and
+                // the next one has to batch everything held meanwhile (#896).
+                // That report's Ack, or the first fanout after a hold-off, sends
+                // it; nothing is drained until then.
+                if !table.context_idle(&context, subscriptions) {
+                    return;
+                }
+                // A failed report's changes can sit on any object of the
+                // context. The first fanout after its hold-off hands the whole
+                // context to one follow-up instead of reporting only its own
+                // object.
+                if table.take_owed_context(&context) {
+                    table.revisits().request(
+                        table
+                            .multiple_context_references(&context)
+                            .map(|sub| sub.key().clone()),
+                    );
+                    return;
+                }
                 let now = Instant::now();
                 let store = table.timed().clone();
                 let claim = claim.insert(TimedClaim::new(store.clone()));
@@ -261,8 +270,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 // Every notification to a context conveys all of its pending
                 // timestamped changes (§§13.17.1.1, 13.18.1.1), including those
-                // of references on objects that did not change now. Their
-                // captured values need no object read.
+                // of references on objects that did not change now. A confirmed
+                // context starts none while a report is outstanding, so this
+                // holds for it too. Captured values need no object read.
                 let mut untimed = HashSet::new();
                 for other in table.multiple_context_references(&context) {
                     if !other.timestamped {
@@ -340,131 +350,36 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         if representative.issue_confirmed_notifications {
-            let guard = match in_flight_tracker.try_acquire(
-                representative.recipient(),
-                config.cov_policy.max_confirmed_in_flight_per_peer,
-                cov_in_flight,
-            ) {
-                Ok(guard) => guard,
-                Err(InFlightAcquireError::PeerLimitExceeded) => {
-                    counters
-                        .notifications_throttled_peer
-                        .fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(InFlightAcquireError::GlobalPoolExhausted) => {
-                    warn!("255 confirmed COV notifications in-flight, skipping COVNotificationMultiple");
-                    return;
-                }
-            };
-
-            let (operation, result_rx) = match notification_transactions.reserve(
-                Self::canonical_cov_peer(&representative),
-                ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
-            ) {
-                Ok(reservation) => reservation,
-                Err(error) => {
-                    warn!(%error, "No free invoke ID for confirmed COVNotificationMultiple");
-                    return;
-                }
-            };
-            let id = operation.invoke_id();
-
-            let buf = match Self::encode_confirmed_cov_multiple_apdu(
-                &notification,
-                id,
-                apdu::max_apdu_header_at_or_below(config.max_apdu_length)
-                    .expect("validated local APDU capacity"),
-            ) {
-                Ok(buf) => buf,
-                Err(e) => {
-                    warn!(error = %e, "Failed to encode confirmed COVNotificationMultiple");
-                    return;
-                }
-            };
-
-            if !budget.try_consume(buf.len()) {
-                counters
-                    .notifications_throttled_fanout
-                    .fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-
-            counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
-            counters
-                .notifications_confirmed
-                .fetch_add(1, Ordering::Relaxed);
-            counters
-                .notification_bytes_sent
-                .fetch_add(buf.len() as u64, Ordering::Relaxed);
-
-            {
-                let mut table = cov_table.write().await;
-                for (snapshot, pv, completion) in &last_notified {
-                    table.complete_observation(snapshot, *completion, pv.clone());
-                }
-            }
-
-            let network = Arc::clone(network);
-            let sub = representative.clone();
-            let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
-            let apdu_retries = DEFAULT_APDU_RETRIES;
-            // Timestamped changes retire at the first transmitted attempt; a
-            // worker that never transmits requeues them when the claim drops.
-            let claim = Arc::new(std::sync::Mutex::new(claim));
-            notification_transactions.spawn(async move {
-                let _guard = guard;
-                let result = run_notification_worker(
-                    operation,
-                    result_rx,
-                    apdu_timeout,
-                    apdu_retries,
-                    |attempt| {
-                        let network = Arc::clone(&network);
-                        let buf = buf.clone();
-                        let sub = sub.clone();
-                        let claim = Arc::clone(&claim);
-                        async move {
-                            let result = Self::send_cov_apdu(&network, &buf, &sub, true).await;
-                            if result.is_ok() {
-                                let transmitted = claim
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .take();
-                                if let Some(transmitted) = transmitted {
-                                    transmitted.commit();
-                                }
-                            }
-                            match &result {
-                                Ok(()) => debug!(
-                                    invoke_id = id,
-                                    attempt, "Confirmed COVNotificationMultiple sent"
-                                ),
-                                Err(error) => warn!(
-                                    %error,
-                                    attempt, "COVNotificationMultiple send failed"
-                                ),
-                            }
-                            result
-                        }
-                    },
-                )
-                .await;
-                match result {
-                    NotificationWorkerResult::Ack => {
-                        debug!(invoke_id = id, "COVNotificationMultiple acknowledged");
-                    }
-                    NotificationWorkerResult::Error => warn!(
-                        invoke_id = id,
-                        "COVNotificationMultiple rejected by subscriber"
-                    ),
-                    NotificationWorkerResult::Exhausted => warn!(
-                        invoke_id = id,
-                        "COVNotificationMultiple failed after {} retries", apdu_retries
-                    ),
-                    NotificationWorkerResult::Closed => {}
-                }
-            });
+            let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
+                .expect("validated local APDU capacity");
+            Self::send_confirmed_cov(
+                handles,
+                budget,
+                ConfirmedReport {
+                    service: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                    route: representative,
+                    // The newest prepared ticket postdates every carried
+                    // reference's baseline, so it completes them all.
+                    completion: last_notified
+                        .iter()
+                        .map(|(_, _, completion)| *completion)
+                        .max_by_key(|completion| completion.ticket())
+                        .expect("a retained reference"),
+                    observations: last_notified
+                        .into_iter()
+                        .map(|(sub, observation, _)| (sub, observation))
+                        .collect(),
+                    claim,
+                },
+                |invoke_id| {
+                    Self::encode_confirmed_cov_multiple_apdu(
+                        &notification,
+                        invoke_id,
+                        max_apdu_length,
+                    )
+                },
+            )
+            .await;
         } else {
             let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
                 Ok(buf) => buf,
