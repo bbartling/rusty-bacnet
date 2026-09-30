@@ -64,7 +64,7 @@ async fn change_status(fixture: &DispatchFixture) {
 
 async fn fire(fixture: &DispatchFixture) -> Vec<u8> {
     change_status(fixture).await;
-    BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
+    BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &fixture.db,
             network: &fixture.network,
@@ -160,7 +160,7 @@ fn multiple_form(confirmed: bool, cancel: bool) -> Bytes {
 
 async fn take_after_confirmed(fixture: &DispatchFixture, count: usize) -> Vec<Apdu> {
     tokio::time::timeout(Duration::from_secs(2), async {
-        while fixture.sent.lock().unwrap().len() < count {
+        while fixture.sent.len() < count {
             tokio::task::yield_now().await;
         }
     })
@@ -219,7 +219,7 @@ async fn cov_identity_multiple_forms_coexist_refresh_and_cancel_exact_context() 
         [Apdu::SimpleAck(_)]
     ));
     change_status(&fixture).await;
-    BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
+    BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &fixture.db,
             network: &fixture.network,
@@ -269,12 +269,12 @@ async fn cov_identity_two_router_paths_renew_one_context_and_cleanup_current_rou
                 single(false),
             )
             .await;
-        let frames = fixture.sent.lock().unwrap().clone();
+        let frames = fixture.sent.frames();
         assert_eq!(frames.len(), 2);
-        for (bytes, destination) in frames {
-            assert_eq!(destination, router);
+        for frame in frames {
+            assert_eq!(frame.mac, router);
             assert_eq!(
-                decode_npdu(bytes).unwrap().destination,
+                decode_npdu(frame.npdu).unwrap().destination,
                 Some(remote.clone())
             );
         }

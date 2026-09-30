@@ -26,7 +26,6 @@ use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, EventType, NotifyType};
 use bytes::{Bytes, BytesMut};
-use std::sync::Mutex as StdMutex;
 
 /// The state value the fixture treats as an alarm, and the one it does not.
 const ALARM_STATE: u64 = 2;
@@ -54,7 +53,7 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
     let sent = broadcasts_from_per_write_path(&db, 0).await;
 
     assert_eq!(sent.len(), 1);
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let notification = decode_broadcast_notification(&sent);
     assert_eq!(notification.notify_type, NotifyType::EVENT.to_raw());
     assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
     assert_eq!(

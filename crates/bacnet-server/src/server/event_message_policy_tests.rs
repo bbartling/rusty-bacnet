@@ -30,7 +30,7 @@ fn commit(
     to: EventState,
     distribute: bool,
 ) -> Option<CommittedIntrinsicTransition> {
-    BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+    BACnetServer::<TestTransport>::commit_intrinsic_transition(
         db,
         &oid,
         TransitionOutcome {
@@ -158,7 +158,7 @@ fn stale_commit_does_not_mutate_committed_event_properties() {
 async fn outbound_message_text_equals_the_committed_history_coordinate() {
     let db = db_with_high_limit_transition(0x80);
     let sent = broadcasts_from_per_write_path(&db, 0).await;
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let notification = decode_broadcast_notification(&sent);
     let expected = "ANALOG_INPUT,1: NORMAL -> HIGH_LIMIT";
     let history = message_slots(
         &*db.read().await,

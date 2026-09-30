@@ -1,20 +1,15 @@
-use super::cov_notifications_tests::RecordingTransport;
+use super::cov_notifications_tests::recording_transport;
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::traits::BACnetObject;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 async fn start_server(
     egress_seconds: u64,
-) -> (
-    BACnetServer<RecordingTransport>,
-    ObjectIdentifier,
-    StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
-) {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport::new(StdArc::clone(&sent));
+) -> (BACnetServer<TestTransport>, ObjectIdentifier, SendLog) {
+    let (transport, sent) = recording_transport();
     let mut object = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     object
         .write_property(
@@ -62,7 +57,7 @@ async fn start_server(
 }
 
 async fn write_command(
-    server: &BACnetServer<RecordingTransport>,
+    server: &BACnetServer<TestTransport>,
     oid: ObjectIdentifier,
     value: u32,
     priority: u8,
@@ -81,7 +76,7 @@ async fn write_command(
 }
 
 async fn read(
-    server: &BACnetServer<RecordingTransport>,
+    server: &BACnetServer<TestTransport>,
     oid: ObjectIdentifier,
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -216,20 +211,20 @@ async fn expiry_fires_one_generic_cov_after_database_lock_release() {
         .unwrap();
 
     write_command(&server, oid, 3, 8).await;
-    assert_eq!(sent.lock().unwrap().len(), 1, "accepted-write coarse COV");
-    sent.lock().unwrap().clear();
+    assert_eq!(sent.len(), 1, "accepted-write coarse COV");
+    sent.clear();
 
     tokio::time::advance(Duration::from_secs(2)).await;
     settle().await;
     assert_eq!(
-        sent.lock().unwrap().len(),
+        sent.len(),
         1,
         "expiry must release the database write lock before the generic COV path rereads state"
     );
 
     tokio::time::advance(Duration::from_secs(10)).await;
     settle().await;
-    assert_eq!(sent.lock().unwrap().len(), 1, "one COV per actual expiry");
+    assert_eq!(sent.len(), 1, "one COV per actual expiry");
     server.stop().await.unwrap();
 }
 
@@ -310,7 +305,7 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
                 .unwrap();
         }
 
-        BACnetServer::<RecordingTransport>::fire_cov_notifications_from_snapshot(
+        BACnetServer::<TestTransport>::fire_cov_notifications_from_snapshot(
             &crate::server::cov_notify_context::CovNotifyContext {
                 db: &server.db,
                 network: server.test_network(),
@@ -327,9 +322,8 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
 
         let apdus = sent
             .lock()
-            .unwrap()
             .iter()
-            .map(|(frame, _)| decode_apdu(decode_npdu(frame.clone()).unwrap().payload).unwrap())
+            .map(|frame| decode_apdu(decode_npdu(frame.npdu.clone()).unwrap().payload).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(apdus.len(), 2);
         for apdu in apdus {

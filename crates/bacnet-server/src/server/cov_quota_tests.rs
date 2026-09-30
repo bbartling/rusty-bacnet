@@ -1,4 +1,3 @@
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
@@ -16,10 +15,11 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
-use super::cov_notifications_tests::RecordingTransport;
+use super::cov_notifications_tests::recording_transport;
 use super::*;
 use crate::cov::{CovNotificationKind, CovPolicy, CovSubscription};
 use crate::handlers::{handle_subscribe_cov, handle_subscribe_cov_property_multiple_with_initial};
+use crate::server::test_transport::TestTransport;
 
 fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -47,7 +47,6 @@ fn create_database_with_ais(count: u32) -> ObjectDatabase {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn peer_quota_isolation() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(10);
     let policy = CovPolicy {
         max_subscriptions_per_peer: 2,
@@ -58,7 +57,7 @@ async fn peer_quota_isolation() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await
@@ -136,7 +135,6 @@ async fn peer_quota_isolation() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn reserved_capacity_preservation() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(10);
     let reserved_mac = MacAddr::from_slice(&[192, 168, 1, 99]);
     let policy = CovPolicy {
@@ -149,7 +147,7 @@ async fn reserved_capacity_preservation() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await
@@ -246,7 +244,6 @@ async fn reserved_capacity_preservation() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn indefinite_subscription_policy() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(10);
     let policy = CovPolicy {
         allow_indefinite_subscriptions: false,
@@ -255,7 +252,7 @@ async fn indefinite_subscription_policy() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await
@@ -308,7 +305,6 @@ async fn indefinite_subscription_policy() {
     assert_eq!(server.cov_counters().subscriptions_active, 1);
 
     // Now test max_indefinite_per_peer when allow_indefinite is true
-    let sent2 = StdArc::new(StdMutex::new(Vec::new()));
     let db2 = create_database_with_ais(10);
     let policy2 = CovPolicy {
         allow_indefinite_subscriptions: true,
@@ -317,7 +313,7 @@ async fn indefinite_subscription_policy() {
     };
     let server2 = BACnetServer::generic_builder()
         .database(db2)
-        .transport(RecordingTransport::new(StdArc::clone(&sent2)))
+        .transport(recording_transport().0)
         .cov_policy(policy2)
         .build()
         .await
@@ -370,7 +366,6 @@ async fn indefinite_subscription_policy() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn disconnect_and_expiry_cleanup_releases_quota() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(10);
     let policy = CovPolicy {
         max_subscriptions_per_peer: 2,
@@ -379,7 +374,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await
@@ -535,7 +530,6 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn fanout_and_work_budgets_enforced() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(2);
     let policy = CovPolicy {
         max_notifications_per_event: 3,
@@ -546,7 +540,7 @@ async fn fanout_and_work_budgets_enforced() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await
@@ -576,7 +570,7 @@ async fn fanout_and_work_budgets_enforced() {
     }
 
     // Fire notifications for AI:1
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+    BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &server.db,
             network: server.test_network(),
@@ -603,7 +597,6 @@ async fn fanout_and_work_budgets_enforced() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn in_flight_confirmed_per_peer_throttled() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(2);
     let policy = CovPolicy {
         max_notifications_per_event: 64,
@@ -613,7 +606,7 @@ async fn in_flight_confirmed_per_peer_throttled() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await
@@ -644,7 +637,7 @@ async fn in_flight_confirmed_per_peer_throttled() {
         }
     }
 
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+    BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &server.db,
             network: server.test_network(),
@@ -669,7 +662,6 @@ async fn in_flight_confirmed_per_peer_throttled() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn subscribe_cov_property_multiple_atomic_rejection() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let db = create_database_with_ais(5);
     let policy = CovPolicy {
         max_subscriptions_per_peer: 3,
@@ -679,7 +671,7 @@ async fn subscribe_cov_property_multiple_atomic_rejection() {
 
     let server = BACnetServer::generic_builder()
         .database(db)
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(recording_transport().0)
         .cov_policy(policy)
         .build()
         .await

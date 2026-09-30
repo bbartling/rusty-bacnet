@@ -1,6 +1,7 @@
 //! End-to-end Event Enrollment notification lifecycle regressions.
 
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
@@ -11,7 +12,6 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{EventState, EventType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 #[path = "event_enrollment_notification_test_support.rs"]
 mod support;
@@ -320,14 +320,11 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
         guard.add(Box::new(replacement)).unwrap();
     }
 
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    let capture = NotificationCapture::default();
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
-            network: &Arc::new(NetworkLayer::new(RecordingTransport {
-                sent: StdArc::clone(&sent),
-                lock_probe: StdArc::default(),
-            })),
+            network: &Arc::new(NetworkLayer::new(capture.transport())),
             comm_state: &Arc::new(AtomicU8::new(0)),
             learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
             notification_transactions: &NotificationTransactions::new(),
@@ -342,7 +339,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
     )
     .await;
 
-    let notifications = drain_notifications(&sent);
+    let notifications = drain_notifications(&capture.sent);
     assert_eq!(notifications.len(), 1);
     assert!(
         notifications[0].ack_required,

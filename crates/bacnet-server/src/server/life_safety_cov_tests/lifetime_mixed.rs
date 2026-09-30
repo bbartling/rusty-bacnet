@@ -56,7 +56,7 @@ impl BACnetObject for ReadProbe {
 
 async fn fire(fixture: &DispatchFixture, initial: bool, snapshots: &[CovSubscriptionSnapshot]) {
     if initial {
-        BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
+        BACnetServer::<TestTransport>::fire_initial_cov_notification_multiple(
             &crate::server::cov_notify_context::CovNotifyContext {
                 db: &fixture.db,
                 network: &fixture.network,
@@ -70,7 +70,7 @@ async fn fire(fixture: &DispatchFixture, initial: bool, snapshots: &[CovSubscrip
         )
         .await;
     } else {
-        BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
+        BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
             &crate::server::cov_notify_context::CovNotifyContext {
                 db: &fixture.db,
                 network: &fixture.network,
@@ -158,7 +158,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
     work.await;
     if retain_value {
         tokio::time::timeout(Duration::from_secs(2), async {
-            while fixture.sent.lock().unwrap().is_empty() {
+            while fixture.sent.is_empty() {
                 tokio::task::yield_now().await;
             }
         })

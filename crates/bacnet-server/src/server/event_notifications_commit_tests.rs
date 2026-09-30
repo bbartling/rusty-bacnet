@@ -99,14 +99,12 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
         .unwrap()
         .evaluate_intrinsic_reporting()
         .unwrap();
-    assert!(
-        BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
-            &mut db,
-            &oid,
-            proposal.clone(),
-        )
-        .is_none()
-    );
+    assert!(BACnetServer::<TestTransport>::commit_intrinsic_transition(
+        &mut db,
+        &oid,
+        proposal.clone(),
+    )
+    .is_none());
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
     assert_eq!(
         db.get_mut(&oid).unwrap().evaluate_intrinsic_reporting(),
@@ -145,7 +143,7 @@ async fn clockless_intrinsic_commit_stores_and_sends_one_reserved_sequence() {
     }
 
     let sent = broadcasts_from_per_write_path(&db, 0).await;
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let notification = decode_broadcast_notification(&sent);
     assert_eq!(
         notification.timestamp,
         BACnetTimeStamp::SequenceNumber(0),
@@ -210,7 +208,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
             .unwrap()
             .evaluate_intrinsic_reporting()
             .unwrap();
-        BACnetServer::<RecordingTransport>::commit_intrinsic_transition(&mut guard, &oid, outcome)
+        BACnetServer::<TestTransport>::commit_intrinsic_transition(&mut guard, &oid, outcome)
             .unwrap()
     };
 
@@ -233,12 +231,9 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
         );
     }
 
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    }));
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    let (transport, sent) = recording_transport();
+    let network = Arc::new(NetworkLayer::new(transport));
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -257,7 +252,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
     .await;
 
     assert!(
-        decode_broadcast_notification(&sent).ack_required,
+        decode_broadcast_notification(&sent.npdus()).ack_required,
         "wire Ack_Required must use the commit-time snapshot"
     );
 }

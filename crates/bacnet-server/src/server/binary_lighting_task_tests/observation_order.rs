@@ -62,7 +62,7 @@ async fn cov_order_supplied_terminal_snapshot_orders_preparation_not_object_age(
     );
     // The intentionally retained older terminal snapshot is prepared later;
     // its new ticket may replace the newer object's previously sent baseline.
-    BACnetServer::<RecordingTransport>::fire_cov_notifications_from_snapshot(
+    BACnetServer::<TestTransport>::fire_cov_notifications_from_snapshot(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &server.db,
             network: server.test_network(),
@@ -97,11 +97,10 @@ async fn cov_order_supplied_terminal_snapshot_orders_preparation_not_object_age(
     );
     let values = sent
         .lock()
-        .unwrap()
         .iter()
-        .map(|(frame, _)| {
+        .map(|frame| {
             let Apdu::UnconfirmedRequest(request) =
-                decode_apdu(decode_npdu(frame.clone()).unwrap().payload).unwrap()
+                decode_apdu(decode_npdu(frame.npdu.clone()).unwrap().payload).unwrap()
             else {
                 panic!()
             };

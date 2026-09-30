@@ -1,5 +1,6 @@
-use super::cov_notifications_tests::RecordingTransport;
+use super::cov_notifications_tests::recording_transport;
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_objects::binary::{BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::BinaryLightingOutputObject;
@@ -9,7 +10,7 @@ use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitVal
 use bacnet_types::enums::Reliability;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
+use std::sync::Arc as StdArc;
 
 fn reference(object_type: ObjectType, instance: u32) -> BACnetDeviceObjectReference {
     BACnetDeviceObjectReference {
@@ -58,7 +59,7 @@ fn add_device(db: &mut ObjectDatabase) {
 }
 
 async fn read(
-    server: &BACnetServer<RecordingTransport>,
+    server: &BACnetServer<TestTransport>,
     oid: ObjectIdentifier,
     property: PropertyIdentifier,
     array_index: Option<u32>,
@@ -75,7 +76,7 @@ async fn read(
 
 #[tokio::test]
 async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     let source = ObjectIdentifier::new(ObjectType::STAGING, 1).unwrap();
     let targets = [
         ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1).unwrap(),
@@ -112,7 +113,7 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(transport)
         .database(db)
         .enable_event_enrollment(false)
         .build()
@@ -149,7 +150,7 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
             timestamped: false,
         })
         .unwrap();
-    sent.lock().unwrap().clear();
+    sent.clear();
     server
         .write_local(
             &source,
@@ -188,12 +189,11 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
             })
         );
     }
-    assert_eq!(sent.lock().unwrap().len(), 1);
+    assert_eq!(sent.len(), 1);
 }
 
 #[tokio::test]
 async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stage() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let source = ObjectIdentifier::new(ObjectType::STAGING, 2).unwrap();
     let target = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 2).unwrap();
     let mut db = clocked_test_database();
@@ -214,7 +214,7 @@ async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stag
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
-        .transport(RecordingTransport::new(sent))
+        .transport(recording_transport().0)
         .database(db)
         .enable_event_enrollment(false)
         .build()
@@ -266,7 +266,6 @@ async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stag
 
 #[tokio::test]
 async fn target_failure_faults_source_and_current_success_recovers() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let source = ObjectIdentifier::new(ObjectType::STAGING, 3).unwrap();
     let target = ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 9).unwrap();
     let mut db = clocked_test_database();
@@ -285,7 +284,7 @@ async fn target_failure_faults_source_and_current_success_recovers() {
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
-        .transport(RecordingTransport::new(sent))
+        .transport(recording_transport().0)
         .database(db)
         .enable_event_enrollment(false)
         .build()
@@ -390,7 +389,6 @@ impl BACnetObject for CountingBinaryOutput {
 
 #[tokio::test]
 async fn retained_stage_does_not_emit_a_duplicate_plan() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
     let writes = StdArc::new(AtomicUsize::new(0));
     let source = ObjectIdentifier::new(ObjectType::STAGING, 4).unwrap();
     let mut db = clocked_test_database();
@@ -414,7 +412,7 @@ async fn retained_stage_does_not_emit_a_duplicate_plan() {
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
-        .transport(RecordingTransport::new(sent))
+        .transport(recording_transport().0)
         .database(db)
         .enable_event_enrollment(false)
         .build()

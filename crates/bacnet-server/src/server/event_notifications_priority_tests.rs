@@ -12,7 +12,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -30,7 +30,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(notif.priority, 50, "TO_OFFNORMAL priority from PRIORITY[0]");
     assert!(
         notif.ack_required,
@@ -48,7 +48,7 @@ async fn event_notification_projects_fault_priority_from_class() {
         from: EventState::NORMAL,
         to: EventState::FAULT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -66,7 +66,7 @@ async fn event_notification_projects_fault_priority_from_class() {
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(notif.priority, 150, "TO_FAULT priority from PRIORITY[1]");
     assert!(
         !notif.ack_required,
@@ -100,7 +100,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
         from: EventState::FAULT,
         to: EventState::NORMAL,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -118,7 +118,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(
         notif.event_type,
         EventType::CHANGE_OF_RELIABILITY.to_raw(),
@@ -138,7 +138,7 @@ async fn event_notification_projects_normal_priority_from_class() {
         from: EventState::HIGH_LIMIT,
         to: EventState::NORMAL,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
@@ -156,7 +156,7 @@ async fn event_notification_projects_normal_priority_from_class() {
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(notif.priority, 250, "TO_NORMAL priority from PRIORITY[2]");
     assert!(
         notif.ack_required,

@@ -1,5 +1,6 @@
-use super::cov_notifications_tests::RecordingTransport;
+use super::cov_notifications_tests::recording_transport;
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
@@ -10,7 +11,6 @@ use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 fn point_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap()
@@ -46,11 +46,10 @@ fn life_safety_db() -> ObjectDatabase {
     db
 }
 
-fn decode_sent(sent: &StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>) -> Vec<Apdu> {
+fn decode_sent(sent: &SendLog) -> Vec<Apdu> {
     sent.lock()
-        .unwrap()
         .iter()
-        .map(|(frame, _)| decode_apdu(decode_npdu(frame.clone()).unwrap().payload).unwrap())
+        .map(|frame| decode_apdu(decode_npdu(frame.npdu.clone()).unwrap().payload).unwrap())
         .collect()
 }
 
@@ -71,9 +70,9 @@ fn single_properties(apdu: &Apdu) -> Vec<PropertyIdentifier> {
 }
 
 struct ExactFixture {
-    sent: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
+    sent: SendLog,
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     cov_in_flight: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
@@ -82,10 +81,8 @@ struct ExactFixture {
 
 impl ExactFixture {
     async fn new(subscriptions: impl IntoIterator<Item = CovSubscription>) -> Self {
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
-        let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-            &sent,
-        ))));
+        let (transport, sent) = recording_transport();
+        let network = Arc::new(NetworkLayer::new(transport));
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
         {
             let mut table = cov_table.write().await;
@@ -105,7 +102,7 @@ impl ExactFixture {
     }
 
     async fn fire(&self, changes: &[PropertyIdentifier]) {
-        BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
+        BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
             &crate::server::cov_notify_context::CovNotifyContext {
                 db: &self.db,
                 network: &self.network,
@@ -123,7 +120,7 @@ impl ExactFixture {
 
     fn take_apdus(&self) -> Vec<Apdu> {
         let decoded = decode_sent(&self.sent);
-        self.sent.lock().unwrap().clear();
+        self.sent.clear();
         decoded
     }
 }
@@ -291,9 +288,9 @@ async fn exact_multiple_cov_groups_matching_properties_and_one_status_flags() {
 
 #[tokio::test]
 async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let mut server = BACnetServer::<RecordingTransport>::generic_builder()
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+    let (transport, sent) = recording_transport();
+    let mut server = BACnetServer::<TestTransport>::generic_builder()
+        .transport(transport)
         .database(life_safety_db())
         .enable_event_enrollment(false)
         .build()
@@ -350,9 +347,9 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
 }
 
 struct DispatchFixture {
-    sent: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
+    sent: SendLog,
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     seg_send_permits: Arc<Semaphore>,
@@ -372,7 +369,7 @@ impl DispatchFixture {
         db: ObjectDatabase,
         subscriptions: impl IntoIterator<Item = CovSubscription>,
     ) -> Self {
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
+        let (transport, sent) = recording_transport();
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
         {
             let mut table = cov_table.write().await;
@@ -381,9 +378,7 @@ impl DispatchFixture {
             }
         }
         Self {
-            network: Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-                &sent,
-            )))),
+            network: Arc::new(NetworkLayer::new(transport)),
             sent,
             db: Arc::new(RwLock::new(db)),
             cov_table,
@@ -428,7 +423,7 @@ impl DispatchFixture {
         service_choice: ConfirmedServiceChoice,
         service_request: Bytes,
     ) {
-        BACnetServer::<RecordingTransport>::handle_confirmed_request(
+        BACnetServer::<TestTransport>::handle_confirmed_request(
             &RequestServices {
                 db: Arc::clone(&self.db),
                 cov_table: Arc::clone(&self.cov_table),
@@ -465,7 +460,7 @@ impl DispatchFixture {
 
     fn take_apdus(&self) -> Vec<Apdu> {
         let apdus = decode_sent(&self.sent);
-        self.sent.lock().unwrap().clear();
+        self.sent.clear();
         apdus
     }
 }
@@ -614,9 +609,8 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_seco
     let first_raw: Vec<Bytes> = fixture
         .sent
         .lock()
-        .unwrap()
         .iter()
-        .map(|(frame, _)| frame.clone())
+        .map(|frame| frame.npdu.clone())
         .collect();
     let apdus = fixture.take_apdus();
     assert_eq!(apdus.len(), 2);
@@ -638,9 +632,8 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_seco
     let second_raw: Vec<Bytes> = fixture
         .sent
         .lock()
-        .unwrap()
         .iter()
-        .map(|(frame, _)| frame.clone())
+        .map(|frame| frame.npdu.clone())
         .collect();
     assert_eq!(
         second_raw.len(),

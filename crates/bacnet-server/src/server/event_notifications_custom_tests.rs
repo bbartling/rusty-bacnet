@@ -3,6 +3,7 @@ use super::*;
 use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
 use bacnet_services::alarm_event::NotificationParameters;
 use std::borrow::Cow;
+use std::sync::Mutex as StdMutex;
 
 struct CustomProposal {
     oid: ObjectIdentifier,
@@ -383,7 +384,7 @@ async fn failed_custom_commit_retries_through_per_write_runtime() {
     assert!(commits.lock().unwrap().is_empty());
     mode.store(1, Ordering::SeqCst);
     let sent = broadcasts_from_per_write_path(&db, 0).await;
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let notification = decode_broadcast_notification(&sent);
     assert_committed(&*db.read().await, &notification, &commits.lock().unwrap());
 }
 
@@ -392,7 +393,7 @@ async fn custom_immediate_proposal_commits_exact_history_before_distribution() {
     let (db, commits) = database(0, Arc::new(AtomicU8::new(1)), false, true);
     let db = Arc::new(RwLock::new(db));
     let sent = broadcasts_from_per_write_path(&db, 0).await;
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let notification = decode_broadcast_notification(&sent);
     assert_committed(&*db.read().await, &notification, &commits.lock().unwrap());
     assert!(broadcasts_from_per_write_path(&db, 0).await.is_empty());
     assert_eq!(commits.lock().unwrap().len(), 1);
@@ -423,22 +424,15 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
         .evaluate_intrinsic_reporting()
         .is_none());
     assert_eq!(snapshot(&db), before);
-    let sent = Arc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: sent.clone(),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let mut server = BACnetServer::start_clockless(ServerConfig::default(), db, transport)
         .await
         .unwrap();
     tokio::task::yield_now().await;
-    assert!(
-        sent.lock().unwrap().is_empty(),
-        "delay must not fire immediately"
-    );
+    assert!(sent.is_empty(), "delay must not fire immediately");
     tokio::time::sleep(Duration::from_secs(3)).await;
     if fail_first || unsupported {
-        assert!(sent.lock().unwrap().is_empty());
+        assert!(sent.is_empty());
         assert_eq!(snapshot(&*server.database().read().await), before);
         assert_eq!(
             server
@@ -462,7 +456,7 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::HIGH_LIMIT);
             tokio::time::sleep(Duration::from_secs(2)).await;
-            assert!(sent.lock().unwrap().is_empty());
+            assert!(sent.is_empty());
             assert_eq!(snapshot(&*server.database().read().await), before);
             server.stop().await.unwrap();
             return;
@@ -470,14 +464,14 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
         mode.store(1, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    let notification = decode_broadcast_notification(&sent);
+    let notification = decode_broadcast_notification(&sent.npdus());
     assert_committed(
         &*server.database().read().await,
         &notification,
         &commits.lock().unwrap(),
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(sent.lock().unwrap().len(), 1);
+    assert_eq!(sent.len(), 1);
     assert_eq!(commits.lock().unwrap().len(), 1);
     server.stop().await.unwrap();
 }

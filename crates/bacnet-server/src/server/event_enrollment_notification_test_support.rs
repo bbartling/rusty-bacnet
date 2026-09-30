@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::server::test_transport::{SendMode, SentFrame, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_encoding::primitives::decode_timestamp_choice;
@@ -7,7 +8,6 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
-use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
@@ -16,31 +16,27 @@ use bacnet_types::primitives::BACnetTimeStamp;
 use bytes::Bytes;
 use std::borrow::Cow;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
+/// Captures the broadcast EventNotifications a [`TestTransport`] sends and
+/// ignores unicasts. While `lock_probe` names a database, each broadcast first
+/// proves that database's guard is released, and only then is recorded.
 #[derive(Clone, Default)]
-pub(super) struct RecordingTransport {
+pub(super) struct NotificationCapture {
     pub(super) sent: StdArc<StdMutex<Vec<Bytes>>>,
     pub(super) lock_probe: StdArc<StdMutex<Option<StdArc<tokio::sync::RwLock<ObjectDatabase>>>>>,
 }
 
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
+impl NotificationCapture {
+    pub(super) fn transport(&self) -> TestTransport {
+        let capture = self.clone();
+        TestTransport::builder()
+            .local_mac(&BIP_LOCAL_MAC)
+            .unicast(SendMode::Ignore)
+            .on_send(move |frame| capture.clone().record(frame))
+            .build()
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+    async fn record(self, frame: SentFrame) -> Result<(), Error> {
         let database = self.lock_probe.lock().unwrap().clone();
         if let Some(database) = database {
             assert!(
@@ -48,16 +44,8 @@ impl TransportPort for RecordingTransport {
                 "Event Enrollment database guard must be released before network I/O"
             );
         }
-        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
+        self.sent.lock().unwrap().push(frame.npdu);
         Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
     }
 }
 
@@ -249,28 +237,21 @@ pub(super) fn add_server_context(db: &mut ObjectDatabase, recipients: bool) {
 pub(super) async fn start_server(
     mut db: ObjectDatabase,
     recipients: bool,
-) -> (
-    BACnetServer<RecordingTransport>,
-    StdArc<StdMutex<Vec<Bytes>>>,
-) {
+) -> (BACnetServer<TestTransport>, StdArc<StdMutex<Vec<Bytes>>>) {
     add_server_context(&mut db, recipients);
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let lock_probe = StdArc::new(StdMutex::new(None));
+    let capture = NotificationCapture::default();
     let server = BACnetServer::start_clockless(
         ServerConfig {
             event_enrollment_interval_secs: 1,
             ..ServerConfig::default()
         },
         db,
-        RecordingTransport {
-            sent: StdArc::clone(&sent),
-            lock_probe: StdArc::clone(&lock_probe),
-        },
+        capture.transport(),
     )
     .await
     .unwrap();
-    *lock_probe.lock().unwrap() = Some(StdArc::clone(server.database()));
-    (server, sent)
+    *capture.lock_probe.lock().unwrap() = Some(StdArc::clone(server.database()));
+    (server, capture.sent)
 }
 
 pub(super) fn drain_notifications(sent: &StdMutex<Vec<Bytes>>) -> Vec<EventNotificationRequest> {
