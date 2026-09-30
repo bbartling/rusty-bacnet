@@ -1681,8 +1681,18 @@ class BACnetClient:
         """Clear the discovered device table."""
         ...
 
-    def who_am_i(self) -> Awaitable[None]:
-        """Broadcast a Who-Am-I request."""
+    def who_am_i(
+        self,
+        vendor_id: int,
+        model_name: str,
+        serial_number: str,
+    ) -> Awaitable[None]:
+        """Broadcast a Who-Am-I request announcing this device's identity.
+
+        The three arguments should match the sender's Device object properties
+        (``vendor_id`` is 0-65535). Raises ``ValueError`` if a string cannot be
+        encoded.
+        """
         ...
 
     def who_is_directed(
@@ -2123,13 +2133,18 @@ class BACnetClient:
         address: str,
         group_number: int,
         write_priority: int,
-        change_list: list[tuple[Optional[ObjectIdentifier], Optional[int], bytes]],
+        change_list: list[tuple[int, Optional[int], bytes]],
         inhibit_delay: Optional[bool] = None,
     ) -> Awaitable[None]:
         """Send a WriteGroup request (unconfirmed).
 
-        ``change_list`` is ``[(channel_oid_or_none, override_priority_or_none, value_bytes), ...]``.
-        ``write_priority`` must be 1-16.
+        ``group_number`` is 1-4294967295 (group 0 is reserved) and
+        ``write_priority`` is 1-16. ``change_list`` is a non-empty list of
+        ``(channel, override_priority_or_none, value_bytes)`` tuples, where
+        ``channel`` is a channel number 0-65535, the override priority is 1-16 or
+        ``None``, and ``value_bytes`` is one encoded BACnetChannelValue: a single
+        application-tagged primitive or a context-0 lighting command, with no
+        wrapper tag. Raises ``ValueError`` for an argument outside those rules.
         """
         ...
 

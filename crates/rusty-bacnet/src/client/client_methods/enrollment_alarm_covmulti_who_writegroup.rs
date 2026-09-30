@@ -218,8 +218,26 @@ impl BACnetClient {
     // Who-Am-I
     // -----------------------------------------------------------------------
 
-    /// Broadcast a Who-Am-I request.
-    fn who_am_i<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// Broadcast a Who-Am-I request announcing this device's identity.
+    ///
+    /// `vendor_id`, `model_name` and `serial_number` should match the sender's Device object
+    /// properties (Clause 16.11.1). Raises `ValueError` if a string cannot be encoded.
+    #[pyo3(signature = (vendor_id, model_name, serial_number))]
+    fn who_am_i<'py>(
+        &self,
+        py: Python<'py>,
+        vendor_id: u16,
+        model_name: String,
+        serial_number: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let req = WhoAmIRequest {
+            vendor_id,
+            model_name,
+            serial_number,
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let inner = self.inner.clone();
         let future = async move {
             let c = {
@@ -228,9 +246,6 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = WhoAmIRequest;
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
             c.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_AM_I, &buf)
                 .await
                 .map_err(to_py_err)?;
@@ -245,7 +260,12 @@ impl BACnetClient {
 
     /// Send a WriteGroup request (unconfirmed).
     ///
-    /// `change_list` is a list of `(channel_oid_or_none, override_priority_or_none, value_bytes)` tuples.
+    /// `group_number` is 1..4294967295 (group 0 is reserved) and `write_priority` is 1..16.
+    /// `change_list` is a non-empty list of `(channel, override_priority_or_none, value_bytes)`
+    /// tuples: `channel` is a channel number 0..65535, `override_priority_or_none` is 1..16 or
+    /// `None`, and `value_bytes` is one encoded BACnetChannelValue (a single application-tagged
+    /// primitive, or a context-0 lighting command) with no extra wrapper tag. Raises
+    /// `ValueError` for an argument outside those rules.
     #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None))]
     fn write_group<'py>(
         &self,
@@ -253,24 +273,30 @@ impl BACnetClient {
         address: String,
         group_number: u32,
         write_priority: u8,
-        change_list: Vec<(Option<PyObjectIdentifier>, Option<u8>, Vec<u8>)>,
+        change_list: Vec<(u16, Option<u8>, Vec<u8>)>,
         inhibit_delay: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        if !(1..=16).contains(&write_priority) {
-            return Err(PyValueError::new_err(format!(
-                "write_priority must be 1-16, got {write_priority}"
-            )));
-        }
-        let inner = self.inner.clone();
-        let cl: Vec<GroupChannelValue> = change_list
-            .into_iter()
-            .map(|(ch, prio, val)| GroupChannelValue {
-                channel: ch.map(|o| o.to_rust()),
-                override_priority: prio,
-                value: val,
-            })
-            .collect();
+        let group_number = std::num::NonZeroU32::new(group_number).ok_or_else(|| {
+            PyValueError::new_err("group_number must be 1-4294967295 (group 0 is reserved)")
+        })?;
+        let req = WriteGroupRequest {
+            group_number,
+            write_priority,
+            change_list: change_list
+                .into_iter()
+                .map(|(channel, override_priority, value)| GroupChannelValue {
+                    channel,
+                    override_priority,
+                    value,
+                })
+                .collect(),
+            inhibit_delay,
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
+        let inner = self.inner.clone();
         let future = async move {
             let mac = parse_address(&address)?;
             let c = {
@@ -279,14 +305,6 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = WriteGroupRequest {
-                group_number,
-                write_priority,
-                change_list: cl,
-                inhibit_delay,
-            };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
             c.unconfirmed_request(&mac, UnconfirmedServiceChoice::WRITE_GROUP, &buf)
                 .await
                 .map_err(to_py_err)?;

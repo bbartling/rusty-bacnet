@@ -1072,7 +1072,19 @@ await client.subscribe_cov_property_multiple(
 
 #### `write_group(address, group_number, write_priority, change_list, inhibit_delay=None)`
 
-Write to a channel group.
+Write values to the Channel objects of a control group (unconfirmed).
+
+- `group_number`: 1 to 4294967295; group 0 is reserved.
+- `write_priority`: 1 to 16, used for entries that do not override it.
+- `change_list`: a non-empty list of `(channel, override_priority, value_bytes)` tuples.
+  - `channel` is a channel number (`int`, 0 to 65535) matching a Channel object's
+    `Channel_Number`.
+  - `override_priority` is 1 to 16, or `None` to use `write_priority`.
+  - `value_bytes` is one encoded BACnetChannelValue with no wrapper tag: a single
+    application-tagged primitive, or a context-0 lighting command.
+- `inhibit_delay`: optional Boolean.
+
+A value outside those rules raises `ValueError` before anything is sent.
 
 ```python
 await client.write_group(
@@ -1080,8 +1092,10 @@ await client.write_group(
     group_number=1,
     write_priority=8,
     change_list=[
-        # (object_id_or_None, channel_or_None, encoded_value_bytes)
-        (ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1), 1, encoded_bytes),
+        # Channel 5 gets REAL 72.0 (application tag 4); channel 6 gets NULL and
+        # writes at priority 10 (NULL relinquishes, as with WriteProperty).
+        (5, None, bytes([0x44, 0x42, 0x90, 0x00, 0x00])),
+        (6, 10, bytes([0x00])),
     ],
     inhibit_delay=False,
 )
@@ -1319,12 +1333,15 @@ authorization, producer behavior, forwarding, or new durable idempotency semanti
 
 ### Additional Discovery
 
-#### `who_am_i()`
+#### `who_am_i(vendor_id, model_name, serial_number)`
 
-Broadcast a WhoAmI request for network path verification.
+Broadcast a Who-Am-I request announcing this device's identity so that a
+configuration tool can answer with You-Are. The three arguments are mandatory
+and should match the Vendor_Identifier, Model_Name and Serial_Number properties
+of the sending Device object. `vendor_id` is 0 to 65535.
 
 ```python
-await client.who_am_i()
+await client.who_am_i(260, "Controller-X", "SN-0001")
 ```
 
 ---

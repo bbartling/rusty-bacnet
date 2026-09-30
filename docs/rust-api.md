@@ -401,8 +401,30 @@ use bacnet_services::life_safety::LifeSafetyOperationRequest;
 ### Write Group
 
 ```rust
-use bacnet_services::write_group::WriteGroupRequest;
+use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 ```
+
+`WriteGroupRequest` follows the WriteGroup-Request production (Clause 21.3.2).
+`group_number` is a `NonZeroU32` (group 0 is reserved) and `write_priority` is 1 to 16.
+Each `GroupChannelValue` carries a `u16` channel number, an optional override priority
+(1 to 16) and the already-encoded BACnetChannelValue in `value`: one
+application-tagged primitive, or a context-0 lighting command, with no wrapper tag.
+`encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
+a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
+buffer unchanged. `decode` enforces the same rules and rejects trailing data.
+Nothing in the bundled server executes inbound WriteGroup.
+
+### Who-Am-I and You-Are
+
+```rust
+use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
+```
+
+`WhoAmIRequest` has three mandatory application-tagged fields: `vendor_id` (`u16`),
+`model_name` and `serial_number`. `YouAreRequest` has the same three plus optional
+`device_identifier` (which must name a Device object) and `device_mac_address`; at
+least one of those two must be present. Both `encode` methods are fallible and both
+`decode` methods reject missing fields, context-tagged layouts and trailing data.
 
 ### Virtual Terminal
 
@@ -2132,7 +2154,6 @@ the bundled server materializes an empty subscription context.
 ```rust
 client.who_is(None, None).await?;                       // broadcast
 client.who_has(WhoHasObject::Name("Zone Temp".into()), None, None).await?;
-client.who_am_i().await?;                               // network path verification
 
 let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>
 let device = client.get_device(1234).await;              // Option<DiscoveredDevice>
@@ -2209,10 +2230,50 @@ let raw = client.confirmed_text_message(&mac, device_oid, priority, "Fire alarm"
 client.unconfirmed_text_message(&mac, device_oid, priority, "Status update", None, None).await?;
 ```
 
-### Write Group
+### Write Group and Who-Am-I
+
+The client has no dedicated methods for these services. Build the
+`bacnet_services` request and send it through the generic unconfirmed-request API.
 
 ```rust
-client.write_group(&mac, group_number, write_priority, change_list, Some(false)).await?;
+use std::num::NonZeroU32;
+
+use bacnet_services::who_am_i::WhoAmIRequest;
+use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
+use bacnet_types::enums::UnconfirmedServiceChoice;
+use bytes::BytesMut;
+
+// Channel 5 gets REAL 72.0; channel 6 gets NULL at priority 10.
+let request = WriteGroupRequest {
+    group_number: NonZeroU32::new(1).unwrap(),
+    write_priority: 8,
+    change_list: vec![
+        GroupChannelValue {
+            channel: 5,
+            override_priority: None,
+            value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
+        },
+        GroupChannelValue {
+            channel: 6,
+            override_priority: Some(10),
+            value: vec![0x00],
+        },
+    ],
+    inhibit_delay: Some(false),
+};
+let mut service_data = BytesMut::new();
+request.encode(&mut service_data)?;
+client.unconfirmed_request(&mac, UnconfirmedServiceChoice::WRITE_GROUP, &service_data).await?;
+
+// Who-Am-I is usually broadcast.
+let who_am_i = WhoAmIRequest {
+    vendor_id: 260,
+    model_name: "Controller-X".into(),
+    serial_number: "SN-0001".into(),
+};
+let mut service_data = BytesMut::new();
+who_am_i.encode(&mut service_data)?;
+client.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_AM_I, &service_data).await?;
 ```
 
 ### Virtual Terminal
