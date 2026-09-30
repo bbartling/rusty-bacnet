@@ -81,11 +81,11 @@ fn encode_ack(
     item_count: &[u8],
     first_sequence_number: Option<&[u8]>,
 ) -> BytesMut {
-    let item_data = item_count
-        .iter()
-        .any(|octet| *octet != 0)
-        .then_some(&[0x00][..])
-        .unwrap_or_default();
+    let item_data = if item_count.iter().any(|octet| *octet != 0) {
+        &[0x00][..]
+    } else {
+        &[]
+    };
     encode_ack_with_item_data(
         property,
         array_index,

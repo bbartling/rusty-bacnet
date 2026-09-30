@@ -5,6 +5,7 @@
 //! identical to Device ReadProperty.
 //!
 //! Run with: `cargo run -p bacnet-endpoint --example composed_bip`
+#![allow(clippy::print_stdout)] // an example demonstrates itself by printing
 
 use std::net::Ipv4Addr;
 use std::time::Duration;

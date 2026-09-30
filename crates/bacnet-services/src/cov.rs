@@ -2,14 +2,13 @@
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
-use bacnet_types::enums::{PropertyIdentifier, RejectReason};
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use crate::common::{
-    decode_context, decode_context_bool, decode_context_u32, BACnetPropertyValue,
-    PropertyReference, MAX_DECODED_ITEMS,
+    decode_context, decode_context_bool, decode_context_u32, BACnetPropertyValue, PropertyReference,
 };
 
 pub use crate::cov_decode::COVNotificationDecodeError;
@@ -315,7 +314,8 @@ mod width_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    use crate::common::MAX_DECODED_ITEMS;
+    use bacnet_types::enums::{ObjectType, PropertyIdentifier, RejectReason};
 
     #[test]
     fn subscribe_cov_round_trip() {

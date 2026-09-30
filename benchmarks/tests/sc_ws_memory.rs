@@ -4,6 +4,7 @@
 //! with --ignored --exact sc_ws_memory --nocapture and SC_WS_MODE=calibration or
 //! acceptance. SC_WS_OUTPUT names a fresh directory. Never run alongside builds.
 //! Child certificate material travels only over private stdin; output has no keys.
+#![allow(clippy::print_stdout, clippy::print_stderr)] // this opt-in experiment prints its measurements
 
 use bacnet_benchmarks::sc_helpers::*;
 use serde_json::{json, Value};
@@ -30,10 +31,9 @@ fn runtime() -> tokio::runtime::Runtime {
 #[test]
 #[ignore = "explicit isolated-process release RSS experiment; not an ordinary test gate"]
 fn sc_ws_memory() {
-    assert!(
-        !cfg!(debug_assertions),
-        "memory experiments require --release"
-    );
+    if cfg!(debug_assertions) {
+        panic!("memory experiments require --release");
+    }
     if let Ok(role) = std::env::var("SC_WS_VICTIM") {
         victim::run(&role);
         return;

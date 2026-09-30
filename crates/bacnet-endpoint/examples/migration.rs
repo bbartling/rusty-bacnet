@@ -8,6 +8,7 @@
 //! stay as untouched compat surfaces.
 //!
 //! Run with: `cargo run -p bacnet-endpoint --example migration`
+#![allow(clippy::print_stdout)] // an example demonstrates itself by printing
 
 use std::net::Ipv4Addr;
 

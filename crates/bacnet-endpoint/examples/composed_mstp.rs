@@ -7,6 +7,7 @@
 //! No bench or on-wire conformance; timing qualification is RB-26.
 //!
 //! Run with: `cargo run -p bacnet-endpoint --example composed_mstp`
+#![allow(clippy::print_stdout)] // an example demonstrates itself by printing
 
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::mstp::MstpEndpointBuilder;

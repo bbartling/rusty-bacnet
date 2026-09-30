@@ -2,6 +2,7 @@
 //!
 //! Supply `RB_IPV6_TEST_ADDRESS` and `RB_IPV6_TEST_INDEX` from a task-owned
 //! internal Docker bridge. These tests must not discover or use a host LAN.
+#![allow(clippy::print_stderr)] // opt-in checks report skipped setups outside a test function
 #![cfg(all(feature = "ipv6", unix))]
 
 #[path = "ipv6_selected_link/controls.rs"]

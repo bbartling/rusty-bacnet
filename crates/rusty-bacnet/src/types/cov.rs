@@ -136,7 +136,11 @@ impl PyCovNotificationIterator {
                         return Ok(PyCovNotification { inner: notif });
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("COV notification iterator lagged, skipped {n} messages");
+                        #[allow(clippy::print_stderr)]
+                        // no logging path in this crate; warn the Python user on stderr
+                        {
+                            eprintln!("COV notification iterator lagged, skipped {n} messages");
+                        }
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => {

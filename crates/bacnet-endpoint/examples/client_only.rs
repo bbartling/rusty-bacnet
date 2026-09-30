@@ -4,6 +4,7 @@
 //! New path: `BipEndpointBuilder::role(ClientOnly)` + `start()`.
 //!
 //! Run with: `cargo run -p bacnet-endpoint --example client_only`
+#![allow(clippy::print_stdout)] // an example demonstrates itself by printing
 
 use std::time::Duration;
 

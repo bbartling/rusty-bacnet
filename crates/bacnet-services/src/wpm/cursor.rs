@@ -117,94 +117,89 @@ impl<'a> WritePropertyMultipleCursor<'a> {
     pub fn next_event(
         &mut self,
     ) -> Result<Option<WritePropertyMultipleEvent>, WritePropertyMultipleCursorError> {
-        loop {
-            match self.state {
-                State::Done => return Ok(None),
-                State::Failed => return Ok(None),
-                State::Object => {
-                    if self.offset == self.data.len() {
-                        self.state = State::Done;
-                        return Ok(None);
-                    }
-                    if self.object_count >= MAX_DECODED_ITEMS {
-                        return self.fail(self.limit_error("WPM object count exceeds limit"));
-                    }
-                    let oid = match self.decode_object_identifier() {
-                        Ok(oid) => oid,
-                        Err(error) => return self.fail(error),
-                    };
-                    if let Err(error) = self.decode_property_list_opening() {
-                        return self.fail(error);
-                    }
-                    self.object_count += 1;
-                    self.property_count = 0;
-                    self.state = State::Properties(oid);
-                    return Ok(Some(WritePropertyMultipleEvent::ObjectStart(oid)));
+        match self.state {
+            State::Done => Ok(None),
+            State::Failed => Ok(None),
+            State::Object => {
+                if self.offset == self.data.len() {
+                    self.state = State::Done;
+                    return Ok(None);
                 }
-                State::Properties(oid) => {
-                    if self.offset >= self.data.len() {
-                        return self.fail(self.syntax_error(
-                            self.offset,
-                            WritePropertyMultipleDecodeStage::PropertyListEnd,
-                            RejectReason::MISSING_REQUIRED_PARAMETER,
-                            None,
-                            "WPM property list is missing closing tag 1",
-                        ));
-                    }
-                    let (tag, tag_end) = match tags::decode_tag(self.data, self.offset) {
-                        Ok(decoded) => decoded,
-                        Err(error) => {
-                            return self.fail(self.syntax_error(
-                                self.offset,
-                                WritePropertyMultipleDecodeStage::PropertyIdentifier,
-                                RejectReason::INVALID_DATA_ENCODING,
-                                None,
-                                error.to_string(),
-                            ));
-                        }
-                    };
-                    if tag.is_closing_tag(1) {
-                        self.offset = tag_end;
-                        self.state = State::Object;
-                        return Ok(Some(WritePropertyMultipleEvent::ObjectEnd));
-                    }
-                    if tag.is_closing {
-                        return self.fail(self.syntax_error(
-                            self.offset,
-                            WritePropertyMultipleDecodeStage::PropertyListEnd,
-                            RejectReason::INVALID_TAG,
-                            None,
-                            "WPM property list has an unmatched closing tag",
-                        ));
-                    }
-                    if self.property_count >= MAX_DECODED_ITEMS
-                        || self.total_attempts >= MAX_DECODED_ITEMS
-                    {
-                        return self.fail(self.limit_error("WPM property count exceeds limit"));
-                    }
-                    let (property, end) = match BACnetPropertyValue::decode_in_list_detailed(
-                        self.data,
+                if self.object_count >= MAX_DECODED_ITEMS {
+                    return self.fail(self.limit_error("WPM object count exceeds limit"));
+                }
+                let oid = match self.decode_object_identifier() {
+                    Ok(oid) => oid,
+                    Err(error) => return self.fail(error),
+                };
+                if let Err(error) = self.decode_property_list_opening() {
+                    return self.fail(error);
+                }
+                self.object_count += 1;
+                self.property_count = 0;
+                self.state = State::Properties(oid);
+                Ok(Some(WritePropertyMultipleEvent::ObjectStart(oid)))
+            }
+            State::Properties(oid) => {
+                if self.offset >= self.data.len() {
+                    return self.fail(self.syntax_error(
                         self.offset,
-                        1,
-                    ) {
+                        WritePropertyMultipleDecodeStage::PropertyListEnd,
+                        RejectReason::MISSING_REQUIRED_PARAMETER,
+                        None,
+                        "WPM property list is missing closing tag 1",
+                    ));
+                }
+                let (tag, tag_end) = match tags::decode_tag(self.data, self.offset) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        return self.fail(self.syntax_error(
+                            self.offset,
+                            WritePropertyMultipleDecodeStage::PropertyIdentifier,
+                            RejectReason::INVALID_DATA_ENCODING,
+                            None,
+                            error.to_string(),
+                        ));
+                    }
+                };
+                if tag.is_closing_tag(1) {
+                    self.offset = tag_end;
+                    self.state = State::Object;
+                    return Ok(Some(WritePropertyMultipleEvent::ObjectEnd));
+                }
+                if tag.is_closing {
+                    return self.fail(self.syntax_error(
+                        self.offset,
+                        WritePropertyMultipleDecodeStage::PropertyListEnd,
+                        RejectReason::INVALID_TAG,
+                        None,
+                        "WPM property list has an unmatched closing tag",
+                    ));
+                }
+                if self.property_count >= MAX_DECODED_ITEMS
+                    || self.total_attempts >= MAX_DECODED_ITEMS
+                {
+                    return self.fail(self.limit_error("WPM property count exceeds limit"));
+                }
+                let (property, end) =
+                    match BACnetPropertyValue::decode_in_list_detailed(self.data, self.offset, 1) {
                         Ok(decoded) => decoded,
                         Err(error) => return self.fail(self.property_error(oid, error)),
                     };
-                    self.offset = end;
-                    self.property_count += 1;
-                    self.total_attempts += 1;
-                    return Ok(Some(WritePropertyMultipleEvent::WriteAttempt(
-                        WritePropertyAttempt {
-                            reference: BACnetObjectPropertyReference {
-                                object_identifier: oid,
-                                property_identifier: property.property_identifier.to_raw(),
-                                property_array_index: property.property_array_index,
-                            },
-                            value: property.value,
-                            priority: property.priority,
+                self.offset = end;
+                self.property_count += 1;
+                self.total_attempts += 1;
+                Ok(Some(WritePropertyMultipleEvent::WriteAttempt(
+                    WritePropertyAttempt {
+                        reference: BACnetObjectPropertyReference {
+                            object_identifier: oid,
+                            property_identifier: property.property_identifier.to_raw(),
+                            property_array_index: property.property_array_index,
                         },
-                    )));
-                }
+                        value: property.value,
+                        priority: property.priority,
+                    },
+                )))
             }
         }
     }

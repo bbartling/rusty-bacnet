@@ -297,7 +297,7 @@ fn destination_wrong_width_transitions_rejected() {
         // two content octets
         {
             let mut b = BytesMut::new();
-            primitives::encode_app_bit_string(&mut b, -5i8 as u8 & 0xFF, &[0xE0, 0x00]);
+            primitives::encode_app_bit_string(&mut b, -5i8 as u8, &[0xE0, 0x00]);
             b.to_vec()
         },
         // wrong unused-bits count (1 — the valid-days count)

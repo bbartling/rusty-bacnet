@@ -11,17 +11,6 @@ use bytes::{Bytes, BytesMut};
 pub struct Peer(pub TlsWebSocket, std::cell::Cell<u8>);
 
 impl Peer {
-    pub async fn connect(url: &str, tls: ScNodeTlsConfig, id: u8) -> Self {
-        Self::connect_identity(
-            url,
-            tls,
-            id,
-            super::support::HUB_VMAC,
-            super::support::HUB_UUID,
-        )
-        .await
-    }
-
     pub async fn connect_identity(
         url: &str,
         tls: ScNodeTlsConfig,

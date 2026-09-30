@@ -564,6 +564,8 @@ fn notification_rejects_empty_lists_and_special_property_identifiers() {
         list_of_cov_notifications: Vec::new(),
     };
     let mut encoded = BytesMut::new();
+    assert!(empty_outer.encode(&mut encoded).is_err());
+    encoded.clear();
     primitives::encode_ctx_unsigned(&mut encoded, 0, 1);
     primitives::encode_ctx_object_id(&mut encoded, 1, &oid(ObjectType::DEVICE, 1));
     primitives::encode_ctx_unsigned(&mut encoded, 2, 1);

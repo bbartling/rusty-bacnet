@@ -2,6 +2,7 @@
 //!
 //! Parses a comma-separated port spec and starts a router connecting them.
 //! Format: `bip:<ip>:<port>:<broadcast>:<network>,bip:<ip>:<port>:<broadcast>:<network>`
+#![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
 
 use std::net::Ipv4Addr;
 
