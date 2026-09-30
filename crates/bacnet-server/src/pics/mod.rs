@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use bacnet_encoding::primitives::charset;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
@@ -189,33 +190,56 @@ pub struct NetworkLayerSupport {
     pub foreign_device: bool,
 }
 
-/// Character set support.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A character set the PICS can claim under Annex A "Character Sets Supported".
+///
+/// The variants are exactly the six sets Annex A offers. Each discriminant is the
+/// set's code from Clause 20.2.9, the initial octet of an encoded CharacterString.
+/// `Display` prints the set's Annex A label. Claiming several sets does not mean
+/// the device can use them all at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum CharacterSet {
-    /// UTF-8.
-    Utf8,
-    /// ANSI X3.4 (ASCII).
-    Ansi,
-    /// IBM/Microsoft double-byte character set.
-    DbcsIbm,
-    /// JIS C 6226, the 1983 name of JIS X 0208, so it names the same set as `Jisx0208`.
-    DbcsMs,
-    /// JIS X 0208.
-    Jisx0208,
-    /// ISO 8859-1 (Latin-1).
-    Iso8859_1,
+    /// ISO 10646 UTF-8, code X'00'.
+    Utf8 = charset::UTF8,
+    /// IBM/Microsoft DBCS, code X'01'. Its strings carry a two-octet code page.
+    IbmMicrosoftDbcs = charset::IBM_MICROSOFT_DBCS,
+    /// JIS X 0208, code X'02'.
+    JisX0208 = charset::JIS_X_0208,
+    /// ISO 10646 UCS-4, code X'03'.
+    Ucs4 = charset::UCS4,
+    /// ISO 10646 UCS-2, code X'04'.
+    Ucs2 = charset::UCS2,
+    /// ISO 8859-1, code X'05'.
+    Iso8859_1 = charset::ISO_8859_1,
+}
+
+impl CharacterSet {
+    /// Every set Annex A offers, in Clause 20.2.9 code order.
+    pub const ALL: [Self; 6] = [
+        Self::Utf8,
+        Self::IbmMicrosoftDbcs,
+        Self::JisX0208,
+        Self::Ucs4,
+        Self::Ucs2,
+        Self::Iso8859_1,
+    ];
+
+    /// The set's Clause 20.2.9 code, one of the `bacnet_encoding::primitives::charset` constants.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
 }
 
 impl fmt::Display for CharacterSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Utf8 => f.write_str("UTF-8"),
-            Self::Ansi => f.write_str("ANSI X3.4"),
-            Self::DbcsIbm => f.write_str("IBM/Microsoft DBCS"),
-            Self::DbcsMs => f.write_str("JIS C 6226"),
-            Self::Jisx0208 => f.write_str("JIS X 0208"),
-            Self::Iso8859_1 => f.write_str("ISO 8859-1"),
-        }
+        f.write_str(match self {
+            Self::Utf8 => "ISO 10646 (UTF-8)",
+            Self::IbmMicrosoftDbcs => "IBM/Microsoft DBCS",
+            Self::JisX0208 => "JIS X 0208",
+            Self::Ucs4 => "ISO 10646 (UCS-4)",
+            Self::Ucs2 => "ISO 10646 (UCS-2)",
+            Self::Iso8859_1 => "ISO 8859-1",
+        })
     }
 }
 
@@ -789,3 +813,6 @@ mod truth_source_tests;
 
 #[cfg(test)]
 mod property_union_tests;
+
+#[cfg(test)]
+mod character_set_tests;
