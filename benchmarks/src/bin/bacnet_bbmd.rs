@@ -2,6 +2,7 @@
 //!
 //! Starts a BIP transport with BBMD enabled, serving as a BDT peer and
 //! accepting foreign device registrations. Also runs a minimal BACnet device.
+#![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
 
 use std::net::Ipv4Addr;
 

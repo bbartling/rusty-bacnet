@@ -146,13 +146,8 @@ enum Decision {
 }
 
 /// Atomic per-class totals shared via [`ControlGate`].
+#[derive(Default)]
 pub struct ControlDecisions([[AtomicU64; 3]; 7]);
-
-impl Default for ControlDecisions {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
 
 impl std::fmt::Debug for ControlDecisions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -291,7 +286,7 @@ impl ControlGate {
     /// Build redacted context from immutable ingress + validated targets and
     /// decide. Call after validation, before any table lock. `targets_omitted`
     /// marks Busy/Available omitted-list scope (all served via peer).
-    pub fn authorize(
+    pub(super) fn authorize(
         &self,
         ingress: &super::IngressContext,
         class: ControlClass,

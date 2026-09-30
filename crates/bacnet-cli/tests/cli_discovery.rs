@@ -1,7 +1,10 @@
 //! Consumer-level discovery and feature-disabled compatibility checks.
 #[allow(dead_code)]
 mod support;
-use support::{failure, run};
+// Only the feature-disabled checks below use `failure`.
+#[cfg(any(not(feature = "sc-tls"), not(feature = "pcap")))]
+use support::failure;
+use support::run;
 
 #[tokio::test]
 async fn help_and_version_do_not_load_sc_files() {

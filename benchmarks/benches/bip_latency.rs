@@ -1,3 +1,4 @@
+#![allow(clippy::print_stderr)] // benchmarks note skipped setups on the console
 use criterion::{criterion_group, criterion_main, Criterion};
 use tokio::runtime::Runtime;
 

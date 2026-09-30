@@ -1,3 +1,4 @@
+#![allow(clippy::print_stderr)] // the peer helpers trace wire frames to diagnose failing tests
 use super::tls;
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_transport::{

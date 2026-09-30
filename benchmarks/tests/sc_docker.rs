@@ -1,6 +1,7 @@
 //! Opt-in read-only smoke peer for an explicitly provisioned, isolated SC pair.
 //! Build natively on the Docker builder; mount this test executable and the
 //! peer's three credential files read-only into a transient client container.
+#![allow(clippy::print_stderr)] // this opt-in peer reports its outcome on the console
 #[path = "sc_binary/peer.rs"]
 mod peer;
 #[path = "sc_binary/support.rs"]

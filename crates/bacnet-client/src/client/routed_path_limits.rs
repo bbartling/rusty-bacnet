@@ -404,10 +404,9 @@ impl RoutedPathLease {
                     age = ?learned.observed_at.elapsed(),
                     "Applying learned routed-path upper bound"
                 );
-                configured_or_conservative
-                    .min(learned.exclusive_max_npdu.checked_sub(1).unwrap_or(0))
+                configured_or_conservative.min(learned.exclusive_max_npdu.saturating_sub(1))
             });
-        Ok(effective_npdu.checked_sub(forwarded_npci_len).unwrap_or(0))
+        Ok(effective_npdu.saturating_sub(forwarded_npci_len))
     }
 
     pub(super) fn forwarded_npci_len(

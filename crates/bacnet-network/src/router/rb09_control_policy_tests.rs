@@ -601,7 +601,6 @@ async fn authorizer_sees_only_protected_and_replaced_peer_differs() {
 #[test]
 fn control_context_debug_is_redacted() {
     use bacnet_transport::port::TransportProvenance;
-    let gate = ControlGate::hardened();
     let npdu = Npdu {
         is_network_message: true,
         message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw()),

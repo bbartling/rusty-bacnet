@@ -132,16 +132,4 @@ pub(super) fn extract_raw_context(
     ))
 }
 
-/// Decode status flags from a bit-string content slice.
-/// Returns the 4-bit status flags value.
-pub(super) fn decode_status_flags(data: &[u8]) -> u8 {
-    // Bit string format: first byte = unused bits count, rest = data
-    if data.len() >= 2 {
-        let unused = data[0];
-        data[1] >> (unused.min(7))
-    } else {
-        0
-    }
-}
-
 // ---------------------------------------------------------------------------

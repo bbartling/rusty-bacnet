@@ -342,7 +342,7 @@ async fn large_table_query_splits_into_bounded_acks() {
             decoded.message_type,
             Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
         );
-        assert!(decoded.payload.len() >= 1);
+        assert!(!decoded.payload.is_empty());
         assert!(decoded.payload[0] as usize <= 255);
         let entries = peer_entries(&decoded.payload);
         assert_eq!(entries.len(), usize::from(decoded.payload[0]));

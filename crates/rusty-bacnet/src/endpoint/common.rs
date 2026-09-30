@@ -148,7 +148,7 @@ pub(crate) fn build_database(
         {
             PyValueError::new_err(e.to_string())
         }
-        _ => to_py_err(e).into(),
+        _ => to_py_err(e),
     })
 }
 

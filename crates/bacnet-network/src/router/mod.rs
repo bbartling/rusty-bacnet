@@ -100,10 +100,6 @@ enum SendRequest {
 }
 
 impl SendRequest {
-    fn unicast(npdu: Bytes, mac: MacAddr) -> Self {
-        Self::unicast_with_attributes(npdu, mac, &[])
-    }
-
     fn broadcast(npdu: Bytes) -> Self {
         Self::broadcast_with_attributes(npdu, &[])
     }
@@ -195,10 +191,12 @@ impl DiscoveryTracker {
         self.last_solicited.clear();
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.last_solicited.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled
     }
@@ -418,7 +416,7 @@ impl BACnetRouter {
     }
 
     async fn start_dispatch<T: TransportPort + 'static>(
-        mut ports: Vec<RouterPort<T>>,
+        ports: Vec<RouterPort<T>>,
         track_depth: bool,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         Self::start_dispatch_with_control(
@@ -785,12 +783,6 @@ impl BACnetRouter {
     /// Get a reference to the routing table.
     pub fn table(&self) -> &Arc<Mutex<RouterTable>> {
         &self.table
-    }
-
-    /// Pending unknown-destination discoveries (for tests and observability).
-    #[cfg(test)]
-    pub(crate) fn discovery(&self) -> &Arc<Mutex<DiscoveryTracker>> {
-        &self.discovery
     }
 
     /// Stop the router.

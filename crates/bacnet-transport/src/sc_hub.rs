@@ -19,7 +19,9 @@ use std::sync::Arc;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};
 use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
+#[cfg(test)]
+use futures_util::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;

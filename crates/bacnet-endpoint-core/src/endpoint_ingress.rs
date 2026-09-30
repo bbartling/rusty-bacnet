@@ -123,9 +123,9 @@ pub enum ClassifierExit {
     /// The network layer closed its APDU stream.
     InputClosed,
     /// A full policy queue prevented lossless reclamation.
-    PolicyRouteFull(PolicyOutcome),
+    PolicyRouteFull(Box<PolicyOutcome>),
     /// The policy queue was closed.
-    PolicyRouteClosed(PolicyOutcome),
+    PolicyRouteClosed(Box<PolicyOutcome>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -408,6 +408,9 @@ enum EgressDrive {
     Exit(ClassifierExit),
 }
 
+// A select! result consumed on the spot, never stored: boxing the APDU would
+// add a heap allocation per APDU received while a send is in flight.
+#[allow(clippy::large_enum_variant)]
 enum PendingEvent {
     Cancelled,
     Received(Option<ReceivedApdu>),
@@ -738,10 +741,10 @@ fn send_policy(
     match policy_tx.try_send(outcome) {
         Ok(()) => None,
         Err(mpsc::error::TrySendError::Full(outcome)) => {
-            Some(ClassifierExit::PolicyRouteFull(outcome))
+            Some(ClassifierExit::PolicyRouteFull(Box::new(outcome)))
         }
         Err(mpsc::error::TrySendError::Closed(outcome)) => {
-            Some(ClassifierExit::PolicyRouteClosed(outcome))
+            Some(ClassifierExit::PolicyRouteClosed(Box::new(outcome)))
         }
     }
 }

@@ -381,11 +381,11 @@ pub fn extract_context_value(
 /// Known limitation: a payload that itself contains the target tag's opening
 /// or closing octet pattern (e.g. as unrelated content bytes) unbalances the
 /// walk; such payloads cannot round-trip through this path.
-pub fn extract_raw_context<'a>(
-    data: &'a [u8],
+pub fn extract_raw_context(
+    data: &[u8],
     offset: usize,
     tag_number: u8,
-) -> Result<(&'a [u8], usize), Error> {
+) -> Result<(&[u8], usize), Error> {
     let wide = tag_number > 14;
     let open_first = if wide { 0xFE } else { (tag_number << 4) | 0x0E };
     let close_first = if wide { 0xFF } else { (tag_number << 4) | 0x0F };

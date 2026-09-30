@@ -23,7 +23,7 @@ use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
-use bacnet_endpoint::session::{SessionConfig, SessionRole};
+use bacnet_endpoint::session::SessionRole;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
@@ -41,15 +41,6 @@ const WAIT: Duration = Duration::from_secs(5);
 
 fn oid(t: ObjectType, i: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(t, i).unwrap()
-}
-
-fn session_config() -> SessionConfig {
-    SessionConfig {
-        queue_capacity: 32,
-        apdu_timeout_ms: 2_000,
-        apdu_retries: 0,
-        max_apdu_length: 480,
-    }
 }
 
 fn identity() -> DeviceIdentity {

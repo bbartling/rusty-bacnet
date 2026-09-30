@@ -134,8 +134,8 @@ impl TransportPort for GatedTransport {
 }
 
 pub enum Owner {
-    Server(BACnetServer<GatedTransport>),
-    Endpoint(EndpointSession<GatedTransport>),
+    Server(Box<BACnetServer<GatedTransport>>),
+    Endpoint(Box<EndpointSession<GatedTransport>>),
 }
 impl Owner {
     async fn start(server: bool, transport: GatedTransport) -> Self {
@@ -144,18 +144,18 @@ impl Owner {
         analog.set_present_value(42.0);
         db.add(Box::new(analog)).unwrap();
         if server {
-            Self::Server(
+            Self::Server(Box::new(
                 bounded(BACnetServer::start(ServerConfig::default(), db, transport))
                     .await
                     .unwrap(),
-            )
+            ))
         } else {
             let mut session =
                 EndpointSession::new(transport, SessionRole::Both, Default::default())
                     .unwrap()
                     .with_database(db);
             bounded(session.start()).await.unwrap();
-            Self::Endpoint(session)
+            Self::Endpoint(Box::new(session))
         }
     }
     pub async fn stop(&mut self) {

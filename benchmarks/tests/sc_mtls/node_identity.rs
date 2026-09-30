@@ -5,7 +5,10 @@ use bacnet_transport::sc::ScReconnectConfig;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use std::{future::Future, panic::AssertUnwindSafe, time::Duration};
 use tokio::{net::TcpListener, sync::mpsc};
-use tokio_tungstenite::tungstenite::{handshake::server::Response, Message};
+use tokio_tungstenite::tungstenite::{
+    handshake::server::{ErrorResponse, Request, Response},
+    Message,
+};
 
 const UUID: [u8; 16] = [
     0x8e, 0x62, 0xac, 0x46, 0xd7, 0x08, 0x42, 0x26, 0x91, 0x37, 0x76, 0xa3, 0x2b, 0x61, 0x93, 0x15,
@@ -16,6 +19,18 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), future)
         .await
         .expect("SC identity barrier timed out")
+}
+
+// The handshake callback's error type is fixed by tungstenite.
+#[allow(clippy::result_large_err)]
+fn accept_hub_subprotocol(_: &Request, mut response: Response) -> Result<Response, ErrorResponse> {
+    response.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        bacnet_transport::sc_frame::BACNET_SC_HUB_SUBPROTOCOL
+            .parse()
+            .unwrap(),
+    );
+    Ok(response)
 }
 
 #[tokio::test]
@@ -32,13 +47,7 @@ async fn sc_server_uuid_wire_bytes_survive_reconnect_and_fresh_builds() {
             let tls = bounded(acceptor.accept(tcp)).await.unwrap();
             let mut ws = bounded(tokio_tungstenite::accept_hdr_async(
                 tls,
-                |_: &_, mut response: Response| {
-                    response.headers_mut().insert(
-                        "Sec-WebSocket-Protocol",
-                        "hub.bsc.bacnet.org".parse().unwrap(),
-                    );
-                    Ok(response)
-                },
+                accept_hub_subprotocol,
             ))
             .await
             .unwrap();

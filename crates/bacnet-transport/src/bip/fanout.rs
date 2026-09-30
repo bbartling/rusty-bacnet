@@ -170,11 +170,9 @@ impl FanoutRateLimiter {
             .policy
             .max_bytes_per_sec_global
             .saturating_sub(self.global_bytes_in_window);
-        let global_packets_by_bytes = if packet_bytes > 0 {
-            global_bytes_remaining / packet_bytes
-        } else {
-            usize::MAX
-        };
+        let global_packets_by_bytes = global_bytes_remaining
+            .checked_div(packet_bytes)
+            .unwrap_or(usize::MAX);
 
         // 4. Per-origin packet budget remaining
         let current_origin = self

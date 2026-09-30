@@ -292,17 +292,17 @@ impl Fixture {
     }
 }
 pub enum Consumer {
-    Client(bacnet_client::client::BACnetClient<QueuedPort>),
-    Endpoint(bacnet_endpoint::session::EndpointSession<QueuedPort>),
+    Client(Box<bacnet_client::client::BACnetClient<QueuedPort>>),
+    Endpoint(Box<bacnet_endpoint::session::EndpointSession<QueuedPort>>),
 }
 impl Consumer {
     pub async fn start(client: bool, port: QueuedPort) -> Self {
         if client {
-            Self::Client(
+            Self::Client(Box::new(
                 bacnet_client::client::BACnetClient::start(Default::default(), port)
                     .await
                     .unwrap(),
-            )
+            ))
         } else {
             let mut session = bacnet_endpoint::session::EndpointSession::new(
                 port,
@@ -312,7 +312,7 @@ impl Consumer {
             .unwrap()
             .with_database(database("original"));
             session.start().await.unwrap();
-            Self::Endpoint(session)
+            Self::Endpoint(Box::new(session))
         }
     }
     pub async fn stop(&mut self) {

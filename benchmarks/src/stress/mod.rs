@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)] // stress scenarios report progress and results on the console
 pub mod bbmd;
 pub mod clients;
 pub mod cov;

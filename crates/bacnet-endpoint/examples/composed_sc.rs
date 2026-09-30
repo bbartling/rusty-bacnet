@@ -8,6 +8,7 @@
 //! what unit proofs use. Real hub dial needs `sc-tls` + a running `ScHub`.
 //!
 //! Run with: `cargo run -p bacnet-endpoint --example composed_sc`
+#![allow(clippy::print_stdout)] // an example demonstrates itself by printing
 
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;

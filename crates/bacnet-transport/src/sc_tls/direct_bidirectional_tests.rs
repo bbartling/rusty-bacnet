@@ -52,7 +52,7 @@ async fn accepted_ordinary_send_selects_established_socket_without_discovery() {
         data: vec![7, 8],
     };
     transport
-        .send_unicast_with_data_attributes(NPDU, &DIAL_VMAC, &[attribute.clone()])
+        .send_unicast_with_data_attributes(NPDU, &DIAL_VMAC, std::slice::from_ref(&attribute))
         .await
         .unwrap();
     let ordinary = decode_sc_message(&peer.recv().await.unwrap()).unwrap();

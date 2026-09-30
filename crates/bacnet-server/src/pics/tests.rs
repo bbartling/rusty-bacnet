@@ -527,7 +527,7 @@ fn make_real_objects_db() -> ObjectDatabase {
 }
 
 /// Helper: look up a property's writable flag in a PICS ObjectTypeSupport.
-fn pics_writable<'a>(pics: &'a Pics, object_type: ObjectType, pid: PropertyIdentifier) -> bool {
+fn pics_writable(pics: &Pics, object_type: ObjectType, pid: PropertyIdentifier) -> bool {
     pics.supported_object_types
         .iter()
         .find(|ot| ot.object_type == object_type)

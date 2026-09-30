@@ -3,6 +3,7 @@
 //! Connects to the multi-network Docker environment and runs cross-subnet
 //! scenarios: router hop latency, BBMD broadcast propagation, and foreign
 //! device access.
+#![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
 
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};

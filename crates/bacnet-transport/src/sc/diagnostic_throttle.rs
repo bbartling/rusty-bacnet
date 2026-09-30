@@ -95,6 +95,7 @@ impl DiagnosticThrottle {
     }
 
     /// Total suppressed events since the last [`Self::take_suppressed`].
+    #[cfg(test)]
     pub(crate) fn suppressed(&self) -> u64 {
         self.suppressed
     }

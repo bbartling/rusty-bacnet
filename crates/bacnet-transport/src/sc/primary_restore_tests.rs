@@ -203,12 +203,13 @@ async fn primary_restore_reseed_failure_blocks_stale_restore_retry() {
         )
         .await;
 
-        match tokio::time::timeout(Duration::from_millis(200), primary_hub.recv()).await {
-            Ok(Ok(data)) => panic!(
+        if let Ok(Ok(data)) =
+            tokio::time::timeout(Duration::from_millis(200), primary_hub.recv()).await
+        {
+            panic!(
                 "primary restore retried with stale VMAC after reseed failure: {:02x?}",
                 data
-            ),
-            Ok(Err(_)) | Err(_) => {}
+            )
         }
     });
 

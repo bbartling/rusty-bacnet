@@ -315,7 +315,7 @@ fn fault_out_of_range_alternative_tag_forms_accepted() {
         v.extend_from_slice(&[0x1F, 0x6F]);
         v
     }
-    let mut enc = |f: &dyn Fn(&mut BytesMut)| {
+    let enc = |f: &dyn Fn(&mut BytesMut)| {
         let mut b = BytesMut::new();
         f(&mut b);
         b.to_vec()

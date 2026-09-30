@@ -36,8 +36,8 @@
 //!
 //! Default = the endpoint server-executed set (`READ_PROPERTY` only). That is
 //! the narrow composition reality in this crate: the client role initiates
-//! `ReadProperty`, the server role executes `ReadProperty` (+ `Reject`/`Abort`
-//! + segmentation-`Abort`). It deliberately differs from the full
+//! `ReadProperty`, the server role executes `ReadProperty` (plus `Reject`/`Abort`
+//! and segmentation-`Abort`). It deliberately differs from the full
 //! `bacnet-server` dispatch surface (`EXECUTED_SERVICES`): advertising the
 //! full set here would be a superset flag the endpoint roles cannot honor.
 //! Explicit [`EndpointSession::with_device_writes`](crate::session::EndpointSession::with_device_writes)

@@ -105,6 +105,7 @@ pub struct AuditLogObject {
 }
 
 const LOG_DISABLED_STATUS: u8 = 0b001;
+#[cfg(test)]
 const BUFFER_PURGED_STATUS: u8 = 0b010;
 
 impl AuditLogObject {
@@ -202,6 +203,7 @@ impl AuditLogObject {
     }
 
     /// Clear buffered records and append the internal BUFFER_PURGED status.
+    #[cfg(test)]
     fn purge(&mut self) -> Result<u64, Error> {
         let timestamp = self.valid_timestamp()?;
         let mut prospective = self.snapshot_for_next_generation()?;

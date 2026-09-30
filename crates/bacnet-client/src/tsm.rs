@@ -11,9 +11,9 @@ use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
 mod final_segment;
-pub(crate) use final_segment::{
-    FinalSegmentIssue, FinalSegmentSendToken, TerminalResponseAdmission,
-};
+#[cfg(test)]
+pub(crate) use final_segment::TerminalResponseAdmission;
+pub(crate) use final_segment::{FinalSegmentIssue, FinalSegmentSendToken};
 mod segmented_response;
 pub(crate) use segmented_response::SegmentedResponseAdmission;
 mod completion;
@@ -290,6 +290,7 @@ impl Tsm {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn register_segmented_transaction_with_progress(
         &mut self,
         destination_mac: MacAddr,
@@ -455,6 +456,7 @@ impl Tsm {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn admit_terminal_response(
         &mut self,
         source_mac: &[u8],
@@ -475,15 +477,12 @@ impl Tsm {
                 sent_all_segments: false
             }
         ) {
-            if let Some(issue) = pending
+            if pending
                 .final_segment_issue
                 .as_ref()
-                .filter(|issue| issue.is_polling())
+                .is_some_and(|issue| issue.is_polling())
             {
-                return TerminalResponseAdmission::FinalSegmentSendPolling {
-                    owner: current_owner,
-                    issue: issue.clone(),
-                };
+                return TerminalResponseAdmission::FinalSegmentSendPolling;
             }
             self.abort_invalid_apdu_in_current_state(source_mac, invoke_id, &current_owner);
             return TerminalResponseAdmission::PrematureSegmentedRequestAborted;

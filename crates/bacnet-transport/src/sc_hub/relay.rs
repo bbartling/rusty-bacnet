@@ -57,6 +57,7 @@ pub(super) fn hub_relay_target(msg: &ScMessage) -> Result<HubRelayTarget, HubRel
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_hub_relay_message(
     inbound: &ScMessage,
     sender_vmac: Vmac,

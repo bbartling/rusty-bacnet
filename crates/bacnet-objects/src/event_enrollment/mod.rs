@@ -595,13 +595,11 @@ impl BACnetObject for EventEnrollmentObject {
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
     /// actually accepts.
     ///
-    /// Enumerated rather than reusing `common::is_event_property_writable`:
-    /// that helper covers the intrinsic-reporting objects and includes
+    /// Enumerated explicitly: the intrinsic-reporting objects accept
     /// `HIGH_LIMIT`, `LOW_LIMIT`, `DEADBAND`, `LIMIT_ENABLE` and `TIME_DELAY`,
-    /// none of which an Event Enrollment accepts — it carries those inside
-    /// `Event_Parameters` instead. Reusing it would over-report writability.
-    /// `TIME_DELAY_NORMAL` overlaps the helper: an enrollment carries THAT
-    /// one as a real (O-coded) property, per Table 12-14.
+    /// none of which an Event Enrollment accepts, because it carries those
+    /// inside `Event_Parameters` instead. `TIME_DELAY_NORMAL` is accepted here
+    /// as a real (O-coded) property, per Table 12-14.
     ///
     /// `Event_Detection_Enable` is writable even though Table 12-14 codes it R
     /// rather than W: Clause 12.1.2 lets implementors accept writes to an R

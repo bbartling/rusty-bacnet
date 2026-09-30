@@ -116,7 +116,7 @@ fn read_property_handler_serves_multistate_event_time_stamps_count() {
 
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     assert_eq!(ack.property_array_index, Some(0));
     let (value, end) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
@@ -400,7 +400,7 @@ fn rpm_all_includes_multistate_event_history() {
     request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf).unwrap();
     let results = &ack.list_of_read_access_results[0].list_of_results;
 
     let timestamps = results
@@ -459,7 +459,7 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
     request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf).unwrap();
     let result = &ack.list_of_read_access_results[0].list_of_results[0];
 
     assert_eq!(result.property_array_index, Some(2));
@@ -550,7 +550,7 @@ fn read_property_serves_derived_services_supported() {
 
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
 
     let (val, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();

@@ -14,7 +14,7 @@ const HUNDREDTHS_PER_MINUTE: i128 = 60 * HUNDREDTHS_PER_SECOND;
 const HUNDREDTHS_PER_DAY: i128 = 24 * 60 * HUNDREDTHS_PER_MINUTE;
 
 /// Validated civil-time settings for the bundled server clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClockConfig {
     utc_offset_minutes: i16,
     daylight_savings_status: bool,
@@ -42,15 +42,6 @@ impl ClockConfig {
     /// Return whether the one-hour daylight-saving adjustment is active.
     pub fn daylight_savings_status(self) -> bool {
         self.daylight_savings_status
-    }
-}
-
-impl Default for ClockConfig {
-    fn default() -> Self {
-        Self {
-            utc_offset_minutes: 0,
-            daylight_savings_status: false,
-        }
     }
 }
 

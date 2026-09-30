@@ -415,7 +415,7 @@ fn whole_configuration_array_writes_preserve_shape_and_reapply_targets() {
     let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
     object.take_staging_write_plan_internal();
 
-    let stages = vec![
+    let stages = [
         stage(12.0, &[true, false], 1.0),
         stage(22.0, &[false, true], 2.0),
         stage(32.0, &[true, true], 1.0),
@@ -458,7 +458,7 @@ fn whole_configuration_array_writes_preserve_shape_and_reapply_targets() {
         PropertyValue::CharacterString("Two".into())
     );
 
-    let references = vec![
+    let references = [
         reference(ObjectType::BINARY_OUTPUT, 9),
         reference(ObjectType::BINARY_LIGHTING_OUTPUT, 10),
     ];

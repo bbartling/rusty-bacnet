@@ -336,13 +336,11 @@ fn read_notification_class_priorities(
         let Some(class_number) = read_notification_class_number(class_object) else {
             continue;
         };
-        if class_number == notification_class {
-            if matching.replace(class_object).is_some() {
-                return Err(operational_problem(
-                    event_object_identifier,
-                    format!("multiple Notification Class objects match {notification_class}"),
-                ));
-            }
+        if class_number == notification_class && matching.replace(class_object).is_some() {
+            return Err(operational_problem(
+                event_object_identifier,
+                format!("multiple Notification Class objects match {notification_class}"),
+            ));
         }
     }
     let class_object = matching.ok_or_else(|| {

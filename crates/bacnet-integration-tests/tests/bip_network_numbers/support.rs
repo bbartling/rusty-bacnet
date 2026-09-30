@@ -196,7 +196,7 @@ impl TransportPort for ObservedBip {
 }
 pub type Server = BACnetServer<ObservedBip>;
 pub async fn start(transport: BipTransport, gates: Option<Arc<Gates>>) -> (Server, SocketAddrV4) {
-    let inner = AnyTransport::Bip(transport);
+    let inner = AnyTransport::Bip(Box::new(transport));
     assert!(
         inner.normal_bip_endpoint().is_none(),
         "no configured NORMAL-B/IP authority"

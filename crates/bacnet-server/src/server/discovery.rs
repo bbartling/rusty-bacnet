@@ -188,7 +188,7 @@ pub(crate) struct SourceKey {
 
 impl SourceKey {
     pub(crate) fn from_parts(source_mac: &MacAddr, source_network: Option<&NpduAddress>) -> Self {
-        if let Some(ref net) = source_network {
+        if let Some(net) = source_network {
             if (1..=0xFFFE).contains(&net.network) && !net.mac_address.is_empty() {
                 return Self {
                     network: net.network,

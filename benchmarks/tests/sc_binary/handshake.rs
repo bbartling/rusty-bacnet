@@ -7,6 +7,28 @@ use rcgen::{CertificateParams, Issuer, KeyPair};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 
+// The handshake callback's error type is fixed by tungstenite.
+#[allow(clippy::result_large_err)]
+fn accept_hub_subprotocol(
+    _: &tokio_tungstenite::tungstenite::handshake::server::Request,
+    mut response: tokio_tungstenite::tungstenite::handshake::server::Response,
+) -> Result<
+    tokio_tungstenite::tungstenite::handshake::server::Response,
+    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+> {
+    response.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        bacnet_transport::sc_frame::BACNET_SC_HUB_SUBPROTOCOL
+            .parse()
+            .unwrap(),
+    );
+    Ok(response)
+}
+
+async fn connect_hub_peer(url: &str, tls: ScNodeTlsConfig, id: u8) -> Peer {
+    Peer::connect_identity(url, tls, id, HUB_VMAC, HUB_UUID).await
+}
+
 fn identity(
     material: &CertMaterial,
     cert: &str,
@@ -33,7 +55,7 @@ async fn good_pair(files: &Files, certs: &CertMaterial) {
     let url = hub.hub_url().await;
     let mut device = Process::start(&mut files.device(&url), files);
     device.ready("SC device connected").await;
-    let peer = Peer::connect(&url, try_make_node_tls_config(certs).unwrap(), 42).await;
+    let peer = connect_hub_peer(&url, try_make_node_tls_config(certs).unwrap(), 42).await;
     peer.read().await;
     assert!(device.child.try_wait().unwrap().is_none());
 }
@@ -144,7 +166,7 @@ async fn actual_binaries_mutual_tls_reads_and_denials_recover() {
         PrivateKeyDer::from_pem_slice(key.as_bytes()).unwrap(),
     )
     .unwrap();
-    let peer = Peer::connect(&url, node, 42).await;
+    let peer = connect_hub_peer(&url, node, 42).await;
     peer.read().await;
     let wrong = generate_test_certs();
     let (expired, expired_key) = leaf("expired", ClientAuth, Some((2000, 2001)));
@@ -237,9 +259,7 @@ async fn device_rejects_hub_dates_and_san_then_good_pair_reads() {
 
 #[tokio::test]
 async fn device_tls12_rejected_and_connect_request_carries_explicit_identity() {
-    use bacnet_transport::sc_frame::{
-        decode_sc_message, encode_sc_message, ScFunction, ScMessage, BACNET_SC_HUB_SUBPROTOCOL,
-    };
+    use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
     use bytes::{Bytes, BytesMut};
     use futures_util::{SinkExt, StreamExt};
     let files = Files::new();
@@ -283,11 +303,12 @@ async fn device_tls12_rejected_and_connect_request_carries_explicit_identity() {
             tls.get_ref().1.peer_certificates().unwrap(),
             pem(&files.0.join("device.pem"))
         );
-        let mut ws = bounded(tokio_tungstenite::accept_hdr_async(tls,
-            |_: &tokio_tungstenite::tungstenite::handshake::server::Request, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                response.headers_mut().insert("Sec-WebSocket-Protocol", BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap());
-                Ok(response)
-            })).await.unwrap();
+        let mut ws = bounded(tokio_tungstenite::accept_hdr_async(
+            tls,
+            accept_hub_subprotocol,
+        ))
+        .await
+        .unwrap();
         let frame = bounded(ws.next()).await.unwrap().unwrap().into_data();
         let request = decode_sc_message(&frame).unwrap();
         assert_eq!(request.function, ScFunction::ConnectRequest);

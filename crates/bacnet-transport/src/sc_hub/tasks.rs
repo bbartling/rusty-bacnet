@@ -82,10 +82,6 @@ impl Tasks {
         self.shutdown.subscribe()
     }
 
-    pub fn subscribe_graceful(&self) -> watch::Receiver<bool> {
-        self.graceful.subscribe()
-    }
-
     pub fn request_shutdown(&self) {
         self.state.lock().unwrap().sealed = true;
         self.shutdown.send_replace(true);

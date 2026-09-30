@@ -1,4 +1,5 @@
 //! Independent byte/UDP helpers adapted from the full-server B/IP fixture.
+#![allow(clippy::print_stderr)] // the fixture reports skipped setups outside a test function
 use bacnet_endpoint::{bip::BipEndpointBuilder, session::EndpointSession};
 use bacnet_objects::{
     analog::AnalogInputObject,

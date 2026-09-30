@@ -7,7 +7,7 @@
 
 use super::{DirectAcceptConfig, DirectListener};
 use crate::sc::{ScConnection, WebSocketPort};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
 use crate::sc_tls::ScNodeTlsConfig;
 
 use std::net::SocketAddr;

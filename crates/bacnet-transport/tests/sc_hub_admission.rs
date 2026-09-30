@@ -152,7 +152,7 @@ async fn admission_limits_rejected_before_bind_on_every_start_api() {
 async fn cloned_config_shares_policy_but_not_deny_counters() {
     let f = Fixture::new();
     let config = typed_config(&f).with_admission_policy(|_| ScHubAdmissionDecision::Deny);
-    let mut hub_a = bounded(ScHub::start(
+    let hub_a = bounded(ScHub::start(
         "127.0.0.1:0",
         config.clone(),
         HUB_VMAC,

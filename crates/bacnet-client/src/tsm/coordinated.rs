@@ -155,6 +155,7 @@ impl Tsm {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_pre_admitted_terminal_response(
         &mut self,
         source_mac: &[u8],
@@ -232,20 +233,6 @@ impl Tsm {
             response,
             PendingRelease::Complete,
         ))
-    }
-
-    pub(crate) fn reject_pre_admitted_segmented_response(
-        &mut self,
-        source_mac: &[u8],
-        admission: &Admission,
-        apdu: &Apdu,
-    ) -> bool {
-        self.reject_pre_admitted_segmented_response_for_peer(
-            &MacAddr::from_slice(source_mac),
-            &CanonicalPeer::direct(source_mac),
-            admission,
-            apdu,
-        )
     }
 
     pub(crate) fn reject_pre_admitted_segmented_response_for_peer(

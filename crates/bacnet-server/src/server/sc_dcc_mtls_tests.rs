@@ -39,9 +39,7 @@ async fn sc_dcc_mtls_requires_client_and_server_trust() {
             .await;
             // TLS1.3 client authentication rejection may surface during the
             // WebSocket upgrade. A completed error, never a deadline, is required.
-            let error = result
-                .err()
-                .expect("unauthenticated TLS endpoint was admitted");
+            let error = result.expect_err("unauthenticated TLS endpoint was admitted");
             assert!(
                 format!("{error:?}").contains(expected),
                 "expected {expected}, got {error:?}"

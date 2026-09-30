@@ -2,6 +2,7 @@
 //!
 //! Running `bacnet` with no arguments or with the `shell` subcommand launches
 //! an interactive REPL. Subcommands can also be used directly for scripting.
+#![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool prints its results
 
 use std::{io::IsTerminal, net::Ipv4Addr};
 

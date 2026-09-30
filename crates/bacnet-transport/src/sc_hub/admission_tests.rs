@@ -145,18 +145,20 @@ async fn allow_policy_registers_with_claimed_values_and_reports_input() {
         assert_eq!((client.max_bvlc, client.max_npdu), (1200, 480));
         assert!(!client.closed.load(Ordering::Acquire));
     }
-    let seen = seen.lock().unwrap();
-    assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].claimed_vmac, [0x22; 6]);
-    assert_eq!(seen[0].claimed_uuid, [0x22; 16]);
-    assert_eq!(
-        (seen[0].claimed_max_bvlc, seen[0].claimed_max_npdu),
-        (1200, 480)
-    );
-    assert!(seen[0].tls_client_verified);
-    assert!(seen[0].provenance.is_hub_channel());
-    assert!(!seen[0].provenance.is_direct_peer());
-    assert!(seen[0].provenance.direct_sc_identity().is_none());
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].claimed_vmac, [0x22; 6]);
+        assert_eq!(seen[0].claimed_uuid, [0x22; 16]);
+        assert_eq!(
+            (seen[0].claimed_max_bvlc, seen[0].claimed_max_npdu),
+            (1200, 480)
+        );
+        assert!(seen[0].tls_client_verified);
+        assert!(seen[0].provenance.is_hub_channel());
+        assert!(!seen[0].provenance.is_direct_peer());
+        assert!(seen[0].provenance.direct_sc_identity().is_none());
+    }
     peer.close().await;
     assert!(clients.lock().await.is_empty());
 }

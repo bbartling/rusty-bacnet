@@ -132,8 +132,8 @@ async fn read(
 }
 
 enum Owner {
-    Server(bacnet_server::server::BACnetServer<BipTransport>),
-    Endpoint(EndpointSession<BipTransport>),
+    Server(Box<bacnet_server::server::BACnetServer<BipTransport>>),
+    Endpoint(Box<EndpointSession<BipTransport>>),
 }
 impl Owner {
     async fn start(full: bool, registered: bool) -> Self {
@@ -142,7 +142,7 @@ impl Owner {
         if full {
             let mut config = identity.server_config();
             config.registered_network_port = registered.then_some(port());
-            Self::Server(
+            Self::Server(Box::new(
                 bacnet_server::server::BACnetServer::start(
                     config,
                     db,
@@ -150,7 +150,7 @@ impl Owner {
                 )
                 .await
                 .unwrap(),
-            )
+            ))
         } else {
             let mut builder =
                 crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
@@ -163,7 +163,7 @@ impl Owner {
             }
             let mut endpoint = builder.build_session().unwrap();
             endpoint.start().await.unwrap();
-            Self::Endpoint(endpoint)
+            Self::Endpoint(Box::new(endpoint))
         }
     }
     fn address(&self) -> SocketAddrV4 {

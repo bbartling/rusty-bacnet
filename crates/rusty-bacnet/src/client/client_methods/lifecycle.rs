@@ -113,7 +113,7 @@ impl BACnetClient {
                     let broadcast: Ipv4Addr = broadcast_str
                         .parse()
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
-                    AnyTransport::Bip(BipTransport::new(interface, port, broadcast))
+                    AnyTransport::Bip(Box::new(BipTransport::new(interface, port, broadcast)))
                 }
                 "ipv6" => {
                     let iface_str = ipv6_interface.as_deref().unwrap_or("::");
@@ -202,7 +202,11 @@ impl BACnetClient {
                 match Arc::try_unwrap(arc) {
                     Ok(mut c) => {
                         if let Err(e) = c.stop().await {
-                            eprintln!("BACnetClient stop error in __aexit__: {e}");
+                            #[allow(clippy::print_stderr)]
+                            // no logging path in this crate; __aexit__ cannot raise here
+                            {
+                                eprintln!("BACnetClient stop error in __aexit__: {e}");
+                            }
                         }
                     }
                     Err(_arc) => {

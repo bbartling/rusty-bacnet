@@ -11,10 +11,9 @@ use super::mutation_tests::{
     apdu, assert_denied, cases, oid, route, Fixture, TestTransport, SOURCE,
 };
 use super::*;
-use crate::mutation::{
-    MutationAuthorizationContext, MutationAuthorizer, MutationDecisionCounters, MutationPolicy,
-    MutationTrust,
-};
+#[cfg(feature = "sc-tls")]
+use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationTrust};
+use crate::mutation::{MutationDecisionCounters, MutationPolicy};
 use crate::server::request_admission::{Class, RequestAdmissionPolicy};
 use crate::server::request_peer::canonical_requester;
 use bacnet_encoding::apdu::decode_apdu;
@@ -32,6 +31,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::EnableDisable;
 use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "sc-tls")]
 use std::sync::Mutex as StdMutex;
 
 fn confirmed(service: ConfirmedServiceChoice, bytes: Bytes, id: u8) -> ConfirmedRequestPdu {
@@ -89,6 +89,7 @@ async fn dispatch_admitted(
     rx.await.ok()
 }
 
+#[cfg(feature = "sc-tls")]
 fn capturing(
     authorizer: impl Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
 ) -> (
@@ -194,7 +195,7 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
     let peer = canonical_requester(SOURCE, route().as_ref());
     server
         .request_tasks
-        .try_spawn(Class::Confirmed, peer, || std::future::pending::<()>())
+        .try_spawn(Class::Confirmed, peer, std::future::pending::<()>)
         .unwrap();
     let before = server
         .db
@@ -704,12 +705,13 @@ async fn direct_channel_allows_where_unknown_leaf_denies() {
         .unwrap();
     // The denial changed nothing; only the allowed write is visible.
     assert_ne!(before, after);
-    let contexts = seen.lock().unwrap();
-    assert_eq!(contexts.len(), 2);
-    assert_eq!(contexts[0].trust, MutationTrust::VerifiedChannel);
-    assert_eq!(contexts[1].trust, MutationTrust::Unverified);
+    {
+        let contexts = seen.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].trust, MutationTrust::VerifiedChannel);
+        assert_eq!(contexts[1].trust, MutationTrust::Unverified);
+    }
     assert_eq!(decisions.snapshot().write_property.allow_total, 1);
     assert_eq!(decisions.snapshot().write_property.deny_total, 1);
-    drop(contexts);
     listener.stop().await;
 }

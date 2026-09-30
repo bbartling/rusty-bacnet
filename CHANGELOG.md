@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `AnyTransport::Bip` now holds a `Box<BipTransport>`, like `Sc`: B/IP made the
+  enum several times larger than its other variants. `From<BipTransport>` still
+  converts; direct constructors become `AnyTransport::Bip(Box::new(..))`. The
+  endpoint-core `ClassifierExit::PolicyRouteFull` and `PolicyRouteClosed` payloads
+  are boxed for the same reason (#902).
+
+- `clippy::print_stdout` and `clippy::print_stderr` are now `deny` across the
+  workspace. The CLI, benchmark binaries, examples and tests allow printing, each
+  with a reason; library crates report through `tracing` (#902).
+
 - Tests run with cargo-nextest: CI, the release gate and
   `scripts/ci/local-macos.sh` use `cargo nextest run` (one process per test),
   plus `cargo test --doc` for doctests, which nextest skips. `.config/nextest.toml`

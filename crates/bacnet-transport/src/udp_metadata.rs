@@ -392,7 +392,9 @@ unsafe fn unix_destination_cmsg(
 supported_unix_item! {
 fn unix_cmsg_has_payload<T>(header: &libc::cmsghdr) -> bool {
     let required = unsafe { libc::CMSG_LEN(std::mem::size_of::<T>() as _) } as usize;
-    header.cmsg_len as usize >= required
+    #[allow(clippy::unnecessary_cast)] // cmsg_len is usize on Linux but u32 on macOS and the BSDs
+    let len = header.cmsg_len as usize;
+    len >= required
 }
 }
 

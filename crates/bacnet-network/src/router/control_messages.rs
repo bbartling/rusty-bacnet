@@ -215,7 +215,7 @@ pub(super) async fn handle_network_message(
         // Clause 6.4.2: one or more 2-octet network numbers. A truncated
         // tail rejects the whole message — no prefix learning, no rebroadcast.
         let data = &npdu.payload;
-        if data.is_empty() || data.len() % 2 != 0 {
+        if data.is_empty() || !data.len().is_multiple_of(2) {
             return;
         }
         // RB-09 protected: authorize lock-free; deny drops silently.
@@ -366,7 +366,7 @@ pub(super) async fn handle_network_message(
         // verbatim out every other port; full queues drop locally (bounded,
         // no retry, no admission path) while per-route marks stay correct.
         let data = &npdu.payload;
-        if data.len() % 2 != 0 {
+        if !data.len().is_multiple_of(2) {
             return;
         }
         let mut listed = Vec::with_capacity(data.len() / 2);
@@ -427,7 +427,7 @@ pub(super) async fn handle_network_message(
         // network it serves. As with Busy, the omitted scope is the via-peer
         // set, and explicit lists intersect with it.
         let data = &npdu.payload;
-        if data.len() % 2 != 0 {
+        if !data.len().is_multiple_of(2) {
             return;
         }
         let mut listed = Vec::with_capacity(data.len() / 2);
@@ -515,7 +515,7 @@ pub(super) async fn handle_network_message(
             // An empty table is still complete in one count-zero ACK; a
             // count-zero ACK is not the same wire value as an update ACK
             // (which carries no data at all — see below and 6.4.8).
-            let chunk_len = MAX_INIT_ACK_ENTRIES.min(255).max(1);
+            let chunk_len = MAX_INIT_ACK_ENTRIES.clamp(1, 255);
             let mut chunks: Vec<&[(u16, u8)]> = snapshot.chunks(chunk_len).collect();
             if chunks.is_empty() {
                 chunks.push(&[]);

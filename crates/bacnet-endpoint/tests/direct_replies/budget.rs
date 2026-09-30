@@ -74,7 +74,6 @@ async fn endpoint_too_small_for_abort_fails_without_fallback_and_dispatch_contin
     let read = a.ws.recv();
     tokio::pin!(read);
     assert!(futures_util::poll!(&mut read).is_pending());
-    drop(read);
     let mut b = f.peer(ca.tls("normal"), None).await;
     f.barrier(&mut b, 91).await;
     session.stop().await.unwrap();

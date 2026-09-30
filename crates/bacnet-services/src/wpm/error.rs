@@ -8,7 +8,7 @@ use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 
 /// Formal service-16 Result(-) body with the first failed write coordinate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +137,7 @@ mod tests {
     use super::*;
     use bacnet_types::enums::{ObjectType, PropertyIdentifier};
     use bacnet_types::primitives::ObjectIdentifier;
+    use bytes::Bytes;
 
     fn sample(index: Option<u32>) -> WritePropertyMultipleError {
         WritePropertyMultipleError {
