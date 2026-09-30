@@ -1,5 +1,6 @@
 use super::*;
 use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationTarget};
+pub(super) use crate::server::test_transport::TestTransport;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
     binary::BinaryValueObject, file::FileObject, multistate::MultiStateInputObject,
@@ -48,39 +49,6 @@ pub(super) fn route() -> Option<NpduAddress> {
 
 pub(super) const SOURCE: &[u8] = &[127, 0, 0, 1, 0xba, 0xc0];
 
-#[derive(Default)]
-pub(super) struct TestTransport {
-    pub sent: StdMutex<Vec<Bytes>>,
-}
-
-impl TransportPort for TestTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        Ok(mpsc::channel(1).1)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, bytes: &[u8], _: &[u8]) -> Result<(), Error> {
-        self.sent
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(bytes));
-        Ok(())
-    }
-    async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
-        self.send_unicast(bytes, &[]).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
-}
-
 pub(super) struct Fixture {
     pub db: Arc<RwLock<ObjectDatabase>>,
     pub table: Arc<RwLock<CovSubscriptionTable>>,
@@ -112,7 +80,7 @@ impl Fixture {
             },
             state: Arc::new(AtomicU8::new(0)),
             tracker: Arc::new(ConfirmedRequestTracker::default()),
-            network: Arc::new(NetworkLayer::new(TestTransport::default())),
+            network: Arc::new(NetworkLayer::new(TestTransport::new())),
         }
     }
 
@@ -393,7 +361,7 @@ async fn denial_case(index: usize) {
         51,
     );
     assert_eq!(fixture.snapshot().await, before);
-    assert!(fixture.network.transport().sent.lock().unwrap().is_empty());
+    assert!(fixture.network.transport().sent().is_empty());
     assert_eq!(
         *observed.lock().unwrap(),
         vec![MutationAuthorizationContext {

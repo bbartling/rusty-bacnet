@@ -70,11 +70,11 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
     let discovery = fixture
         .network
         .transport()
-        .sent
+        .sent()
         .lock()
-        .unwrap()
         .pop()
-        .unwrap();
+        .unwrap()
+        .npdu;
     let npdu = decode_npdu(discovery).unwrap();
     assert_eq!(npdu.destination, route());
     let Apdu::UnconfirmedRequest(i_am) = decode_apdu(npdu.payload).unwrap() else {

@@ -4,6 +4,7 @@
 //! unchanged from the actual listener. Live replies are decoded from the exact
 //! accepted TLS socket; a separate generic-egress spy detects fallback.
 use super::*;
+use crate::server::test_transport::{SendMode, TestTransport};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyPointResetCommit};
 use bacnet_objects::value_types::CharacterStringValueObject;
@@ -56,38 +57,25 @@ impl TestCa {
     }
 }
 
-struct QueuedPort {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// Feeds the server from `incoming` and decodes every generic-egress unicast
+/// onto `responses`, the fallback spy. Broadcasts are dropped.
+fn queued_port(
+    incoming: mpsc::Receiver<ReceivedNpdu>,
     responses: mpsc::UnboundedSender<Apdu>,
-}
-impl TransportPort for QueuedPort {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], _: &[u8]) -> Result<(), Error> {
-        let npdu = decode_npdu(Bytes::copy_from_slice(npdu)).unwrap();
-        self.responses
-            .send(apdu::decode_apdu(npdu.payload).unwrap())
-            .unwrap();
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0xaa; 6]
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(&[0xaa; 6])
+        .inbound(incoming)
+        .broadcast(SendMode::Ignore)
+        .on_send(move |frame| {
+            responses.send(frame.apdu()).unwrap();
+            std::future::ready(Ok(()))
+        })
+        .build()
 }
 
 struct Fixture {
-    server: BACnetServer<QueuedPort>,
+    server: BACnetServer<TestTransport>,
     listener: DirectListener,
     admitted: mpsc::Receiver<ReceivedNpdu>,
     incoming: mpsc::Sender<ReceivedNpdu>,
@@ -109,16 +97,9 @@ impl Fixture {
         .unwrap();
         let (incoming, rx) = mpsc::channel(32);
         let (responses, observed) = mpsc::unbounded_channel();
-        let server = BACnetServer::start(
-            config,
-            db,
-            QueuedPort {
-                incoming: Some(rx),
-                responses,
-            },
-        )
-        .await
-        .unwrap();
+        let server = BACnetServer::start(config, db, queued_port(rx, responses))
+            .await
+            .unwrap();
         Self {
             server,
             listener,

@@ -1,28 +1,13 @@
 use super::*;
+use crate::server::test_transport::{StartMode, TestTransport};
 
-struct NeverStart;
-impl TransportPort for NeverStart {
-    async fn start(
-        &mut self,
-    ) -> Result<tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        panic!("invalid enrollment budget reached startup")
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
+/// Startup panics, so reaching it means invalid limits were not refused first.
+fn never_start() -> TestTransport {
+    TestTransport::builder()
+        .start(StartMode::Panic(
+            "invalid enrollment budget reached startup",
+        ))
+        .build()
 }
 
 #[tokio::test]
@@ -59,12 +44,12 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
                 ..Default::default()
             },
             ObjectDatabase::new(),
-            NeverStart,
+            never_start(),
         )
         .await
         .err();
         let generic = BACnetServer::generic_builder()
-            .transport(NeverStart)
+            .transport(never_start())
             .get_enrollment_summary_budget(budget)
             .build()
             .await

@@ -3,16 +3,13 @@ use super::*;
 use bacnet_network::layer::IssuedApdu;
 use bacnet_network::response_route::ResponseRoute;
 
-fn idle_network() -> NetworkLayer<QueuedPort> {
+fn idle_network() -> NetworkLayer<TestTransport> {
     let (_, incoming) = mpsc::channel(1);
     let (responses, _) = mpsc::unbounded_channel();
-    NetworkLayer::new(QueuedPort {
-        incoming: Some(incoming),
-        responses,
-    })
+    NetworkLayer::new(queued_port(incoming, responses))
 }
 async fn issue(
-    net: &NetworkLayer<QueuedPort>,
+    net: &NetworkLayer<TestTransport>,
     route: &ResponseRoute,
     invoke: u8,
 ) -> Result<(), Error> {
@@ -106,10 +103,7 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
     let (tx, incoming) = mpsc::channel(8);
     let (responses, mut generic) = mpsc::unbounded_channel();
     let (mut router, mut local) = BACnetRouter::start(vec![RouterPort {
-        transport: QueuedPort {
-            incoming: Some(incoming),
-            responses,
-        },
+        transport: queued_port(incoming, responses),
         network_number: 44,
     }])
     .await

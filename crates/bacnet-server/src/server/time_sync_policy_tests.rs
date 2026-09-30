@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::test_transport::{StartMode, TestTransport};
 use crate::server::{BACnetServer, ServerConfig};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::port::TransportProvenance;
@@ -294,29 +295,11 @@ fn concurrent_time_sync_admission_is_bounded_and_check_apply_is_serialized() {
     assert_eq!(applied.load(Ordering::SeqCst), 4);
 }
 
-struct NeverStart;
-impl TransportPort for NeverStart {
-    async fn start(
-        &mut self,
-    ) -> Result<tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        panic!("invalid policy reached transport startup")
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
+/// Startup panics, so reaching it means the invalid policy was not refused first.
+fn never_start() -> TestTransport {
+    TestTransport::builder()
+        .start(StartMode::Panic("invalid policy reached transport startup"))
+        .build()
 }
 
 #[tokio::test]
@@ -375,14 +358,14 @@ async fn time_sync_defaults_and_all_builders_validate_before_start_or_dial() {
             time_sync_policy: policy.clone(),
             ..Default::default()
         };
-        let direct = BACnetServer::start(config.clone(), ObjectDatabase::new(), NeverStart)
+        let direct = BACnetServer::start(config.clone(), ObjectDatabase::new(), never_start())
             .await
             .err();
-        let clockless = BACnetServer::start_clockless(config, ObjectDatabase::new(), NeverStart)
+        let clockless = BACnetServer::start_clockless(config, ObjectDatabase::new(), never_start())
             .await
             .err();
         let generic = BACnetServer::generic_builder()
-            .transport(NeverStart)
+            .transport(never_start())
             .time_sync_policy(policy.clone())
             .build()
             .await

@@ -66,30 +66,15 @@ impl ScServerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct NeverStart;
-    impl TransportPort for NeverStart {
-        async fn start(
-            &mut self,
-        ) -> Result<tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error>
-        {
-            panic!("invalid RPM budget reached transport startup")
-        }
-        async fn stop(&mut self) -> Result<(), Error> {
-            Ok(())
-        }
-        async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-            Ok(())
-        }
-        async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-            Ok(())
-        }
-        fn local_receive_apdu_capacity(&self) -> u16 {
-            1476
-        }
+    use crate::server::test_transport::{StartMode, TestTransport};
 
-        fn local_mac(&self) -> &[u8] {
-            &[1]
-        }
+    /// Startup panics, so reaching it means invalid limits were not refused first.
+    fn never_start() -> TestTransport {
+        TestTransport::builder()
+            .start(StartMode::Panic(
+                "invalid RPM budget reached transport startup",
+            ))
+            .build()
     }
 
     #[tokio::test]
@@ -126,11 +111,11 @@ mod tests {
                     ..Default::default()
                 },
                 ObjectDatabase::new(),
-                NeverStart,
+                never_start(),
             )
             .await;
             let generic = BACnetServer::generic_builder()
-                .transport(NeverStart)
+                .transport(never_start())
                 .read_property_multiple_budget(budget)
                 .build()
                 .await;
@@ -147,7 +132,7 @@ mod tests {
                 read_property_multiple_budget: budget,
                 ..Default::default()
             };
-            let error = BACnetServer::start(config, ObjectDatabase::new(), NeverStart)
+            let error = BACnetServer::start(config, ObjectDatabase::new(), never_start())
                 .await
                 .err()
                 .unwrap();

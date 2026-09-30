@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::test_transport::{StartMode, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::file::FileObject;
@@ -115,29 +116,11 @@ async fn atomic_write_file_default_record_budget_refuses_without_mutation() {
     default_refusal(true).await;
 }
 
-struct NeverStart;
-impl TransportPort for NeverStart {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        panic!("invalid budget reached startup")
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
+/// Startup panics, so reaching it means invalid limits were not refused first.
+fn never_start() -> TestTransport {
+    TestTransport::builder()
+        .start(StartMode::Panic("invalid budget reached startup"))
+        .build()
 }
 
 #[tokio::test]
@@ -180,12 +163,12 @@ async fn atomic_write_file_all_builders_validate_before_start_or_dial() {
                 ..Default::default()
             },
             ObjectDatabase::new(),
-            NeverStart,
+            never_start(),
         )
         .await
         .err();
         let generic = BACnetServer::generic_builder()
-            .transport(NeverStart)
+            .transport(never_start())
             .atomic_write_file_budget(budget)
             .build()
             .await
