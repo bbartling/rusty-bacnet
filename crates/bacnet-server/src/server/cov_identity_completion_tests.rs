@@ -1,3 +1,4 @@
+use super::test_transport::{SendMode, SentFrame, TestTransport, BIP_LOCAL_MAC};
 use super::*;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::analog::AnalogValueObject;
@@ -7,7 +8,9 @@ use tokio::sync::Notify;
 
 type SendGates = Arc<StdMutex<std::collections::VecDeque<Arc<completion_order::CallGate>>>>;
 
-struct HeldTransport {
+/// The fixture's send path, installed as the shared test transport's send hook.
+#[derive(Clone)]
+struct HeldSends {
     gates: SendGates,
     sent: Arc<StdMutex<Vec<Bytes>>>,
     routes: Arc<StdMutex<Vec<MacAddr>>>,
@@ -16,22 +19,14 @@ struct HeldTransport {
     hold: bool,
     fail: Arc<std::sync::atomic::AtomicBool>,
 }
-impl TransportPort for HeldTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        Ok(mpsc::channel(1).1)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+impl HeldSends {
+    async fn send(self, frame: SentFrame) -> Result<(), Error> {
         let gate = self.gates.lock().unwrap().pop_front();
         if let Some(gate) = gate.as_ref().filter(|gate| !gate.record_before) {
             gate.wait().await?;
         }
-        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
-        self.routes.lock().unwrap().push(MacAddr::from_slice(mac));
+        self.sent.lock().unwrap().push(frame.npdu);
+        self.routes.lock().unwrap().push(frame.mac);
         self.entered.notify_one();
         if let Some(gate) = gate.as_ref().filter(|gate| gate.record_before) {
             gate.wait().await?;
@@ -44,15 +39,12 @@ impl TransportPort for HeldTransport {
         }
         Ok(())
     }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xba, 0xc0]
+    fn transport(self) -> TestTransport {
+        TestTransport::builder()
+            .local_mac(&BIP_LOCAL_MAC)
+            .broadcast(SendMode::Ignore)
+            .on_send(move |frame| self.clone().send(frame))
+            .build()
     }
 }
 
@@ -92,7 +84,7 @@ fn proposal(
 struct Fixture {
     gates: SendGates,
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<HeldTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     table: Arc<RwLock<CovSubscriptionTable>>,
     permits: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
@@ -119,15 +111,18 @@ impl Fixture {
         Self {
             gates: gates.clone(),
             db: Arc::new(RwLock::new(db)),
-            network: Arc::new(NetworkLayer::new(HeldTransport {
-                gates,
-                sent: sent.clone(),
-                routes: routes.clone(),
-                entered: entered.clone(),
-                release: release.clone(),
-                hold,
-                fail: fail.clone(),
-            })),
+            network: Arc::new(NetworkLayer::new(
+                HeldSends {
+                    gates,
+                    sent: sent.clone(),
+                    routes: routes.clone(),
+                    entered: entered.clone(),
+                    release: release.clone(),
+                    hold,
+                    fail: fail.clone(),
+                }
+                .transport(),
+            )),
             table: Arc::new(RwLock::new(CovSubscriptionTable::new())),
             permits: Arc::new(Semaphore::new(8)),
             transactions: NotificationTransactions::new(),
@@ -142,7 +137,7 @@ impl Fixture {
     }
     async fn fire(&self, initial: bool, snapshots: &[CovSubscriptionSnapshot]) {
         if !initial {
-            BACnetServer::<HeldTransport>::fire_cov_notifications(
+            BACnetServer::<TestTransport>::fire_cov_notifications(
                 &crate::server::cov_notify_context::CovNotifyContext {
                     db: &self.db,
                     network: &self.network,
@@ -156,7 +151,7 @@ impl Fixture {
             )
             .await;
         } else if snapshots[0].notification_kind == CovNotificationKind::Single {
-            BACnetServer::<HeldTransport>::fire_initial_cov_notification(
+            BACnetServer::<TestTransport>::fire_initial_cov_notification(
                 &crate::server::cov_notify_context::CovNotifyContext {
                     db: &self.db,
                     network: &self.network,
@@ -170,7 +165,7 @@ impl Fixture {
             )
             .await;
         } else {
-            BACnetServer::<HeldTransport>::fire_initial_cov_notification_multiple(
+            BACnetServer::<TestTransport>::fire_initial_cov_notification_multiple(
                 &crate::server::cov_notify_context::CovNotifyContext {
                     db: &self.db,
                     network: &self.network,

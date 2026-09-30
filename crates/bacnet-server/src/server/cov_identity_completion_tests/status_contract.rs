@@ -322,7 +322,7 @@ async fn cov_status_snapshot_captures_companion_without_live_db_fallback() {
             increment: Some(2.0),
         }));
         s.lock().unwrap().flags_fail = true;
-        BACnetServer::<HeldTransport>::fire_cov_notifications_inner(
+        BACnetServer::<TestTransport>::fire_cov_notifications_inner(
             &crate::server::cov_notify_context::CovNotifyContext {
                 db: &f.db,
                 network: &f.network,

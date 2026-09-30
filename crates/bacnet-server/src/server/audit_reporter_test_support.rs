@@ -1,6 +1,8 @@
 //! Shared fixture and wire helpers for the Audit Reporter behavioral tests.
 
 use super::super::*;
+pub(super) use crate::server::test_transport::TestTransport;
+use crate::server::test_transport::{SendMode, SentFrame, StartMode};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
     analog::AnalogInputObject,
@@ -22,8 +24,10 @@ pub(super) const LOGGER: &[u8] = &[2];
 pub(super) const NEW_LOGGER: &[u8] = &[4];
 pub(super) const SOURCE: &[u8] = &[3];
 
+/// What the audit fixtures' link observed, and switches that steer it. The link
+/// itself is the shared [`TestTransport`] built by [`AuditCapture::port`].
 #[derive(Clone, Default)]
-pub(super) struct CaptureTransport {
+pub(super) struct AuditCapture {
     pub(super) six_byte_mac: bool,
     pub(super) learned_broadcast: Option<MacAddr>,
     pub(super) reject_route_callbacks: Arc<AtomicBool>,
@@ -41,7 +45,7 @@ pub(super) struct CaptureTransport {
         Arc<StdMutex<Option<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>>>>,
 }
 
-impl CaptureTransport {
+impl AuditCapture {
     fn route_callback(&self) {
         self.route_callbacks.fetch_add(1, Ordering::AcqRel);
         assert!(
@@ -49,14 +53,15 @@ impl CaptureTransport {
             "target route callback after startup"
         );
     }
-}
 
-impl TransportPort for CaptureTransport {
-    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+    /// The link's `bip_broadcast_endpoint` answer, counted as a route callback.
+    pub(super) fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
         self.route_callback();
         None
     }
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+
+    /// The link's `is_broadcast_mac` answer, counted as a route callback.
+    pub(super) fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         self.route_callback();
         self.started.load(Ordering::Acquire)
             && self
@@ -65,37 +70,18 @@ impl TransportPort for CaptureTransport {
                 .is_some_and(|broadcast| broadcast.as_slice() == mac)
     }
 
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        self.started.store(true, Ordering::Release);
-        Ok(self
-            .incoming
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or_else(|| mpsc::channel(1).1))
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, bytes: &[u8], mac: &[u8]) -> Result<(), Error> {
-        if mac == SOURCE {
-            self.responses
-                .lock()
-                .unwrap()
-                .push(Bytes::copy_from_slice(bytes));
+    async fn send(self, frame: SentFrame) -> Result<(), Error> {
+        let (bytes, mac) = (frame.npdu, frame.mac);
+        if mac.as_slice() == SOURCE {
+            self.responses.lock().unwrap().push(bytes);
             if self.fail_response.load(Ordering::Acquire) {
                 return Err(Error::Encoding("injected response send failure".into()));
             }
             return Ok(());
         }
-        assert!(mac == LOGGER || mac == NEW_LOGGER);
+        assert!(mac.as_slice() == LOGGER || mac.as_slice() == NEW_LOGGER);
         self.destinations.lock().unwrap().push(mac.to_vec());
-        self.sent
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(bytes));
+        self.sent.lock().unwrap().push(bytes);
         if self.block.load(Ordering::Acquire) {
             self.unblock.notified().await;
         }
@@ -104,19 +90,32 @@ impl TransportPort for CaptureTransport {
         }
         Ok(())
     }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
 
-    fn local_mac(&self) -> &[u8] {
-        if self.six_byte_mac {
+    /// Build a link that reports into this capture. Unicasts go to [`Self::send`],
+    /// broadcasts succeed unrecorded, and the capture rides along as the
+    /// transport's state so helpers holding only the server can reach it.
+    pub(super) fn port(&self) -> TestTransport {
+        let start = match self.incoming.lock().unwrap().take() {
+            Some(incoming) => StartMode::Inbound(incoming),
+            None => StartMode::Closed,
+        };
+        let local_mac: &[u8] = if self.six_byte_mac {
             &[127, 0, 0, 1, 0xba, 0xc0]
         } else {
             &[1]
-        }
+        };
+        let (started, routes, endpoint, sends) =
+            (self.clone(), self.clone(), self.clone(), self.clone());
+        TestTransport::builder()
+            .local_mac(local_mac)
+            .start(start)
+            .broadcast(SendMode::Ignore)
+            .on_start(move || started.started.store(true, Ordering::Release))
+            .on_is_broadcast_mac(move |mac| routes.is_broadcast_mac(mac))
+            .on_bip_broadcast_endpoint(move || endpoint.bip_broadcast_endpoint())
+            .on_send(move |frame| sends.clone().send(frame))
+            .state(Arc::new(self.clone()))
+            .build()
     }
 }
 
@@ -193,8 +192,8 @@ impl BACnetObject for CountingValue {
 }
 
 pub(super) struct Fixture {
-    pub(super) server: BACnetServer<CaptureTransport>,
-    pub(super) transport: CaptureTransport,
+    pub(super) server: BACnetServer<TestTransport>,
+    pub(super) transport: AuditCapture,
     pub(super) writes: Arc<AtomicUsize>,
     pub(super) attempts: Arc<AtomicUsize>,
     pub(super) execution_error: Arc<StdMutex<Option<Error>>>,
@@ -260,7 +259,7 @@ async fn try_servers_profile(
         bindings,
         enabled,
         1476,
-        CaptureTransport::default(),
+        AuditCapture::default(),
     )
     .await
 }
@@ -271,7 +270,7 @@ pub(super) async fn try_servers_config(
     bindings: Vec<DeviceBinding>,
     enabled: bool,
     max_apdu_length: u32,
-    transport: CaptureTransport,
+    transport: AuditCapture,
 ) -> Result<Fixture, Error> {
     let mut db = ObjectDatabase::new();
     let writes = Arc::new(AtomicUsize::new(0));
@@ -316,7 +315,6 @@ pub(super) async fn try_servers_config(
     for reporter in reporters {
         db.add(Box::new(reporter)).unwrap();
     }
-    let captured = transport.clone();
     let server = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
             max_apdu_length,
@@ -326,14 +324,14 @@ pub(super) async fn try_servers_config(
             ..Default::default()
         },
         db,
-        transport,
+        transport.port(),
         None,
         bindings,
     )
     .await?;
     Ok(Fixture {
         server,
-        transport: captured,
+        transport,
         writes,
         attempts,
         execution_error,
@@ -341,7 +339,7 @@ pub(super) async fn try_servers_config(
 }
 
 pub(super) async fn dispatch(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     service: ConfirmedServiceChoice,
     data: Bytes,
 ) -> Apdu {
@@ -351,7 +349,7 @@ pub(super) async fn dispatch(
 }
 
 pub(super) async fn dispatch_optional(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     service: ConfirmedServiceChoice,
     data: Bytes,
 ) -> Option<Apdu> {
@@ -359,7 +357,7 @@ pub(super) async fn dispatch_optional(
 }
 
 pub(super) async fn dispatch_from(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     service: ConfirmedServiceChoice,
     data: Bytes,
     source_mac: &[u8],
@@ -370,6 +368,7 @@ pub(super) async fn dispatch_from(
         server
             .test_network()
             .transport()
+            .state::<AuditCapture>()
             .requests
             .fetch_add(1, Ordering::AcqRel),
     );

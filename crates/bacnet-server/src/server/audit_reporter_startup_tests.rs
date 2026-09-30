@@ -7,16 +7,16 @@ use bacnet_objects::{
 async fn start_profile(
     selected: ObjectIdentifier,
     recipient: Option<ObjectIdentifier>,
-    transport: CaptureTransport,
-) -> Result<BACnetServer<CaptureTransport>, Error> {
+    transport: AuditCapture,
+) -> Result<BACnetServer<TestTransport>, Error> {
     start_profiles(vec![selected], recipient, transport).await
 }
 
 async fn start_profiles(
     selected: Vec<ObjectIdentifier>,
     recipient: Option<ObjectIdentifier>,
-    transport: CaptureTransport,
-) -> Result<BACnetServer<CaptureTransport>, Error> {
+    transport: AuditCapture,
+) -> Result<BACnetServer<TestTransport>, Error> {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -46,7 +46,7 @@ async fn start_profiles(
             ..Default::default()
         },
         db,
-        transport,
+        transport.port(),
         None,
         vec![DeviceBinding::local(oid(ObjectType::DEVICE, 20), LOGGER).unwrap()],
     )
@@ -54,7 +54,7 @@ async fn start_profiles(
 }
 
 async fn assert_invalid_selection(selected: ObjectIdentifier) {
-    let transport = CaptureTransport::default();
+    let transport = AuditCapture::default();
     let error = match start_profile(
         selected,
         Some(oid(ObjectType::DEVICE, 20)),
@@ -95,7 +95,7 @@ async fn audit_reporter_startup_preserves_recipient_configuration_health() {
             Reliability::NO_FAULT_DETECTED,
         ),
     ] {
-        let transport = CaptureTransport::default();
+        let transport = AuditCapture::default();
         let mut server = start_profile(
             oid(ObjectType::AUDIT_REPORTER, 1),
             recipient,
@@ -113,7 +113,7 @@ async fn audit_reporter_startup_preserves_recipient_configuration_health() {
 
 #[tokio::test]
 async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
-    let mut transport = CaptureTransport::default();
+    let mut transport = AuditCapture::default();
     transport.six_byte_mac = true;
     // Six octets on a generic link do not establish the B/IP address grammar.
     let mut db = ObjectDatabase::new();
@@ -138,7 +138,7 @@ async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
             ..Default::default()
         },
         db,
-        transport.clone(),
+        transport.port(),
         None,
         vec![],
     )
@@ -173,7 +173,7 @@ async fn target_reporter_set_validation_precedes_transport_start() {
         )],
         vec![first, oid(ObjectType::AUDIT_REPORTER, 2)],
     ] {
-        let transport = CaptureTransport::default();
+        let transport = AuditCapture::default();
         assert!(start_profiles(
             selected,
             Some(oid(ObjectType::DEVICE, 20)),

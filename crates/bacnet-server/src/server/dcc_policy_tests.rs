@@ -35,13 +35,13 @@ async fn dcc_disable_rate_validation_before_start() {
             dcc_disable_rate_limit: Some(limit),
             ..Default::default()
         };
-        let error = BACnetServer::start(config, ObjectDatabase::new(), NeverStart(started.clone()))
+        let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
             .await
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
         assert!(BACnetServer::generic_builder()
-            .transport(NeverStart(started.clone()))
+            .transport(never_start(&started))
             .dcc_disable_rate_limit(Some(limit))
             .build()
             .await
@@ -130,13 +130,13 @@ async fn dcc_source_restriction_rejected_before_start() {
             dcc_source_restriction: restriction.clone(),
             ..Default::default()
         };
-        let error = BACnetServer::start(config, ObjectDatabase::new(), NeverStart(started.clone()))
+        let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
             .await
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
         assert!(BACnetServer::generic_builder()
-            .transport(NeverStart(started.clone()))
+            .transport(never_start(&started))
             .dcc_policy(policy)
             .dcc_source_restriction(restriction.clone())
             .build()
@@ -191,7 +191,7 @@ async fn dcc_source_denied_enable_still_occupies_recovery() {
         assert_eq!(server.comm_state(), 2);
         assert!(server.dcc_timer.lock().await.is_none());
         assert!(
-            matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
+            matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e))
             if e.error_class == ErrorClass::SERVICES && e.error_code == ErrorCode::SERVICE_REQUEST_DENIED)
         );
     }
@@ -243,7 +243,7 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
 }
 
 pub(super) async fn legacy_fixture() -> (
-    BACnetServer<HeldTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
@@ -267,17 +267,13 @@ async fn dcc_require_password_rejected_before_start() {
             dcc_password: password.clone(),
             ..Default::default()
         };
-        let error = BACnetServer::start(
-            config,
-            ObjectDatabase::new(),
-            NeverStart(Arc::clone(&started)),
-        )
-        .await
-        .err()
-        .unwrap();
+        let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
+            .await
+            .err()
+            .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("nonempty dcc_password")));
         let mut builder = BACnetServer::generic_builder()
-            .transport(NeverStart(Arc::clone(&started)))
+            .transport(never_start(&started))
             .dcc_policy(DccPolicy::RequirePassword);
         if let Some(password) = &password {
             builder = builder.dcc_password(password);
@@ -339,7 +335,7 @@ async fn dcc_default_recovery_admission_does_not_authorize_enable() {
             assert_eq!(server.comm_state(), 2);
             assert!(server.dcc_timer.lock().await.is_none());
             assert!(
-                matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
+                matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e))
                 if e.error_class == ErrorClass::SERVICES && e.error_code == ErrorCode::SERVICE_REQUEST_DENIED)
             );
         }

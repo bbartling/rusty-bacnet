@@ -1,3 +1,4 @@
+use super::test_transport::{SentFrame, TestTransport};
 use super::*;
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::device::DeviceObject;
@@ -33,10 +34,10 @@ impl Drop for SendGuard {
     }
 }
 
-pub(super) struct HeldTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// Send-path state the fixture attaches to its transport; reach it with [`held_sends`].
+pub(super) struct Held {
     started: mpsc::UnboundedSender<oneshot::Receiver<()>>,
-    release: Arc<Notify>,
+    release: Notify,
     panic_next: AtomicBool,
     fail_next: AtomicBool,
     pass_cov: AtomicBool,
@@ -44,21 +45,13 @@ pub(super) struct HeldTransport {
     routes: std::sync::Mutex<Vec<(Option<NpduAddress>, MacAddr)>>,
 }
 
-impl TransportPort for HeldTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let decoded = decode_npdu(Bytes::copy_from_slice(npdu)).unwrap();
+impl Held {
+    async fn send(self: Arc<Self>, frame: SentFrame) -> Result<(), Error> {
+        let decoded = decode_npdu(frame.npdu).unwrap();
         self.routes
             .lock()
             .unwrap()
-            .push((decoded.destination.clone(), MacAddr::from_slice(mac)));
+            .push((decoded.destination.clone(), frame.mac));
         let apdu = apdu::decode_apdu(decoded.payload).unwrap();
         let segment_ack = matches!(apdu, Apdu::SegmentAck(_));
         let cov = matches!(&apdu, Apdu::ConfirmedRequest(request)
@@ -83,22 +76,15 @@ impl TransportPort for HeldTransport {
         }
         Ok(())
     }
+}
 
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_unicast(npdu, &[]).await
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[2]
-    }
+/// The fixture's send-path state, reached through the server's transport.
+pub(super) fn held_sends(server: &BACnetServer<TestTransport>) -> &Held {
+    server.test_network().transport().state::<Held>()
 }
 
 pub(super) async fn fixture() -> (
-    BACnetServer<HeldTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
@@ -108,7 +94,7 @@ pub(super) async fn fixture() -> (
 async fn fixture_with_name(
     name: &str,
 ) -> (
-    BACnetServer<HeldTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
@@ -126,22 +112,28 @@ async fn fixture_with_config(
     name: &str,
     config: ServerConfig,
 ) -> (
-    BACnetServer<HeldTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
     let (tx, rx) = mpsc::channel(16);
     let (started, observations) = mpsc::unbounded_channel();
-    let transport = HeldTransport {
-        incoming: Some(rx),
+    let state = Arc::new(Held {
         started,
-        release: Arc::new(Notify::new()),
+        release: Notify::new(),
         panic_next: AtomicBool::new(false),
         fail_next: AtomicBool::new(false),
         pass_cov: AtomicBool::new(false),
         frames: std::sync::Mutex::new(Vec::new()),
         routes: std::sync::Mutex::new(Vec::new()),
-    };
+    });
+    let send = Arc::clone(&state);
+    let transport = TestTransport::builder()
+        .local_mac(&[2])
+        .inbound(rx)
+        .on_send(move |frame| Arc::clone(&send).send(frame))
+        .state(state)
+        .build();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(bacnet_objects::device::DeviceConfig {
@@ -248,7 +240,7 @@ async fn request_tasks_stop_joins_reassembled_handler() {
     stop_releases_handler(confirmed(true)).await;
 }
 
-async fn wait_reaped(server: &BACnetServer<HeldTransport>) {
+async fn wait_reaped(server: &BACnetServer<TestTransport>) {
     tokio::time::timeout(Duration::from_secs(2), async {
         while !server.request_tasks.is_empty() {
             tokio::task::yield_now().await;
@@ -271,12 +263,10 @@ async fn request_tasks_reap_success_and_panic_without_killing_dispatch() {
             .await
             .unwrap()
             .unwrap();
-        server
-            .test_network()
-            .transport()
+        held_sends(&server)
             .panic_next
             .store(panic, Ordering::Release);
-        server.test_network().transport().release.notify_one();
+        held_sends(&server).release.notify_one();
         released.await.unwrap();
         wait_reaped(&server).await;
         assert!(!server.dispatch_task.as_ref().unwrap().is_finished());
@@ -357,7 +347,7 @@ async fn request_tasks_reap_with_active_control_ingress() {
         .await
         .unwrap()
         .unwrap();
-    server.test_network().transport().release.notify_one();
+    held_sends(&server).release.notify_one();
     let ingress = async {
         for invoke_id in 0..128 {
             inject(

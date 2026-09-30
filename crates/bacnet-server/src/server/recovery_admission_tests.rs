@@ -153,7 +153,7 @@ async fn recovery_wire_same_peer_enable_with_sixteen_ordinary_held() {
     inject(&tx, enable(16, None)).await;
     observed(&mut started).await;
     assert!(
-        matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 16)
+        matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 16)
     );
     assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
     let c = server.request_admission_counters();
@@ -163,7 +163,7 @@ async fn recovery_wire_same_peer_enable_with_sixteen_ordinary_held() {
         (17, 1)
     );
     assert_eq!(c.confirmed_overloaded_total, 0);
-    server.test_network().transport().release.notify_waiters();
+    held_sends(&server).release.notify_waiters();
     wait_reaped(&server).await;
     assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
     server.stop().await.unwrap();
@@ -188,14 +188,7 @@ async fn recovery_segmented_enable_charged_once_after_reassembly() {
     last.service_request = last.service_request.slice(1..);
     inject(&tx, Apdu::ConfirmedRequest(first)).await;
     tokio::time::timeout(Duration::from_secs(2), async {
-        while server
-            .test_network()
-            .transport()
-            .frames
-            .lock()
-            .unwrap()
-            .is_empty()
-        {
+        while held_sends(&server).frames.lock().unwrap().is_empty() {
             tokio::task::yield_now().await;
         }
     })
@@ -510,14 +503,14 @@ async fn recovery_invalid_reserve_before_direct_generic_and_bip_start() {
                 ..Default::default()
             },
             ObjectDatabase::new(),
-            NeverStart(Arc::clone(&started)),
+            never_start(&started),
         )
         .await
         .err()
         .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve")));
         let error = BACnetServer::generic_builder()
-            .transport(NeverStart(Arc::clone(&started)))
+            .transport(never_start(&started))
             .request_admission_policy(policy)
             .build()
             .await
@@ -556,14 +549,14 @@ async fn recovery_wire_enable_restores_communications_at_ordinary_saturation() {
     dispatch(&server, request(60), source(4), None).await;
     observed(&mut started).await;
     assert!(
-        matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == 60 && a.abort_reason == AbortReason::OUT_OF_RESOURCES)
+        matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == 60 && a.abort_reason == AbortReason::OUT_OF_RESOURCES)
     );
     server.comm_state.store(1, Ordering::Release);
     inject(&tx, enable(61, None)).await; // Full NPDU/APDU ingress, different logical peer.
     observed(&mut started).await;
     assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
     assert!(
-        matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 61)
+        matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 61)
     );
     assert_eq!(
         (
@@ -612,8 +605,8 @@ async fn recovery_protected_wire_exhaustion_duplicate_retry_and_abort_fallback()
         ),
         (10, 2)
     );
-    assert!(server.test_network().transport().frames.lock().unwrap()[4..].iter().all(|p| matches!(p, Apdu::Abort(a) if a.abort_reason == AbortReason::OUT_OF_RESOURCES && a.sent_by_server)));
-    server.test_network().transport().release.notify_waiters();
+    assert!(held_sends(&server).frames.lock().unwrap()[4..].iter().all(|p| matches!(p, Apdu::Abort(a) if a.abort_reason == AbortReason::OUT_OF_RESOURCES && a.sent_by_server)));
+    held_sends(&server).release.notify_waiters();
     tokio::time::timeout(Duration::from_secs(2), async {
         while server.request_admission_counters().confirmed_active
             + server.request_admission_counters().abort_active
@@ -627,7 +620,7 @@ async fn recovery_protected_wire_exhaustion_duplicate_retry_and_abort_fallback()
     dispatch(&server, enable(12, None), source(12), None).await;
     observed(&mut started).await;
     assert!(
-        matches!(server.test_network().transport().frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 12)
+        matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 12)
     );
     server.stop().await.unwrap();
 }

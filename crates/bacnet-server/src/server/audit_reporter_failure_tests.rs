@@ -35,7 +35,7 @@ pub(super) fn expected_value_write(
     }
 }
 
-async fn failed_value_write(server: &BACnetServer<CaptureTransport>, priority: Option<u8>) -> Apdu {
+async fn failed_value_write(server: &BACnetServer<TestTransport>, priority: Option<u8>) -> Apdu {
     dispatch(
         server,
         ConfirmedServiceChoice::WRITE_PROPERTY,

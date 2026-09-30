@@ -698,6 +698,8 @@ mod rb07_provenance_tests;
 #[cfg(test)]
 mod segmentation_tests;
 #[cfg(test)]
+pub(crate) mod test_transport;
+#[cfg(test)]
 mod tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

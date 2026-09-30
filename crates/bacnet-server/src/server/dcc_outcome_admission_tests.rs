@@ -172,7 +172,7 @@ async fn admission_dcc_prechecks_and_duplicate_before_first_poll() {
         ConfirmedRequestAdmission::New(_)
     ));
     server.comm_state.store(0, Ordering::Release);
-    server.test_network().transport().release.notify_waiters();
+    held_sends(&server).release.notify_waiters();
     wait_reaped(&server).await;
     dispatch(&server, request(2), None, None).await;
     observed(&mut started).await;

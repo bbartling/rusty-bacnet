@@ -27,65 +27,26 @@ const SERVER_MAC: &[u8] = &[0x02];
 const CLIENT_MAC: &[u8] = &[0x01];
 const CSV_INSTANCE: u32 = 1;
 
-pub(super) struct RoutedInjectionTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent_unicast: SentFrames,
-    local_mac: MacAddr,
-}
-
-impl RoutedInjectionTransport {
-    pub(super) fn new(sent_unicast: SentFrames) -> (Self, mpsc::Sender<ReceivedNpdu>) {
-        let (incoming_tx, incoming) = mpsc::channel(16);
-        (
-            Self {
-                incoming: Some(incoming),
-                sent_unicast,
-                local_mac: MacAddr::from_slice(SERVER_MAC),
-            },
-            incoming_tx,
-        )
-    }
-}
-
-impl TransportPort for RoutedInjectionTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.incoming
-            .take()
-            .ok_or_else(|| Error::Encoding("routed injection transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent_unicast
-            .lock()
-            .unwrap()
-            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+/// The server end of an injected routed link: the test feeds inbound NPDUs and
+/// reads recorded unicasts; broadcasts are ignored.
+pub(super) fn routed_injection_transport() -> (TestTransport, mpsc::Sender<ReceivedNpdu>, SentFrames)
+{
+    let (incoming_tx, incoming) = mpsc::channel(16);
+    let transport = TestTransport::builder()
+        .local_mac(SERVER_MAC)
+        .inbound(incoming)
+        .broadcast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, incoming_tx, sent)
 }
 
 pub(super) async fn start_routed_reassembly_server() -> (
-    BACnetServer<RoutedInjectionTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     SentFrames,
 ) {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let (transport, incoming) = RoutedInjectionTransport::new(StdArc::clone(&sent));
+    let (transport, incoming, sent) = routed_injection_transport();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         CharacterStringValueObject::new(CSV_INSTANCE, "CSV-1").unwrap(),
@@ -158,13 +119,10 @@ pub(super) async fn inject_routed_segment(
 }
 
 pub(super) fn sent_routed_frame(sent: &SentFrames, index: usize) -> (Npdu, MacAddr) {
-    let (npdu, link_destination) = {
-        let sent = sent.lock().unwrap();
-        sent[index].clone()
-    };
+    let frame = sent.frame(index);
     (
-        decode_npdu(npdu).expect("sent frame should decode as NPDU"),
-        link_destination,
+        decode_npdu(frame.npdu).expect("sent frame should decode as NPDU"),
+        frame.mac,
     )
 }
 

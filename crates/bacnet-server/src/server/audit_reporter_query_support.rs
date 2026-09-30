@@ -215,7 +215,7 @@ pub(super) fn request(data: Bytes) -> ConfirmedRequestPdu {
 }
 
 pub(super) async fn ingress(
-    server: &BACnetServer<CaptureTransport>,
+    server: &BACnetServer<TestTransport>,
     req: ConfirmedRequestPdu,
     reply_tx: Option<oneshot::Sender<Bytes>>,
 ) {

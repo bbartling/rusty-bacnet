@@ -3,7 +3,7 @@ use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
 
 async fn fixture() -> (
-    BACnetServer<HeldTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {

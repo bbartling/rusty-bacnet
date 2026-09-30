@@ -1,4 +1,5 @@
 //! Deterministic admission and custom-transport cleanup ownership boundaries.
+use super::test_transport::TestTransport;
 use super::*;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_transport::port::ReceivedNpdu;
@@ -29,55 +30,48 @@ impl Drop for SendFrame {
         let _ = self.0.events.send(Event::SendDropped);
     }
 }
-struct Held {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    probe: Arc<Probe>,
-}
-impl Drop for Held {
-    fn drop(&mut self) {
-        self.probe.drops.fetch_add(1, Ordering::SeqCst);
-        let _ = self.probe.events.send(Event::Dropped);
+impl Probe {
+    async fn send(self: Arc<Self>) -> Result<(), Error> {
+        let _frame = SendFrame(Arc::clone(&self));
+        let _ = self.events.send(Event::Send);
+        self.send_release.notified().await;
+        Ok(())
     }
-}
-impl TransportPort for Held {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.probe.stops.fetch_add(1, Ordering::SeqCst);
-        let _ = self.probe.events.send(Event::Stop);
-        if self.probe.hold_stop.load(Ordering::SeqCst) {
-            self.probe.stop_release.notified().await;
+    async fn stop(self: Arc<Self>) -> Result<(), Error> {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        let _ = self.events.send(Event::Stop);
+        if self.hold_stop.load(Ordering::SeqCst) {
+            self.stop_release.notified().await;
         }
-        match self.probe.outcome.load(Ordering::SeqCst) {
+        match self.outcome.load(Ordering::SeqCst) {
             1 => Err(Error::Encoding("injected cleanup failure".into())),
             2 => panic!("injected cleanup panic"),
             _ => {
-                let _ = self.probe.events.send(Event::StopFinished);
+                let _ = self.events.send(Event::StopFinished);
                 Ok(())
             }
         }
     }
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        let _frame = SendFrame(Arc::clone(&self.probe));
-        let _ = self.probe.events.send(Event::Send);
-        self.probe.send_release.notified().await;
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_unicast(npdu, &[]).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[2]
+    fn dropped(&self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        let _ = self.events.send(Event::Dropped);
     }
 }
 
+/// A custom transport whose sends, cleanup and drop are observable and held.
+fn held(incoming: mpsc::Receiver<ReceivedNpdu>, probe: &Arc<Probe>) -> TestTransport {
+    let (send, stop, dropped) = (Arc::clone(probe), Arc::clone(probe), Arc::clone(probe));
+    TestTransport::builder()
+        .local_mac(&[2])
+        .inbound(incoming)
+        .on_send(move |_| Arc::clone(&send).send())
+        .on_stop(move || Arc::clone(&stop).stop())
+        .on_drop(move || dropped.dropped())
+        .build()
+}
+
 async fn fixture() -> (
-    BACnetServer<Held>,
+    BACnetServer<TestTransport>,
     Arc<Probe>,
     mpsc::UnboundedReceiver<Event>,
     mpsc::Sender<ReceivedNpdu>,
@@ -93,10 +87,7 @@ async fn fixture() -> (
         drops: AtomicUsize::new(0),
     });
     let (ingress, incoming) = mpsc::channel(4);
-    let transport = Held {
-        incoming: Some(incoming),
-        probe: Arc::clone(&probe),
-    };
+    let transport = held(incoming, &probe);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig::default()).unwrap(),

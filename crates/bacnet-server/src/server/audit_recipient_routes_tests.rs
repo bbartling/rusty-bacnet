@@ -204,7 +204,7 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
             db.add(Box::new(reporter())).unwrap();
             db.add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
                 .unwrap();
-            let mut transport = CaptureTransport::default();
+            let mut transport = AuditCapture::default();
             transport.learned_broadcast = Some(MacAddr::from_slice(&[0x42]));
             assert!(!transport.is_broadcast_mac(&[0x42]));
             assert_eq!(transport.bip_broadcast_endpoint(), None);
@@ -216,7 +216,7 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
                     ..Default::default()
                 },
                 db,
-                transport.clone(),
+                transport.port(),
                 None,
                 vec![
                     if routed {
@@ -353,7 +353,7 @@ async fn audit_source_correlation_uses_post_start_generic_route_eligibility() {
         db.add(Box::new(reporter())).unwrap();
         db.add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
             .unwrap();
-        let mut transport = CaptureTransport::default();
+        let mut transport = AuditCapture::default();
         transport.learned_broadcast = Some(MacAddr::from_slice(&[0x42]));
         let mut server = BACnetServer::start_with_clock_mode_and_bindings(
             ServerConfig {
@@ -363,7 +363,7 @@ async fn audit_source_correlation_uses_post_start_generic_route_eligibility() {
                 ..Default::default()
             },
             db,
-            transport.clone(),
+            transport.port(),
             None,
             vec![
                 DeviceBinding::local(logger, LOGGER).unwrap(),

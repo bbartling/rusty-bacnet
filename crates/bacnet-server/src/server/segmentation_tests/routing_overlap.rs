@@ -2,10 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn routed_source_segment_ack_and_abort_match_across_immediate_routers() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (network, sent) = recording_network();
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let router_a = test_mac(16);
@@ -117,10 +114,7 @@ async fn routed_source_segment_ack_and_abort_match_across_immediate_routers() {
 
 #[tokio::test]
 async fn dispatch_ack_flood_does_not_drop_valid_segment_ack() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (network, sent) = recording_network();
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(11);
     let invoke_id = 0x4B;
@@ -159,10 +153,7 @@ async fn dispatch_ack_flood_does_not_drop_valid_segment_ack() {
 
 #[tokio::test]
 async fn overlapping_same_peer_invoke_id_cancels_old_segmented_sender() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (network, sent) = recording_network();
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(12);
     let invoke_id = 0x4C;
@@ -209,10 +200,7 @@ async fn overlapping_same_peer_invoke_id_cancels_old_segmented_sender() {
 
 #[tokio::test]
 async fn routed_same_peer_replacement_cancels_old_sender_across_routers() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (network, sent) = recording_network();
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let router_a = test_mac(18);

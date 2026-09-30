@@ -90,7 +90,7 @@ fn families() -> Vec<Box<dyn BACnetObject>> {
     ]
 }
 async fn fire(f: &Fixture, oid: ObjectIdentifier) {
-    BACnetServer::<HeldTransport>::fire_cov_notifications(
+    BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &f.db,
             network: &f.network,
