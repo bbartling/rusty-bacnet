@@ -26,6 +26,7 @@ macro_rules! bacnet_enum {
 
         impl $Name {
             $(
+                #[doc = concat!("Named constant `", stringify!($VARIANT), "`; raw wire value `", stringify!($val), "`.")]
                 $(#[$vmeta])*
                 pub const $VARIANT: Self = Self($val);
             )*

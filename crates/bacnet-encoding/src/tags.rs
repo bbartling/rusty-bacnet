@@ -21,18 +21,31 @@ pub enum TagClass {
 
 /// Application tag numbers.
 pub mod app_tag {
+    /// Application tag number for Null (no content octets).
     pub const NULL: u8 = 0;
+    /// Application tag number for Boolean (value carried in the tag length field).
     pub const BOOLEAN: u8 = 1;
+    /// Application tag number for Unsigned integer.
     pub const UNSIGNED: u8 = 2;
+    /// Application tag number for Signed integer (two's complement).
     pub const SIGNED: u8 = 3;
+    /// Application tag number for IEEE-754 single-precision float.
     pub const REAL: u8 = 4;
+    /// Application tag number for IEEE-754 double-precision float.
     pub const DOUBLE: u8 = 5;
+    /// Application tag number for Octet string.
     pub const OCTET_STRING: u8 = 6;
+    /// Application tag number for Character string (leading charset octet).
     pub const CHARACTER_STRING: u8 = 7;
+    /// Application tag number for Bit string (leading unused-bits octet).
     pub const BIT_STRING: u8 = 8;
+    /// Application tag number for Enumerated value.
     pub const ENUMERATED: u8 = 9;
+    /// Application tag number for Date (year, month, day, weekday octets).
     pub const DATE: u8 = 10;
+    /// Application tag number for Time (hour, minute, second, hundredths octets).
     pub const TIME: u8 = 11;
+    /// Application tag number for Object identifier (10-bit type, 22-bit instance).
     pub const OBJECT_IDENTIFIER: u8 = 12;
 }
 
