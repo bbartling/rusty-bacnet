@@ -405,10 +405,12 @@ pub struct OutOfRangeDetector {
     pub notification_class: u32,
     /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
     pub notify_type: u32,
-    /// Event_Enable bits; one bit per transition (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
+    /// Event_Enable, one bit per transition in LSB-first order: 0x01 TO_OFFNORMAL, 0x02 TO_FAULT,
+    /// 0x04 TO_NORMAL. This is not the wire bitstring octet.
     pub event_enable: u8,
-    /// Seconds a non-normal condition must persist before its transition fires; 0 fires
-    /// immediately.
+    /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
+    /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
+    /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.6 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
@@ -417,8 +419,8 @@ pub struct OutOfRangeDetector {
     pub time_delay_normal: Option<u32>,
     /// Current event state.
     pub event_state: EventState,
-    /// Acknowledged-transitions bitfield (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
-    /// A set bit means the corresponding transition has been acknowledged.
+    /// Acked_Transitions, in the same LSB-first layout as `event_enable`; a set bit means that
+    /// transition was acknowledged.
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
@@ -673,10 +675,12 @@ pub struct ChangeOfStateDetector {
     pub notification_class: u32,
     /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
     pub notify_type: u32,
-    /// Event_Enable bits; one bit per transition (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
+    /// Event_Enable, one bit per transition in LSB-first order: 0x01 TO_OFFNORMAL, 0x02 TO_FAULT,
+    /// 0x04 TO_NORMAL. This is not the wire bitstring octet.
     pub event_enable: u8,
-    /// Seconds a non-normal condition must persist before its transition fires; 0 fires
-    /// immediately.
+    /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
+    /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
+    /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.2 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
@@ -685,7 +689,8 @@ pub struct ChangeOfStateDetector {
     pub time_delay_normal: Option<u32>,
     /// Current event state.
     pub event_state: EventState,
-    /// Acknowledged-transitions bits (3 bits); a set bit means that transition was acknowledged.
+    /// Acked_Transitions, in the same LSB-first layout as `event_enable`; a set bit means that
+    /// transition was acknowledged.
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
@@ -859,10 +864,12 @@ pub struct CommandFailureDetector {
     pub notification_class: u32,
     /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
     pub notify_type: u32,
-    /// Event_Enable bits; one bit per transition (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
+    /// Event_Enable, one bit per transition in LSB-first order: 0x01 TO_OFFNORMAL, 0x02 TO_FAULT,
+    /// 0x04 TO_NORMAL. This is not the wire bitstring octet.
     pub event_enable: u8,
-    /// Seconds a non-normal condition must persist before its transition fires; 0 fires
-    /// immediately.
+    /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
+    /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
+    /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.4 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
@@ -871,7 +878,8 @@ pub struct CommandFailureDetector {
     pub time_delay_normal: Option<u32>,
     /// Current event state.
     pub event_state: EventState,
-    /// Acknowledged-transitions bits (3 bits); a set bit means that transition was acknowledged.
+    /// Acked_Transitions, in the same LSB-first layout as `event_enable`; a set bit means that
+    /// transition was acknowledged.
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,

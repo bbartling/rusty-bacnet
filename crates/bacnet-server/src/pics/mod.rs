@@ -198,7 +198,7 @@ pub enum CharacterSet {
     Ansi,
     /// IBM/Microsoft double-byte character set.
     DbcsIbm,
-    /// Microsoft double-byte character set variant (see `Display`, which prints a JIS label).
+    /// JIS C 6226, the 1983 name of JIS X 0208, so it names the same set as `Jisx0208`.
     DbcsMs,
     /// JIS X 0208.
     Jisx0208,

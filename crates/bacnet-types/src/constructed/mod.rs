@@ -590,7 +590,7 @@ pub enum FaultParameters {
     },
     /// Fault on status flags change.
     FaultStatusFlags {
-        /// Property whose StatusFlags are watched for a fault indication.
+        /// Reference to the StatusFlags property whose FAULT bit is monitored.
         reference: BACnetDeviceObjectPropertyReference,
     },
     /// Fault when value exceeds range.
@@ -636,9 +636,10 @@ pub struct BACnetCOVSubscription {
     pub monitored_property_reference: BACnetObjectPropertyReference,
     /// `true` for confirmed notifications, `false` for unconfirmed ones.
     pub issue_confirmed_notifications: bool,
-    /// Seconds left before the subscription lapses.
+    /// Seconds left before the subscription lapses; 0 means it never lapses.
     pub time_remaining: u32,
-    /// Minimum change that triggers a notification; `None` when no increment was requested.
+    /// COV increment in use for a numeric monitored property: the requested one, else the
+    /// object's COV_Increment. `None` when the monitored property isn't numeric.
     pub cov_increment: Option<f32>,
 }
 

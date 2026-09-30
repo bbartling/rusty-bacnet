@@ -311,7 +311,7 @@ bitflags::bitflags! {
         const FAULT = 0b0100;
         /// The value is being supplied by a local override rather than the physical input.
         const OVERRIDDEN = 0b0010;
-        /// The object is out of service; its value is decoupled from the physical input.
+        /// Out_Of_Service is TRUE.
         const OUT_OF_SERVICE = 0b0001;
     }
 }

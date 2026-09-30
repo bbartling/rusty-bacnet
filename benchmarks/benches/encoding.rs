@@ -1,4 +1,4 @@
-//! Criterion suite: encode and decode cost of service requests, NPDUs and primitives.
+//! Criterion suite: encode and decode cost of ReadProperty requests, NPDUs and APDUs.
 use bytes::BytesMut;
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;

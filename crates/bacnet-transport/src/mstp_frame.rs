@@ -64,7 +64,8 @@ pub enum FrameType {
 }
 
 impl FrameType {
-    /// Map a wire frame-type octet to a `FrameType`; unassigned values become `Unknown`.
+    /// Map a wire frame-type octet to a `FrameType`; any value without a variant here, including
+    /// the extended frame types 32-34 and proprietary 128-255, becomes `Unknown`.
     pub fn from_raw(val: u8) -> Self {
         match val {
             0x00 => Self::Token,

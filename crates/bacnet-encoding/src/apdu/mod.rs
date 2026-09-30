@@ -195,11 +195,11 @@ pub struct ConfirmedRequest {
     pub max_apdu_length: u16,
     /// Identifier the requester uses to match the reply to this request.
     pub invoke_id: u8,
-    /// Segment number within a segmented request; `None` for unsegmented PDUs (encoded as 0 when
-    /// segmented).
+    /// Segment number within a segmented request; `None` for unsegmented PDUs. `None` on a
+    /// segmented PDU encodes as 0.
     pub sequence_number: Option<u8>,
     /// Segments the sender proposes to send before waiting for a SegmentACK (1..=127); `None` for
-    /// unsegmented PDUs.
+    /// unsegmented PDUs. `None` on a segmented PDU encodes as 1.
     pub proposed_window_size: Option<u8>,
     /// Which confirmed service is being requested.
     pub service_choice: ConfirmedServiceChoice,
@@ -234,11 +234,11 @@ pub struct ComplexAck {
     pub more_follows: bool,
     /// Invoke ID of the confirmed request this reply answers.
     pub invoke_id: u8,
-    /// Segment number within a segmented reply; `None` for unsegmented PDUs (encoded as 0 when
-    /// segmented).
+    /// Segment number within a segmented reply; `None` for unsegmented PDUs. `None` on a
+    /// segmented PDU encodes as 0.
     pub sequence_number: Option<u8>,
     /// Segments the sender proposes to send before waiting for a SegmentACK (1..=127); `None` for
-    /// unsegmented PDUs.
+    /// unsegmented PDUs. `None` on a segmented PDU encodes as 1.
     pub proposed_window_size: Option<u8>,
     /// Confirmed service this reply belongs to.
     pub service_choice: ConfirmedServiceChoice,
@@ -249,15 +249,16 @@ pub struct ComplexAck {
 /// SegmentACK PDU (Clause 20.1.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentAck {
-    /// Set when the receiver rejects the segment (for example out of order) and asks for a resend
-    /// from `sequence_number`.
+    /// Set when a segment arrived out of order; the peer resends starting with the segment after
+    /// `sequence_number`.
     pub negative_ack: bool,
     /// Set when the SegmentACK comes from the server side (the device answering a request), clear
     /// when sent by the requester.
     pub sent_by_server: bool,
     /// Invoke ID of the segmented transaction being acknowledged.
     pub invoke_id: u8,
-    /// Highest segment number the receiver accepted contiguously (or the one being refused).
+    /// Last segment received in order. It and every earlier segment are acknowledged; the peer
+    /// continues (or, on a negative ack, resends) from the next one, modulo 256.
     pub sequence_number: u8,
     /// Window size, in segments (1..=127), the receiver will accept from now on.
     pub actual_window_size: u8,
@@ -275,7 +276,8 @@ pub struct ErrorPdu {
     /// Error code from the standard Error production.
     pub error_code: ErrorCode,
     /// Service-specific bytes following the error class and code; empty for a plain class/code
-    /// error. For WritePropertyMultiple this holds the whole formal error body.
+    /// error. For WritePropertyMultiple it holds the whole error body when that decodes in the
+    /// formal form; a legacy class/code WPM error keeps only the bytes after the code.
     pub error_data: Bytes,
 }
 
