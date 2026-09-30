@@ -10,6 +10,7 @@
 
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
+| CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
@@ -70,7 +71,7 @@ The workspace doesn't turn on pyo3's `extension-module` feature, so these test
 binaries link libpython (#919); maturin turns the feature on for wheel and
 `maturin develop` builds from `crates/rusty-bacnet/pyproject.toml`. Linking
 needs the interpreter's shared library and its unversioned `.so` symlink, which
-the job gets from `libpython3-dev`. The step sets `PYO3_PYTHON=/usr/bin/python3`
+the CI image gets from `libpython3-dev`. The step sets `PYO3_PYTHON=/usr/bin/python3`
 so it links the apt Python that package matches, whatever else is on `PATH`,
 and without depending on the venv from the maturin step. Tests that call into
 Python start the interpreter with `Python::initialize()` first, since nothing
@@ -83,11 +84,55 @@ about them.
 ### Runner
 
 Jobs run on a self-hosted Linux runner (8 vCPU, 32 GB, up to three concurrent
-Docker jobs in `ghcr.io/catthehacker/ubuntu:act-24.04`) on a preemptible VM.
-Each job installs its pinned Rust toolchain through `dtolnay/rust-toolchain`;
-`Swatinem/rust-cache` keeps Cargo state in the runner's cache. The cache lives
-on the VM, so a preemption starts the next run cold, and a preempted job must
-be re-run.
+Docker jobs) on a preemptible VM. `Swatinem/rust-cache` keeps Cargo state in the
+runner's cache. The cache lives on the VM, so a preemption starts the next run
+cold, and a preempted job must be re-run.
+
+### CI image
+
+Every job except CI OK runs in one prebuilt image,
+`forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:<tag>`, built from
+[`.forgejo/ci-image/Dockerfile`](../.forgejo/ci-image/Dockerfile) (#904). It
+contains:
+
+- the runner's default `ghcr.io/catthehacker/ubuntu:act-24.04`;
+- Rust 1.97.1 with rustfmt and clippy, and the 1.93 MSRV toolchain;
+- cargo-nextest, cargo-audit, cargo-deny and maturin, at pinned versions;
+- the apt packages the jobs need.
+
+The jobs no longer spend time on apt, rustup or tool downloads.
+
+The first job, **CI image**, runs on the `linux-host` label. It does three things:
+
+1. Checks that `CI_IMAGE`'s tag equals the first 12 hex digits of the
+   Dockerfile's SHA-256.
+2. Checks that `TOOLCHAIN`, `MSRV`, `rust-toolchain.toml` and the Dockerfile's
+   `RUST_TOOLCHAIN` / `RUST_MSRV` agree.
+3. Builds and pushes the image only if that tag isn't in Forgejo's container
+   registry yet.
+
+A PR that changes the Dockerfile therefore builds and tests its own image.
+
+**Changing the image** (a toolchain bump, a tool version, an apt package):
+
+1. Edit the Dockerfile. Move `TOOLCHAIN` / `MSRV` in `ci.yml` and
+   `rust-toolchain.toml` along with its `ARG`s.
+2. Set `CI_IMAGE`'s tag to
+   `$(sha256sum .forgejo/ci-image/Dockerfile | cut -c1-12)`.
+
+**Credentials:**
+
+- Pushes use the `CI_IMAGE_TOKEN` repository secret: a personal access token
+  with only package read and write scope. Forgejo's automatic job token can log
+  in to the registry but gets 401 on uploads.
+- Pulls are anonymous. Container packages take the owner's visibility, and the
+  owner is public.
+
+**Storage:** images take space on Forgejo's data disk. Keep the last few tags
+with a package cleanup rule, set in the owner's Settings → Packages.
+
+**First runs:** the image moves Cargo's home to `/usr/local/cargo`, so the
+first run after an image change can miss the Rust caches.
 
 The workflow sets `CARGO_INCREMENTAL=0` and drops native debug info from dev and
 test builds (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`) to cut codegen, link time and
