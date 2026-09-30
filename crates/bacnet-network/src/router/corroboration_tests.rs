@@ -12,12 +12,13 @@ struct DebugCounter(Arc<AtomicUsize>);
 
 impl DebugCounter {
     fn new(events: Arc<AtomicUsize>) -> Self {
-        // With one registered dispatcher, tracing-core 0.1.36 takes a cold
-        // callsite's interest from the registering thread's default. A parallel
-        // test reaching the disconnect callsite first would cache "never" and
-        // hide our events (#866). As in dcc_trace_tests, keep a second, disabled
-        // dispatcher registered (not installed as a default) so registration
-        // consults every live dispatcher. It retains no events.
+        // While at most one dispatcher is registered, tracing-core 0.1.36 takes
+        // a cold callsite's interest from the registering thread's default. A
+        // parallel test reaching the disconnect callsite first would cache
+        // "never" and hide our events (#866). As in bacnet-server's
+        // dcc_trace_tests, keep a second, disabled dispatcher registered (not
+        // installed as a default) so registration consults every live
+        // dispatcher. It retains no events.
         static REGISTRATION_PEER: std::sync::OnceLock<tracing::Dispatch> =
             std::sync::OnceLock::new();
         REGISTRATION_PEER
@@ -392,6 +393,7 @@ async fn debug_counter_counts_this_thread_whoever_registers_the_callsite() {
     let _subscriber = tracing::subscriber::set_default(DebugCounter::new(debug_events.clone()));
     std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
+            .enable_all()
             .build()
             .unwrap()
             .block_on(async { Fixture::learned().deliver(1, &[2], kind, &payload).await });
