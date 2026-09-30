@@ -4,22 +4,26 @@ name: CI
 # ghcr.io/catthehacker/ubuntu:act-24.04). macOS is checked locally with
 # scripts/ci/local-macos.sh; Windows is not currently tested. See docs/ci.md.
 #
-#   Lean  — every PR to dev/main, push to main, v* tags:
+#   Lean  — every PR to dev/main, push to dev/main, v* tags:
 #           lint (fmt, file-size cap, no-secret scan, script regressions),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features),
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
 #           and the Python bindings built with maturin and their unittest suite.
-#   Heavy — PRs to main, push to main, v* tags, weekly schedule:
+#   Heavy — PRs to main, push to main, v* tags, weekly schedule, manual:
 #           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
 #   CI OK — single required status that fails if any job above failed.
+#
+# Pushes to dev (PR merges) run the Lean jobs so their caches are written from a
+# non-PR event, which every new PR's first run can restore (PR-event cache
+# writes are scoped to that PR), and so the merge result itself is tested (#904).
 
 on:
   pull_request:
     branches: [dev, main]
     types: [opened, synchronize, reopened]
   push:
-    branches: [main]
+    branches: [dev, main]
     tags: ["v*"]
   schedule:
     # Advisory databases change without code changes.
@@ -174,7 +178,8 @@ jobs:
 
   msrv:
     name: MSRV (Linux native)
-    if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+    # Not on dev merges (push to dev), but still on the weekly schedule, which runs on dev.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref != 'refs/heads/dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -200,7 +205,8 @@ jobs:
 
   audit-deny:
     name: Cargo Audit + Deny
-    if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+    # Not on dev merges (push to dev), but still on the weekly schedule, which runs on dev.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref != 'refs/heads/dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

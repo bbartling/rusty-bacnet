@@ -8,23 +8,27 @@
 
 ## Pipeline
 
-| Job | PR to `dev` | PR to `main` | Push to `main`, `v*` tag, weekly, manual |
-| --- | --- | --- | --- |
-| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ |
-| Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ |
-| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` | ✓ | ✓ | ✓ |
-| MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) | | ✓ | ✓ |
-| Cargo Audit + Cargo Deny | | ✓ | ✓ |
-| **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ |
+| Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
+| --- | --- | --- | --- | --- |
+| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
+| Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
+| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` | ✓ | ✓ | ✓ | ✓ |
+| MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
+| Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
+| **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
 
 `CI OK` is the single status to require in branch protection (its context is
 `CI / CI OK (pull_request)`); jobs skipped by tier count as passing. [`.forgejo/workflows/docs.yml`](../.forgejo/workflows/docs.yml)
 validates the website (Astro checks, unit tests, production build and Chromium
 tests) on PRs that change `website/**`.
 
-Merge pushes to `dev` do not start a pipeline: the PR already tested that head.
-The weekly scheduled run checks the default branch (`dev`).
+Merge pushes to `dev` run the Lean jobs. That tests the merge result, which a
+PR run doesn't (it checks out the PR head). It also writes each job's Rust cache
+from a non-PR event. The runner scopes cache writes from `pull_request` events
+to that PR, and a PR's first run falls back only to non-PR caches, so without
+this every new PR started cold (#904). The weekly scheduled run checks the
+default branch (`dev`) with the Heavy jobs too.
 A new push to a PR cancels its superseded run.
 
 Tests run with [cargo-nextest](https://nexte.st), which gives each test its
