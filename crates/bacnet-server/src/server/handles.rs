@@ -86,7 +86,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Generate PICS from the database and the server's effective Device execution view.
     /// Standalone [`PicsGenerator`](crate::pics::PicsGenerator) keeps raw-object semantics.
     ///
-    /// The caller must supply a [`PicsConfig`] for fields not available from the server
+    /// The caller must supply a [`PicsConfig`](crate::pics::PicsConfig) for fields not available from the server
     /// (vendor name, model, firmware revision, etc.).
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
         let db = self.db.read().await;

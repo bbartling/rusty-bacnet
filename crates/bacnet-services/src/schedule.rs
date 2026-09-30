@@ -447,7 +447,7 @@ pub fn encode_weekly_schedule(buf: &mut BytesMut, days: &[Vec<BACnetTimeValue>; 
 /// Decode a 7-day weekly schedule.
 ///
 /// Errors if the payload doesn't contain exactly 7 daily schedules — the
-/// spec requires a fixed-size ARRAY[7] and a count mismatch is the
+/// spec requires a fixed-size ARRAY\[7\] and a count mismatch is the
 /// signature of a malformed or truncated response.
 pub fn decode_weekly_schedule(data: &[u8]) -> Result<[Vec<BACnetTimeValue>; 7], Error> {
     let mut days: [Vec<BACnetTimeValue>; 7] = Default::default();

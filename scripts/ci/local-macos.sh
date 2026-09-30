@@ -6,10 +6,11 @@
 #   bash scripts/ci/local-macos.sh          # lint + clippy + macOS tests
 #   bash scripts/ci/local-macos.sh --quick  # skip the test suite
 #
-# serial and ethernet are Linux-only transport features, so macOS runs the
-# ipv6 + sc-tls feature set. Tests need cargo-nextest 0.9.145 or later
-# (`cargo install cargo-nextest --locked`). Record the result in the PR (see
-# docs/ci.md).
+# serial and ethernet are Linux-only features, so macOS uses every other
+# optional feature, including those crates gate on their own features (#906).
+# Clippy and rustdoc deny warnings, as CI does. Tests need cargo-nextest
+# 0.9.145 or later (`cargo install cargo-nextest --locked`). Record the result
+# in the PR (see docs/ci.md).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -29,14 +30,22 @@ step "rustfmt";          cargo fmt --all --check
 step "file-size cap";    bash scripts/ci/check-file-size.sh
 step "no-secret scan";   bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
 step "MSRV script regressions"; python3 scripts/ci/test-check-msrv.py
-step "clippy";           cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
+features=bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-cli/sc-tls,bacnet-cli/pcap
+step "clippy (every macOS feature)"
+cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$features" -- -D warnings
+step "clippy (PyO3 bindings)"; cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+step "clippy and rustdoc (each published crate, default features; no_std bacnet-types)"
+bash scripts/ci/check-default-features.sh
+step "rustdoc (every macOS feature)"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$features"
 if ! "$quick"; then
-  features=bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls
   cargo nextest --version >/dev/null 2>&1 \
     || { echo "error: cargo-nextest not found; cargo install cargo-nextest --locked" >&2; exit 1; }
-  step "tests (ipv6, sc-tls)"
+  step "tests (every macOS feature)"
   cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$features"
   step "doctests"
   cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$features"
+  step "bacnet-cli tests (default features)"
+  cargo nextest run -p bacnet-cli --locked
 fi
 step "OK: macOS checks passed"

@@ -41,17 +41,17 @@ pub struct RecipientProcess {
 /// GetEnrollmentSummary-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetEnrollmentSummaryRequest {
-    /// [0] acknowledgmentFilter: all(0), acked(1), not-acked(2).
+    /// \[0\] acknowledgmentFilter: 0 selects all enrollments, 1 acknowledged, 2 unacknowledged.
     pub acknowledgment_filter: u32,
-    /// [1] enrollmentFilter (optional) — BACnetRecipientProcess.
+    /// \[1\] enrollmentFilter (optional) — BACnetRecipientProcess.
     pub enrollment_filter: Option<RecipientProcess>,
-    /// [2] eventStateFilter (optional).
+    /// \[2\] eventStateFilter (optional).
     pub event_state_filter: Option<EnrollmentSummaryEventStateFilter>,
-    /// [3] eventTypeFilter (optional).
+    /// \[3\] eventTypeFilter (optional).
     pub event_type_filter: Option<EventType>,
-    /// [4] priorityFilter { [0] minPriority, [1] maxPriority } (optional).
+    /// \[4\] priorityFilter { \[0\] minPriority, \[1\] maxPriority } (optional).
     pub priority_filter: Option<PriorityFilter>,
-    /// [5] notificationClassFilter (optional).
+    /// \[5\] notificationClassFilter (optional).
     pub notification_class_filter: Option<u32>,
 }
 

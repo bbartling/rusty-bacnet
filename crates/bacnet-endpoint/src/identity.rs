@@ -245,7 +245,7 @@ impl DeviceIdentity {
     /// `services = [READ_PROPERTY]` (narrow endpoint reality, no superset),
     /// no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
     /// [`with_device_uuid`](Self::with_device_uuid)). Returns
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) for an
+    /// [`Error::Encoding`] for an
     /// out-of-range Device instance.
     pub fn new(instance: u32, vendor_id: u16) -> Result<Self, Error> {
         ObjectIdentifier::new(ObjectType::DEVICE, instance)?;
@@ -264,7 +264,7 @@ impl DeviceIdentity {
     /// Overrides the max-APDU accepted/advertised (must be a wire-legal value).
     ///
     /// Validated by the codec's APDU-length table; illegal values return
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding). Note the
+    /// [`Error::Encoding`]. Note the
     /// MS/TP builder additionally rejects values above its 480 transport
     /// bound at build time.
     pub fn with_max_apdu(mut self, max_apdu: u16) -> Result<Self, Error> {

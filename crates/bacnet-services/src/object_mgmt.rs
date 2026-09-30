@@ -19,9 +19,9 @@ use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 /// The object specifier: by type (server picks instance) or by identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectSpecifier {
-    /// Create by type — server assigns instance number ([0] context tag inside [0] constructed).
+    /// Create by type — server assigns instance number (\[0\] context tag inside \[0\] constructed).
     Type(ObjectType),
-    /// Create with a specific identifier ([1] context tag inside [0] constructed).
+    /// Create with a specific identifier (\[1\] context tag inside \[0\] constructed).
     Identifier(ObjectIdentifier),
 }
 

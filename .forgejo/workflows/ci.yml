@@ -6,7 +6,9 @@ name: CI
 #
 #   Lean  — every PR to dev/main, push to main, v* tags:
 #           lint (fmt, file-size cap, no-secret scan, script regressions),
-#           clippy, full-feature Linux tests.
+#           clippy and rustdoc with warnings denied (every feature, the PyO3
+#           crate, and each published crate alone with default features),
+#           every-feature Linux tests plus bacnet-cli's feature-off tests.
 #   Heavy — PRs to main, push to main, v* tags, weekly schedule:
 #           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
 #   CI OK — single required status that fails if any job above failed.
@@ -35,11 +37,13 @@ env:
   # Test binaries without native debug info: less codegen, linking and cache.
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
-  # Per-rule lint severity lives in [workspace.lints]; RUSTFLAGS=-Dwarnings
-  # would turn the warn-level missing_docs backlog into errors.
   TOOLCHAIN: "1.97.1"
   MSRV: "1.93"
-  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet
+  # Every optional feature that builds on Linux, including per-crate features
+  # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap} that nothing
+  # else in the workspace turns on (#906). bacnet-benchmarks/console is left
+  # out: it needs tokio_unstable.
+  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap
 
 jobs:
   lint:
@@ -69,6 +73,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends pkg-config libpcap-dev python3
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.TOOLCHAIN }}
@@ -77,7 +85,21 @@ jobs:
         with:
           key: clippy
           cache-bin: false
-      - run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
+      # Warnings are errors for workspace code only; dependencies are unaffected.
+      - name: Clippy (every feature)
+        run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$LINUX_FEATURES" -- -D warnings
+      # !cancelled(): report every configuration, not just the first failure.
+      - name: Clippy (PyO3 bindings)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/check-default-features.sh
+      - name: Rustdoc (every feature)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$LINUX_FEATURES"
 
   test:
     name: Test (Linux, full features)
@@ -88,7 +110,7 @@ jobs:
       - name: System packages
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends pkg-config cmake perl
+          apt-get install -y -qq --no-install-recommends pkg-config cmake perl libpcap-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.TOOLCHAIN }}
@@ -103,6 +125,10 @@ jobs:
       # it does not run doctests, so cargo test --doc covers those.
       - run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES" --profile ci
       - run: cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
+      # Tests that exist only with a feature off (the CLI's rebuild advice for
+      # sc-tls and pcap); LINUX_FEATURES compiles them out.
+      - name: bacnet-cli tests (default features)
+        run: cargo nextest run -p bacnet-cli --locked --profile ci
 
   msrv:
     name: MSRV (Linux native)

@@ -592,7 +592,7 @@ class PropertyIdentifier:
 
 
 class ErrorClass:
-    """BACnet error class enumeration (Clause 18.1.1)."""
+    """BACnet error class enumeration (Clause 18)."""
 
     DEVICE: ErrorClass
     OBJECT: ErrorClass

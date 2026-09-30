@@ -234,14 +234,14 @@ impl LimitEnable {
 /// transition is cancelled and no notification is sent.
 ///
 /// The countdown advances once per elapsed wall-clock second via
-/// [`PendingTransition::tick`], never per detector call — so a fast poll
+/// the detector's `tick` (for example [`OutOfRangeDetector::tick`]), never per `probe` call — so a fast poll
 /// loop writing the same out-of-range value cannot shorten the delay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingTransition {
     /// The state the detector wants to transition to once the delay elapses.
     pub state: EventState,
     /// Seconds remaining; seeded with the direction-appropriate delay (see
-    /// [`delay_toward`]) and decremented per tick.
+    /// `delay_toward`) and decremented per tick.
     pub remaining: u32,
 }
 
@@ -389,7 +389,7 @@ pub(crate) fn fault_precedence(
 /// honored via the split [`Self::probe`] / [`Self::tick`] entry points: a
 /// present-value write calls `probe`, which seeds a pending transition (or
 /// fires immediately when the direction-appropriate delay is zero,
-/// [`delay_toward`]); a one-second periodic task calls `tick` to advance the
+/// `delay_toward`); a one-second periodic task calls `tick` to advance the
 /// countdown and fire on expiry.
 #[derive(Debug, Clone)]
 pub struct OutOfRangeDetector {
@@ -488,7 +488,7 @@ impl OutOfRangeDetector {
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
     ///
-    /// When the direction-appropriate delay ([`delay_toward`]) is zero the
+    /// When the direction-appropriate delay (`delay_toward`) is zero the
     /// transition is confirmed immediately and `event_state` is updated,
     /// preserving the legacy instant-transition behavior. Otherwise a
     /// [`PendingTransition`] is seeded (or cleared if the condition

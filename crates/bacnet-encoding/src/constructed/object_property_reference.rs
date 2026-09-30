@@ -19,14 +19,14 @@
 //! | `setpoint-reference` | `[0]` | `BACnetObjectPropertyReference` | yes |
 //!
 //! Every member is context-tagged, so a property *write* carries a reference
-//! as primitive context tags [0]/[1] (plus optional [2]) concatenated on the
+//! as primitive context tags \[0\]/\[1\] (plus optional \[2\]) concatenated on the
 //! wire; the `Setpoint_Reference` property nests those members in the
 //! opening/closing tag 0 frame of `BACnetSetpointReference`. Unlike
 //! `BACnetDeviceObjectPropertyReference` there is NO device member in this
 //! production — these references name objects in the local device only — so
-//! a device-qualifying [3] element is rejected on decode rather than being
-//! silently absorbed (the tranche-J [`super::decode_dopr_body`] codec accepts
-//! [3]; this codec narrows it).
+//! a device-qualifying \[3\] element is rejected on decode rather than being
+//! silently absorbed (the tranche-J `decode_dopr_body` codec accepts
+//! \[3\]; this codec narrows it).
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::error::Error;
@@ -40,7 +40,7 @@ use super::decode_dopr_body;
 const WHAT: &str = "BACnetObjectPropertyReference";
 
 /// Encode the bare `BACnetObjectPropertyReference` member sequence:
-/// context-tagged [0]/[1] plus [2] when the reference is indexed.
+/// context-tagged \[0\]/\[1\] plus \[2\] when the reference is indexed.
 pub fn encode_object_property_reference(buf: &mut BytesMut, r: &BACnetObjectPropertyReference) {
     primitives::encode_ctx_object_id(buf, 0, &r.object_identifier);
     primitives::encode_ctx_unsigned(buf, 1, r.property_identifier as u64);
@@ -65,7 +65,7 @@ pub fn encode_setpoint_reference(buf: &mut BytesMut, r: &BACnetObjectPropertyRef
 /// the shared DOPR body codec: a device-qualifying member `[3]` is not part
 /// of `BACnetObjectPropertyReference` (the Loop/Pulse Converter references
 /// are local-device only), so it is rejected — as is any other content
-/// trailing the [0]/[1]/[2] members.
+/// trailing the \[0\]/\[1\]/\[2\] members.
 pub fn decode_object_property_reference(
     data: &[u8],
 ) -> Result<BACnetObjectPropertyReference, Error> {

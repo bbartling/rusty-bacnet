@@ -347,7 +347,7 @@ pub struct ReadRangeAck {
     pub item_count: u32,
     /// Raw item data (application-layer interprets content).
     pub item_data: Vec<u8>,
-    /// Optional first sequence number (context tag [6]).
+    /// Optional first sequence number (context tag \[6\]).
     pub first_sequence_number: Option<u32>,
 }
 

@@ -178,7 +178,7 @@ pub enum BACnetAuditLogQueryParameters {
         /// Optional operation bit filter.
         operations: Option<AuditOperationFlags>,
         /// Which operation outcomes match: all, successes-only, or
-        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags [7]/[4]).
+        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags \[7\]/\[4\]).
         successful_actions_only: BACnetSuccessFilter,
     },
     /// Match operations by source attributes.
@@ -192,7 +192,7 @@ pub enum BACnetAuditLogQueryParameters {
         /// Optional operation bit filter.
         operations: Option<AuditOperationFlags>,
         /// Which operation outcomes match: all, successes-only, or
-        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags [7]/[4]).
+        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags \[7\]/\[4\]).
         successful_actions_only: BACnetSuccessFilter,
     },
 }

@@ -56,6 +56,8 @@ impl DirectScIdentity {
         self.incarnation
     }
 
+    // Only the sc-tls direct accept and dial paths mint verified identities.
+    #[cfg(any(test, feature = "sc-tls"))]
     pub(crate) fn verified(leaf_sha256: [u8; 32], incarnation: u64) -> Self {
         Self {
             leaf_sha256,
@@ -99,6 +101,8 @@ pub struct TransportProvenance {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ProvenanceKind {
     Unverified,
+    // Constructed only by sc-tls direct ingress.
+    #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
     DirectPeer(DirectScIdentity),
     HubChannel,
     RelayedOrigin,
@@ -113,6 +117,7 @@ impl TransportProvenance {
     }
 
     /// Only built-in verified direct TLS ingress may mint this principal-bearing value.
+    #[cfg(any(test, feature = "sc-tls"))]
     pub(crate) fn verified_direct_peer(identity: DirectScIdentity) -> Self {
         Self {
             kind: ProvenanceKind::DirectPeer(identity),
@@ -121,6 +126,7 @@ impl TransportProvenance {
 
     /// Hub registration callback's own verified TLS-client channel, not a leaf
     /// identity for application ingress relayed through that Hub.
+    #[cfg(any(test, feature = "sc-tls"))]
     pub(crate) fn verified_hub_channel() -> Self {
         Self {
             kind: ProvenanceKind::HubChannel,

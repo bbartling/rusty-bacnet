@@ -422,7 +422,7 @@ pub struct BACnetLogRecord {
 // BACnetScale (Clause 21)
 // ---------------------------------------------------------------------------
 
-/// BACnet Scale: CHOICE { float-scale [0] Real, integer-scale [1] Integer }.
+/// BACnet Scale: CHOICE { float-scale \[0\] Real, integer-scale \[1\] Integer }.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetScale {
     /// Present_Value is multiplied by this factor to get engineering units.
@@ -694,11 +694,11 @@ pub struct BACnetCOVReference {
 /// BACnet Value Source — identifies the source of a property value write.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetValueSource {
-    /// No identified source: context [0] NULL.
+    /// No identified source: context \[0\] NULL.
     None,
-    /// Source object, optionally qualified by a device: constructed context [1].
+    /// Source object, optionally qualified by a device: constructed context \[1\].
     Object(BACnetDeviceObjectReference),
-    /// Source network/MAC address: constructed context [2].
+    /// Source network/MAC address: constructed context \[2\].
     Address(BACnetAddress),
 }
 

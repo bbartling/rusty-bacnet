@@ -43,7 +43,7 @@
 //! - One socket / one serial owner per session (RB-16 B/IP + SC-hub proofs,
 //!   RB-17 MS/TP simulator proof). No second hidden socket or serial owner is
 //!   created by the builders or the session.
-//! - I-Am identical to Device ReadProperty for the composed [`identity`](crate::identity)
+//! - I-Am identical to Device ReadProperty for the composed [`identity`]
 //!   on real B/IP loopback UDP and on the constrained-TLS SC hub
 //!   (I-Am readback matrix in `rb16_*_proof` tests).
 //! - Loopback-only coverage for port/UUID/capability corners beyond that
@@ -158,18 +158,18 @@
 //!
 //! # Module map
 //!
-//! - [`session`] — [`EndpointSession`](session::EndpointSession),
-//!   [`SessionRole`](session::SessionRole), [`SessionConfig`](session::SessionConfig),
-//!   [`PolicyCountersSnapshot`](session::PolicyCountersSnapshot),
-//!   [`SessionExit`](session::SessionExit).
-//! - [`roles`] — [`ClientRoleHandle`](roles::ClientRoleHandle) (`read_property`
+//! - [`session`] — [`EndpointSession`],
+//!   [`SessionRole`], [`SessionConfig`],
+//!   [`PolicyCountersSnapshot`],
+//!   [`SessionExit`].
+//! - [`roles`] — [`ClientRoleHandle`] (`read_property`
 //!   and `read_property_with_destination`, addressed by
 //!   [`EndpointApduDestination`]) +
-//!   [`ServerRoleHandle`](roles::ServerRoleHandle) (inbound / liveness / suspend /
+//!   [`ServerRoleHandle`] (inbound / liveness / suspend /
 //!   notification admit-complete).
-//! - [`identity`] — [`DeviceIdentity`](identity::DeviceIdentity),
-//!   [`NetworkPortEntry`](identity::NetworkPortEntry),
-//!   [`build_database_with_extra`](identity::build_database_with_extra).
+//! - [`identity`] — [`DeviceIdentity`],
+//!   [`NetworkPortEntry`],
+//!   [`build_database_with_extra`].
 //! - [`bip`], [`sc`], [`mstp`] — the three endpoint builders.
 //!
 //! Hidden by design: `SessionToken`, single-admit/decode helpers,

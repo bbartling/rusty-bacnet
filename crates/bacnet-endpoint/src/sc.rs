@@ -183,7 +183,7 @@ impl ScEndpointBuilder {
     ///
     /// Checks VMAC reservation, UUID presence, heartbeat range, and reconnect
     /// config. Returns a typed
-    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) on the first
+    /// [`Error::Encoding`] on the first
     /// violation, before any dial.
     pub fn validate_only(&self) -> Result<(), Error> {
         self.validate()

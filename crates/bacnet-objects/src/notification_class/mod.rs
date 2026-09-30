@@ -19,7 +19,7 @@
 //! *local* time, derived from the wall clock plus the Device object's
 //! `UTC_Offset` property (signed minutes) at the sender. A window with
 //! `to_time < from_time` (e.g. 22:00–02:00) crosses midnight and is active
-//! outside the `[from, to]` interval; see [`time_in_window`].
+//! outside the `[from, to]` interval; see `time_in_window`.
 
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

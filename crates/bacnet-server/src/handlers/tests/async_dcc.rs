@@ -1,7 +1,7 @@
 use super::*;
 
 // -----------------------------------------------------------------------
-// DCC timer auto-re-enable tests (Clause 16.4.3)
+// DCC timer auto-re-enable tests (Clause 16.1)
 // -----------------------------------------------------------------------
 
 #[tokio::test(start_paused = true)]

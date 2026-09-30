@@ -258,7 +258,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet virtual terminal class (Clause 17.1).
+    /// BACnet virtual terminal class, the VT-Open class parameter (Clause 17.2).
     pub struct VTClass(u32);
 
     const DEFAULT_TERMINAL = 0;
