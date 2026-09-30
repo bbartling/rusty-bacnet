@@ -8,7 +8,8 @@ name: CI
 #           lint (fmt, file-size cap, no-secret scan, script regressions),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features),
-#           every-feature Linux tests plus bacnet-cli's feature-off tests.
+#           every-feature Linux tests plus bacnet-cli's feature-off tests,
+#           and the Python bindings built with maturin and their unittest suite.
 #   Heavy — PRs to main, push to main, v* tags, weekly schedule:
 #           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
 #   CI OK — single required status that fails if any job above failed.
@@ -130,6 +131,47 @@ jobs:
       - name: bacnet-cli tests (default features)
         run: cargo nextest run -p bacnet-cli --locked --profile ci
 
+  python:
+    name: Python bindings
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MATURIN_VERSION: "1.15.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The SC hub and endpoint tests generate certificates with the openssl CLI.
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends python3 python3-venv openssl
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: python
+          cache-bin: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      # A debug extension builds faster, and the suite doesn't need release speed.
+      - name: Build the extension (maturin develop)
+        run: |
+          python3 -m venv /tmp/venv
+          . /tmp/venv/bin/activate
+          pip install --quiet --disable-pip-version-check "maturin==$MATURIN_VERSION"
+          python --version
+          maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
+      - name: Python tests
+        run: |
+          . /tmp/venv/bin/activate
+          python -m unittest discover -s crates/rusty-bacnet/tests
+      # The crate's Rust integration tests. Its lib unit tests can't link while
+      # the workspace forces pyo3's extension-module feature (#919).
+      - name: Rust integration tests
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p rusty-bacnet --test endpoint_lifecycle --locked --profile ci
+
   msrv:
     name: MSRV (Linux native)
     if: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
@@ -178,7 +220,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: ${{ always() }}
-    needs: [lint, clippy, test, msrv, audit-deny]
+    needs: [lint, clippy, test, python, msrv, audit-deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

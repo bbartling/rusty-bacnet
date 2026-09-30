@@ -3,6 +3,7 @@ name = "rusty-bacnet"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 description = "Python bindings for rusty-bacnet via PyO3"
 publish = false
 
