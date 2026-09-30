@@ -82,6 +82,7 @@ pub(super) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_
     let address = listener.local_addr().unwrap();
     let accept = async {
         let (tcp, _) = listener.accept().await.unwrap();
+        crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
         let stream = tls.acceptor.accept(tcp).await.unwrap();
         #[allow(clippy::result_large_err)]
         tokio_tungstenite::accept_hdr_async(

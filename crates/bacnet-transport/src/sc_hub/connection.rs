@@ -108,6 +108,7 @@ pub(super) async fn accept_loop_with_counter(
             continue;
         }
         let admission_permit = Admission::new(active_connections.clone(), timeouts.tls());
+        crate::sc_tls::disable_nagle(&tcp_stream);
 
         debug!("Hub: new TCP connection from {peer_addr}");
 

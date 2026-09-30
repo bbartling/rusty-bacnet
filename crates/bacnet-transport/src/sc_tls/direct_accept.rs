@@ -423,6 +423,7 @@ async fn accept_loop(
             continue;
         };
         let guard = _guard;
+        crate::sc_tls::disable_nagle(&tcp);
         let peer_config = config.clone();
         let peer_tx = npdu_tx.clone();
         let mut peer_shutdown = shutdown.clone();
