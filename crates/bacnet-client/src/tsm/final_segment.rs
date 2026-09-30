@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
+#[cfg(test)]
 use super::TransactionOwner;
 
 const NOT_STARTED: u8 = 0;
@@ -10,13 +11,11 @@ const POLLING: u8 = 1;
 const ISSUED: u8 = 2;
 const FAILED: u8 = 3;
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum TerminalResponseAdmission {
     Active(TransactionOwner),
-    FinalSegmentSendPolling {
-        owner: TransactionOwner,
-        issue: FinalSegmentIssue,
-    },
+    FinalSegmentSendPolling,
     PrematureSegmentedRequestAborted,
     NoTransaction,
 }

@@ -93,7 +93,7 @@ async fn registered_port_capacity_stays_independent_of_device_limit_and_row_orde
         let mut owner = if full {
             let mut config = id.server_config();
             config.registered_network_port = Some(port());
-            Owner::Server(
+            Owner::Server(Box::new(
                 bacnet_server::server::BACnetServer::start(
                     config,
                     db,
@@ -101,7 +101,7 @@ async fn registered_port_capacity_stays_independent_of_device_limit_and_row_orde
                 )
                 .await
                 .unwrap(),
-            )
+            ))
         } else {
             let mut endpoint =
                 crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
@@ -111,7 +111,7 @@ async fn registered_port_capacity_stays_independent_of_device_limit_and_row_orde
                     .build_session()
                     .unwrap();
             endpoint.start().await.unwrap();
-            Owner::Endpoint(endpoint)
+            Owner::Endpoint(Box::new(endpoint))
         };
         let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let address = owner.address();

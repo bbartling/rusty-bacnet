@@ -117,10 +117,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     control = network_control_rx.recv(), if network_control_open => {
                         match control {
                             Some(control) => {
-                                if let Some((tx, parsed)) = number_tx.as_ref().and_then(|tx| {
-                                    bacnet_network::network_number::NumberControl::parse(&control)
-                                        .map(|parsed| (tx, parsed))
-                                }) {
+                                if let Some((tx, parsed)) = number_tx
+                                    .as_ref()
+                                    .zip(bacnet_network::network_number::NumberControl::parse(&control))
+                                {
                                     if tx.try_send(parsed).is_err() {
                                         debug!("client Number control queue full or closed; dropping control");
                                     }
@@ -148,26 +148,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         // Cleanup is provenance-agnostic: drop any reassembly
                         // snapshot for this (mac, invoke) with a matching
                         // owner, regardless of trust context (fail-closed).
-                        let removed = {
-                            let found = seg_state
-                                .keys()
-                                .find(|key| {
-                                    key.0 == cleanup.mac
-                                        && key.1 == cleanup.invoke_id
-                                        && seg_state
-                                            .get(*key)
-                                            .is_some_and(|state| {
-                                                state.owner.same_as(&cleanup.owner)
-                                            })
-                                })
-                                .cloned();
-                            if let Some(found) = found {
-                                seg_state.remove(&found);
-                                true
-                            } else {
-                                false
-                            }
-                        };
+                        let found = seg_state
+                            .keys()
+                            .find(|key| {
+                                key.0 == cleanup.mac
+                                    && key.1 == cleanup.invoke_id
+                                    && seg_state
+                                        .get(*key)
+                                        .is_some_and(|state| {
+                                            state.owner.same_as(&cleanup.owner)
+                                        })
+                            })
+                            .cloned();
+                        #[cfg(test)]
+                        let removed = found.is_some();
+                        if let Some(found) = found {
+                            seg_state.remove(&found);
+                        }
                         if let Some(expected_sender) = cleanup.seg_ack_sender {
                             let key = (cleanup.mac, cleanup.invoke_id);
                             let mut senders = seg_ack_senders_dispatch.lock().await;

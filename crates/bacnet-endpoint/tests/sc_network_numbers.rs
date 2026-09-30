@@ -42,15 +42,15 @@ fn database() -> ObjectDatabase {
     db
 }
 enum Owner {
-    Server(BACnetServer<AnyTransport<LoopbackSerial>>),
-    Endpoint(EndpointSession<AnyTransport<LoopbackSerial>>),
+    Server(Box<BACnetServer<AnyTransport<LoopbackSerial>>>),
+    Endpoint(Box<EndpointSession<AnyTransport<LoopbackSerial>>>),
 }
 impl Owner {
     async fn start(server: bool, transport: ScTransport<TlsWebSocket>) -> Self {
         // Exercise the same erasure/delegation used by in-repo frontends.
         let transport = AnyTransport::Sc(Box::new(transport));
         if server {
-            Self::Server(
+            Self::Server(Box::new(
                 bounded(BACnetServer::start(
                     ServerConfig::default(),
                     database(),
@@ -58,14 +58,14 @@ impl Owner {
                 ))
                 .await
                 .unwrap(),
-            )
+            ))
         } else {
             let mut endpoint =
                 EndpointSession::new(transport, SessionRole::Both, Default::default())
                     .unwrap()
                     .with_database(database());
             bounded(endpoint.start()).await.unwrap();
-            Self::Endpoint(endpoint)
+            Self::Endpoint(Box::new(endpoint))
         }
     }
     async fn stop(&mut self) {

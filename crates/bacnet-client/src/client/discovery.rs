@@ -1,5 +1,4 @@
 use super::*;
-use bacnet_types::enums::Segmentation;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Resolve a device instance to its MAC address and optional routing info.

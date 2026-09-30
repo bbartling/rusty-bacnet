@@ -35,7 +35,7 @@ fn recipient_address_preserves_network_number_all_forms() {
     // broadcast (net 65535, empty MAC), local (net 0), and remote (net 1000).
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let mac = MacAddr::from_slice(&[192u8, 168, 1, 100, 0xBA, 0xC0]);
-    nc.add_destination(make_dest_address(0xBAC0, &mac.to_vec()));
+    nc.add_destination(make_dest_address(0xBAC0, &mac));
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)

@@ -1,7 +1,7 @@
 //! RB-17 MS/TP proof: one-link endpoint over simulated serial, one owner.
 //!
 //! Session-under-test (via [`MstpEndpointBuilder`](bacnet_endpoint::mstp::MstpEndpointBuilder))
-//! + raw-frame peer harness over [`LoopbackSerial::pair`](bacnet_transport::mstp::LoopbackSerial).
+//! and raw-frame peer harness over [`LoopbackSerial::pair`](bacnet_transport::mstp::LoopbackSerial).
 //! Every logical scenario runs in BOTH `Tokio` and `DedicatedThread`
 //! execution modes with the same assertions. Deterministic and event-driven
 //! (timeout-guarded channel receives, no sleeps).

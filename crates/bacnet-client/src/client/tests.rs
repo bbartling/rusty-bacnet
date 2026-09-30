@@ -52,18 +52,13 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
 async fn assert_sc_socket_closed_after_drop(ws_hub: &LoopbackWebSocket, context: &str) {
     timeout(Duration::from_secs(1), async {
-        loop {
-            match ws_hub.recv().await {
-                Ok(data) => {
-                    let msg = decode_sc_message(&data).unwrap();
-                    assert_ne!(
-                        msg.function,
-                        ScFunction::HeartbeatAck,
-                        "{context} must not leave SC answering heartbeats"
-                    );
-                }
-                Err(_) => break,
-            }
+        while let Ok(data) = ws_hub.recv().await {
+            let msg = decode_sc_message(&data).unwrap();
+            assert_ne!(
+                msg.function,
+                ScFunction::HeartbeatAck,
+                "{context} must not leave SC answering heartbeats"
+            );
         }
     })
     .await

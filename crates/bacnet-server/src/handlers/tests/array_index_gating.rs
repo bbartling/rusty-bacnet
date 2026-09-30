@@ -214,7 +214,7 @@ fn write_indexed(
     };
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
-    handle_write_property(db, &mut buf).map(|_| ())
+    handle_write_property(db, &buf).map(|_| ())
 }
 
 fn wpm_single(
@@ -279,7 +279,7 @@ fn list_properties_reject_indexed_read_property_multiple_inline() {
         request.encode(&mut buf).unwrap();
         let mut ack_buf = BytesMut::new();
         handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-        let ack = ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&ack_buf).unwrap();
         let results = &ack.list_of_read_access_results[0].list_of_results;
         assert!(
             results[0].property_value.is_some(),
@@ -331,7 +331,7 @@ fn true_arrays_pass_the_gate_on_read_property() {
     .encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     let (count, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
     assert_eq!(count, PropertyValue::Unsigned(2));
@@ -706,7 +706,7 @@ fn notification_class_priority_accepts_index_range() {
     .encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     assert_eq!(ack.property_array_index, Some(0));
     let (count, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();

@@ -511,7 +511,7 @@ impl OutOfRangeDetector {
         // NOT restart the countdown (ASHRAE 135-2020 §13.2.4 — Time_Delay is a
         // debounce timer); re-seeding here would let writes faster than the
         // 1s tick pin the transition forever. The periodic `tick` advances it.
-        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+        if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
@@ -741,7 +741,7 @@ impl ChangeOfStateDetector {
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
-        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+        if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
@@ -930,7 +930,7 @@ impl CommandFailureDetector {
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
-        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+        if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None

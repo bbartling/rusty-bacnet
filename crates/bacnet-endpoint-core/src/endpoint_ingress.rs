@@ -123,9 +123,9 @@ pub enum ClassifierExit {
     /// The network layer closed its APDU stream.
     InputClosed,
     /// A full policy queue prevented lossless reclamation.
-    PolicyRouteFull(PolicyOutcome),
+    PolicyRouteFull(Box<PolicyOutcome>),
     /// The policy queue was closed.
-    PolicyRouteClosed(PolicyOutcome),
+    PolicyRouteClosed(Box<PolicyOutcome>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -410,7 +410,7 @@ enum EgressDrive {
 
 enum PendingEvent {
     Cancelled,
-    Received(Option<ReceivedApdu>),
+    Received(Option<Box<ReceivedApdu>>),
     Sent(Result<(), Error>),
 }
 
@@ -521,7 +521,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                         return EgressDrive::Complete;
                     },
                     _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
-                    received = apdu_rx.recv() => PendingEvent::Received(received),
+                    received = apdu_rx.recv() => PendingEvent::Received(received.map(Box::new)),
                     result = &mut send => PendingEvent::Sent(result),
                 }
             } else {
@@ -536,7 +536,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                     },
                     _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
                     result = &mut send => PendingEvent::Sent(result),
-                    received = apdu_rx.recv() => PendingEvent::Received(received),
+                    received = apdu_rx.recv() => PendingEvent::Received(received.map(Box::new)),
                 }
             };
 
@@ -544,7 +544,8 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 PendingEvent::Cancelled => break EgressDrive::Cancelled,
                 PendingEvent::Received(Some(received)) => {
                     *prefer_ingress = !*prefer_ingress;
-                    if let Some(exit) = route_received(received, inbound_tx, terminal_tx, policy_tx)
+                    if let Some(exit) =
+                        route_received(*received, inbound_tx, terminal_tx, policy_tx)
                     {
                         break EgressDrive::Exit(exit);
                     }
@@ -738,10 +739,10 @@ fn send_policy(
     match policy_tx.try_send(outcome) {
         Ok(()) => None,
         Err(mpsc::error::TrySendError::Full(outcome)) => {
-            Some(ClassifierExit::PolicyRouteFull(outcome))
+            Some(ClassifierExit::PolicyRouteFull(Box::new(outcome)))
         }
         Err(mpsc::error::TrySendError::Closed(outcome)) => {
-            Some(ClassifierExit::PolicyRouteClosed(outcome))
+            Some(ClassifierExit::PolicyRouteClosed(Box::new(outcome)))
         }
     }
 }

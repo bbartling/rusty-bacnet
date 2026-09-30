@@ -172,7 +172,7 @@ async fn authoritative_local_no_segmentation_refuses_segmented_request() {
         LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
     let mut peer_rx = peer_transport.start().await.unwrap();
 
-    let mut client = BACnetClient::generic_builder()
+    let client = BACnetClient::generic_builder()
         .transport(client_transport)
         .apdu_timeout_ms(1000)
         .build()
@@ -217,7 +217,7 @@ async fn authoritative_local_transmit_only_refuses_segmented_request() {
         LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
     let mut peer_rx = peer_transport.start().await.unwrap();
 
-    let mut client = BACnetClient::generic_builder()
+    let client = BACnetClient::generic_builder()
         .transport(client_transport)
         .apdu_timeout_ms(1000)
         .build()
@@ -263,7 +263,7 @@ async fn authoritative_routed_no_segmentation_refuses_segmented_request() {
         LoopbackTransport::pair(client_mac.clone(), router_mac.clone());
     let mut router_rx = router_transport.start().await.unwrap();
 
-    let mut client = BACnetClient::generic_builder()
+    let client = BACnetClient::generic_builder()
         .transport(client_transport)
         .apdu_timeout_ms(1000)
         .build()
@@ -504,7 +504,7 @@ async fn explicit_upsert_refresh_makes_placeholder_authoritative() {
         LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
     let mut peer_rx = peer_transport.start().await.unwrap();
 
-    let mut client = BACnetClient::generic_builder()
+    let client = BACnetClient::generic_builder()
         .transport(client_transport)
         .apdu_timeout_ms(1000)
         .build()

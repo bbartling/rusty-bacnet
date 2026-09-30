@@ -18,7 +18,7 @@ struct CustomProposal {
 }
 impl CustomProposal {
     fn proposal(&self) -> Option<TransitionOutcome> {
-        (self.state == EventState::NORMAL).then(|| TransitionOutcome {
+        (self.state == EventState::NORMAL).then_some(TransitionOutcome {
             change: EventStateChange {
                 from: self.state,
                 to: EventState::HIGH_LIMIT,

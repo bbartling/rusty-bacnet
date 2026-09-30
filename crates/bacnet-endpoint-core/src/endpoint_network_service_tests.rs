@@ -184,7 +184,7 @@ async fn assert_command(
     let apdu = encoded_unconfirmed_request();
     let data_attributes = vec![DataAttribute {
         option_type: attribute_type,
-        must_understand: attribute_type % 2 == 0,
+        must_understand: attribute_type.is_multiple_of(2),
         data: vec![attribute_type, attribute_type.wrapping_add(1)],
     }];
 

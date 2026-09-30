@@ -100,9 +100,7 @@ fn read_raw(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdenti
     request.encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(db, &buf, &mut ack_buf).unwrap();
-    ReadPropertyACK::decode(&ack_buf.to_vec())
-        .unwrap()
-        .property_value
+    ReadPropertyACK::decode(&ack_buf).unwrap().property_value
 }
 
 #[test]

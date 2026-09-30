@@ -60,22 +60,6 @@ impl FaultOutOfRangeState {
         }
     }
 
-    fn property_list(
-        &self,
-        base: &'static [PropertyIdentifier],
-    ) -> Cow<'static, [PropertyIdentifier]> {
-        if self.limits.is_none() {
-            return Cow::Borrowed(base);
-        }
-        let mut properties = Vec::with_capacity(base.len() + 2);
-        properties.extend_from_slice(base);
-        properties.extend([
-            PropertyIdentifier::FAULT_HIGH_LIMIT,
-            PropertyIdentifier::FAULT_LOW_LIMIT,
-        ]);
-        Cow::Owned(properties)
-    }
-
     fn clear_ownership(&mut self) {
         self.owned_fault = None;
     }

@@ -121,7 +121,7 @@ impl<'a> LogLifecycle<'a> {
         if status_fills {
             *self.enabled = false;
         }
-        let bits = BUFFER_PURGED | u8::from(disabled) * LOG_DISABLED;
+        let bits = BUFFER_PURGED | (u8::from(disabled) * LOG_DISABLED);
         self.insert_status(timestamp, bits);
         Ok(())
     }

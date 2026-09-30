@@ -64,7 +64,7 @@ async fn registered_port_reassembled_routed_read_and_endpoint_segmentation_bound
             let mut config = id.server_config();
             config.registered_network_port = Some(port());
             config.segmentation_supported = bacnet_types::enums::Segmentation::BOTH;
-            Owner::Server(
+            Owner::Server(Box::new(
                 bacnet_server::server::BACnetServer::start(
                     config,
                     id.build_database().unwrap(),
@@ -72,7 +72,7 @@ async fn registered_port_reassembled_routed_read_and_endpoint_segmentation_bound
                 )
                 .await
                 .unwrap(),
-            )
+            ))
         } else {
             Owner::start(false, true).await
         };
