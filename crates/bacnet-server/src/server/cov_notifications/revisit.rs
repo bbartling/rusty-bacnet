@@ -1,18 +1,20 @@
-//! Fan acknowledged references out again (#896).
+//! Fan acknowledged or fenced references out again (#896).
 //!
 //! A confirmed report advances its baseline only on the Ack, and changes made
-//! while it was outstanding were held back. Each acknowledged reference is
-//! evaluated again through the usual per-subscription fanout, so it reports
-//! whatever now differs from the acknowledged baseline (Status_Flags included)
-//! and nothing when it is unchanged.
+//! while it was outstanding were held back. The acknowledged subscription, or
+//! every live reference of the acknowledged context, is evaluated again through
+//! the usual fanout, so it reports whatever now differs from its baseline
+//! (Status_Flags and queued timestamped changes included) and nothing when it
+//! is unchanged. References whose outstanding report was fenced by a route
+//! change or re-subscription come through here too.
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use crate::cov::CovSubscriptionKey;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate the live references among `keys` against their baselines and
-    /// report what changed, under one event budget. Skipped under DCC, as any
-    /// fanout is.
+    /// report what changed. Under DCC the evaluation is dropped, as any fanout
+    /// is, not deferred: the references report again on their next fanout.
     pub(in crate::server) async fn fire_cov_revisits(
         ctx: &CovNotifyContext<'_, T>,
         keys: &[CovSubscriptionKey],
@@ -40,17 +42,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             in_flight_tracker: &in_flight_tracker,
             counters: &counters,
         };
-        let mut budget = EventBudget::new(&ctx.config.cov_policy);
+        // One budget per object or context, as a natural event would have.
         let mut single_by_object: HashMap<ObjectIdentifier, Vec<CovSubscriptionSnapshot>> =
             HashMap::new();
-        let mut multiple = Vec::new();
+        let mut multiple_by_context: HashMap<
+            crate::cov::MultipleContextKey,
+            Vec<CovSubscriptionSnapshot>,
+        > = HashMap::new();
         for sub in subs {
-            match sub.notification_kind {
-                CovNotificationKind::Single => single_by_object
+            match sub.key().multiple_context() {
+                Some(context) => multiple_by_context
+                    .entry(context.clone())
+                    .or_default()
+                    .push(sub),
+                None => single_by_object
                     .entry(sub.monitored_object_identifier)
                     .or_default()
                     .push(sub),
-                CovNotificationKind::Multiple => multiple.push(sub),
             }
         }
         for (oid, subs) in &single_by_object {
@@ -60,17 +68,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 subs,
                 None,
                 false,
-                &mut budget,
+                &mut EventBudget::new(&ctx.config.cov_policy),
             )
             .await;
         }
-        Self::fire_cov_notification_multiple_for_subscriptions(
-            &handles,
-            &multiple,
-            None,
-            false,
-            &mut budget,
-        )
-        .await;
+        for subs in multiple_by_context.values() {
+            Self::fire_cov_notification_multiple_for_subscriptions(
+                &handles,
+                subs,
+                None,
+                false,
+                &mut EventBudget::new(&ctx.config.cov_policy),
+            )
+            .await;
+        }
     }
 }

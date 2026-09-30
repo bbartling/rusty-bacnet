@@ -4,19 +4,17 @@
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
 use crate::cov::timed::TimedClaim;
-use crate::cov::{CovObservation, CovSubscriptionKey, PreparedCovCompletion};
+use crate::cov::{BeginRefusal, CovObservation, CovSubscriptionKey, PreparedCovCompletion};
 
 /// A confirmed notification ready for admission.
 pub(in crate::server) struct ConfirmedReport {
     pub(in crate::server) service: ConfirmedServiceChoice,
     /// Reference whose recipient and current route receive the notification.
     pub(in crate::server) route: CovSubscriptionSnapshot,
+    /// The report's one ticket, under which every carried reference completes.
+    pub(in crate::server) completion: PreparedCovCompletion,
     /// Each carried reference with the observation its Ack completes.
-    pub(in crate::server) completions: Vec<(
-        CovSubscriptionSnapshot,
-        CovObservation,
-        PreparedCovCompletion,
-    )>,
+    pub(in crate::server) observations: Vec<(CovSubscriptionSnapshot, CovObservation)>,
     /// Timestamped history conveyed; it retires on the Ack and otherwise
     /// returns to its references.
     pub(in crate::server) claim: Option<TimedClaim>,
@@ -32,13 +30,13 @@ impl ConfirmedReport {
     }
 
     fn keys(&self) -> impl Iterator<Item = CovSubscriptionKey> + '_ {
-        self.completions.iter().map(|(sub, _, _)| sub.key().clone())
+        self.observations.iter().map(|(sub, _)| sub.key().clone())
     }
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Admit `report` against the peer and global in-flight limits, an invoke
-    /// ID, the event budget and its references' outstanding-report marks, then
+    /// ID, the event budget and its coordinate's outstanding-report mark, then
     /// deliver it with the usual retries. `encode` builds the APDU for the
     /// reserved invoke ID.
     pub(in crate::server) async fn send_confirmed_cov(
@@ -99,20 +97,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (flight, revisits) = {
             let mut table = ctx.cov_table.write().await;
             let flight = table.begin_confirmed(
-                report
-                    .completions
-                    .iter()
-                    .map(|(sub, _, completion)| (sub, *completion)),
+                report.completion,
+                report.observations.iter().map(|(sub, _)| sub),
             );
-            if flight.is_none() {
-                // A concurrent report or acknowledgment of one of these
-                // references won the race; evaluate them all again against
-                // what it left behind.
+            if matches!(flight, Err(BeginRefusal::NotCurrent)) {
+                // A fence moved a reference since it was captured; look at its
+                // live state again. A busy coordinate needs nothing: its
+                // outstanding report, Ack or hold-off owns the follow-up.
                 table.revisits().request(report.keys());
             }
             (flight, Arc::clone(table.revisits()))
         };
-        let Some(flight) = flight else {
+        let Ok(flight) = flight else {
             budget.refund(buf.len());
             return;
         };
@@ -130,10 +126,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let cov_table = Arc::clone(ctx.cov_table);
         let apdu_timeout = Duration::from_millis(ctx.config.cov_retry_timeout_ms);
         let apdu_retries = DEFAULT_APDU_RETRIES;
+        // After a failure the coordinate waits one retry cycle before it may
+        // report again, bounding a dead or refusing subscriber.
+        let hold_off = apdu_timeout * u32::from(apdu_retries);
         ctx.notification_transactions.spawn(async move {
             let ConfirmedReport {
                 route,
-                completions,
+                completion,
+                observations,
                 claim,
                 ..
             } = report;
@@ -157,39 +157,58 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 },
             )
             .await;
-            match result {
-                NotificationWorkerResult::Ack => debug!(invoke_id = id, "{label} acknowledged"),
-                NotificationWorkerResult::Error => {
-                    warn!(invoke_id = id, "{label} rejected by subscriber");
+            let revisit = match result {
+                NotificationWorkerResult::Ack => {
+                    debug!(invoke_id = id, "{label} acknowledged");
+                    let mut table = cov_table.write().await;
+                    if let Some(claim) = claim {
+                        claim.commit();
+                    }
+                    let completed: Vec<_> = observations
+                        .into_iter()
+                        .filter(|(sub, observation)| {
+                            table.complete_observation(sub, completion, observation.clone())
+                        })
+                        .map(|(sub, _)| sub.key().clone())
+                        .collect();
+                    drop(flight);
+                    // Changes to any reference of a context were held while the
+                    // report was outstanding, not only to those it carried.
+                    match route.key().multiple_context() {
+                        Some(context) if !completed.is_empty() => table
+                            .multiple_context_references(context)
+                            .map(|sub| sub.key().clone())
+                            .collect(),
+                        _ => completed,
+                    }
                 }
-                NotificationWorkerResult::Exhausted => warn!(
-                    invoke_id = id,
-                    "{label} failed after {} retries", apdu_retries
-                ),
-                NotificationWorkerResult::Closed => {}
-            }
-            let acknowledged = if result == NotificationWorkerResult::Ack {
-                let mut table = cov_table.write().await;
-                if let Some(claim) = claim {
-                    claim.commit();
+                NotificationWorkerResult::Error | NotificationWorkerResult::Exhausted => {
+                    if result == NotificationWorkerResult::Error {
+                        warn!(invoke_id = id, "{label} rejected by subscriber");
+                    } else {
+                        warn!(
+                            invoke_id = id,
+                            "{label} failed after {} retries", apdu_retries
+                        );
+                    }
+                    // Return unacknowledged history before the mark clears, so
+                    // the next report conveys it again in capture order.
+                    drop(claim);
+                    flight.failed(hold_off);
+                    Vec::new()
                 }
-                completions
-                    .into_iter()
-                    .filter(|(sub, observation, completion)| {
-                        table.complete_observation(sub, *completion, observation.clone())
-                    })
-                    .map(|(sub, _, _)| sub.key().clone())
-                    .collect()
-            } else {
-                // Return unacknowledged history before any mark clears, so a
-                // later report conveys it again in capture order.
-                drop(claim);
-                Vec::new()
+                NotificationWorkerResult::Closed => {
+                    drop(claim);
+                    drop(flight);
+                    Vec::new()
+                }
             };
-            // Free the peer slot and marks before the follow-up needs them.
-            drop(flight);
+            // Free the peer slot before the follow-up needs it.
             drop(guard);
-            revisits.request(acknowledged);
+            revisits.request(revisit);
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

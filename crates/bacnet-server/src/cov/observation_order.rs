@@ -22,10 +22,18 @@ impl ObservationTicket {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PreparedCovCompletion {
     /// Completes on the subscriber's Ack, and only while this ticket is the
-    /// reference's outstanding report (see [`super::confirmed`]).
+    /// coordinate's outstanding report (see [`super::confirmed`]).
     Confirmed(ObservationTicket),
     /// Completes once the transport accepts the send, if no newer send did.
     Unconfirmed(ObservationTicket),
+}
+impl PreparedCovCompletion {
+    /// Issue order of this completion's ticket.
+    pub(crate) fn ticket(self) -> ObservationTicket {
+        match self {
+            Self::Confirmed(ticket) | Self::Unconfirmed(ticket) => ticket,
+        }
+    }
 }
 impl CovSubscriptionSnapshot {
     /// Call synchronously after complete capture/qualification, before any later await.
@@ -47,8 +55,9 @@ impl CovSubscriptionSnapshot {
 impl CovSubscriptionTable {
     /// Commit a complete observation and successful marker together under the caller's
     /// table write guard. Issued-but-failed/canceled work never advances this marker.
-    /// A confirmed completion must be the reference's outstanding report, whose
-    /// mark it clears; an older or replaced report changes nothing.
+    /// A confirmed completion must carry its coordinate's outstanding report
+    /// ticket; an older or replaced report changes nothing. The caller ends the
+    /// flight once every reference is complete.
     pub(crate) fn complete_observation(
         &mut self,
         snapshot: &CovSubscriptionSnapshot,
@@ -60,9 +69,9 @@ impl CovSubscriptionTable {
         }
         let entry = self.subs.get_mut(snapshot.key()).expect("current entry");
         let ticket = match (snapshot.issue_confirmed_notifications, completion) {
-            (true, PreparedCovCompletion::Confirmed(ticket))
-                if entry.confirmed_flight.holds(ticket) =>
-            {
+            // Every reference of one report shares its ticket, so the mark stays
+            // until the flight ends after the last of them.
+            (true, PreparedCovCompletion::Confirmed(ticket)) if entry.flight.holds(ticket) => {
                 ticket
             }
             (false, PreparedCovCompletion::Unconfirmed(ticket)) => ticket,
@@ -73,9 +82,6 @@ impl CovSubscriptionTable {
         }
         entry.last_successful_ticket = ticket.0;
         entry.subscription.last_notified_observation = Some(value);
-        if snapshot.issue_confirmed_notifications {
-            entry.confirmed_flight.release(ticket);
-        }
         true
     }
     /// Test setup still uses real reservation and completion, not a baseline
@@ -90,7 +96,7 @@ impl CovSubscriptionTable {
             return false;
         };
         let _flight = if snapshot.issue_confirmed_notifications {
-            let Some(flight) = self.begin_confirmed([(snapshot, completion)]) else {
+            let Ok(flight) = self.begin_confirmed(completion, [snapshot]) else {
                 return false;
             };
             Some(flight)

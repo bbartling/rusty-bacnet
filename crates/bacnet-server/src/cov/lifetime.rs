@@ -53,12 +53,7 @@ impl CovSubscriptionTable {
             return None;
         }
         self.subs.get(snapshot.key()).and_then(|entry| {
-            let same_route = match (&entry.route_owner, &snapshot.route_owner) {
-                (Some(current), Some(captured)) => Arc::ptr_eq(current, captured),
-                (None, None) => true,
-                _ => false,
-            };
-            (entry.generation == snapshot.generation && same_route)
+            (entry.generation == snapshot.generation && entry.flight.same(&snapshot.flight))
                 .then(|| CovTimeRemaining::at(entry.expires_at, now))
         })
     }

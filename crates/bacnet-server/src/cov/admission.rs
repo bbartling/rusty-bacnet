@@ -29,7 +29,9 @@ impl CovSubscriptionTable {
     /// context's (last write wins); the delay is reported, never acted on.
     /// The admitted route also replaces the route of every retained reference,
     /// including empty renewals. A changed route fences old snapshots while
-    /// preserving unreplaced observations; same-route refresh retains authority.
+    /// preserving unreplaced observations; same-route refresh retains authority,
+    /// unless it lists references while the context's confirmed report is
+    /// outstanding or holding off, which fences it the same way (#896).
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
@@ -70,13 +72,7 @@ impl CovSubscriptionTable {
         self.check_admission_multiple(&peer, new_count, 0)?;
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
-        let route_owner = self
-            .subs
-            .values()
-            .find(|entry| entry.key.multiple_context() == Some(context))
-            .filter(|entry| entry.endpoint() == *route)
-            .and_then(|entry| entry.route_owner.clone())
-            .unwrap_or_else(|| Arc::new(()));
+        let (flight, fenced) = self.context_flight(context, route, !subscriptions.is_empty());
         let mut previously_indefinite = 0;
         for entry in self.subs.values_mut() {
             if entry.key.multiple_context() == Some(context) {
@@ -85,16 +81,20 @@ impl CovSubscriptionTable {
                 entry.max_notification_delay = Some(max_notification_delay);
                 entry.subscription.subscriber_mac = route.mac.clone();
                 entry.subscription.subscriber_network = route.network.clone();
-                if !entry
-                    .route_owner
-                    .as_ref()
-                    .is_some_and(|owner| Arc::ptr_eq(owner, &route_owner))
-                {
-                    // A new route fences the old route's outstanding report too.
-                    entry.confirmed_flight = Default::default();
-                }
-                entry.route_owner = Some(Arc::clone(&route_owner));
+                entry.flight = flight.clone();
             }
+        }
+        if fenced {
+            // The fenced report's Ack can no longer complete the references this
+            // request keeps, and their held changes would wait for an unrelated
+            // fanout: evaluate them again (#896).
+            let retained: Vec<_> = self
+                .subs
+                .keys()
+                .filter(|key| key.multiple_context() == Some(context) && !keys.contains(*key))
+                .cloned()
+                .collect();
+            self.revisits.request(retained);
         }
         if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
             *count -= previously_indefinite;
@@ -111,7 +111,7 @@ impl CovSubscriptionTable {
                     sub,
                     first_generation + offset as u64,
                     Some(max_notification_delay),
-                    Some(Arc::clone(&route_owner)),
+                    Some(flight.clone()),
                 )
             })
             .collect())
@@ -170,15 +170,14 @@ impl CovSubscriptionTable {
         sub: CovSubscription,
         generation: u64,
         max_notification_delay: Option<u32>,
-        route_owner: Option<Arc<()>>,
+        context_flight: Option<super::confirmed::FlightMarker>,
     ) -> CovSubscriptionSnapshot {
         let snapshot = CovSubscriptionSnapshot {
             key,
             generation,
             owner: Arc::clone(&self.owner),
             last_successful_ticket: 0,
-            route_owner,
-            confirmed_flight: Default::default(),
+            flight: context_flight.unwrap_or_default(),
             subscription: sub.clone(),
             max_notification_delay,
         };

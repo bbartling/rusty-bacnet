@@ -16,7 +16,7 @@ pub use identity::*;
 pub(crate) mod active;
 mod admission;
 mod confirmed;
-pub(crate) use confirmed::CovRevisits;
+pub(crate) use confirmed::{BeginRefusal, CovRevisits};
 mod sample;
 pub use sample::CovSample;
 mod observation;

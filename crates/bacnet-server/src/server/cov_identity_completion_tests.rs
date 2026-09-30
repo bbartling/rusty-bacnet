@@ -200,9 +200,12 @@ impl Fixture {
                 })
             ));
             // The worker completes baselines on the Ack (#896); let it.
-            tokio::time::timeout(Duration::from_secs(2), self.transactions.join_next())
-                .await
-                .unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(2), self.transactions.join_next())
+                    .await
+                    .unwrap(),
+                Some(Ok(()))
+            ));
         }
         self.transactions.close();
         while self.transactions.join_next().await.is_some() {}

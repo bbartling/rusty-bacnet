@@ -609,8 +609,15 @@ where
     Fut: Future<Output = Result<(), E>>,
 {
     for attempt in 0..=max_retries {
-        let send_failed = send(attempt).await.is_err();
-        match tokio::time::timeout(timeout, receiver).await {
+        // The whole attempt, its send included, ends within `timeout`, so a
+        // transport that never finishes a send cannot hold the transaction (and
+        // any COV report it carries) open; a send cut off counts as failed.
+        let deadline = tokio::time::Instant::now() + timeout;
+        let send_failed = !matches!(
+            tokio::time::timeout_at(deadline, send(attempt)).await,
+            Ok(Ok(()))
+        );
+        match tokio::time::timeout_at(deadline, receiver).await {
             Ok(Ok(CovAckResult::Ack)) => {
                 operation.terminal_completed();
                 return NotificationWorkerResult::Ack;

@@ -127,6 +127,16 @@ async fn baseline(h: &Harness) -> Option<CovSample> {
         .map(|observation| observation.sample().clone())
 }
 
+/// Whether BV-1's one subscription may start a confirmed report now.
+async fn idle(h: &Harness) -> bool {
+    let mut table = h.server.cov_table.write().await;
+    let sub = table.subscriptions_for(&bv1())[0].clone();
+    match sub.key().multiple_context() {
+        Some(context) => table.context_idle(context, std::slice::from_ref(&sub)),
+        None => table.confirmed_idle(&sub),
+    }
+}
+
 /// Write BV-1's Present_Value, fanning COV out even when it is unchanged.
 async fn write(h: &Harness, value: u32) {
     h.server
@@ -160,7 +170,7 @@ fn discard_retries(h: &Harness, (invoke_id, service_choice): (u8, ConfirmedServi
 }
 
 #[tokio::test(start_paused = true)]
-async fn confirmed_report_exhausted_keeps_the_baseline_and_is_reported_again() {
+async fn confirmed_report_exhausted_holds_off_then_is_reported_again() {
     for family in FAMILIES {
         let mut h = start(10).await;
         family.start(&mut h).await;
@@ -172,7 +182,12 @@ async fn confirmed_report_exhausted_keeps_the_baseline_and_is_reported_again() {
         h.settle().await;
         assert_eq!(baseline(&h).await, Some(sample(INACTIVE)), "{family:?}");
         discard_retries(&h, unanswered);
+        // Inside the hold-off an unchanged fanout sends nothing, and nothing
+        // is scheduled for when it ends.
+        assert!(!idle(&h).await, "{family:?} holds off");
+        write(&h, ACTIVE).await;
         h.no_notification().await;
+        assert!(idle(&h).await, "{family:?} hold-off over");
         // The next fanout of the unchanged object reports the lost change.
         write(&h, ACTIVE).await;
         assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
@@ -185,7 +200,7 @@ async fn confirmed_report_exhausted_keeps_the_baseline_and_is_reported_again() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn confirmed_report_rejected_keeps_the_baseline_and_is_reported_again() {
+async fn confirmed_report_rejected_holds_off_then_is_reported_again() {
     for family in FAMILIES {
         let mut h = start(3000).await;
         family.start(&mut h).await;
@@ -194,13 +209,42 @@ async fn confirmed_report_rejected_keeps_the_baseline_and_is_reported_again() {
         h.reject().await;
         h.settle().await;
         assert_eq!(baseline(&h).await, Some(sample(INACTIVE)), "{family:?}");
-        // Not retried at once: only the next fanout reports it again.
+        // Not retried at once, nor by the next fanout inside the hold-off.
+        write(&h, ACTIVE).await;
         h.no_notification().await;
+        assert!(!idle(&h).await, "{family:?} holds off");
+        // One retry cycle: the 3 s timeout times the retries.
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        assert!(idle(&h).await, "{family:?} hold-off over");
         write(&h, ACTIVE).await;
         assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
         h.ack().await;
         h.settle().await;
         assert_eq!(baseline(&h).await, Some(sample(ACTIVE)), "{family:?}");
+        h.server.stop().await.unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn confirmed_follow_up_under_dcc_is_dropped_not_deferred() {
+    for family in FAMILIES {
+        let mut h = start(3000).await;
+        family.start(&mut h).await;
+        write(&h, ACTIVE).await;
+        assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
+        write(&h, INACTIVE).await;
+        // DISABLE_INITIATION: the Ack still completes the baseline, but the
+        // follow-up is suppressed like any fanout.
+        h.server.comm_state.store(2, Ordering::Release);
+        h.ack().await;
+        h.settle().await;
+        assert_eq!(baseline(&h).await, Some(sample(ACTIVE)), "{family:?}");
+        h.no_notification().await;
+        // Re-enabled: the dropped follow-up does not come back by itself.
+        h.server.comm_state.store(0, Ordering::Release);
+        h.no_notification().await;
+        write(&h, INACTIVE).await;
+        assert_eq!(family.report(&h).await, enumerated(INACTIVE), "{family:?}");
         h.server.stop().await.unwrap();
     }
 }

@@ -49,11 +49,6 @@ impl EventBudget {
         self.notifications_sent >= self.max_notifications || self.bytes_sent >= self.max_bytes
     }
 
-    #[allow(dead_code)]
-    pub(super) fn has_capacity(&self) -> bool {
-        !self.is_exhausted()
-    }
-
     pub(super) fn try_consume(&mut self, bytes: usize) -> bool {
         if self.notifications_sent >= self.max_notifications {
             return false;
@@ -508,7 +503,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     ConfirmedReport {
                         service: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
                         route: sub.clone(),
-                        completions: vec![(sub.clone(), current_observation, completion)],
+                        completion,
+                        observations: vec![(sub.clone(), current_observation)],
                         claim: None,
                     },
                     |invoke_id| {

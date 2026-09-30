@@ -188,9 +188,12 @@ async fn cov_recipient_route_admitted_confirmed_ack_cannot_overwrite_new_generat
             })
         ));
         // Let the worker handle the ACK before shutdown can cancel it.
-        tokio::time::timeout(Duration::from_secs(2), fixture.transactions.join_next())
-            .await
-            .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), fixture.transactions.join_next())
+                .await
+                .unwrap(),
+            Some(Ok(()))
+        ));
         fixture.finish(false).await;
         assert_eq!(
             fixture

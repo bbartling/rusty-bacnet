@@ -153,11 +153,12 @@ pub struct CovSubscriptionSnapshot {
     pub(super) owner: Arc<ObservationOwner>,
     // Zero is the initial marker; issued tickets start at one and never wrap.
     pub(super) last_successful_ticket: u64,
-    // Shared by one live Multiple route incarnation; unchanged on same-route
-    // refresh. Private so callers cannot forge completion authority.
-    pub(super) route_owner: Option<Arc<()>>,
-    // Outstanding confirmed report, shared by this entry's snapshots (#896).
-    pub(super) confirmed_flight: super::confirmed::FlightMarker,
+    // Outstanding confirmed report and hold-off of this entry's coordinate
+    // (#896): the entry itself for ordinary and Single subscriptions, the whole
+    // context for Multiple ones. A Multiple context shares it for one live route
+    // incarnation, so a route change fences old snapshots; a same-route refresh
+    // keeps it. Private so callers cannot forge completion authority.
+    pub(super) flight: super::confirmed::FlightMarker,
     pub(super) subscription: CovSubscription,
     /// Reported maximum notification delay of a Multiple reference; `None`
     /// for ordinary and Single entries. Never acted on.

@@ -184,17 +184,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .clone();
             let (retained, untimed) = {
                 let table = cov_table.read().await;
+                // A confirmed context has at most one outstanding report, and
+                // the next one has to batch everything held meanwhile (#896).
+                // That report's Ack, or the first fanout after a hold-off, sends
+                // it; nothing is drained until then.
+                if !table.context_idle(&context, subscriptions) {
+                    return;
+                }
                 let now = Instant::now();
                 let store = table.timed().clone();
                 let claim = claim.insert(TimedClaim::new(store.clone()));
                 let mut retained = Vec::new();
                 for (sub, prepared) in candidates {
-                    // A reference with an outstanding confirmed report waits for
-                    // it, its queued history included (#896).
                     let Some(remaining) = table
                         .remaining_lifetime(sub, now)
                         .and_then(crate::cov::CovTimeRemaining::wire_seconds)
-                        .filter(|_| table.confirmed_idle(sub))
                     else {
                         continue;
                     };
@@ -254,8 +258,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 // Every notification to a context conveys all of its pending
                 // timestamped changes (§§13.17.1.1, 13.18.1.1), including those
-                // of references on objects that did not change now. Their
-                // captured values need no object read.
+                // of references on objects that did not change now. A confirmed
+                // context starts none while a report is outstanding, so this
+                // holds for it too. Captured values need no object read.
                 let mut untimed = HashSet::new();
                 for other in table.multiple_context_references(&context) {
                     if !other.timestamped {
@@ -272,7 +277,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let Some(remaining) = table
                         .remaining_lifetime(other, now)
                         .and_then(crate::cov::CovTimeRemaining::wire_seconds)
-                        .filter(|_| table.confirmed_idle(other))
                     else {
                         continue;
                     };
@@ -342,7 +346,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ConfirmedReport {
                     service: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
                     route: representative,
-                    completions: last_notified,
+                    // The newest prepared ticket postdates every carried
+                    // reference's baseline, so it completes them all.
+                    completion: last_notified
+                        .iter()
+                        .map(|(_, _, completion)| *completion)
+                        .max_by_key(|completion| completion.ticket())
+                        .expect("a retained reference"),
+                    observations: last_notified
+                        .into_iter()
+                        .map(|(sub, observation, _)| (sub, observation))
+                        .collect(),
                     claim,
                 },
                 |invoke_id| {

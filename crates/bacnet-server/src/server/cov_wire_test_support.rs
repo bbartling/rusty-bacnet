@@ -114,6 +114,9 @@ pub(super) struct Harness {
     pub(super) invoke_id: u8,
     /// Invoke ID and service of the last confirmed notification taken.
     last_confirmed: StdMutex<Option<(u8, ConfirmedServiceChoice)>>,
+    /// Every confirmed notification taken. Invoke IDs rotate, so a byte-equal
+    /// request with the same ID later is a retry, never a new report.
+    taken: StdMutex<Vec<ConfirmedRequestPdu>>,
 }
 
 impl Harness {
@@ -174,6 +177,7 @@ impl Harness {
             fail_notifications,
             invoke_id: 0,
             last_confirmed: StdMutex::new(None),
+            taken: StdMutex::new(Vec::new()),
         }
     }
 
@@ -312,8 +316,14 @@ impl Harness {
             .unwrap();
     }
 
-    /// Wait for the next notification carrying either service choice, leaving
-    /// other frames in place.
+    /// Whether `apdu` retries a confirmed notification already taken.
+    fn is_retry(&self, apdu: &Apdu) -> bool {
+        matches!(apdu, Apdu::ConfirmedRequest(request)
+            if self.taken.lock().unwrap().iter().any(|taken| taken == request))
+    }
+
+    /// Wait for the next new notification carrying either service choice,
+    /// discarding retries of those already taken and leaving other frames.
     async fn next_notification(
         &self,
         confirmed: ConfirmedServiceChoice,
@@ -324,6 +334,7 @@ impl Harness {
             loop {
                 let next = {
                     let mut frames = self.frames.lock().unwrap();
+                    frames.retain(|apdu| !self.is_retry(apdu));
                     let at = frames.iter().position(|apdu| match apdu {
                         Apdu::UnconfirmedRequest(request) => request.service_choice == unconfirmed,
                         Apdu::ConfirmedRequest(request) => request.service_choice == confirmed,
@@ -336,7 +347,9 @@ impl Harness {
                     Some(Apdu::ConfirmedRequest(request)) => {
                         *self.last_confirmed.lock().unwrap() =
                             Some((request.invoke_id, request.service_choice));
-                        return request.service_request;
+                        let body = request.service_request.clone();
+                        self.taken.lock().unwrap().push(request);
+                        return body;
                     }
                     // Sleep rather than spin, so paused-time tests can advance.
                     _ => tokio::time::sleep(Duration::from_millis(1)).await,
@@ -404,10 +417,12 @@ impl Harness {
             .await;
     }
 
+    /// No new notification within 50 ms; retries of taken ones don't count.
     pub(super) async fn no_notification(&self) {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
             !self.frames.lock().unwrap().iter().any(|apdu| match apdu {
+                _ if self.is_retry(apdu) => false,
                 Apdu::UnconfirmedRequest(_) => true,
                 Apdu::ConfirmedRequest(request) => matches!(
                     request.service_choice,

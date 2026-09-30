@@ -183,7 +183,10 @@ async fn take_after_confirmed(fixture: &DispatchFixture, count: usize) -> Vec<Ap
     // fans out again.
     tokio::time::timeout(Duration::from_secs(2), async {
         while !fixture.transactions.workers_empty() {
-            fixture.transactions.join_next().await;
+            assert!(matches!(
+                fixture.transactions.join_next().await,
+                Some(Ok(()))
+            ));
         }
     })
     .await

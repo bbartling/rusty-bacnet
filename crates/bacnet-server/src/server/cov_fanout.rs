@@ -101,10 +101,23 @@ impl<T: TransportPort + 'static> CovFanout<T> {
     /// so changes held back while it was outstanding reach the subscriber
     /// (#896). Runs until the server aborts it.
     pub(super) async fn run_revisits(self) {
+        use futures_util::FutureExt;
         let revisits = Arc::clone(self.cov_table.read().await.revisits());
         loop {
             let keys = revisits.next().await;
-            BACnetServer::<T>::fire_cov_revisits(&self.notify_context(), &keys).await;
+            let ctx = self.notify_context();
+            let batch = BACnetServer::<T>::fire_cov_revisits(&ctx, &keys);
+            // A panic ends only this batch; later acknowledgments still follow up.
+            if std::panic::AssertUnwindSafe(batch)
+                .catch_unwind()
+                .await
+                .is_err()
+            {
+                warn!(
+                    references = keys.len(),
+                    "COV follow-up fanout panicked; those references report on their next fanout"
+                );
+            }
         }
     }
 }

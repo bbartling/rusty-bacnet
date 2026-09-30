@@ -146,6 +146,10 @@ async fn full_history_drops_the_oldest_changes_and_counts_them() {
     h.server.stop().await.unwrap();
 }
 
+/// Hold-off after a failed confirmed report with a 10 ms retry timeout: one
+/// retry cycle, the timeout times the retries.
+const HOLD_OFF: Duration = Duration::from_millis(10 * DEFAULT_APDU_RETRIES as u64);
+
 #[tokio::test(start_paused = true)]
 async fn confirmed_changes_retire_once_acknowledged() {
     let mut h = Harness::start(ServerConfig::default()).await;
@@ -186,10 +190,10 @@ async fn confirmed_changes_unacknowledged_return_for_the_next_report() {
     h.set_clock(45);
     h.write_local(5.0).await;
     h.notification().await;
-    // Transmitted with every retry but never acknowledged.
+    // Transmitted with every retry but never acknowledged; then the context
+    // holds off for one retry cycle (#896).
     h.workers_idle().await;
-    h.settle().await;
-    h.frames.lock().unwrap().clear();
+    tokio::time::sleep(HOLD_OFF).await;
     h.set_clock(46);
     h.write_local(6.0).await;
     assert_eq!(
@@ -214,7 +218,7 @@ async fn confirmed_changes_never_transmitted_return_for_the_next_report() {
     h.set_clock(43);
     h.write_local(3.0).await;
     h.workers_idle().await;
-    h.settle().await;
+    tokio::time::sleep(HOLD_OFF).await;
     h.fail_notifications.store(false, Ordering::Release);
     h.set_clock(44);
     h.write_local(4.0).await;

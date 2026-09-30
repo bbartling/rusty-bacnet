@@ -1972,22 +1972,43 @@ Multiple expiry refresh retains progress; reference replacement resets it.
 Ticket exhaustion suppresses further candidates of either form for that table.
 
 Confirmed reports draw tickets from the same counter but complete only on the
-subscriber's Ack (#896). While a report is outstanding, each reference it carries
-is marked with its ticket and fanouts skip it, so later changes wait instead of
-going out as a second report. The Ack advances each reference's baseline to the
-acknowledged observation, clears the mark and fans the references out again
-through the usual per-subscription path: a change made in the meantime, Status_Flags
-included, follows at once, and an unchanged value sends nothing. Exhausted retries,
-an Error, Reject or Abort answer, and shutdown only clear the mark. The baseline
-stays put, so the next ordinary fanout reports the change again; there is no
-immediate retry against a subscriber that stopped answering. The standard ends
-delivery with the confirmed-request retries (Clause 5.4.4), so reporting again later
-is local policy. The mark is per reference, like the baseline and its ticket. A
-COV-multiple notification marks every reference it carries, and a replaced reference
-or a context moved to a new route starts unmarked, so a report of an older
-generation or route can neither complete nor unmark it. The peer and global
-in-flight limits, event budgets and throttling counters apply to every report,
-including the one that follows an Ack.
+subscriber's Ack (#896). Each coordinate has one outstanding confirmed report: an
+ordinary or SubscribeCOVProperty subscription, or a whole COV-multiple context.
+A context is one coordinate because every notification to it carries all the
+timestamped changes queued for it (Clauses 13.1, 13.16.3.1.2.3, 13.17.1.1.5), so
+one reference's report cannot be outstanding while a sibling's goes out. While a
+report is outstanding the coordinate is marked with its ticket and fanouts skip
+it, so later changes wait instead of going out as a second report. The Ack
+advances each carried reference's baseline to the acknowledged observation,
+clears the mark and fans the coordinate out again through the usual path; for a
+context that covers every live reference, held or carried. A change made in the
+meantime, Status_Flags included, then follows in one notification, and an
+unchanged value sends nothing. Under DCC that follow-up is dropped like any
+fanout rather than deferred, so a held change waits for the coordinate's next
+fanout after communication is re-enabled.
+
+Exhausted retries and an Error, Reject or Abort answer leave the baseline where it
+was and hold the coordinate off for one retry cycle: the retry timeout times the
+number of retries. A fanout inside the hold-off skips the coordinate and schedules
+nothing; the first fanout after it reports the change again. Nothing re-sends by
+itself, so a subscriber that stopped answering, or keeps refusing, costs at most
+one delivery attempt per hold-off however often its objects change, and cannot
+keep the per-peer and global in-flight slots to itself. Shutdown and cancellation
+clear the mark without a hold-off. Each attempt, its transport send included, ends
+within the retry timeout, so a send that never finishes cannot hold a coordinate
+either. The standard ends delivery with the confirmed-request retries
+(Clause 5.4.4); reporting again after a hold-off is local policy.
+
+A replaced ordinary or SubscribeCOVProperty subscription starts unmarked, as does
+a context whose route changes or which is re-subscribed with a non-empty list
+while it is busy. The initial report of a renewal or re-subscription therefore
+goes out at once (Clauses 13.14.2, 13.16.2), even while the old incarnation's
+report is still retrying: that report can no longer complete or unmark the new
+one. When an outstanding context report is fenced this way, the references the
+request kept are fanned out again, since its Ack can no longer do it. The peer and
+global in-flight limits, event budgets and throttling counters apply to every
+report; a follow-up spends one event budget per object or context, as a natural
+fanout does.
 
 This orders prepared observations, not original object mutations, transport byte
 order or remote receipt. In particular, a retained Binary Lighting terminal
@@ -2004,9 +2025,9 @@ fault-detection reliability changes and schedule writes. Changes queue
 per reference until a notification carrying them is delivered: sent, for an
 unconfirmed context, or acknowledged, for a confirmed one (#896). Any notification
 to a context also carries the pending changes of that context's other references
-(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`. The
-exception is a reference whose confirmed report is still outstanding: its newer
-changes stay queued and follow that report's Ack (#896).
+(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`. A
+confirmed context sends nothing while its report is outstanding, so the next
+notification carries everything held meanwhile (#896).
 Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed

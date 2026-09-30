@@ -93,18 +93,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every retry went unanswered or the subscriber answered with an Error. Since
   COV criteria report only actual changes (#889), that change was then never
   re-sent until the value changed again. Now:
-  - Exhausted retries, an Error, Reject or Abort answer, and shutdown leave the
-    baseline alone, so the next fanout reports the change again. There is no
-    immediate retry against a subscriber that stopped answering.
-  - Each subscription, and each COV-multiple reference, has at most one
-    outstanding confirmed report. Changes made while it is outstanding wait.
-  - The Ack re-evaluates the subscription through the usual fanout, so the
-    current value, including Status_Flags, follows at once if it differs from
-    what was acknowledged. An unchanged value sends nothing.
+  - Each subscription, and each whole COV-multiple context, has one outstanding
+    confirmed report. Changes made while it is outstanding wait. A renewal or a
+    re-subscription is the exception: its initial report goes out at once, as
+    the standard requires, even while the old incarnation's report is still
+    retrying, and that old report can no longer complete the new one.
+  - The Ack re-evaluates the subscription or context through the usual fanout,
+    so the current values, including Status_Flags and every timestamped change
+    held meanwhile, follow in one notification if they differ from what was
+    acknowledged. An unchanged value sends nothing. Under DCC this follow-up is
+    dropped like any other fanout.
+  - Exhausted retries and an Error, Reject or Abort answer leave the baseline
+    alone and hold the subscription or context off for one retry cycle (the
+    retry timeout times the retries). Fanouts inside the hold-off send nothing;
+    the first one after it reports the change again. Nothing re-sends by
+    itself, so an unreachable or refusing subscriber costs at most one delivery
+    attempt per hold-off. Shutdown clears the outstanding report without one.
   - Timestamped COV-multiple history retires on the Ack instead of the first
     transmission, and returns to its queue otherwise.
-  - A report for a replaced subscription, or one sent on a route its context has
-    since left, can neither complete the new subscription nor unblock it.
+  - A context that changes route mid-report re-evaluates the references it kept,
+    so a held change reaches the new route.
+  - Each attempt of a confirmed notification, its transport send included, ends
+    within the retry timeout; a send that never finishes can no longer hold the
+    transaction open.
   Peer and global in-flight limits, event budgets and the unconfirmed path are
   unchanged. Re-reporting after the standard's retries end is local policy.
 
