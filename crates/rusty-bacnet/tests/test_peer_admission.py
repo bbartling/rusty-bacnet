@@ -38,11 +38,12 @@ class PeerAdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             async def drained(sock):
                 # Idle counters also occur between two queued requests, so they
-                # alone can't show the burst is over (#883). One source's
-                # requests reach admission in order: once an unconfirmed marker
-                # sent after the burst is counted, every burst request that
-                # arrived was admitted or rejected. UDP may drop a marker while
-                # the server's socket is full, so repeat it until one counts.
+                # alone can't show the burst is over (#883). Loopback delivers
+                # in order and one ingress pipeline carries every source to
+                # admission, so once an unconfirmed marker sent after the burst
+                # is counted, every burst request that arrived was admitted or
+                # rejected. A full socket or ingress queue may drop a marker,
+                # so repeat it until one counts.
                 def markers(counters):
                     return (counters["unconfirmed_admitted_total"]
                             + counters["unconfirmed_overloaded_total"])
@@ -50,7 +51,8 @@ class PeerAdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 seen = markers(await server.request_admission_counters())
                 async with asyncio.timeout(3):
                     while markers(await server.request_admission_counters()) == seen:
-                        await send(sock, b"\x10\x04")  # unsupported service, ignored
+                        # UnconfirmedPrivateTransfer: unsupported here, so ignored.
+                        await send(sock, b"\x10\x04")
                         await asyncio.sleep(0.01)
                 return await quiescent()
 
