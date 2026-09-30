@@ -40,9 +40,11 @@ pub struct AuditNotificationRequest {
 /// continuity, filtering, or the truth of `no_more_items`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuditLogQueryAck {
+    /// Audit Log object whose records were queried.
     pub audit_log: ObjectIdentifier,
     /// Zero or more adjacent record results encoded under context tag `[1]`.
     pub records: Vec<BACnetAuditLogRecordResult>,
+    /// `true` when no records remain beyond those returned; the codec does not verify it.
     pub no_more_items: bool,
 }
 
@@ -83,10 +85,13 @@ impl TryFrom<AuditPropertyReference> for PropertyReference {
 /// AuditLogQuery-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditLogQueryRequest {
+    /// Audit Log object to query.
     pub audit_log: ObjectIdentifier,
+    /// Filter selecting which records to return.
     pub query_parameters: BACnetAuditLogQueryParameters,
     /// Corrected-baseline `Unsigned64` cursor (Errata 2024-04-29 item 8).
     pub start_at_sequence_number: Option<u64>,
+    /// Maximum number of records the requester wants returned.
     pub requested_count: u16,
 }
 
@@ -106,6 +111,7 @@ impl AuditNotificationRequest {
         notification_codec::encode(self, buf)
     }
 
+    /// Encode the request into `buf`; same as `try_encode`.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
     }
@@ -122,6 +128,7 @@ impl AuditLogQueryRequest {
         query_codec::encode(self, buf)
     }
 
+    /// Encode the request into `buf`; same as `try_encode`.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
     }
@@ -138,6 +145,7 @@ impl AuditLogQueryAck {
         query_ack_codec::encode(self, buf)
     }
 
+    /// Encode the ACK into `buf`; same as `try_encode`.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
     }

@@ -38,6 +38,7 @@ pub struct EventNotificationRequest {
 }
 
 impl EventNotificationRequest {
+    /// Append the ASN.1 encoding of the request to `buf`; `buf` is unchanged if validation fails.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         let mut encoded = BytesMut::new();
         self.encode_into(&mut encoded)?;
@@ -89,6 +90,7 @@ impl EventNotificationRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on missing, malformed or truncated fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         validate_tlv_sequence(data, "EventNotification")?;
         // [0] processIdentifier

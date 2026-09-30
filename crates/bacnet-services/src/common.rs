@@ -160,11 +160,14 @@ pub(crate) fn extract_property_value<'a>(
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyReference {
+    /// Property being referred to.
     pub property_identifier: PropertyIdentifier,
+    /// Array element index; `None` refers to the whole property.
     pub property_array_index: Option<u32>,
 }
 
 impl PropertyReference {
+    /// Append the ASN.1 encoding of the reference to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_ctx_unsigned(buf, 0, self.property_identifier.to_raw() as u64);
         if let Some(idx) = self.property_array_index {
@@ -172,6 +175,7 @@ impl PropertyReference {
         }
     }
 
+    /// Decode a reference at `offset` in `data`; returns the value and the offset just past it.
     pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         // [0] propertyIdentifier
         let (prop_id, mut offset) =
@@ -218,13 +222,18 @@ impl PropertyReference {
 /// layer interprets the value based on the property type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetPropertyValue {
+    /// Property being reported.
     pub property_identifier: PropertyIdentifier,
+    /// Array element index; `None` means the whole property.
     pub property_array_index: Option<u32>,
+    /// Property value as encoded BACnet bytes, without the surrounding `[2]` context tags.
     pub value: Vec<u8>,
+    /// Write priority (1-16); `None` when absent.
     pub priority: Option<u8>,
 }
 
 impl BACnetPropertyValue {
+    /// Append the ASN.1 encoding of the value to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] propertyIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.property_identifier.to_raw() as u64);

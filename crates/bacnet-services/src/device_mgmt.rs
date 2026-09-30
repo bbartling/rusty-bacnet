@@ -19,12 +19,16 @@ use bytes::BytesMut;
 /// DeviceCommunicationControl-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceCommunicationControlRequest {
+    /// Minutes the requested state lasts; `None` means until changed by a later request.
     pub time_duration: Option<u16>,
+    /// Requested communication state for the device.
     pub enable_disable: EnableDisable,
+    /// Password the device may require before honoring the request; `None` when not supplied.
     pub password: Option<String>,
 }
 
 impl DeviceCommunicationControlRequest {
+    /// Append the ASN.1 encoding of the request to `buf`; fails if the password is unencodable.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] time-duration (optional)
         if let Some(dur) = self.time_duration {
@@ -39,6 +43,7 @@ impl DeviceCommunicationControlRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on malformed input or an out-of-range duration.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -103,11 +108,14 @@ impl DeviceCommunicationControlRequest {
 /// ReinitializeDevice-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReinitializeDeviceRequest {
+    /// Restart or backup/restore action the device is asked to perform.
     pub reinitialized_state: ReinitializedState,
+    /// Password the device may require before honoring the request; `None` when not supplied.
     pub password: Option<String>,
 }
 
 impl ReinitializeDeviceRequest {
+    /// Append the ASN.1 encoding of the request to `buf`; fails if the password is unencodable.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] reinitialized-state
         primitives::encode_ctx_enumerated(buf, 0, self.reinitialized_state.to_raw());
@@ -118,6 +126,7 @@ impl ReinitializeDeviceRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on missing or malformed fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -175,16 +184,20 @@ impl ReinitializeDeviceRequest {
 /// Used for both TimeSynchronization and UTCTimeSynchronization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeSynchronizationRequest {
+    /// Calendar date to synchronize to.
     pub date: Date,
+    /// Time of day to synchronize to.
     pub time: Time,
 }
 
 impl TimeSynchronizationRequest {
+    /// Append the application-tagged encoding of the date and time to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_date(buf, &self.date);
         primitives::encode_app_time(buf, &self.time);
     }
 
+    /// Decode the request from `data`; errors on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
