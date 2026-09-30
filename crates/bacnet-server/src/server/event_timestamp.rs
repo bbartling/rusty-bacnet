@@ -232,12 +232,19 @@ mod tests {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<RecordingTransport>>,
     ) {
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-            db,
-            network,
-            &Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            &Arc::new(Mutex::new(LearnedRouterCache::new())),
-            &NotificationTransactions::new(),
+        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+            &crate::server::event_delivery::EventDelivery {
+                db,
+                network,
+                comm_state: &Arc::new(std::sync::atomic::AtomicU8::new(0)),
+                learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+                notification_transactions: &NotificationTransactions::new(),
+                device_bindings: &Arc::new(RwLock::new(
+                    crate::server::device_bindings::DeviceBindingTable::new(),
+                )),
+                retry_timeout_ms: 1000,
+                local_apdu_capacity: 1476,
+            },
             &bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             (
                 EventStateChange {
@@ -246,8 +253,6 @@ mod tests {
                 },
                 EventType::OUT_OF_RANGE,
             ),
-            1000,
-            1476,
         )
         .await;
     }

@@ -151,24 +151,28 @@ async fn initial_single_and_multiple_life_safety_payloads_include_one_status_fla
     };
 
     BACnetServer::<RecordingTransport>::fire_initial_cov_notification(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &ServerConfig::default(),
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &fixture.db,
+            network: &fixture.network,
+            cov_table: &fixture.cov_table,
+            cov_in_flight: &fixture.cov_in_flight,
+            notification_transactions: &fixture.transactions,
+            comm_state: &fixture.comm_state,
+            config: &ServerConfig::default(),
+        },
         &single,
     )
     .await;
     BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &ServerConfig::default(),
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &fixture.db,
+            network: &fixture.network,
+            cov_table: &fixture.cov_table,
+            cov_in_flight: &fixture.cov_in_flight,
+            notification_transactions: &fixture.transactions,
+            comm_state: &fixture.comm_state,
+            config: &ServerConfig::default(),
+        },
         &[multiple],
     )
     .await;

@@ -1,18 +1,12 @@
+use super::cov_fanout::CovFanout;
 use super::*;
 use tokio::time::{Instant, MissedTickBehavior};
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
-    db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<T>>,
-    cov_table: Arc<RwLock<CovSubscriptionTable>>,
-    cov_in_flight: Arc<Semaphore>,
-    notification_transactions: Arc<NotificationTransactions>,
-    comm_state: Arc<AtomicU8>,
-    config: ServerConfig,
+    fanout: CovFanout<T>,
     monotonic_origin: Instant,
 ) -> JoinHandle<()> {
-    let owner = notification_transactions.audit_owner_lease();
+    let owner = fanout.notification_transactions.audit_owner_lease();
     tokio::spawn(async move {
         let _owner = owner;
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -30,7 +24,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
             let now = Instant::now().saturating_duration_since(monotonic_origin);
 
             let changed = {
-                let mut database = db.write().await;
+                let mut database = fanout.db.write().await;
                 let mut changed = Vec::new();
                 next_deadline = None;
                 database.for_each_object_mut(|oid, object| {
@@ -46,7 +40,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                 });
                 if !changed.is_empty() {
                     let captures: Vec<_> = {
-                        let table = cov_table.read().await;
+                        let table = fanout.cov_table.read().await;
                         changed
                             .iter()
                             .map(|(oid, _)| table.timed_capture(*oid))
@@ -61,13 +55,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
 
             for (oid, snapshot) in changed {
                 BACnetServer::<T>::fire_cov_notifications_from_snapshot(
-                    &db,
-                    &network,
-                    &cov_table,
-                    &cov_in_flight,
-                    &notification_transactions,
-                    &comm_state,
-                    &config,
+                    &fanout.notify_context(),
                     &oid,
                     snapshot.as_ref(),
                 )

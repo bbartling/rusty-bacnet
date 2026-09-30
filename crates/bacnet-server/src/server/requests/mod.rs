@@ -1,3 +1,4 @@
+use super::cov_notify_context::CovNotifyContext;
 use super::*;
 
 mod acknowledge_alarm;
@@ -155,9 +156,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification_transactions,
             device_bindings,
             comm_state,
-            source_mac,
-            source_network.as_ref(),
-            invoke_id,
+            super::audit_reporter::RequestSource {
+                mac: source_mac,
+                network: source_network.as_ref(),
+                invoke_id,
+            },
         )
         .await;
         let mut read_audits = Vec::new();
@@ -515,16 +518,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Non-LSO callers pass `None` (or an untracked guard whose completion
         // is a no-op); dropping here is intentional.
 
-        Self::execute_staging_plans(
+        let cov_ctx = CovNotifyContext {
             db,
             network,
             cov_table,
             cov_in_flight,
-            learned_routers,
             notification_transactions,
-            device_bindings,
             comm_state,
             config,
+        };
+        Self::execute_staging_plans(
+            &crate::server::event_delivery::EventDelivery {
+                db,
+                network,
+                comm_state,
+                learned_routers,
+                notification_transactions,
+                device_bindings,
+                retry_timeout_ms: config.cov_retry_timeout_ms,
+                local_apdu_capacity: config.max_apdu_length,
+            },
+            &cov_ctx,
             staging_plans,
         )
         .await;
@@ -597,13 +611,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await;
                 }
                 Self::fire_post_write_cov_notifications(
-                    db,
-                    network,
-                    cov_table,
-                    cov_in_flight,
-                    notification_transactions,
-                    comm_state,
-                    config,
+                    &cov_ctx,
                     &coarse_cov_oids,
                     &life_safety_cov_changes,
                 )
@@ -611,30 +619,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 for notification in &initial_cov_notifications {
                     match notification {
                         InitialCovNotification::Single(subscription) => {
-                            Self::fire_initial_cov_notification(
-                                db,
-                                network,
-                                cov_table,
-                                cov_in_flight,
-                                notification_transactions,
-                                comm_state,
-                                config,
-                                subscription,
-                            )
-                            .await;
+                            Self::fire_initial_cov_notification(&cov_ctx, subscription).await;
                         }
                         InitialCovNotification::Multiple(subscriptions) => {
-                            Self::fire_initial_cov_notification_multiple(
-                                db,
-                                network,
-                                cov_table,
-                                cov_in_flight,
-                                notification_transactions,
-                                comm_state,
-                                config,
-                                subscriptions,
-                            )
-                            .await;
+                            Self::fire_initial_cov_notification_multiple(&cov_ctx, subscriptions)
+                                .await;
                         }
                     }
                 }
@@ -693,13 +682,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         Self::fire_post_write_cov_notifications(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
+            &cov_ctx,
             &coarse_cov_oids,
             &life_safety_cov_changes,
         )
@@ -708,30 +691,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         for notification in &initial_cov_notifications {
             match notification {
                 InitialCovNotification::Single(subscription) => {
-                    Self::fire_initial_cov_notification(
-                        db,
-                        network,
-                        cov_table,
-                        cov_in_flight,
-                        notification_transactions,
-                        comm_state,
-                        config,
-                        subscription,
-                    )
-                    .await;
+                    Self::fire_initial_cov_notification(&cov_ctx, subscription).await;
                 }
                 InitialCovNotification::Multiple(subscriptions) => {
-                    Self::fire_initial_cov_notification_multiple(
-                        db,
-                        network,
-                        cov_table,
-                        cov_in_flight,
-                        notification_transactions,
-                        comm_state,
-                        config,
-                        subscriptions,
-                    )
-                    .await;
+                    Self::fire_initial_cov_notification_multiple(&cov_ctx, subscriptions).await;
                 }
             }
         }

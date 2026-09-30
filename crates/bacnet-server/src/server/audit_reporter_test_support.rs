@@ -264,7 +264,6 @@ async fn try_servers_profile(
     )
     .await
 }
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn try_servers_config(
     reporters: Vec<AuditReporterObject>,
     devices: &[u32],

@@ -171,13 +171,15 @@ async fn fire_cov(server: &BACnetServer<HeldTransport>, kind: CovNotificationKin
         )
         .unwrap();
     BACnetServer::<HeldTransport>::fire_cov_notifications(
-        &server.db,
-        server.test_network(),
-        &server.cov_table,
-        &server.cov_in_flight,
-        &server.notification_transactions,
-        &server.comm_state,
-        &server.config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &server.db,
+            network: server.test_network(),
+            cov_table: &server.cov_table,
+            cov_in_flight: &server.cov_in_flight,
+            notification_transactions: &server.notification_transactions,
+            comm_state: &server.comm_state,
+            config: &server.config,
+        },
         &oid,
     )
     .await;

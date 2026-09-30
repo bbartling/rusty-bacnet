@@ -129,13 +129,15 @@ async fn in_flight_failure_does_not_consume_event_budget() {
     ))));
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &cov_in_flight,
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &cov_in_flight,
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &config,
+        },
         &ao_oid,
     )
     .await;
@@ -218,13 +220,15 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
     ))));
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &cov_in_flight,
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &cov_in_flight,
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &config,
+        },
         &ao_oid,
     )
     .await;
@@ -484,13 +488,15 @@ async fn unlimited_policy_half_cap_computation_does_not_overflow() {
     // The previous computation `(remaining_notifications + 1) / 2` panicked on overflow.
     // This must complete without panicking and dispatch both families.
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &cov_in_flight,
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &cov_in_flight,
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &config,
+        },
         &ao_oid,
     )
     .await;
@@ -595,13 +601,15 @@ async fn life_safety_fair_budget_partitioning_between_single_and_multiple() {
     ))));
 
     BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &cov_in_flight,
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &cov_in_flight,
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &config,
+        },
         &point_oid,
         &[PropertyIdentifier::PRESENT_VALUE],
     )

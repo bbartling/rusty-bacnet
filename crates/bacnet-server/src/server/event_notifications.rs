@@ -204,38 +204,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// seeds a pending transition (returning `None`, so no notification is
     /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
     /// advances the countdown and sends the notification on expiry.
-    // Test-only convenience wrapper over `fire_event_notifications_with_bindings`
-    // that supplies default COV and binding tables; a struct would only rename
-    // the arguments the test call sites already pass.
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
-    pub(super) async fn fire_event_notifications(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        oid: &ObjectIdentifier,
-        retry_timeout_ms: u64,
-        local_apdu_capacity: u32,
-    ) {
-        Self::fire_event_notifications_with_bindings(
-            &EventDelivery {
-                db,
-                network,
-                comm_state,
-                learned_routers,
-                notification_transactions,
-                device_bindings: &Arc::new(RwLock::new(DeviceBindingTable::new())),
-                retry_timeout_ms,
-                local_apdu_capacity,
-            },
-            &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-            oid,
-        )
-        .await;
-    }
-
     pub(super) async fn fire_event_notifications_with_bindings(
         ctx: &EventDelivery<'_, T>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
@@ -275,39 +243,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
-    // Test-only convenience wrapper over `build_and_send_event_notification_with_bindings`
-    // that supplies a default binding table; a struct would only rename the
-    // arguments the test call sites already pass.
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
-    pub(super) async fn build_and_send_event_notification(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        oid: &ObjectIdentifier,
-        transition: impl Into<NotificationTransition>,
-        retry_timeout_ms: u64,
-        local_apdu_capacity: u32,
-    ) {
-        Self::build_and_send_event_notification_with_bindings(
-            &EventDelivery {
-                db,
-                network,
-                comm_state,
-                learned_routers,
-                notification_transactions,
-                device_bindings: &Arc::new(RwLock::new(DeviceBindingTable::new())),
-                retry_timeout_ms,
-                local_apdu_capacity,
-            },
-            oid,
-            transition,
-        )
-        .await;
-    }
-
     pub(super) async fn build_and_send_event_notification_with_bindings(
         ctx: &EventDelivery<'_, T>,
         oid: &ObjectIdentifier,

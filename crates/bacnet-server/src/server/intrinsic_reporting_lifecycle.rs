@@ -2,16 +2,10 @@
 use super::super::cov_fanout::CovFanout;
 use super::*;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn run<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
-    network_intrinsic: Arc<NetworkLayer<T>>,
-    comm_state_intrinsic: Arc<AtomicU8>,
-    learned_routers_intrinsic: Arc<Mutex<LearnedRouterCache>>,
-    notification_transactions_intrinsic: Arc<NotificationTransactions>,
-    device_bindings_intrinsic: Arc<RwLock<DeviceBindingTable>>,
-    intrinsic_retry_ms: u64,
-    intrinsic_apdu_capacity: u32,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     // The countdown decrements exactly once per call, so a delayed wake
@@ -63,16 +57,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         };
         for (oid, resolved) in fired {
             BACnetServer::<T>::build_and_send_event_notification_with_bindings(
-                &EventDelivery {
-                    db: &fanout.db,
-                    network: &network_intrinsic,
-                    comm_state: &comm_state_intrinsic,
-                    learned_routers: &learned_routers_intrinsic,
-                    notification_transactions: &notification_transactions_intrinsic,
-                    device_bindings: &device_bindings_intrinsic,
-                    retry_timeout_ms: intrinsic_retry_ms,
-                    local_apdu_capacity: intrinsic_apdu_capacity,
-                },
+                &fanout.event_delivery(&learned_routers, &device_bindings),
                 &oid,
                 resolved,
             )

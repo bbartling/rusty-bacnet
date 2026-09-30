@@ -124,9 +124,11 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
         &fixture.server.notification_transactions,
         &fixture.server.device_bindings,
         &fixture.server.comm_state,
-        SOURCE,
-        None,
-        77,
+        audit_reporter::RequestSource {
+            mac: SOURCE,
+            network: None,
+            invoke_id: 77,
+        },
     )
     .await;
     let accepted = vec![0; 32];

@@ -204,6 +204,15 @@ fn recipient(db: &ObjectDatabase, device: ObjectIdentifier) -> Option<BACnetReci
         .map(|(value, _)| value)
 }
 
+/// Where a confirmed request came from: the peer's link address, its network
+/// address when routed, and the request's invoke ID.
+#[derive(Clone, Copy)]
+pub(super) struct RequestSource<'s> {
+    pub(super) mac: &'s [u8],
+    pub(super) network: Option<&'s NpduAddress>,
+    pub(super) invoke_id: u8,
+}
+
 pub(super) struct WriteAudit<'a, T: TransportPort> {
     config: &'a ServerConfig,
     network: &'a Arc<NetworkLayer<T>>,
@@ -251,17 +260,19 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn new(
         config: &'a ServerConfig,
         network: &'a Arc<NetworkLayer<T>>,
         transactions: &'a Arc<NotificationTransactions>,
         bindings: &Arc<RwLock<DeviceBindingTable>>,
         comm_state: &'a Arc<AtomicU8>,
-        source_mac: &[u8],
-        source_network: Option<&NpduAddress>,
-        invoke_id: u8,
+        request: RequestSource<'_>,
     ) -> Self {
+        let RequestSource {
+            mac: source_mac,
+            network: source_network,
+            invoke_id,
+        } = request;
         // Entries were checked against the concrete link at configuration or
         // observation admission. Correlation needs no caller code under locks.
         let known_source = if config.audit_reporters.is_some() {

@@ -57,25 +57,29 @@ impl BACnetObject for ReadProbe {
 async fn fire(fixture: &DispatchFixture, initial: bool, snapshots: &[CovSubscriptionSnapshot]) {
     if initial {
         BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
-            &fixture.db,
-            &fixture.network,
-            &fixture.cov_table,
-            &fixture.cov_in_flight,
-            &fixture.transactions,
-            &fixture.comm_state,
-            &fixture.config,
+            &crate::server::cov_notify_context::CovNotifyContext {
+                db: &fixture.db,
+                network: &fixture.network,
+                cov_table: &fixture.cov_table,
+                cov_in_flight: &fixture.cov_in_flight,
+                notification_transactions: &fixture.transactions,
+                comm_state: &fixture.comm_state,
+                config: &fixture.config,
+            },
             snapshots,
         )
         .await;
     } else {
         BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
-            &fixture.db,
-            &fixture.network,
-            &fixture.cov_table,
-            &fixture.cov_in_flight,
-            &fixture.transactions,
-            &fixture.comm_state,
-            &fixture.config,
+            &crate::server::cov_notify_context::CovNotifyContext {
+                db: &fixture.db,
+                network: &fixture.network,
+                cov_table: &fixture.cov_table,
+                cov_in_flight: &fixture.cov_in_flight,
+                notification_transactions: &fixture.transactions,
+                comm_state: &fixture.comm_state,
+                config: &fixture.config,
+            },
             &point_oid(),
             &[PropertyIdentifier::STATUS_FLAGS],
         )

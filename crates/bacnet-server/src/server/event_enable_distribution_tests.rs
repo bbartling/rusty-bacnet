@@ -217,15 +217,21 @@ impl Fixture {
             )
             .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
 
-        BACnetServer::<RecordingTransport>::fire_event_notifications(
-            &self.db,
-            &self.network,
-            &self.comm_state,
-            &self.learned_routers,
-            &self.notification_transactions,
+        BACnetServer::<RecordingTransport>::fire_event_notifications_with_bindings(
+            &crate::server::event_delivery::EventDelivery {
+                db: &self.db,
+                network: &self.network,
+                comm_state: &self.comm_state,
+                learned_routers: &self.learned_routers,
+                notification_transactions: &self.notification_transactions,
+                device_bindings: &Arc::new(RwLock::new(
+                    crate::server::device_bindings::DeviceBindingTable::new(),
+                )),
+                retry_timeout_ms: 1000,
+                local_apdu_capacity: 1476,
+            },
+            &Arc::new(RwLock::new(crate::cov::CovSubscriptionTable::new())),
             &self.oid,
-            1000,
-            1476,
         )
         .await;
     }

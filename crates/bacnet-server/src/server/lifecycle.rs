@@ -718,36 +718,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
-        let network_intrinsic = Arc::clone(&network);
-        let comm_state_intrinsic = Arc::clone(&comm_state);
-        let learned_routers_intrinsic = Arc::clone(&learned_routers);
-        let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
-        let device_bindings_intrinsic = Arc::clone(&device_bindings);
-        let intrinsic_retry_ms = config.cov_retry_timeout_ms;
-        let intrinsic_apdu_capacity = config.max_apdu_length;
         let intrinsic_reporting_task = Some(spawn_owned(
             audit_owner.clone(),
             intrinsic::run(
-                cov_fanout,
-                network_intrinsic,
-                comm_state_intrinsic,
-                learned_routers_intrinsic,
-                notification_transactions_intrinsic,
-                device_bindings_intrinsic,
-                intrinsic_retry_ms,
-                intrinsic_apdu_capacity,
+                cov_fanout.clone(),
+                Arc::clone(&learned_routers),
+                Arc::clone(&device_bindings),
             ),
         ));
 
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
-                Arc::clone(&db),
-                Arc::clone(&network),
-                Arc::clone(&cov_table),
-                Arc::clone(&cov_in_flight),
-                Arc::clone(&notification_transactions),
-                Arc::clone(&comm_state),
-                config.clone(),
+                cov_fanout,
                 monotonic_origin,
             ),
         );

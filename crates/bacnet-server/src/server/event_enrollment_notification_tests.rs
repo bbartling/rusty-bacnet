@@ -321,19 +321,24 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
     }
 
     let sent = StdArc::new(StdMutex::new(Vec::new()));
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &Arc::new(NetworkLayer::new(RecordingTransport {
-            sent: StdArc::clone(&sent),
-            lock_probe: StdArc::default(),
-        })),
-        &Arc::new(AtomicU8::new(0)),
-        &Arc::new(Mutex::new(LearnedRouterCache::new())),
-        &NotificationTransactions::new(),
+    BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+        &crate::server::event_delivery::EventDelivery {
+            db: &db,
+            network: &Arc::new(NetworkLayer::new(RecordingTransport {
+                sent: StdArc::clone(&sent),
+                lock_probe: StdArc::default(),
+            })),
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+            notification_transactions: &NotificationTransactions::new(),
+            device_bindings: &Arc::new(RwLock::new(
+                crate::server::device_bindings::DeviceBindingTable::new(),
+            )),
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &enrollment_oid,
         transition,
-        1000,
-        1476,
     )
     .await;
 

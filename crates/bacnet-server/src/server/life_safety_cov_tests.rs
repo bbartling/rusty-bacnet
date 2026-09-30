@@ -106,13 +106,15 @@ impl ExactFixture {
 
     async fn fire(&self, changes: &[PropertyIdentifier]) {
         BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.transactions,
-            &self.comm_state,
-            &ServerConfig::default(),
+            &crate::server::cov_notify_context::CovNotifyContext {
+                db: &self.db,
+                network: &self.network,
+                cov_table: &self.cov_table,
+                cov_in_flight: &self.cov_in_flight,
+                notification_transactions: &self.transactions,
+                comm_state: &self.comm_state,
+                config: &ServerConfig::default(),
+            },
             &point_oid(),
             changes,
         )

@@ -1,4 +1,6 @@
 //! The COV fanout a background commit owes, sent after its guard is dropped.
+use super::cov_notify_context::CovNotifyContext;
+use super::event_delivery::EventDelivery;
 use super::*;
 use crate::committed_cov::CommittedCov;
 
@@ -10,7 +12,7 @@ pub(super) struct CovFanout<T: TransportPort + 'static> {
     pub(super) cov_table: Arc<RwLock<CovSubscriptionTable>>,
     network: Arc<NetworkLayer<T>>,
     cov_in_flight: Arc<Semaphore>,
-    notification_transactions: Arc<NotificationTransactions>,
+    pub(super) notification_transactions: Arc<NotificationTransactions>,
     comm_state: Arc<AtomicU8>,
     config: Arc<ServerConfig>,
 }
@@ -50,18 +52,44 @@ impl<T: TransportPort + 'static> CovFanout<T> {
         }
     }
 
+    /// Borrow the handles a COV notification pass reads.
+    pub(super) fn notify_context(&self) -> CovNotifyContext<'_, T> {
+        CovNotifyContext {
+            db: &self.db,
+            network: &self.network,
+            cov_table: &self.cov_table,
+            cov_in_flight: &self.cov_in_flight,
+            notification_transactions: &self.notification_transactions,
+            comm_state: &self.comm_state,
+            config: &self.config,
+        }
+    }
+
+    /// Borrow the handles an EventNotification send reads. The retry timeout
+    /// and APDU capacity come from the server config.
+    pub(super) fn event_delivery<'a>(
+        &'a self,
+        learned_routers: &'a Arc<Mutex<LearnedRouterCache>>,
+        device_bindings: &'a Arc<RwLock<DeviceBindingTable>>,
+    ) -> EventDelivery<'a, T> {
+        EventDelivery {
+            db: &self.db,
+            network: &self.network,
+            comm_state: &self.comm_state,
+            learned_routers,
+            notification_transactions: &self.notification_transactions,
+            device_bindings,
+            retry_timeout_ms: self.config.cov_retry_timeout_ms,
+            local_apdu_capacity: self.config.max_apdu_length,
+        }
+    }
+
     pub(super) async fn fire(&self, committed: &CommittedCov) {
         if committed.is_empty() {
             return;
         }
         BACnetServer::<T>::fire_post_write_cov_notifications(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.notification_transactions,
-            &self.comm_state,
-            &self.config,
+            &self.notify_context(),
             &committed.coarse,
             &committed.life_safety,
         )

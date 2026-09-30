@@ -321,13 +321,15 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     }
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &NotificationTransactions::new(),
-        &Arc::new(AtomicU8::new(0)),
-        &ServerConfig::default(),
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &NotificationTransactions::new(),
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &ServerConfig::default(),
+        },
         &ao_oid,
     )
     .await;
@@ -454,13 +456,15 @@ async fn capture_timestamped_cov_multiple(
     }
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &NotificationTransactions::new(),
-        &Arc::new(AtomicU8::new(0)),
-        &ServerConfig::default(),
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &NotificationTransactions::new(),
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &ServerConfig::default(),
+        },
         &ao_oid,
     )
     .await;
@@ -573,13 +577,15 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
     };
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(AtomicU8::new(0)),
+            config: &config,
+        },
         &ao_oid,
     )
     .await;
