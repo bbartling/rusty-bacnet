@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destination, expecting-reply flag, priority), the route and the issuance
   callback (#902).
 
+- CI builds the Python bindings with maturin and runs their unittest suite on
+  every PR, so a binding break no longer waits for a local run or a release.
+  Cargo Deny now checks the bindings' dependencies as well, and the
+  `rusty-bacnet` crate declares its MIT licence in `Cargo.toml` (#903).
+
 - Every public item is documented, and `missing_docs` is now `deny`
   (`bacnet-benchmarks`, which isn't published, opts out). CI treats clippy and
   rustdoc warnings as errors, and checks three ways: the workspace with every

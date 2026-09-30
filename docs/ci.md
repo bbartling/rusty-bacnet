@@ -13,6 +13,7 @@
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ |
+| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` | ✓ | ✓ | ✓ |
 | MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) | | ✓ | ✓ |
 | Cargo Audit + Cargo Deny | | ✓ | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ |
@@ -40,6 +41,11 @@ cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
 cargo nextest run -p bacnet-cli --locked --profile ci
 ```
+
+The Python job builds the PyO3 extension in debug mode into a fresh venv with
+the CI image's Python (3.12) and runs the unittest suite. The SC tests generate
+certificates with the `openssl` CLI. Cargo Deny covers the bindings'
+dependencies too; only `bacnet-benchmarks` is excluded.
 
 Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
 mark unrelated passing tests as leaky (#751), and the configuration warns
