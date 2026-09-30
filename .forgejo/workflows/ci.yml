@@ -151,6 +151,9 @@ jobs:
         with:
           key: python
           cache-bin: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
       # A debug extension builds faster, and the suite doesn't need release speed.
       - name: Build the extension (maturin develop)
         run: |
@@ -158,11 +161,16 @@ jobs:
           . /tmp/venv/bin/activate
           pip install --quiet --disable-pip-version-check "maturin==$MATURIN_VERSION"
           python --version
-          cd crates/rusty-bacnet && maturin develop --locked
+          maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
       - name: Python tests
         run: |
           . /tmp/venv/bin/activate
           python -m unittest discover -s crates/rusty-bacnet/tests
+      # The crate's Rust integration tests. Its lib unit tests can't link while
+      # the workspace forces pyo3's extension-module feature (#919).
+      - name: Rust integration tests
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p rusty-bacnet --test endpoint_lifecycle --locked --profile ci
 
   msrv:
     name: MSRV (Linux native)

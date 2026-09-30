@@ -34,8 +34,10 @@ class HubProbePolicyTests(mtls.MtlsFixture):
         return endpoint
 
     async def test_configured_probe_emits_ack_refreshes_then_wrong_ack_expires(self):
+        # The ack age must cover Python reading the probe and answering it; 80 ms
+        # was too tight for a debug extension on a shared CI runner (#918).
         hub = await self.start(probe_scan_interval_ms=20, probe_idle_age_ms=50,
-                               probe_ack_age_ms=80, probe_send_budget_ms=40,
+                               probe_ack_age_ms=400, probe_send_budget_ms=40,
                                relay_send_budget_ms=30)
         endpoint = await self.register(hub, 0x42)
         # These observed probes arrive within one second; the default first idle
@@ -48,7 +50,8 @@ class HubProbePolicyTests(mtls.MtlsFixture):
         self.assertNotEqual(second[2:4], first[2:4])
         wrong = ((int.from_bytes(second[2:4], "big") + 1) % 65536).to_bytes(2, "big")
         await self.send(endpoint[1], b"\x0b\0" + wrong)
-        header = await asyncio.wait_for(endpoint[0].readexactly(2), 1)
+        # Expiry lands one scan after the 400 ms ack age.
+        header = await asyncio.wait_for(endpoint[0].readexactly(2), 2)
         self.assertEqual(header[0], 0x88)
         self.assertEqual((await hub.status())["client_count"], 0)
         await self.stop_hub(hub)
