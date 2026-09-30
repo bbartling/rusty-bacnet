@@ -231,12 +231,16 @@ fn decode_rejects_out_of_range_numbers() {
     };
     // Positive control: the same scaffold with in-range values decodes.
     WriteGroupRequest::decode(&build(&[0x09, 0x01], &[0x19, 0x08], &entry)).unwrap();
-    // Group number above u32.
-    assert_decoding_error(&build(
-        &[0x0D, 0x01, 0x00, 0x00, 0x00, 0x01],
+    // Group number above u32: a canonical five-octet Unsigned of 2^32, so the group check is
+    // the first failure.
+    let err = WriteGroupRequest::decode(&build(
+        &[0x0D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
         &[0x19, 0x08],
         &entry,
-    ));
+    ))
+    .unwrap_err();
+    assert!(matches!(err, Error::Decoding { .. }), "{err:?}");
+    assert!(err.to_string().contains("group number"), "{err}");
     // Write priority 0, 17 and 257.
     for priority in [&[0x19, 0x00][..], &[0x19, 0x11], &[0x1A, 0x01, 0x01]] {
         assert_decoding_error(&build(&[0x09, 0x01], priority, &entry));
@@ -384,7 +388,114 @@ fn encode_rejects_values_that_are_not_one_channel_value() {
     }
 }
 
+// --- channel values in other forms ---------------------------------------
+
+/// Channel 5 carrying `value`, inside an otherwise valid request.
+fn wire_with_value(value: &[u8]) -> Vec<u8> {
+    let mut data = vec![0x09, 0x01, 0x19, 0x08, 0x2E, 0x09, 0x05];
+    data.extend_from_slice(value);
+    data.push(0x2F);
+    data
+}
+
 #[test]
-fn group_zero_is_unrepresentable() {
-    assert!(NonZeroU32::new(0).is_none());
+fn character_string_values_in_other_charsets_round_trip() {
+    let values: [&[u8]; 4] = [
+        // DBCS (charset 1) with a two-octet code page, JIS X 0208 (2), UCS-4 (3) and UCS-2 (4),
+        // the last two holding U+0041.
+        &[0x74, 0x01, 0x03, 0xA8, 0x41],
+        &[0x73, 0x02, 0x30, 0x21],
+        &[0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41],
+        &[0x73, 0x04, 0x00, 0x41],
+    ];
+    for value in values {
+        let req = single(5, value.to_vec());
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf)
+            .unwrap_or_else(|e| panic!("{value:02X?}: {e}"));
+        assert_eq!(WriteGroupRequest::decode(&buf).unwrap(), req);
+        assert!(WriteGroupRequest::decode(&wire_with_value(value)).is_ok());
+    }
+}
+
+#[test]
+fn truncated_application_value_is_rejected_by_decode_and_encode() {
+    // A REAL that stops after two content octets inside the list.
+    let data = wire_with_value(&[0x44, 0x42, 0x90]);
+    assert_decoding_error(&data);
+    // A CharacterString claiming more octets than remain, and a UCS-4 string with 3 payload octets.
+    assert_decoding_error(&wire_with_value(&[0x75, 0x09, 0x03, 0x00, 0x00]));
+    assert_decoding_error(&wire_with_value(&[0x74, 0x03, 0x00, 0x00, 0x41]));
+    assert_encode_error(&single(5, vec![0x44, 0x42, 0x90]));
+    assert_encode_error(&single(5, vec![0x74, 0x03, 0x00, 0x00, 0x41]));
+}
+
+#[test]
+fn invalid_value_error_points_at_the_value() {
+    let data = wire_with_value(&[0x74, 0x03, 0x00, 0x00, 0x41]);
+    match WriteGroupRequest::decode(&data) {
+        Err(Error::Decoding { offset, .. }) => assert!(offset >= 7, "offset {offset}"),
+        other => panic!("expected a decoding error, got {other:?}"),
+    }
+}
+
+// --- lighting command structure -------------------------------------------
+
+/// Wrap lighting-command fields in context tag 0.
+fn lighting(fields: &[u8]) -> Vec<u8> {
+    let mut value = vec![0x0E];
+    value.extend_from_slice(fields);
+    value.push(0x0F);
+    value
+}
+
+#[test]
+fn lighting_command_with_every_field_round_trips() {
+    // operation 1, target-level 50.0, ramp-rate 2.0, step-increment 1.0, fade-time 1000,
+    // priority 8.
+    let fields = [
+        0x09, 0x01, 0x1C, 0x42, 0x48, 0x00, 0x00, 0x2C, 0x40, 0x00, 0x00, 0x00, 0x3C, 0x3F, 0x80,
+        0x00, 0x00, 0x4A, 0x03, 0xE8, 0x59, 0x08,
+    ];
+    let req = single(5, lighting(&fields));
+    assert_eq!(WriteGroupRequest::decode(&encode(&req)).unwrap(), req);
+    // Fields may be skipped as long as their numbers increase.
+    let req = single(5, lighting(&[0x09, 0x03, 0x59, 0x10]));
+    assert_eq!(WriteGroupRequest::decode(&encode(&req)).unwrap(), req);
+}
+
+#[test]
+fn lighting_command_rejects_malformed_structure() {
+    let bad: [&[u8]; 10] = [
+        // Out of order, and a repeated field.
+        &[
+            0x09, 0x01, 0x2C, 0x40, 0x00, 0x00, 0x00, 0x1C, 0x42, 0x48, 0x00, 0x00,
+        ],
+        &[
+            0x09, 0x01, 0x1C, 0x42, 0x48, 0x00, 0x00, 0x1C, 0x42, 0x48, 0x00, 0x00,
+        ],
+        // A nested opening tag and a nested constructed element.
+        &[0x09, 0x01, 0x1E, 0x1F],
+        &[0x09, 0x01, 0x3E, 0x09, 0x01, 0x3F],
+        // Application-tagged element between context fields.
+        &[0x09, 0x01, 0x21, 0x01],
+        // REAL with the wrong length.
+        &[0x09, 0x01, 0x1B, 0x42, 0x48, 0x00],
+        &[0x09, 0x01, 0x1D, 0x05, 0x42, 0x48, 0x00, 0x00, 0x00],
+        // Field number above 5, empty Unsigned, and five-octet Unsigned.
+        &[0x09, 0x01, 0x69, 0x00],
+        &[0x08],
+        &[0x09, 0x01, 0x5D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+    ];
+    for fields in bad {
+        let value = lighting(fields);
+        assert_encode_error(&single(5, value.clone()));
+        assert_decoding_error(&wire_with_value(&value));
+    }
+    // Priority outside 1-16 inside a lighting command.
+    for priority in [0x00, 0x11] {
+        let value = lighting(&[0x09, 0x01, 0x59, priority]);
+        assert_encode_error(&single(5, value.clone()));
+        assert_decoding_error(&wire_with_value(&value));
+    }
 }

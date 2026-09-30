@@ -1084,7 +1084,8 @@ Write values to the Channel objects of a control group (unconfirmed).
     application-tagged primitive, or a context-0 lighting command.
 - `inhibit_delay`: optional Boolean.
 
-A value outside those rules raises `ValueError` before anything is sent.
+A value outside those rules raises `ValueError`, or `OverflowError` for integers that
+don't fit, before anything is sent.
 
 ```python
 await client.write_group(
@@ -1123,7 +1124,8 @@ remote_id = await client.vt_open(
 #### `vt_close(address, session_ids)`
 
 Close one or more virtual terminal sessions. `session_ids` must contain at
-least one identifier; an empty list raises `ValueError`.
+least one identifier, each 0 to 255; an empty list raises `ValueError`, or
+`OverflowError` for an integer that doesn't fit, before anything is sent.
 
 ```python
 await client.vt_close("192.168.1.100:47808", session_ids=[1, 2])
@@ -1338,7 +1340,8 @@ authorization, producer behavior, forwarding, or new durable idempotency semanti
 Broadcast a Who-Am-I request announcing this device's identity so that a
 configuration tool can answer with You-Are. The three arguments are mandatory
 and should match the Vendor_Identifier, Model_Name and Serial_Number properties
-of the sending Device object. `vendor_id` is 0 to 65535.
+of the sending Device object. `vendor_id` is 0 to 65535 (`OverflowError` for an
+integer that doesn't fit); a string that cannot be encoded raises `ValueError`.
 
 ```python
 await client.who_am_i(260, "Controller-X", "SN-0001")

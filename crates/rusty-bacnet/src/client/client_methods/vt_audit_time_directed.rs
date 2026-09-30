@@ -46,8 +46,9 @@ impl BACnetClient {
 
     /// Close one or more virtual terminal sessions.
     ///
-    /// `session_ids` must hold at least one identifier; an empty list raises
-    /// `ValueError`.
+    /// `session_ids` must hold at least one identifier, each 0-255. An empty list raises
+    /// `ValueError`, or `OverflowError` for an integer that doesn't fit, before anything is
+    /// sent.
     #[pyo3(signature = (address, session_ids))]
     fn vt_close<'py>(
         &self,
@@ -55,6 +56,13 @@ impl BACnetClient {
         address: String,
         session_ids: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let req = VTCloseRequest {
+            list_of_remote_vt_session_identifiers: session_ids,
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+
         let inner = self.inner.clone();
         let future = async move {
             let mac = parse_address(&address)?;
@@ -64,12 +72,6 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = VTCloseRequest {
-                list_of_remote_vt_session_identifiers: session_ids,
-            };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?;
             c.confirmed_request(&mac, ConfirmedServiceChoice::VT_CLOSE, &buf)
                 .await
                 .map_err(to_py_err)?;

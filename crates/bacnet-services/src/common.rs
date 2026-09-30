@@ -36,6 +36,34 @@ pub(crate) fn decode_context<'a>(
     Ok((&data[pos..end], end))
 }
 
+/// Read the content octets of the application-tagged primitive `expected_tag` at `offset`,
+/// returning them with the offset just past the element. `field` names the element in errors.
+pub(crate) fn decode_application<'a>(
+    data: &'a [u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(&'a [u8], usize), Error> {
+    let (tag, pos) = tags::decode_tag(data, offset)?;
+    if tag.class != tags::TagClass::Application
+        || tag.is_opening
+        || tag.is_closing
+        || tag.number != expected_tag
+    {
+        return Err(Error::decoding(
+            offset,
+            format!("{field} expected application tag {expected_tag}"),
+        ));
+    }
+    let end = pos
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
+    if end > data.len() {
+        return Err(Error::decoding(pos, format!("{field} truncated")));
+    }
+    Ok((&data[pos..end], end))
+}
+
 pub(crate) fn decode_context_u32(
     data: &[u8],
     offset: usize,

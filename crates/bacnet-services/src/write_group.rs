@@ -10,7 +10,7 @@ use bacnet_encoding::tags::{self, TagClass};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use crate::common::MAX_DECODED_ITEMS;
+use crate::common::{decode_context, decode_context_bool, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -19,68 +19,131 @@ use crate::common::MAX_DECODED_ITEMS;
 /// Range of a write priority or overriding priority (Clauses 15.11.1.1.2 and 21.6).
 const PRIORITY_RANGE: core::ops::RangeInclusive<u64> = 1..=16;
 
+fn priority_message(field: &str, value: u64) -> String {
+    format!("WriteGroup {field} {value} out of range 1-16")
+}
+
 fn check_priority(field: &str, value: u64) -> Result<u8, Error> {
     if PRIORITY_RANGE.contains(&value) {
         Ok(value as u8)
     } else {
-        Err(Error::Encoding(format!(
-            "WriteGroup {field} {value} out of range 1-16"
-        )))
+        Err(Error::Encoding(priority_message(field, value)))
     }
 }
 
 fn decode_priority(field: &str, offset: usize, value: u64) -> Result<u8, Error> {
-    check_priority(field, value).map_err(|_| {
-        Error::decoding(
-            offset,
-            format!("WriteGroup {field} {value} out of range 1-16"),
-        )
-    })
+    if PRIORITY_RANGE.contains(&value) {
+        Ok(value as u8)
+    } else {
+        Err(Error::decoding(offset, priority_message(field, value)))
+    }
 }
 
-/// Read the content octets of a primitive context tag `number` at `offset`.
-fn read_context<'a>(
-    data: &'a [u8],
-    offset: usize,
-    number: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    if offset >= data.len() {
+/// Number of the last optional field of a BACnetLightingCommand (Clause 21.6); the operation
+/// field is number 0.
+const LIGHTING_LAST_FIELD: u8 = 5;
+
+/// Check the content octet count of lighting-command field `number` (Clause 21.6): the
+/// operation, fade-time and priority fields are ENUMERATED or Unsigned and take 1-4 octets here,
+/// the three level fields are REAL and take exactly 4.
+fn check_lighting_field(number: u8, content: &[u8], offset: usize) -> Result<(), Error> {
+    let real = matches!(number, 1..=3);
+    let length_ok = if real {
+        content.len() == 4
+    } else {
+        (1..=4).contains(&content.len())
+    };
+    if !length_ok {
         return Err(Error::decoding(
             offset,
-            format!("WriteGroup truncated before {field}"),
+            format!(
+                "WriteGroup lighting command field {number} has {} content octets",
+                content.len()
+            ),
         ));
     }
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(number) {
-        return Err(Error::decoding(
+    if number == 5 {
+        decode_priority(
+            "lighting command priority",
             offset,
-            format!("WriteGroup expected context tag {number} for {field}"),
-        ));
+            primitives::decode_unsigned(content)?,
+        )?;
     }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, "WriteGroup length overflow"))?;
-    if end > data.len() {
-        return Err(Error::decoding(
-            pos,
-            format!("WriteGroup truncated at {field}"),
-        ));
+    Ok(())
+}
+
+/// Validate the body of a constructed lighting command that starts at `offset`, just after its
+/// opening tag 0; returns the offset past the closing tag 0.
+///
+/// The operation field (context 0) must come first; fields 1-5 may follow in increasing order,
+/// each at most once. Every element is a primitive context tag, so no nested constructions are
+/// accepted.
+fn lighting_command_end(data: &[u8], mut offset: usize) -> Result<usize, Error> {
+    let mut next_number = 0u8;
+    loop {
+        let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.is_closing_tag(0) {
+            if next_number == 0 {
+                return Err(Error::decoding(
+                    offset,
+                    "WriteGroup lighting command must start with its operation field",
+                ));
+            }
+            return Ok(pos);
+        }
+        if tag.class != TagClass::Context || tag.is_opening || tag.is_closing {
+            return Err(Error::decoding(
+                offset,
+                "WriteGroup lighting command fields must be primitive context tags",
+            ));
+        }
+        if next_number == 0 && tag.number != 0 {
+            return Err(Error::decoding(
+                offset,
+                "WriteGroup lighting command must start with its operation field",
+            ));
+        }
+        if tag.number < next_number {
+            return Err(Error::decoding(
+                offset,
+                format!(
+                    "WriteGroup lighting command field {} is out of order",
+                    tag.number
+                ),
+            ));
+        }
+        if tag.number > LIGHTING_LAST_FIELD {
+            return Err(Error::decoding(
+                offset,
+                format!(
+                    "WriteGroup lighting command field {} is not defined",
+                    tag.number
+                ),
+            ));
+        }
+        let end = pos
+            .checked_add(tag.length as usize)
+            .filter(|end| *end <= data.len())
+            .ok_or_else(|| Error::decoding(pos, "WriteGroup lighting command truncated"))?;
+        check_lighting_field(tag.number, &data[pos..end], offset)?;
+        next_number = tag.number + 1;
+        offset = end;
     }
-    Ok((&data[pos..end], end))
 }
 
 /// Return the offset just past the single BACnetChannelValue starting at `offset`.
 ///
-/// The value is an untagged CHOICE (Clause 21.6): one application-tagged primitive, or a
-/// constructed context-\[0\] BACnetLightingCommand whose mandatory first field is context \[0\].
+/// The value is an untagged CHOICE (Clause 21.6): one well-formed application-tagged primitive
+/// of any character set, or a constructed context-\[0\] BACnetLightingCommand. The lighting
+/// command is checked for structure (field order, tag class, content lengths) and for the
+/// documented priority range, but not for the REAL level ranges or the operation value.
 fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
     if offset >= data.len() {
         return Err(Error::decoding(offset, "WriteGroup missing channel value"));
     }
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.class == TagClass::Application {
-        return primitives::decode_application_value(data, offset).map(|(_, end)| end);
+        return primitives::validate_application_value(data, offset);
     }
     if !tag.is_opening_tag(0) {
         return Err(Error::decoding(
@@ -88,14 +151,7 @@ fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
             "WriteGroup channel value must be an application-tagged primitive or a context 0 lighting command",
         ));
     }
-    let (content, end) = tags::extract_context_value(data, pos, 0)?;
-    match tags::decode_tag(content, 0) {
-        Ok((first, _)) if first.is_context(0) => Ok(end),
-        _ => Err(Error::decoding(
-            pos,
-            "WriteGroup lighting command must start with its operation field",
-        )),
-    }
+    lighting_command_end(data, pos)
 }
 
 // ---------------------------------------------------------------------------
@@ -111,27 +167,24 @@ pub struct GroupChannelValue {
     /// for this entry.
     pub override_priority: Option<u8>,
     /// The BACnetChannelValue, already encoded and carried without a wrapper tag: one
-    /// application-tagged primitive, or a context-\[0\] constructed lighting command.
-    /// [`WriteGroupRequest::encode`] rejects anything else.
+    /// well-formed application-tagged primitive, or a context-\[0\] constructed lighting
+    /// command whose fields are in order with valid lengths. [`WriteGroupRequest::encode`]
+    /// rejects anything else.
     pub value: Vec<u8>,
 }
 
-/// WriteGroup-Request service parameters.
+/// WriteGroup-Request service parameters (Clause 15.11.1; encoding in Clauses 21.3.2 and 21.6).
 ///
-/// ```text
-/// WriteGroup-Request ::= SEQUENCE {
-///     group-number   [0] Unsigned32,
-///     write-priority [1] Unsigned (1..16),
-///     change-list    [2] SEQUENCE OF BACnetGroupChannelValue,
-///     inhibit-delay  [3] BOOLEAN OPTIONAL
-/// }
+/// Fields, in order:
+/// - group number, context \[0\], mandatory (Unsigned32);
+/// - write priority, context \[1\], mandatory (1-16);
+/// - change list, context \[2\] constructed, mandatory, holding one or more
+///   BACnetGroupChannelValue entries;
+/// - inhibit delay, context \[3\], optional (Boolean).
 ///
-/// BACnetGroupChannelValue ::= SEQUENCE {
-///     channel             [0] Unsigned16,
-///     overriding-priority [1] Unsigned (1..16) OPTIONAL,
-///     value                   BACnetChannelValue   -- untagged CHOICE
-/// }
-/// ```
+/// Each change-list entry is a channel number in context \[0\] (Unsigned16), an optional
+/// overriding priority in context \[1\] (1-16), and then the channel value itself with no
+/// wrapper tag (an untagged CHOICE).
 ///
 /// For channel 5 holding REAL 72.0 the change-list entry is `09 05 44 42 90 00 00`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,7 +251,7 @@ impl WriteGroupRequest {
     /// Fails on malformed, truncated or out-of-range input and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] group-number
-        let (content, mut offset) = read_context(data, 0, 0, "group-number")?;
+        let (content, mut offset) = decode_context(data, 0, 0, "WriteGroup group-number")?;
         let group_raw = primitives::decode_unsigned(content)?;
         let group_number = u32::try_from(group_raw)
             .ok()
@@ -212,7 +265,7 @@ impl WriteGroupRequest {
 
         // [1] write-priority
         let priority_pos = offset;
-        let (content, end) = read_context(data, offset, 1, "write-priority")?;
+        let (content, end) = decode_context(data, offset, 1, "WriteGroup write-priority")?;
         let write_priority = decode_priority(
             "write-priority",
             priority_pos,
@@ -245,7 +298,7 @@ impl WriteGroupRequest {
             }
 
             // [0] channel
-            let (content, end) = read_context(data, offset, 0, "channel")?;
+            let (content, end) = decode_context(data, offset, 0, "WriteGroup channel")?;
             let channel_raw = primitives::decode_unsigned(content)?;
             let channel = u16::try_from(channel_raw).map_err(|_| {
                 Error::decoding(
@@ -258,7 +311,8 @@ impl WriteGroupRequest {
             // [1] overriding-priority OPTIONAL
             let mut override_priority = None;
             if offset < data.len() && tags::decode_tag(data, offset)?.0.is_context(1) {
-                let (content, end) = read_context(data, offset, 1, "override-priority")?;
+                let (content, end) =
+                    decode_context(data, offset, 1, "WriteGroup override-priority")?;
                 override_priority = Some(decode_priority(
                     "override-priority",
                     offset,
@@ -286,17 +340,8 @@ impl WriteGroupRequest {
         // [3] inhibit-delay OPTIONAL
         let mut inhibit_delay = None;
         if offset < data.len() && tags::decode_tag(data, offset)?.0.is_context(3) {
-            let (content, end) = read_context(data, offset, 3, "inhibit-delay")?;
-            inhibit_delay = Some(match content {
-                [0] => false,
-                [1] => true,
-                _ => {
-                    return Err(Error::decoding(
-                        offset,
-                        "WriteGroup inhibit-delay must be Boolean 0 or 1",
-                    ));
-                }
-            });
+            let (inhibit, end) = decode_context_bool(data, offset, 3, "WriteGroup inhibit-delay")?;
+            inhibit_delay = Some(inhibit);
             offset = end;
         }
         if offset != data.len() {

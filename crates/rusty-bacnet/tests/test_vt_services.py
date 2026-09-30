@@ -98,6 +98,16 @@ class VirtualTerminalTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(payload, bytes.fromhex("21012102"))
 
+    async def test_vt_close_validates_synchronously_on_an_unstarted_client(self):
+        client = BACnetClient(interface="127.0.0.1", port=0)
+        with self.assertRaises(ValueError):
+            client.vt_close("invalid-address", [])
+        for bad in (256, -1):
+            with self.assertRaises(OverflowError):
+                client.vt_close("invalid-address", [bad])
+        with self.assertRaises(RuntimeError):
+            await client.vt_close("127.0.0.1:47808", [1])
+
     async def test_vt_close_empty_list_is_rejected_before_sending(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
             peer.bind(("127.0.0.1", 0))

@@ -286,5 +286,24 @@ fn you_are_rejects_non_device_identifier() {
 #[test]
 fn you_are_rejects_wrong_identifier_length() {
     assert_you_are_decoding_error(&concat(&[&IDENTITY, &[0xC3, 0x02, 0x00, 0x04]]));
-    assert_you_are_decoding_error(&concat(&[&IDENTITY, &[0xC5, 0x05, 0x02, 0x00, 0x04, 0xD2]]));
+    assert_you_are_decoding_error(&concat(&[
+        &IDENTITY,
+        &[0xC5, 0x05, 0x02, 0x00, 0x04, 0xD2, 0x00],
+    ]));
+}
+
+#[test]
+fn who_am_i_model_name_over_253_octets_uses_two_octet_length() {
+    // 300 characters plus the character-set octet is 301 content octets: header 75 FE 01 2D.
+    let mut expected = vec![0x22, 0x01, 0x04, 0x75, 0xFE, 0x01, 0x2D, 0x00];
+    expected.extend(std::iter::repeat_n(b'a', 300));
+    expected.extend_from_slice(&[0x72, 0x00, 0x53]);
+    let request = WhoAmIRequest {
+        model_name: "a".repeat(300),
+        ..who_am_i()
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf).unwrap();
+    assert_eq!(buf.to_vec(), expected);
+    assert_eq!(WhoAmIRequest::decode(&expected).unwrap(), request);
 }

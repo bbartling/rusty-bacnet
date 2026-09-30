@@ -265,7 +265,8 @@ impl BACnetClient {
     /// tuples: `channel` is a channel number 0..65535, `override_priority_or_none` is 1..16 or
     /// `None`, and `value_bytes` is one encoded BACnetChannelValue (a single application-tagged
     /// primitive, or a context-0 lighting command) with no extra wrapper tag. Raises
-    /// `ValueError` for an argument outside those rules.
+    /// `ValueError`, or `OverflowError` for integers that don't fit, for an argument outside
+    /// those rules.
     #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None))]
     fn write_group<'py>(
         &self,

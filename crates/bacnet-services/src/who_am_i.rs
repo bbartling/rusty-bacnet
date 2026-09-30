@@ -10,63 +10,34 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+use crate::common::decode_application;
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Read the content of the application tag `number` at `offset`; returns it with the offset
-/// past the element.
-fn app_content<'a>(
-    data: &'a [u8],
-    offset: usize,
-    number: u8,
-    context: &str,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    if offset >= data.len() {
-        return Err(Error::decoding(
-            offset,
-            format!("{context} truncated before {field}"),
-        ));
-    }
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Application || tag.number != number {
-        return Err(Error::decoding(
-            offset,
-            format!("{context} expected application tag {number} for {field}"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{context} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::decoding(
-            pos,
-            format!("{context} truncated at {field}"),
-        ));
-    }
-    Ok((&data[pos..end], end))
-}
-
 /// Decode the vendor ID, model name and serial number that start both requests.
 fn decode_identity(data: &[u8], context: &str) -> Result<(u16, String, String, usize), Error> {
-    let (content, offset) = app_content(data, 0, tags::app_tag::UNSIGNED, context, "vendor-id")?;
+    let (content, offset) = decode_application(
+        data,
+        0,
+        tags::app_tag::UNSIGNED,
+        &format!("{context} vendor-id"),
+    )?;
     let vendor_id = u16::try_from(primitives::decode_unsigned(content)?)
         .map_err(|_| Error::decoding(0, format!("{context} vendor-id exceeds 65535")))?;
-    let (content, offset) = app_content(
+    let (content, offset) = decode_application(
         data,
         offset,
         tags::app_tag::CHARACTER_STRING,
-        context,
-        "model-name",
+        &format!("{context} model-name"),
     )?;
     let model_name = primitives::decode_character_string(content)?;
-    let (content, offset) = app_content(
+    let (content, offset) = decode_application(
         data,
         offset,
         tags::app_tag::CHARACTER_STRING,
-        context,
-        "serial-number",
+        &format!("{context} serial-number"),
     )?;
     let serial_number = primitives::decode_character_string(content)?;
     Ok((vendor_id, model_name, serial_number, offset))
@@ -87,17 +58,12 @@ fn encode_identity(
 // WhoAmIRequest
 // ---------------------------------------------------------------------------
 
-/// Who-Am-I-Request service parameters (Clause 16.11.1, Table 16-13).
+/// Who-Am-I-Request service parameters (Clause 16.11.1, Table 16-13; encoding in Clause 21.3.3).
 ///
-/// ```text
-/// Who-Am-I-Request ::= SEQUENCE {
-///     vendor-id     Unsigned16,
-///     model-name    CharacterString,
-///     serial-number CharacterString
-/// }
-/// ```
+/// Fields, in order, all application-tagged and all mandatory: vendor identifier (Unsigned16),
+/// model name (CharacterString) and serial number (CharacterString).
 ///
-/// All three fields are application-tagged. Vendor 260, model "M" and serial "S" encode as
+/// Vendor 260, model "M" and serial "S" encode as
 /// `22 01 04 72 00 4D 72 00 53`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoAmIRequest {
@@ -144,19 +110,13 @@ impl WhoAmIRequest {
 // YouAreRequest
 // ---------------------------------------------------------------------------
 
-/// You-Are-Request service parameters (Clause 16.11.3, Table 16-14).
+/// You-Are-Request service parameters (Clause 16.11.3, Table 16-14; encoding in Clause 21.3.3).
 ///
-/// ```text
-/// You-Are-Request ::= SEQUENCE {
-///     vendor-id          Unsigned16,
-///     model-name         CharacterString,
-///     serial-number      CharacterString,
-///     device-identifier  BACnetObjectIdentifier OPTIONAL,
-///     device-mac-address OctetString OPTIONAL
-/// }
-/// ```
+/// Fields, in order, all application-tagged: vendor identifier (Unsigned16), model name
+/// (CharacterString) and serial number (CharacterString), all mandatory; then a device
+/// identifier (ObjectIdentifier) and a device MAC address (OctetString), both optional.
 ///
-/// Every field is application-tagged. At least one of `device_identifier` and
+/// At least one of `device_identifier` and
 /// `device_mac_address` must be present; both [`encode`](Self::encode) and
 /// [`decode`](Self::decode) reject a request with neither. The identifier, when present,
 /// must name a Device object.
@@ -219,12 +179,11 @@ impl YouAreRequest {
 
         let mut device_identifier = None;
         if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OBJECT_IDENTIFIER)? {
-            let (content, end) = app_content(
+            let (content, end) = decode_application(
                 data,
                 offset,
                 tags::app_tag::OBJECT_IDENTIFIER,
-                "YouAre",
-                "device-identifier",
+                "YouAre device-identifier",
             )?;
             let oid = ObjectIdentifier::decode(content)?;
             if oid.object_type() != ObjectType::DEVICE {
@@ -239,12 +198,11 @@ impl YouAreRequest {
 
         let mut device_mac_address = None;
         if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OCTET_STRING)? {
-            let (content, end) = app_content(
+            let (content, end) = decode_application(
                 data,
                 offset,
                 tags::app_tag::OCTET_STRING,
-                "YouAre",
-                "device-mac-address",
+                "YouAre device-mac-address",
             )?;
             device_mac_address = Some(content.to_vec());
             offset = end;

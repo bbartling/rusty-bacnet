@@ -1691,7 +1691,7 @@ class BACnetClient:
 
         The three arguments should match the sender's Device object properties
         (``vendor_id`` is 0-65535). Raises ``ValueError`` if a string cannot be
-        encoded.
+        encoded, or ``OverflowError`` for a ``vendor_id`` that doesn't fit.
         """
         ...
 
@@ -2144,7 +2144,8 @@ class BACnetClient:
         ``channel`` is a channel number 0-65535, the override priority is 1-16 or
         ``None``, and ``value_bytes`` is one encoded BACnetChannelValue: a single
         application-tagged primitive or a context-0 lighting command, with no
-        wrapper tag. Raises ``ValueError`` for an argument outside those rules.
+        wrapper tag. Raises ``ValueError``, or ``OverflowError`` for integers that
+        don't fit, for an argument outside those rules.
         """
         ...
 
@@ -2166,7 +2167,9 @@ class BACnetClient:
     def vt_close(self, address: str, session_ids: list[int]) -> Awaitable[None]:
         """Close one or more virtual terminal sessions.
 
-        ``session_ids`` must not be empty (``ValueError``).
+        ``session_ids`` must not be empty and each identifier is 0-255. Raises
+        ``ValueError`` for an empty list, or ``OverflowError`` for an integer that
+        doesn't fit, before anything is sent.
         """
         ...
 

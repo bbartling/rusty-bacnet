@@ -10,37 +10,11 @@ use bacnet_types::enums::VTClass;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use crate::common::MAX_DECODED_ITEMS;
-
-fn is_application_tag(tag: &tags::Tag, header: u8, number: u8, max_lvt: u8) -> bool {
-    tag.class == tags::TagClass::Application && tag.number == number && header & 0x07 <= max_lvt
-}
-
-/// Decode one application-tagged primitive of type `number` at `offset`, returning its content
-/// octets and the offset just past them.
-fn decode_app_primitive<'a>(
-    data: &'a [u8],
-    offset: usize,
-    number: u8,
-    what: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !is_application_tag(&tag, data[offset], number, 5) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: unexpected tag, expected application tag {number}"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .filter(|end| *end <= data.len())
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: truncated")))?;
-    Ok((&data[pos..end], end))
-}
+use crate::common::{decode_application, MAX_DECODED_ITEMS};
 
 /// Decode an application-tagged Unsigned that must fit in eight bits (Unsigned8).
 fn decode_app_u8(data: &[u8], offset: usize, what: &str) -> Result<(u8, usize), Error> {
-    let (content, end) = decode_app_primitive(data, offset, tags::app_tag::UNSIGNED, what)?;
+    let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, what)?;
     let raw = primitives::decode_unsigned(content)?;
     let value = u8::try_from(raw)
         .map_err(|_| Error::decoding(offset, format!("{what} {raw} exceeds u8")))?;
@@ -86,7 +60,7 @@ impl VTOpenRequest {
     /// truncated fields and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (content, offset) =
-            decode_app_primitive(data, 0, tags::app_tag::ENUMERATED, "VTOpen vt-class")?;
+            decode_application(data, 0, tags::app_tag::ENUMERATED, "VTOpen vt-class")?;
         let raw = primitives::decode_unsigned(content)?;
         let vt_class = VTClass::from_raw(
             u32::try_from(raw)
@@ -215,11 +189,11 @@ impl VTDataRequest {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (vt_session_identifier, offset) = decode_app_u8(data, 0, "VTData session-identifier")?;
         let (octets, offset) =
-            decode_app_primitive(data, offset, tags::app_tag::OCTET_STRING, "VTData new-data")?;
+            decode_application(data, offset, tags::app_tag::OCTET_STRING, "VTData new-data")?;
         let vt_new_data = octets.to_vec();
         let flag_offset = offset;
         let (flag, offset) =
-            decode_app_primitive(data, offset, tags::app_tag::UNSIGNED, "VTData data-flag")?;
+            decode_application(data, offset, tags::app_tag::UNSIGNED, "VTData data-flag")?;
         let vt_data_flag = match primitives::decode_unsigned(flag)? {
             0 => false,
             1 => true,
