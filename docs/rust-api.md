@@ -2000,8 +2000,8 @@ Safety objects report exactly the properties the pass changed. The bundled Event
 Enrollment objects accept no COV subscriptions, so their periodic evaluation fans
 nothing out. The usual COV criteria and DCC suppression apply. The criteria report
 only an actual change: a missing or non-positive COV increment means any change,
-and a value the subscriber was already sent is not reported again, however often
-its object is fanned out.
+and a value equal to the last one sent is not reported again, however often its
+object is fanned out, unless a Status_Flags change carries it.
 
 The built-in commandable objects expose `Priority_Array` as read-only (§19.2.1).
 Set or relinquish a priority slot by writing a value or NULL to `Present_Value`
@@ -2026,14 +2026,16 @@ PROPERTY/NOT_COV_PROPERTY whether an increment is present or absent. Indexed
 non-arrays that pass existing read validation return PROPERTY_IS_NOT_AN_ARRAY.
 
 For matching finite numeric values, nonpositive increments (including negative
-infinity) remain eligible on observation; NaN and positive infinity increments
-do not trigger numeric deltas. Initial reporting and type transitions still
+infinity) report any change, and an unchanged value reports nothing; NaN and
+positive infinity increments do not trigger numeric deltas. Initial reporting and type transitions still
 report. Same-type nonfinite samples compare IEEE bits; identical NaN payloads and
 infinities are stable. Structural equality also preserves float bits, while finite
 numeric signed zeros compare equal. These are explicit local exceptional-value
-policies, not Standard-prescribed arithmetic. Existing ordinary whole-object
-numeric/nonnumeric eligibility, Life Safety committed-delta triggers and
-confirmed-admission versus unconfirmed-success baseline timing are preserved.
+policies, not Standard-prescribed arithmetic. Ordinary whole-object values follow
+the same rule (#889): a numeric Present_Value must move by the increment, and a
+non-numeric or increment-less one must change. Life Safety committed-delta
+triggers and confirmed-admission versus unconfirmed-success baseline timing are
+preserved.
 
 Applicable Status_Flags changes independently trigger ordinary and property COV.
 Property reports include the selected value and declared-present flags; explicit
@@ -2052,7 +2054,7 @@ selected values under the same DB/snapshot borrow, then releasing it before
 transport. Separate contexts may sample at different times; custom interior-mutability
 callbacks are not promised atomic hardware sampling. Only references surviving
 late lifetime/ownership checks authorize companions, timestamps and paired baseline
-completion. Ordinary nonnumeric/no-increment fanout retains its existing behavior.
+completion. Ordinary nonnumeric/no-increment values report only on change (#889).
 
 This profile does not add empty finite Multiple contexts, delayed Multiple
 notifications, live Device subscription-property projection, general numeric
