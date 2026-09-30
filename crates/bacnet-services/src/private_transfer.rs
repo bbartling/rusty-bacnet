@@ -1,5 +1,5 @@
 //! ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer services
-//! per ASHRAE 135-2020 Clauses 15.19 and 16.10.6.
+//! per ASHRAE 135-2020 Clauses 16.2 and 16.3.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -14,13 +14,16 @@ use bytes::{BufMut, BytesMut};
 /// UnconfirmedPrivateTransfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivateTransferRequest {
+    /// Vendor identifier of the organization that defines the private service.
     pub vendor_id: u32,
+    /// Vendor-defined number selecting the private service to invoke.
     pub service_number: u32,
     /// Vendor-defined payload (raw bytes, opaque to the stack).
     pub service_parameters: Option<Vec<u8>>,
 }
 
 impl PrivateTransferRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] vendorID
         primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
@@ -34,6 +37,7 @@ impl PrivateTransferRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -112,13 +116,16 @@ impl PrivateTransferRequest {
 /// ConfirmedPrivateTransfer-ACK service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivateTransferAck {
+    /// Vendor identifier of the organization that defines the private service.
     pub vendor_id: u32,
+    /// Vendor-defined service number this result answers.
     pub service_number: u32,
     /// Vendor-defined result (raw bytes, opaque to the stack).
     pub result_block: Option<Vec<u8>>,
 }
 
 impl PrivateTransferAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] vendorID
         primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
@@ -132,6 +139,8 @@ impl PrivateTransferAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

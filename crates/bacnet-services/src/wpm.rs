@@ -28,7 +28,9 @@ pub use error::WritePropertyMultipleError;
 /// A single object + list of property values to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteAccessSpecification {
+    /// Object to write to.
     pub object_identifier: ObjectIdentifier,
+    /// Property values to write to that object, each with optional array index and priority.
     pub list_of_properties: Vec<BACnetPropertyValue>,
 }
 
@@ -37,6 +39,7 @@ pub struct WriteAccessSpecification {
 /// Uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritePropertyMultipleRequest {
+    /// Per-object write specifications; must not be empty when encoding.
     pub list_of_write_access_specs: Vec<WriteAccessSpecification>,
 }
 
@@ -90,6 +93,7 @@ impl WritePropertyMultipleRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut cursor = WritePropertyMultipleCursor::new(data);
         let mut specs = Vec::new();

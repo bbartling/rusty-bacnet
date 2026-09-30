@@ -65,8 +65,12 @@ fn specific_datetime(date: &Date, time: &Time) -> bool {
 /// ReadRange-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadRangeRequest {
+    /// Object holding the list property to read.
     pub object_identifier: ObjectIdentifier,
+    /// List property to read; not ALL, REQUIRED or OPTIONAL.
     pub property_identifier: PropertyIdentifier,
+    /// Array index selecting one list within an array-of-lists property; `None` otherwise. Zero is
+    /// invalid.
     pub property_array_index: Option<u32>,
     /// Range specification: by-position, by-sequence-number, or by-time.
     pub range: Option<RangeSpec>,
@@ -76,12 +80,28 @@ pub struct ReadRangeRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RangeSpec {
     /// By position: reference_index, count.
-    ByPosition { reference_index: u32, count: i32 },
+    ByPosition {
+        /// One-based list index (first item is 1) of the item that anchors the range.
+        reference_index: u32,
+        /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference
+        /// and negative reads backward, ending at the reference.
+        count: i32,
+    },
     /// By sequence number: reference_seq, count.
-    BySequenceNumber { reference_seq: u32, count: i32 },
+    BySequenceNumber {
+        /// Sequence number of the item that anchors the range.
+        reference_seq: u32,
+        /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference
+        /// and negative reads backward, ending at the reference.
+        count: i32,
+    },
     /// By time: reference_time (Date, Time), count.
     ByTime {
+        /// Timestamp that anchors the range; must be fully specified.
         reference_time: (Date, Time),
+        /// Signed INTEGER16 item count, never zero. The reference time itself is excluded:
+        /// positive reads forward from the first item newer than it, negative reads backward
+        /// ending at the newest item older than it (Clause 15.8.1.1.4.3).
         count: i32,
     },
 }
@@ -175,6 +195,7 @@ impl ReadRangeRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -314,11 +335,15 @@ impl ReadRangeRequest {
 /// ReadRange-ACK service parameters.
 #[derive(Debug, Clone)]
 pub struct ReadRangeAck {
+    /// Object that was read.
     pub object_identifier: ObjectIdentifier,
+    /// Property that was read.
     pub property_identifier: PropertyIdentifier,
+    /// Array index that was requested, echoed from the request; `None` when absent.
     pub property_array_index: Option<u32>,
     /// Result flags: first_item, last_item, more_items.
     pub result_flags: (bool, bool, bool),
+    /// Number of items encoded in `item_data`.
     pub item_count: u32,
     /// Raw item data (application-layer interprets content).
     pub item_data: Vec<u8>,
@@ -327,6 +352,7 @@ pub struct ReadRangeAck {
 }
 
 impl ReadRangeAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] objectIdentifier
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
@@ -360,6 +386,8 @@ impl ReadRangeAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

@@ -43,16 +43,19 @@ fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u3
 /// GetEventInformation-Request — optional last_received_object_identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetEventInformationRequest {
+    /// Continuation cursor: last object from the previous response; `None` requests the first page.
     pub last_received_object_identifier: Option<ObjectIdentifier>,
 }
 
 impl GetEventInformationRequest {
+    /// Append the ASN.1 encoding of the request to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         if let Some(ref oid) = self.last_received_object_identifier {
             primitives::encode_ctx_object_id(buf, 0, oid);
         }
     }
 
+    /// Decode the request from `data`; errors on malformed input or trailing bytes.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         if data.is_empty() {
             return Ok(Self {
@@ -81,14 +84,18 @@ impl GetEventInformationRequest {
 /// GetEventInformation-ACK service parameters (simplified).
 #[derive(Debug, Clone)]
 pub struct GetEventInformationAck {
+    /// Objects with a non-normal event state or unacknowledged transitions.
     pub list_of_event_summaries: Vec<EventSummary>,
+    /// `true` when more summaries remain beyond this response.
     pub more_events: bool,
 }
 
 /// Event summary for GetEventInformation-ACK.
 #[derive(Debug, Clone)]
 pub struct EventSummary {
+    /// Object these event details describe.
     pub object_identifier: ObjectIdentifier,
+    /// BACnetEventState value (raw enumeration) currently held by the object.
     pub event_state: u32,
     /// 3-bit bitstring: TO_OFFNORMAL, TO_FAULT, TO_NORMAL
     pub acknowledged_transitions: u8,
@@ -100,6 +107,8 @@ pub struct EventSummary {
     pub event_enable: u8,
     /// Priorities for TO_OFFNORMAL, TO_FAULT, TO_NORMAL
     pub event_priorities: [u32; 3],
+    /// Not part of the GetEventInformation wire format: encode ignores it and decode always
+    /// sets 0.
     pub notification_class: u32,
 }
 
@@ -235,6 +244,7 @@ impl GetEventInformationAck {
         })
     }
 
+    /// Append the ASN.1 encoding of the ACK to `buf`; fails if a timestamp is unencodable.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] listOfEventSummaries
         tags::encode_opening_tag(buf, 0);

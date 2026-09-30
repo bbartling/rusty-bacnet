@@ -15,7 +15,9 @@ use bytes::BytesMut;
 /// The messageClass CHOICE: numeric or text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageClass {
+    /// Numeric class code chosen by the sender.
     Numeric(u32),
+    /// Free-form class name chosen by the sender.
     Text(String),
 }
 
@@ -27,13 +29,18 @@ pub enum MessageClass {
 /// UnconfirmedTextMessage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextMessageRequest {
+    /// Device object of the sending device.
     pub source_device: ObjectIdentifier,
+    /// Optional classification of the message; `None` when the sender did not supply one.
     pub message_class: Option<MessageClass>,
+    /// Urgency of the message (normal or urgent).
     pub message_priority: MessagePriority,
+    /// Message text shown to the recipient.
     pub message: String,
 }
 
 impl TextMessageRequest {
+    /// Encode the request parameters into `buf`; fails if a character string cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] textMessageSourceDevice
         primitives::encode_ctx_object_id(buf, 0, &self.source_device);
@@ -57,6 +64,7 @@ impl TextMessageRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

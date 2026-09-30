@@ -17,7 +17,9 @@ use bytes::BytesMut;
 /// the request is treated as unbounded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoIsRequest {
+    /// Lowest device instance number that should answer; `None` for an unbounded request.
     pub low_limit: Option<u32>,
+    /// Highest device instance number that should answer; `None` for an unbounded request.
     pub high_limit: Option<u32>,
 }
 
@@ -38,6 +40,8 @@ impl WhoIsRequest {
         }
     }
 
+    /// Encode the request into `buf`. The limits are written only when both are set; otherwise
+    /// nothing is written.
     pub fn encode(&self, buf: &mut BytesMut) {
         if let (Some(low), Some(high)) = (self.low_limit, self.high_limit) {
             primitives::encode_ctx_unsigned(buf, 0, low as u64);
@@ -45,6 +49,7 @@ impl WhoIsRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         if data.is_empty() {
             return Ok(Self::all());
@@ -114,13 +119,18 @@ impl WhoIsRequest {
 /// All fields use APPLICATION tags (not context-specific).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IAmRequest {
+    /// Device object of the announcing device.
     pub object_identifier: ObjectIdentifier,
+    /// Largest APDU, in octets, the device can accept.
     pub max_apdu_length: u32,
+    /// Segmentation abilities the device supports.
     pub segmentation_supported: Segmentation,
+    /// Vendor identifier (Unsigned16) of the device manufacturer.
     pub vendor_id: u16,
 }
 
 impl IAmRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.object_identifier);
         primitives::encode_app_unsigned(buf, self.max_apdu_length as u64);
@@ -128,6 +138,7 @@ impl IAmRequest {
         primitives::encode_app_unsigned(buf, self.vendor_id as u64);
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

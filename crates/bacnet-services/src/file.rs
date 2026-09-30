@@ -1,4 +1,4 @@
-//! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 15.1–15.2.
+//! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 14.1–14.2.
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -79,14 +79,18 @@ fn checked_unsigned_u32(
 /// AtomicReadFile-Request — stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicReadFileRequest {
+    /// File object to read from; should be of object type File (not checked here).
     pub file_identifier: ObjectIdentifier,
+    /// Stream or record access, with the position and amount requested.
     pub access: FileAccessMethod,
 }
 
 /// AtomicWriteFile-Request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicWriteFileRequest {
+    /// File object to write to; should be of object type File (not checked here).
     pub file_identifier: ObjectIdentifier,
+    /// Stream or record access, with the data to write.
     pub access: FileWriteAccessMethod,
 }
 
@@ -95,12 +99,16 @@ pub struct AtomicWriteFileRequest {
 pub enum FileAccessMethod {
     /// Stream access: file_start_position, requested_octet_count.
     Stream {
+        /// Octet offset at which reading starts (0 is the first octet).
         file_start_position: i32,
+        /// Maximum number of octets the responder should return.
         requested_octet_count: u32,
     },
     /// Record access: file_start_record, requested_record_count.
     Record {
+        /// Record number at which reading starts (0 is the first record).
         file_start_record: i32,
+        /// Maximum number of records the responder should return.
         requested_record_count: u32,
     },
 }
@@ -111,20 +119,27 @@ pub enum FileWriteAccessMethod {
     /// Stream access: `file_data` is written beginning at octet offset
     /// `file_start_position`, or appended when that offset is -1.
     Stream {
+        /// Octet offset at which writing starts, or -1 to append to the end of the file.
         file_start_position: i32,
+        /// Octets to write.
         file_data: Vec<u8>,
     },
     /// Record access: `record_count` records taken from `file_record_data` are
     /// written beginning at record number `file_start_record`, or appended when
     /// that record number is -1.
     Record {
+        /// Record number at which writing starts, or -1 to append after the last record.
         file_start_record: i32,
+        /// Number of records supplied in `file_record_data`. Encode writes it as given; decode
+        /// rejects a count that doesn't match the records.
         record_count: u32,
+        /// Records to write, each one an opaque octet string.
         file_record_data: Vec<Vec<u8>>,
     },
 }
 
 impl AtomicReadFileRequest {
+    /// Encode the request parameters (Clause 14.1.2) into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.file_identifier);
         match &self.access {
@@ -149,6 +164,7 @@ impl AtomicReadFileRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -201,6 +217,7 @@ impl AtomicReadFileRequest {
 }
 
 impl AtomicWriteFileRequest {
+    /// Encode the request parameters (Clause 14.2.2) into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.file_identifier);
         match &self.access {
@@ -229,6 +246,7 @@ impl AtomicWriteFileRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -303,7 +321,9 @@ impl AtomicWriteFileRequest {
 /// AtomicReadFile-ACK — response for stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicReadFileAck {
+    /// True when the returned data reaches the end of the file.
     pub end_of_file: bool,
+    /// Stream or record data returned, with its starting position.
     pub access: FileReadAckMethod,
 }
 
@@ -312,18 +332,24 @@ pub struct AtomicReadFileAck {
 pub enum FileReadAckMethod {
     /// Stream access: file_start_position + returned data.
     Stream {
+        /// Octet offset within the file of the first returned octet.
         file_start_position: i32,
+        /// Octets read from the file.
         file_data: Vec<u8>,
     },
     /// Record access: file_start_record + returned records.
     Record {
+        /// Record number of the first returned record.
         file_start_record: i32,
+        /// Number of records returned in `file_record_data`.
         returned_record_count: u32,
+        /// Records read from the file, each one an opaque octet string.
         file_record_data: Vec<Vec<u8>>,
     },
 }
 
 impl AtomicReadFileAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_boolean(buf, self.end_of_file);
         match &self.access {
@@ -352,6 +378,8 @@ impl AtomicReadFileAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -472,6 +500,7 @@ impl AtomicReadFileAck {
 /// AtomicWriteFile-ACK — response for stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicWriteFileAck {
+    /// Stream or record form of the acknowledgment, echoing where the write took place.
     pub access: FileWriteAckMethod,
 }
 
@@ -479,12 +508,19 @@ pub struct AtomicWriteFileAck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWriteAckMethod {
     /// Stream: confirmed file_start_position.
-    Stream { file_start_position: i32 },
+    Stream {
+        /// Octet offset at which the data was actually written.
+        file_start_position: i32,
+    },
     /// Record: confirmed file_start_record.
-    Record { file_start_record: i32 },
+    Record {
+        /// Record number at which the records were actually written.
+        file_start_record: i32,
+    },
 }
 
 impl AtomicWriteFileAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         match &self.access {
             FileWriteAckMethod::Stream {
@@ -498,6 +534,8 @@ impl AtomicWriteFileAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, pos) = tags::decode_tag(data, 0)?;
         let end = pos + tag.length as usize;

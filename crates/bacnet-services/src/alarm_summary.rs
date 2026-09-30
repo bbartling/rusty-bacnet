@@ -20,7 +20,9 @@ use crate::common::MAX_DECODED_ITEMS;
 /// `(unused_bits, data)`. Bits represent: to-offnormal, to-fault, to-normal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlarmSummaryEntry {
+    /// Object that is in an alarm condition.
     pub object_identifier: ObjectIdentifier,
+    /// Event state the object currently holds.
     pub alarm_state: EventState,
     /// Raw bitstring: (unused_bits, data bytes).
     pub acknowledged_transitions: (u8, Vec<u8>),
@@ -31,10 +33,12 @@ pub struct AlarmSummaryEntry {
 /// GetAlarmSummary-Request has no parameters so no struct is needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetAlarmSummaryAck {
+    /// Summary entries, one per alarming object.
     pub entries: Vec<AlarmSummaryEntry>,
 }
 
 impl GetAlarmSummaryAck {
+    /// Append the ASN.1 encoding of the ACK to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         for entry in &self.entries {
             primitives::encode_app_object_id(buf, &entry.object_identifier);
@@ -47,6 +51,7 @@ impl GetAlarmSummaryAck {
         }
     }
 
+    /// Decode the ACK from `data`; errors on malformed input or too many entries.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut entries = Vec::new();
         let mut offset = 0;

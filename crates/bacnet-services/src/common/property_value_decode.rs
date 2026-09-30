@@ -94,6 +94,7 @@ fn value_failure_reason(error: &Error) -> RejectReason {
 }
 
 impl BACnetPropertyValue {
+    /// Decode a property value at `offset` in `data`; returns it and the offset just past it.
     pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         Self::decode_with_boundaries(
             data,

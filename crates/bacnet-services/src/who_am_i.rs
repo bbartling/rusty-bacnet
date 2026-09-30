@@ -1,4 +1,4 @@
-//! Who-Am-I and You-Are services per ASHRAE 135-2020 Clause 16.10.9 / 16.10.10.
+//! Who-Am-I and You-Are services per ASHRAE 135-2020 Clause 16.11.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -10,13 +10,16 @@ use bytes::BytesMut;
 // WhoAmIRequest
 // ---------------------------------------------------------------------------
 
-/// Who-Am-I-Request (empty APDU, no parameters).
+/// Who-Am-I-Request. The 2020 standard gives it vendor ID, model name and serial number
+/// parameters (Clause 16.11.1); this codec does not carry them yet and handles an empty request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoAmIRequest;
 
 impl WhoAmIRequest {
+    /// Encode the request; this codec writes nothing (see the type doc).
     pub fn encode(&self, _buf: &mut BytesMut) {}
 
+    /// Decode the request; this codec does not inspect the input (see the type doc).
     pub fn decode(_data: &[u8]) -> Result<Self, Error> {
         Ok(Self)
     }
@@ -39,14 +42,20 @@ impl WhoAmIRequest {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YouAreRequest {
+    /// Vendor identifier (Unsigned16) of the device that should act on the request.
     pub vendor_id: u16,
+    /// Model name the target device reports in its Device object.
     pub model_name: String,
+    /// Serial number the target device reports in its Device object.
     pub serial_number: String,
+    /// Device object identifier to assign to the target device; `None` leaves it unchanged.
     pub device_identifier: Option<ObjectIdentifier>,
+    /// MAC address to configure on the target device; `None` leaves it unchanged.
     pub device_mac_address: Option<Vec<u8>>,
 }
 
 impl YouAreRequest {
+    /// Encode the request parameters into `buf`; fails if a character string cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] vendorID
         primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
@@ -65,6 +74,7 @@ impl YouAreRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

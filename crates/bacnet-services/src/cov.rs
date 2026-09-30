@@ -1,4 +1,4 @@
-//! COV (Change of Value) services per ASHRAE 135-2020 Clause 13 & 16.
+//! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -22,9 +22,14 @@ pub use crate::cov_decode::COVNotificationDecodeError;
 /// Both `issue_confirmed_notifications` and `lifetime` absent = cancellation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscribeCOVRequest {
+    /// Subscriber-chosen handle echoed in every notification, matching it to this subscription.
     pub subscriber_process_identifier: u32,
+    /// Object whose changes are being subscribed to.
     pub monitored_object_identifier: ObjectIdentifier,
+    /// `true` confirmed, `false` unconfirmed notifications; `None` (with no lifetime) cancels.
     pub issue_confirmed_notifications: Option<bool>,
+    /// Subscription lifetime in seconds, where `Some(0)` means no expiry. `None` together with
+    /// no confirmed flag cancels; `None` alone also means no expiry.
     pub lifetime: Option<u32>,
 }
 
@@ -62,6 +67,7 @@ impl SubscribeCOVRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on missing, malformed or truncated fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -120,12 +126,20 @@ impl SubscribeCOVRequest {
 /// overrides the COV increment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubscribeCOVPropertyRequest {
+    /// Subscriber-chosen handle echoed in every notification for this subscription.
     pub subscriber_process_identifier: u32,
+    /// Object that holds the monitored property.
     pub monitored_object_identifier: ObjectIdentifier,
+    /// `true` confirmed, `false` unconfirmed notifications; `None` (with no lifetime) cancels.
     pub issue_confirmed_notifications: Option<bool>,
+    /// Subscription lifetime in seconds, where `Some(0)` means no expiry. `None` together with
+    /// no confirmed flag cancels; `None` alone also means no expiry.
     pub lifetime: Option<u32>,
+    /// Property whose changes are reported.
     pub monitored_property_identifier: PropertyIdentifier,
+    /// Array element of the monitored property to watch; `None` means the whole property.
     pub monitored_property_array_index: Option<u32>,
+    /// Minimum change that triggers a notification, overriding the object's own COV increment.
     pub cov_increment: Option<f32>,
 }
 
@@ -178,6 +192,7 @@ impl SubscribeCOVPropertyRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on missing, malformed or truncated fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -277,14 +292,21 @@ impl SubscribeCOVPropertyRequest {
 /// Used for both ConfirmedCOVNotification and UnconfirmedCOVNotification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct COVNotificationRequest {
+    /// Subscriber-chosen handle from the subscription, used to route the notification.
     pub subscriber_process_identifier: u32,
+    /// Device that sent the notification.
     pub initiating_device_identifier: ObjectIdentifier,
+    /// Object whose value changed.
     pub monitored_object_identifier: ObjectIdentifier,
+    /// Seconds left before the subscription expires; 0 means it never expires (Clause 13.6.1).
     pub time_remaining: u32,
+    /// Property values the notification reports for the monitored object (Table 13-1 lists which
+    /// ones), each as raw encoded BACnet bytes; not only the ones that changed.
     pub list_of_values: Vec<BACnetPropertyValue>,
 }
 
 impl COVNotificationRequest {
+    /// Append the ASN.1 encoding of the notification to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] subscriber-process-identifier
         primitives::encode_ctx_unsigned(buf, 0, self.subscriber_process_identifier as u64);
@@ -302,6 +324,7 @@ impl COVNotificationRequest {
         tags::encode_closing_tag(buf, 4);
     }
 
+    /// Decode the notification from `data`; errors on missing, malformed or truncated fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         Self::decode_detailed(data).map_err(COVNotificationDecodeError::into_error)
     }

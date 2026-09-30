@@ -22,7 +22,9 @@ fn is_application_tag(tag: &tags::Tag, header: u8, number: u8) -> bool {
 /// Priority filter sub-structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PriorityFilter {
+    /// Lowest event priority to include (0-255).
     pub min_priority: u8,
+    /// Highest event priority to include (0-255).
     pub max_priority: u8,
 }
 
@@ -119,6 +121,7 @@ impl GetEnrollmentSummaryRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on malformed or truncated fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -368,9 +371,13 @@ fn decode_closed_enumeration(data: &[u8], maximum: u32) -> Result<u32, Error> {
 /// One entry in the GetEnrollmentSummary-ACK sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrollmentSummaryEntry {
+    /// Event-initiating object being summarised.
     pub object_identifier: ObjectIdentifier,
+    /// Kind of event algorithm the object uses.
     pub event_type: EventType,
+    /// Event state the object currently holds.
     pub event_state: EventState,
+    /// Priority of the object's event notifications (0-255).
     pub priority: u8,
     /// Optional notification-class member.
     pub notification_class: Option<u32>,
@@ -379,10 +386,12 @@ pub struct EnrollmentSummaryEntry {
 /// GetEnrollmentSummary-ACK: a sequence of summary entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetEnrollmentSummaryAck {
+    /// Summary entries for matching objects.
     pub entries: Vec<EnrollmentSummaryEntry>,
 }
 
 impl GetEnrollmentSummaryAck {
+    /// Append the ASN.1 encoding of the ACK to `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         for entry in &self.entries {
             primitives::encode_app_object_id(buf, &entry.object_identifier);
@@ -395,6 +404,7 @@ impl GetEnrollmentSummaryAck {
         }
     }
 
+    /// Decode the ACK from `data`; errors on malformed input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut entries = Vec::new();
         let mut offset = 0;

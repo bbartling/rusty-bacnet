@@ -51,10 +51,16 @@ fn decode_context_u32(
 /// WriteProperty uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritePropertyRequest {
+    /// Object to write to.
     pub object_identifier: ObjectIdentifier,
+    /// Property to write.
     pub property_identifier: PropertyIdentifier,
+    /// Array index of the element to write; `None` writes the whole property.
     pub property_array_index: Option<u32>,
+    /// Application-tagged encoding of the value to write, opaque to this crate.
     pub property_value: Vec<u8>,
+    /// Priority (1-16) for commandable properties. `None` omits it, and the responder then
+    /// uses 16; a non-commandable property ignores it (Clause 15.9.1).
     pub priority: Option<u8>,
 }
 
@@ -91,6 +97,7 @@ impl WritePropertyRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

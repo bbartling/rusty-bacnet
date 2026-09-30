@@ -18,13 +18,17 @@ use crate::common::{
 /// A single object + list of property references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadAccessSpecification {
+    /// Object to read from.
     pub object_identifier: ObjectIdentifier,
+    /// Properties to read from that object; may name the special ALL, REQUIRED or OPTIONAL
+    /// selectors.
     pub list_of_property_references: Vec<PropertyReference>,
 }
 
 /// ReadPropertyMultiple-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadPropertyMultipleRequest {
+    /// Per-object read specifications; must not be empty when encoding.
     pub list_of_read_access_specs: Vec<ReadAccessSpecification>,
 }
 
@@ -54,6 +58,7 @@ impl ReadPropertyMultipleRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
         let mut specs = Vec::new();
@@ -130,7 +135,10 @@ impl ReadPropertyMultipleRequest {
 /// A single result element: success (value) or failure (error).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadResultElement {
+    /// Property this result answers.
     pub property_identifier: PropertyIdentifier,
+    /// Array index that was requested, echoed from the request; `None` when the whole property was
+    /// read.
     pub property_array_index: Option<u32>,
     /// Success: raw application-tagged value bytes. Mutually exclusive with `error`.
     pub property_value: Option<Vec<u8>>,
@@ -141,13 +149,16 @@ pub struct ReadResultElement {
 /// Results for a single object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadAccessResult {
+    /// Object the results belong to.
     pub object_identifier: ObjectIdentifier,
+    /// One element per property read, in the order returned by the responder.
     pub list_of_results: Vec<ReadResultElement>,
 }
 
 /// ReadPropertyMultiple-ACK service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadPropertyMultipleACK {
+    /// Per-object results, in request order.
     pub list_of_read_access_results: Vec<ReadAccessResult>,
 }
 
@@ -185,6 +196,7 @@ impl ReadResultElement {
 }
 
 impl ReadPropertyMultipleACK {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         for result in &self.list_of_read_access_results {
             ReadAccessResult::encode_header(buf, &result.object_identifier);
@@ -195,6 +207,8 @@ impl ReadPropertyMultipleACK {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
         let mut results = Vec::new();

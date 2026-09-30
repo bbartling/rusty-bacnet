@@ -26,13 +26,22 @@ fn decode_requesting_source(content: &[u8]) -> Result<String, Error> {
 /// LifeSafetyOperation-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifeSafetyOperationRequest {
+    /// Process on the requesting device that initiated the operation; meaning is local to that
+    /// device.
     pub requesting_process_identifier: u32,
+    /// Identity of the human operator behind the request. Decoding yields an empty string when the
+    /// source uses a character set the stack cannot decode.
     pub requesting_source: String,
+    /// Operation requested (silence, reset, unsilence and their audible/visual variants).
     pub request: LifeSafetyOperation,
+    /// Single object the operation targets; `None` applies it to every applicable object in the
+    /// receiving device.
     pub object_identifier: Option<ObjectIdentifier>,
 }
 
 impl LifeSafetyOperationRequest {
+    /// Encode the request parameters into `buf`; fails if `requesting_source` cannot be encoded as
+    /// a character string.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] requestingProcessIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.requesting_process_identifier as u64);
@@ -47,6 +56,7 @@ impl LifeSafetyOperationRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 

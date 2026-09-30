@@ -16,16 +16,23 @@ fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
 /// AcknowledgeAlarm-Request service parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AcknowledgeAlarmRequest {
+    /// Identifies the process on the requesting device that performs the acknowledgment; how it
+    /// is assigned is a local matter (Clause 13.5.1).
     pub acknowledging_process_identifier: u32,
+    /// Object whose event transition is being acknowledged.
     pub event_object_identifier: ObjectIdentifier,
+    /// BACnetEventState value (raw enumeration) of the transition being acknowledged.
     pub event_state_acknowledged: u32,
+    /// Timestamp of the event transition being acknowledged, as given in the original notification.
     pub timestamp: BACnetTimeStamp,
+    /// Free-form identification of the operator or system acknowledging the alarm.
     pub acknowledgment_source: String,
     /// Time of acknowledgment.
     pub time_of_acknowledgment: BACnetTimeStamp,
 }
 
 impl AcknowledgeAlarmRequest {
+    /// Append the ASN.1 encoding to `buf`; fails if a string or timestamp is unencodable.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] acknowledgingProcessIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.acknowledging_process_identifier as u64);
@@ -42,6 +49,7 @@ impl AcknowledgeAlarmRequest {
         Ok(())
     }
 
+    /// Decode the request from `data`; errors on missing, malformed or truncated fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
