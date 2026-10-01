@@ -1,0 +1,5 @@
+# Check out text files with LF line endings on every OS. Tests read repository
+# files (the conformance ledger, docs, fixtures) and match multi-line text, and
+# Git for Windows' default core.autocrlf=true would otherwise turn every LF
+# into CRLF in the working tree (#950).
+* text=auto eol=lf
