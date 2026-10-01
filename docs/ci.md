@@ -285,14 +285,16 @@ git push origin v0.12.0
 ```
 
 The tag push also starts CI on the tagged commit, with the heavy jobs, and the
-release waits for it (see [CI gate](#ci-gate)).
+release waits for it (see [CI gate](#ci-gate)). Before that, and before any
+build, the [preflight](#preflight) checks that both release hosts will take
+the release.
 
 ### Jobs
 
 | Job | What it does |
 | --- | --- |
 | CI image | Pulls `CI_IMAGE` into the VM's Docker. Only `ci.yml` builds the image, and its image job fails if `release.yml` carries another tag. |
-| Validate | Runs the release script tests (`scripts/release/test_*.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a release, checks that the publish secrets are set, before anything is built. Extracts the notes with `changelog_notes.py`, writes `THIRD-PARTY-NOTICES`, then runs the [CI gate](#ci-gate). |
+| Validate | Runs the release script tests (`scripts/release/test_*.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a release, checks that the publish secrets are set and runs the [preflight](#preflight), before anything is built; a dry run runs the preflight's read-only part. Extracts the notes with `changelog_notes.py`, writes `THIRD-PARTY-NOTICES`, then runs the [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then the crates.io job's plan (read only), `cargo package` for the `crates` artifact, and `maturin sdist`. |
 | Wheels (x86_64, aarch64) | `maturin build --release --locked --zig --compatibility manylinux2014` for CPython 3.11 to 3.14. The image has only Python 3.12; maturin uses its bundled sysconfig for the others. |
 | CLI (amd64, arm64) | `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. |
@@ -301,11 +303,12 @@ release waits for it (see [CI gate](#ci-gate)).
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `maturin upload --skip-existing` of the wheels and the sdist. |
 | Forgejo release | `release_api.py forgejo`: [draft, upload, publish](#draft-then-publish). |
-| GitHub release copy | `release_api.py github`: waits up to 15 minutes for the push mirror to bring the tag, checks that it points at the release commit, then drafts, uploads and publishes through the GitHub REST API. |
+| GitHub release copy | `release_api.py github`: checks again that the mirror's tag points at the release commit (the preflight already waited for it), then drafts, uploads, checks and publishes through the GitHub REST API. |
 
 The publish jobs run only for a tag, after every build and test passed, one at
-a time in the order above. A failure stops the jobs after it. Release builds
-use no Rust cache.
+a time in the order above. A failure stops the jobs after it: each publish
+job's `if:` starts with `success() &&`, because Forgejo leaves the implicit
+`success()` to the runner. Release builds use no Rust cache.
 
 Not tested at run time: the aarch64 wheels (only their tags, module names, ELF
 machine and glibc symbols are checked) and the arm64 CLI's network commands.
@@ -322,10 +325,75 @@ all three of these to be `success`:
 - `CI / Cargo Audit + Deny (push)`
 
 MSRV and audit/deny are heavy jobs, which a dev push skips and a tag push
-runs. On a tag, the gate polls every 30 seconds for up to 60 minutes while the
-tag's CI run is pending, and fails at once on `failure`, `error` or `skipped`.
-A dry run checks once and only warns. A dispatched CI run posts no commit
-statuses, so only push runs count.
+runs. A dev push's run posts `skipped` for them under the same context names,
+and the tag is often on a commit that dev's run has already reported on, so
+`skipped` can be the latest state until the tag's run reports. On a tag, the
+gate polls every 30 seconds for up to 60 minutes while any of the three is
+`pending`, `skipped` or not reported yet. It fails at once on `failure` or
+`error` (including `CI OK` failing) or any other state. At the deadline it
+fails with what each context showed, and says to re-run the release once the
+tag's CI run has passed; a failure's message says to re-run the failed CI jobs
+if it was transient. A dry run checks once and only warns. A dispatched CI run
+posts no commit statuses, so only push runs count.
+
+The gate reads the combined status page by page. On this Forgejo,
+`total_count` is the size of the page, not of the list, so the gate stops at
+the first page shorter than the 50 it asks for.
+
+### Preflight
+
+Before anything is built, a release run checks that both hosts will take it,
+so that a token or host setting problem stops the run before crates.io and
+PyPI, which can't be undone. Validate's "Release preflight" step runs
+`release_api.py forgejo --preflight` and then `release_api.py github
+--preflight`:
+
+1. **Tag** (GitHub only). `GET /repos/{o}/{r}/git/ref/tags/{tag}` (and
+   `git/tags/{sha}` for an annotated tag), polling every 30 seconds for up to
+   15 minutes until the push mirror has the tag, which must point at the
+   release commit. The repository is public, so this call is anonymous.
+2. **Release list.** The release list (`GET /repos/{o}/{r}/releases`, every
+   page) with the token, which shows whether the release for the tag is
+   absent, a draft the publish job will resume, or published (then only
+   checked). A draft made for another commit stops the run here, as the
+   publish job would. Drafts named `release-preflight-*` that an earlier run
+   couldn't delete are reported, not deleted, since another tag's run may be
+   using its own.
+3. **Write check.** A disposable draft named `release-preflight-<run id>-<8 hex>`.
+   It isn't a `v*` name, so no tag rule applies, and it's unique even when a
+   run is re-run. The calls:
+   - `POST /repos/{o}/{r}/releases` with `draft: true`, `prerelease: true` and
+     `target_commitish: <commit>`. Neither host creates a tag for a draft.
+   - The release list again, which must show the new draft: proof that the
+     token sees drafts, which resuming a release depends on.
+   - Three uploads named like the release's assets: `bacnet-linux-amd64` (one
+     byte, extension-less like the CLI binaries, `SHA256SUMS` and
+     `THIRD-PARTY-NOTICES`), `rusty_bacnet-0.0.0-py3-none-any.whl` (an empty
+     zip) and `rusty_bacnet-0.0.0.tar.gz` (an empty gzip). This proves the
+     host's allowed attachment types (Forgejo's `[repository.release]
+     ALLOWED_TYPES`) accept every kind.
+   - The [final check](#draft-then-publish) on the draft: on GitHub, each
+     reported `digest`, and a download of the one-byte file through the API
+     asset URL; on Forgejo, each size.
+   - `DELETE /repos/{o}/{r}/releases/{id}`.
+   - Confirmation: the release list has no release of that name, `GET
+     .../releases/{id}` is 404, and no tag of that name exists (GitHub:
+     `GET git/ref/tags/<name>` is 404; Forgejo: the whole `GET .../tags` list,
+     which comes from git).
+
+The draft is deleted in a `finally` block, whatever failed before: by its id
+if the create returned one, and by name from the release list in case the
+create's response was lost. If the deletion itself fails, the step fails and
+names the draft to delete by hand; if the check had already failed, that
+error is reported as well. Forgejo's API never removes a deleted release's
+database row: it keeps it as a tag record without a commit, which no API list,
+git, the web tags page or the tag count shows, so nothing visible is left.
+
+Any failure stops the release before anything is built, with the reason and
+"Nothing has been built or published". A dry run does only the read-only part
+(steps 1 and 2, for `v<version>`, and without waiting for the tag), never the
+write check; on GitHub it does only the anonymous tag check while
+`GH_RELEASE_TOKEN` isn't set, and says so in a notice.
 
 ### Draft, then publish
 
@@ -342,24 +410,51 @@ therefore builds each release as a draft and publishes it last. For GitHub:
    the draft lacks.
 4. `SHA256SUMS`, computed over the draft's final asset set, uploaded the same
    way (an outdated one is deleted first).
-5. `PATCH /repos/{o}/{r}/releases/{id}` with `draft: false`, the last call.
+5. The final check, on a fresh `GET` of the draft (below).
+6. `PATCH /repos/{o}/{r}/releases/{id}` with `draft: false` and
+   `make_latest: "legacy"`, the last call. `legacy` has GitHub pick the latest
+   release by date and version, so a backport published after a newer
+   release doesn't become the latest.
 
 The Forgejo release follows the same order through Forgejo's API, so
-`releases/latest` never shows a half-uploaded release.
+`releases/latest` never shows a half-uploaded release. Forgejo's API has no
+`make_latest`: its latest release is the newest published non-prerelease by
+creation date, so a backport published after a newer release does show as
+Forgejo's latest until the next release.
 
-- **Resuming.** A draft left by an earlier run keeps its notes. On GitHub, its
-  assets are kept, with the checksums GitHub reports for them, and
-  `SHA256SUMS` lists what the draft holds. Forgejo's web routes, the only way to
-  download an attachment, don't accept the job token for a private repository,
-  so on a resumed Forgejo draft this run's files replace the existing ones.
+- **Final check.** The last step before the irreversible publish. The raw
+  asset list, before any filtering by state, must hold exactly the expected
+  names, once each, with no entry other than `uploaded` (GitHub's `state`).
+  Each asset's size must match, and on GitHub its reported `digest`
+  (`sha256:<hex>`) must equal the expected sha256: the local file's for an
+  upload, the verified digest of an asset kept from an earlier run, and for
+  `SHA256SUMS` the sha256 of the text this run computed or found up to date.
+  An asset without a digest is downloaded and hashed. Forgejo reports no
+  digest and won't serve the assets to the job token, so there the check is
+  each asset's size against the local file's (every Forgejo asset is this
+  run's upload).
+- **Resuming.** A draft left by an earlier run keeps its notes, but only if its
+  `target_commitish` is the release commit: a draft made for another commit
+  stops the run with a message to delete it. Assets that aren't part of this
+  release (the local assets plus `SHA256SUMS`) are deleted first, as are all
+  copies of a name that appears more than once (Forgejo allows that; the run
+  then uploads one). On GitHub, the other assets are kept, with the checksums
+  GitHub reports for them, and `SHA256SUMS` lists what the draft holds.
+  Forgejo's web routes, the only way to download an attachment, don't accept
+  the job token for a private repository, so on a resumed Forgejo draft this
+  run's files replace the existing ones.
 - **Published.** The script never uploads to or deletes from a published
   release. It checks that every asset and `SHA256SUMS` are there and, on
   GitHub, that each asset matches `SHA256SUMS`, and fails with an explanation
   otherwise.
 - **Retries.** Reads, the final `PATCH` and deletes retry on 5xx and network
-  errors. A `POST` doesn't: after a failed upload the script lists the draft's
-  assets again and sends the file again only if it's absent (or, on GitHub,
-  differs). A failed create looks for the draft before trying again.
+  errors, including a truncated response (`http.client.HTTPException`, such
+  as `IncompleteRead`). Deletes treat 404 as done, so a retried delete
+  succeeds. A `POST` doesn't retry: after an uncertain upload failure, or
+  GitHub's 422 `already_exists`, the script lists the draft's assets again
+  and accepts the asset if it's complete and matches (digest on GitHub, size
+  on Forgejo), or deletes it and sends the file again. A failed create looks
+  for the draft before trying again.
 - **Downloads.** GitHub serves a draft's assets only through the API asset URL
   with `Accept: application/octet-stream`. The token goes in an unredirected
   header, so the redirect to storage never carries it.
@@ -367,10 +462,11 @@ The Forgejo release follows the same order through Forgejo's API, so
 #### Release API (dry run)
 
 The dry run calls the same code with `--dry-run`, which makes no write: it
-finds the release, checks a published one, prints the uploads a real run would
-make and, on GitHub, downloads the smallest existing asset. While the
-workspace version is already released, the check reports what the published
-release lacks as a warning.
+finds the release, checks a published one, prints the deletions and uploads a
+real run would make (or warns that a draft for another commit would stop it)
+and, on GitHub, downloads the smallest existing asset. While the workspace
+version is already released, the check reports what the published release
+lacks as a warning.
 
 ### Artifacts
 
@@ -408,8 +504,22 @@ binaries with the licence files it ships, identical texts printed once.
   for the CLI (`-p bacnet-cli --features sc-tls,pcap`) and the Python extension
   (`-p rusty-bacnet`) on both Linux targets, so build scripts, proc-macros and
   dev-dependencies, which neither binary contains, are left out. The licence
-  files are the ones at each crate's root, plus `aws-lc/LICENSE` for the C
-  library that `aws-lc-sys` bundles.
+  files are the ones at each crate's root, plus three for the C library that
+  `aws-lc-sys` bundles: `aws-lc/LICENSE`, fiat-crypto's
+  `aws-lc/third_party/fiat/LICENSE` (MIT), and the licence comment of
+  jitterentropy's `jitterentropy.h`, which is built on Linux and whose
+  BSD-3-Clause terms AWS-LC elects (the crate doesn't ship jitterentropy's
+  `LICENSE`).
+- Every component's row gives where its source is: a crate's crates.io page
+  for that version (`https://crates.io/crates/{name}/{version}`), or its
+  repository if it isn't from crates.io; libpcap's release tarball on
+  tcpdump.org. MPL-2.0 needs this for `serialport`, which is in the wheels.
+- Generation fails if a crate ships no licence file while its licence
+  expression has any identifier other than the public-domain-like `0BSD`,
+  `CC0-1.0`, `MIT-0`, `Unlicense` and `WTFPL` (so MIT, BSD-*, ISC,
+  Apache-2.0, MPL-2.0 and unknown ones all count), unless
+  `ALLOW_NO_LICENSE_FILE` in the script names it with the reason. The list is
+  empty: every such crate ships a licence file.
 - libpcap's licence and version come from `/opt/libpcap` in the CI image.
 - The file depends only on `Cargo.lock`, the crate sources and libpcap, so a
   rebuild writes the same file.
@@ -454,9 +564,12 @@ Repository secrets, each passed only to the step that needs it:
   `bacnet-cli`.
 - `PYPI_PUBLISH`: a PyPI API token for `rusty-bacnet`, used as `__token__`.
 - `GH_RELEASE_TOKEN`: a fine-grained GitHub token for `jscott3201/rusty-bacnet`
-  with Contents read and write.
-- The job's automatic token creates the Forgejo release and reads commit
-  statuses.
+  with Contents read and write. Validate's preflight uses it too, to list
+  releases and to create and delete its disposable draft.
+- The job's automatic token creates the Forgejo release, makes and deletes the
+  preflight's draft, and reads commit statuses. Validate and the Forgejo
+  release job declare `contents: write` for when Forgejo honours
+  `permissions`.
 
 For a release, Validate fails before any build if `CARGO_REGISTRY_TOKEN`,
 `PYPI_PUBLISH` or `GH_RELEASE_TOKEN` is empty; a dry run only warns. The step
