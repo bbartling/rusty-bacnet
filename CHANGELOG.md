@@ -190,6 +190,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A B/IP BBMD now forwards its own broadcasts (#937). Before, `send_broadcast`
+  in BBMD mode sent only the local Original-Broadcast-NPDU, so the BBMD's own
+  Who-Is, I-Am and Network-Number-Is, and broadcasts it routed, never reached
+  remote subnets or foreign devices, and they could not discover its device by
+  broadcast. It now also sends a Forwarded-NPDU, with its own B/IP address as
+  the originating address, to every BDT entry except its own (directed
+  broadcast or unicast, by the entry's mask) and to every registered foreign
+  device (Annex J.4.5). This fanout goes through the same `FanoutPolicy` queue,
+  budgets and `fanout_counters()` as forwarded input. A throttled or failed
+  forward is counted and logged and does not fail the local broadcast. Plain and
+  foreign-device modes are unchanged. `BbmdState::local_address` is new.
+
 - The PICS generator's `CharacterSet` now offers exactly the six character sets
   in Annex A's "Character Sets Supported" section, each printed with its Annex A
   label (#913). `DbcsMs` printed JIS C 6226, the old name of JIS X 0208, so it

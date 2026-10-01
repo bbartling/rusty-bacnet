@@ -228,6 +228,11 @@ impl BbmdState {
         self.counters
     }
 
+    /// This BBMD's own B/IP address (IP and UDP port), as given to [`Self::new`].
+    pub fn local_address(&self) -> ([u8; 4], u16) {
+        (self.local_ip, self.local_port)
+    }
+
     // -----------------------------------------------------------------------
     // BDT management
     // -----------------------------------------------------------------------

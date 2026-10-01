@@ -22,89 +22,28 @@ use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 
+mod bvlc_response;
 mod fanout;
 mod socket;
+use bvlc_response::{
+    bvlc_result_error, decode_bvlc_result_code, expect_bvlc_function, BvlcResponseKind,
+    PendingBvlcResponse,
+};
 use socket::BipSocket;
 mod io;
+mod own_broadcast;
 mod rate_limit;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 use io::{
     handle_bvll_message, original_destination_matches, resolve_local_ip,
     send_register_foreign_device, RecvContext,
 };
+use own_broadcast::OwnBroadcastForwarder;
 pub use rate_limit::ManagementCounters;
 use rate_limit::ManagementRateLimiter;
 
 /// Default BACnet/IP port (0xBAC0 = 47808).
 pub const DEFAULT_BACNET_PORT: u16 = 0xBAC0;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum BvlcResponseKind {
-    Result,
-    ReadBroadcastDistributionTableAck,
-    ReadForeignDeviceTableAck,
-}
-
-impl BvlcResponseKind {
-    pub(super) fn accepts(self, function: BvlcFunction) -> bool {
-        match self {
-            Self::Result => function == BvlcFunction::BVLC_RESULT,
-            Self::ReadBroadcastDistributionTableAck => {
-                function == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK
-                    || function == BvlcFunction::BVLC_RESULT
-            }
-            Self::ReadForeignDeviceTableAck => {
-                function == BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK
-                    || function == BvlcFunction::BVLC_RESULT
-            }
-        }
-    }
-}
-
-pub(super) struct PendingBvlcResponse {
-    target: ([u8; 4], u16),
-    expected: BvlcResponseKind,
-    tx: oneshot::Sender<BvllMessage>,
-}
-
-impl PendingBvlcResponse {
-    pub(super) fn matches(&self, sender: ([u8; 4], u16), function: BvlcFunction) -> bool {
-        self.target == sender && self.expected.accepts(function)
-    }
-}
-
-pub(super) fn expect_bvlc_function(msg: &BvllMessage, expected: BvlcFunction) -> Result<(), Error> {
-    if msg.function == expected {
-        Ok(())
-    } else {
-        Err(Error::Encoding(format!(
-            "expected BVLC response {expected:?}, got {:?}",
-            msg.function
-        )))
-    }
-}
-
-pub(super) fn decode_bvlc_result_code(msg: &BvllMessage) -> Result<BvlcResultCode, Error> {
-    expect_bvlc_function(msg, BvlcFunction::BVLC_RESULT)?;
-    if msg.payload.len() != std::mem::size_of::<u16>() {
-        return Err(Error::Encoding(format!(
-            "BVLC-Result payload must be 2 bytes, got {}",
-            msg.payload.len()
-        )));
-    }
-
-    Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
-        msg.payload[0],
-        msg.payload[1],
-    ])))
-}
-
-fn bvlc_result_error(msg: &BvllMessage) -> Error {
-    match decode_bvlc_result_code(msg) {
-        Ok(code) => Error::Encoding(format!("BVLC-Result: {code:?}")),
-        Err(err) => err,
-    }
-}
 
 /// Configuration for foreign device registration.
 #[derive(Debug, Clone)]
@@ -181,6 +120,9 @@ pub struct BipTransport {
     fanout_counters: Arc<fanout::AtomicFanoutCounters>,
     /// Rate limiter for broadcast forwarding fanout.
     fanout_limiter: Arc<std::sync::Mutex<fanout::FanoutRateLimiter>>,
+    /// Forwards this BBMD's own broadcasts to BDT peers and foreign devices
+    /// (BBMD mode only, created in `start()`).
+    own_broadcast: Option<OwnBroadcastForwarder>,
 }
 
 impl BipTransport {
@@ -217,6 +159,7 @@ impl BipTransport {
             fanout_task: None,
             fanout_counters,
             fanout_limiter,
+            own_broadcast: None,
         }
     }
 
@@ -363,6 +306,7 @@ impl BipTransport {
             task.abort();
             tasks.push(task);
         }
+        self.own_broadcast = None;
         self.socket = None;
         tasks
     }
@@ -675,6 +619,11 @@ impl TransportPort for BipTransport {
             Arc::clone(&self.fanout_limiter),
             Arc::clone(&self.fanout_counters),
         );
+        // The send path shares the receive loop's dispatcher, budgets and counters.
+        self.own_broadcast = self
+            .bbmd
+            .clone()
+            .map(|bbmd| OwnBroadcastForwarder::new(bbmd, fanout_dispatcher.clone()));
 
         let recv_ctx = RecvContext {
             local_mac: self.local_mac,
@@ -820,6 +769,14 @@ impl TransportPort for BipTransport {
         let mut buf = BytesMut::with_capacity(4 + npdu.len());
         encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, npdu)?;
 
+        // A BBMD also forwards its own broadcast to the other BDT subnets and
+        // its foreign devices (Annex J.4.5). The fanout is queued first, so its
+        // targets are fixed before the local frame is on the wire; a throttled
+        // or failed forward is counted and logged and never fails this send.
+        if let Some(forwarder) = &self.own_broadcast {
+            forwarder.forward(npdu).await;
+        }
+
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 
         Ok(())
@@ -868,6 +825,8 @@ mod management_ack_tests;
 mod npdu_addressing_tests;
 #[cfg(test)]
 mod original_tests;
+#[cfg(test)]
+mod own_broadcast_tests;
 #[cfg(test)]
 mod rate_limit_tests;
 #[cfg(test)]
