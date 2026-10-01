@@ -92,6 +92,8 @@ async fn make_client() -> BACnetClient<BipTransport> {
 mod atomic_write_file_budget;
 #[path = "server/basic.rs"]
 mod basic;
+#[path = "server/bbmd_discovery.rs"]
+mod bbmd_discovery;
 #[path = "server/dcc.rs"]
 mod dcc;
 #[path = "server/error_cov.rs"]

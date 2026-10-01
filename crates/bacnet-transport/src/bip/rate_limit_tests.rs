@@ -346,7 +346,7 @@ async fn rate_limit_discards_malformed_and_unauthorized_before_normal_handling()
             originating_ip: None,
             originating_port: None,
         };
-        handle_bvll_message(&msg, sender, server).await;
+        handle_bvll_message(&msg, sender, Delivery::Unicast, server).await;
     }
 
     // Fill the combined quota with a mix: 8 reads + 8 deletes. Each delete
@@ -486,7 +486,7 @@ async fn rate_limit_leaves_dbtn_and_npdu_outside_limiter() {
             originating_ip: None,
             originating_port: None,
         };
-        handle_bvll_message(&msg, sender, &ctx).await;
+        handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
         // Drain each admitted Read-BDT-ACK from the peer.
         let mut buf = [0u8; 2048];
         timeout(Duration::from_millis(300), peer.recv_from(&mut buf))
@@ -501,7 +501,7 @@ async fn rate_limit_leaves_dbtn_and_npdu_outside_limiter() {
         originating_ip: None,
         originating_port: None,
     };
-    handle_bvll_message(&over, sender, &ctx).await;
+    handle_bvll_message(&over, sender, Delivery::Unicast, &ctx).await;
     {
         let mut buf = [0u8; 2048];
         assert!(
@@ -519,7 +519,7 @@ async fn rate_limit_leaves_dbtn_and_npdu_outside_limiter() {
         originating_ip: None,
         originating_port: None,
     };
-    handle_bvll_message(&npdu, sender, &ctx).await;
+    handle_bvll_message(&npdu, sender, Delivery::Unicast, &ctx).await;
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await
         .expect("NPDU must bypass the management limiter")
@@ -534,7 +534,7 @@ async fn rate_limit_leaves_dbtn_and_npdu_outside_limiter() {
         originating_ip: None,
         originating_port: None,
     };
-    handle_bvll_message(&dbtn, sender, &ctx).await;
+    handle_bvll_message(&dbtn, sender, Delivery::Unicast, &ctx).await;
     {
         let mut buf = [0u8; 2048];
         let (len, _) = timeout(Duration::from_secs(2), peer.recv_from(&mut buf))

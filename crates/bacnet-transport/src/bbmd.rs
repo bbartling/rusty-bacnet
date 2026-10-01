@@ -118,6 +118,46 @@ fn validate_bdt_entry(e: &BdtEntry) -> Result<(), Error> {
     }
 }
 
+/// Validate and canonicalize a BDT candidate (issue #529) without adding the
+/// local BBMD's own row.
+///
+/// Byte-identical duplicates collapse in stable first-seen order; the same
+/// `(ip, port)` with different masks rejects the whole candidate.
+pub(crate) fn canonical_bdt(entries: Vec<BdtEntry>) -> Result<Vec<BdtEntry>, Error> {
+    let cap = entries.len().min(BbmdState::MAX_BDT_ENTRIES);
+    let mut seen: HashMap<([u8; 4], u16), [u8; 4]> = HashMap::with_capacity(cap);
+    let mut canonical: Vec<BdtEntry> = Vec::with_capacity(cap);
+    for entry in entries {
+        validate_bdt_entry(&entry)?;
+        match seen.entry((entry.ip, entry.port)) {
+            Entry::Occupied(o) => {
+                if *o.get() != entry.broadcast_mask {
+                    return Err(bdt_invalid(&entry, "conflicting masks"));
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(entry.broadcast_mask);
+                canonical.push(entry);
+            }
+        }
+    }
+    Ok(canonical)
+}
+
+/// Fail when `rows`, plus a self row for `(ip, port)` if absent, would exceed
+/// [`BbmdState::MAX_BDT_ENTRIES`].
+fn check_bdt_capacity_with_self(rows: &[BdtEntry], ip: [u8; 4], port: u16) -> Result<(), Error> {
+    let has_self = rows.iter().any(|e| e.ip == ip && e.port == port);
+    let effective_len = rows.len() + usize::from(!has_self);
+    if effective_len > BbmdState::MAX_BDT_ENTRIES {
+        return Err(Error::Encoding(format!(
+            "BDT size {effective_len} exceeds maximum of {} after self-entry insertion",
+            BbmdState::MAX_BDT_ENTRIES
+        )));
+    }
+    Ok(())
+}
+
 /// An FDT entry decoded from the wire (Read-FDT-ACK payload).
 ///
 /// Unlike [`FdtEntry`], this does not contain an `Instant` field — it carries
@@ -180,6 +220,9 @@ pub fn decode_fdt(data: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
 #[derive(Debug)]
 pub struct BbmdState {
     bdt: Vec<BdtEntry>,
+    /// Whether the last BDT row is this BBMD's own row, appended because the
+    /// committed table lacked it (see `ensure_self_in_bdt`).
+    self_row_appended: bool,
     fdt: Vec<FdtEntry>,
     local_ip: [u8; 4],
     local_port: u16,
@@ -198,6 +241,7 @@ impl BbmdState {
     pub fn new(local_ip: [u8; 4], local_port: u16) -> Self {
         Self {
             bdt: Vec::new(),
+            self_row_appended: false,
             fdt: Vec::new(),
             local_ip,
             local_port,
@@ -228,6 +272,34 @@ impl BbmdState {
         self.counters
     }
 
+    /// This BBMD's own B/IP address (IP and UDP port): the one given to
+    /// [`Self::new`], or the one a restart of a `0.0.0.0`-bound transport chose.
+    pub fn local_address(&self) -> ([u8; 4], u16) {
+        (self.local_ip, self.local_port)
+    }
+
+    /// Change this BBMD's own B/IP address, keeping the BDT and FDT. Only the
+    /// B/IP transport's restart of a wildcard-bound BBMD calls this.
+    ///
+    /// A self row that [`Self::set_bdt`] appended for the old address moves to
+    /// the new one. A row the BDT lists explicitly stays, and becomes an
+    /// ordinary peer row once it no longer matches. Returns `Error::Encoding`,
+    /// changing nothing, when the new self row would overflow the BDT.
+    pub(crate) fn set_local_address(&mut self, ip: [u8; 4], port: u16) -> Result<(), Error> {
+        if (ip, port) == (self.local_ip, self.local_port) {
+            return Ok(());
+        }
+        check_bdt_capacity_with_self(self.configured_bdt(), ip, port)?;
+        if self.self_row_appended {
+            self.bdt.pop();
+            self.self_row_appended = false;
+        }
+        self.local_ip = ip;
+        self.local_port = port;
+        self.ensure_self_in_bdt();
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // BDT management
     // -----------------------------------------------------------------------
@@ -245,34 +317,10 @@ impl BbmdState {
     /// over-capacity candidate returns `Error::Encoding` and preserves the
     /// previously committed table exactly.
     pub fn set_bdt(&mut self, entries: Vec<BdtEntry>) -> Result<(), Error> {
-        let cap = entries.len().min(Self::MAX_BDT_ENTRIES);
-        let mut seen: HashMap<([u8; 4], u16), [u8; 4]> = HashMap::with_capacity(cap);
-        let mut canonical: Vec<BdtEntry> = Vec::with_capacity(cap);
-        for entry in entries {
-            validate_bdt_entry(&entry)?;
-            match seen.entry((entry.ip, entry.port)) {
-                Entry::Occupied(o) => {
-                    if *o.get() != entry.broadcast_mask {
-                        return Err(bdt_invalid(&entry, "conflicting masks"));
-                    }
-                }
-                Entry::Vacant(v) => {
-                    v.insert(entry.broadcast_mask);
-                    canonical.push(entry);
-                }
-            }
-        }
-        let has_self = canonical
-            .iter()
-            .any(|e| e.ip == self.local_ip && e.port == self.local_port);
-        let effective_len = canonical.len() + usize::from(!has_self);
-        if effective_len > Self::MAX_BDT_ENTRIES {
-            return Err(Error::Encoding(format!(
-                "BDT size {effective_len} exceeds maximum of {} after self-entry insertion",
-                Self::MAX_BDT_ENTRIES
-            )));
-        }
+        let canonical = canonical_bdt(entries)?;
+        check_bdt_capacity_with_self(&canonical, self.local_ip, self.local_port)?;
         self.bdt = canonical;
+        self.self_row_appended = false;
         self.ensure_self_in_bdt();
         Ok(())
     }
@@ -289,12 +337,19 @@ impl BbmdState {
                 port: self.local_port,
                 broadcast_mask: [0xff, 0xff, 0xff, 0xff],
             });
+            self.self_row_appended = true;
         }
     }
 
     /// Get the current BDT.
     pub fn bdt(&self) -> &[BdtEntry] {
         &self.bdt
+    }
+
+    /// The BDT without the self row [`Self::set_bdt`] appended, if it did.
+    pub(crate) fn configured_bdt(&self) -> &[BdtEntry] {
+        let len = self.bdt.len() - usize::from(self.self_row_appended);
+        &self.bdt[..len]
     }
 
     /// Encode the BDT for a Read-BDT-ACK payload.

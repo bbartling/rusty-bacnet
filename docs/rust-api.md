@@ -1292,25 +1292,101 @@ use std::path::PathBuf;
 use bacnet_transport::bbmd::BdtEntry;
 use bacnet_transport::bip::{BipTransport, DEFAULT_BACNET_PORT};
 
+// Bind the BBMD's own interface address and its subnet's broadcast address.
 let mut transport = BipTransport::new(
-    Ipv4Addr::UNSPECIFIED,
+    Ipv4Addr::new(192, 168, 1, 10),
     DEFAULT_BACNET_PORT,
-    Ipv4Addr::BROADCAST,
+    Ipv4Addr::new(192, 168, 1, 255),
 );
 
-transport.enable_bbmd(vec![BdtEntry {
-    ip: [192, 168, 1, 10],
-    port: DEFAULT_BACNET_PORT,
-    broadcast_mask: [255, 255, 255, 255],
-}]);
+transport.enable_bbmd(vec![
+    // This BBMD's own row (added automatically when it is missing).
+    BdtEntry {
+        ip: [192, 168, 1, 10],
+        port: DEFAULT_BACNET_PORT,
+        broadcast_mask: [255, 255, 255, 255],
+    },
+    // A peer BBMD on another subnet, reached by unicast.
+    BdtEntry {
+        ip: [10, 0, 5, 2],
+        port: DEFAULT_BACNET_PORT,
+        broadcast_mask: [255, 255, 255, 255],
+    },
+]);
 
-// Optional: persist successful legacy Write-BDT updates and reload them on restart.
+// Optional: load a BDT saved in this file at startup, falling back to the
+// configured table if the file is missing or invalid. Write-BDT from the
+// network is always refused and never changes the table or the file.
 transport.set_bdt_persist_path(PathBuf::from("/var/lib/rusty-bacnet/bdt.bin"));
 
-// Optional: restrict Write-BDT and Delete-FDT management operations.
-// An empty ACL allows all sources.
+// Optional: sources allowed to send Delete-Foreign-Device-Table-Entry.
+// An empty ACL denies every source.
 transport.set_bbmd_management_acl(vec![[192, 168, 1, 100]]);
 ```
+
+The BBMD's own B/IP address is the originating address of the broadcasts it
+forwards for itself, the BDT row it never forwards to, and the source it drops
+as the echo of its own broadcasts. With an interface address, it is that
+address and the bound port. Bound to `0.0.0.0`, the BBMD reads it from the BDT
+it starts with (the persisted BDT when that loads, otherwise the configured
+one):
+
+- the one row whose IP is a local IPv4 address of the host and whose port is
+  the bound port;
+- if several rows qualify, `start()` fails and asks for an explicit interface;
+- if none does, the host's local address toward its default route, but only
+  when it is one of the host's addresses and not loopback; otherwise `start()`
+  fails and asks for an explicit interface or the BBMD's own row in the BDT.
+
+A persisted BDT that loads is authoritative here: if no own address can be
+chosen from it, `start()` fails rather than falling back to the configured
+BDT. Only a self row that would push the persisted BDT past 128 entries still
+falls back to the configured BDT, with a warning.
+
+Each `start()` of a `0.0.0.0` BBMD repeats this, so a restart follows a
+changed address. The self row the BBMD appended moves with it, and rows listed
+in the BDT stay. A failed `start()` keeps the BBMD configuration, and a failed
+restart leaves its BDT and FDT as they were. Where the transport cannot list
+local addresses (currently Windows), a row counts as local when a socket can
+bind to its IP, and the same rules apply, except that with no local row any
+non-loopback default-route address is used and a warning is logged; bind an
+explicit interface there.
+
+On a multihomed host, prefer an explicit interface and that subnet's broadcast
+address, so the echo of each broadcast comes back from the BBMD's own address.
+A `0.0.0.0` BBMD whose broadcast address is 255.255.255.255 and whose own
+address is not the default-route address logs a warning at start: the kernel
+may send its broadcasts from another interface, and their echo is then not
+recognised as its own. Whatever its own address, a BBMD never rebroadcasts on
+its subnet a Forwarded-NPDU that arrived by broadcast (to the configured
+broadcast address or 255.255.255.255), since the subnet already received it;
+it still sends it to its foreign devices. This also stops a BDT row that is
+the BBMD itself under another address from looping a broadcast.
+
+A BBMD forwards its own broadcasts as well as those of other devices on its
+subnet (Annex J.4.5). Each `send_broadcast` in BBMD mode queues a
+Forwarded-NPDU, with the BBMD's own B/IP address as the originating address,
+for every BDT entry except its own and for its registered foreign devices, then
+sends the local Original-Broadcast-NPDU. At most
+`ForeignDevicePolicy::max_fdt_fanout` foreign devices (default 32) and
+`FanoutPolicy::max_fanout_per_input` targets in all (default 64) receive each
+broadcast. So remote devices and foreign devices hear the BBMD's own Who-Is,
+I-Am and Network-Number-Is, and the broadcasts it routes.
+
+This fanout uses the same `FanoutPolicy` queue and rate limits as forwarded
+input and shows in `fanout_counters()`. The per-origin limit is keyed on the
+origin's IP only. The BBMD's own broadcasts, including those it routes, share
+that one budget with everything else it forwards with its own IP as origin:
+`max_packets_per_sec_per_origin`, 128 forwarded packets per second by default,
+or about 128/T complete broadcasts per second with T targets. Past that, a
+broadcast reaches only some of its targets: BDT targets come first, so foreign
+devices are cut first. The global packet and byte limits also apply.
+
+Throttled targets, a full queue and failed sends are counted in
+`fanout_counters()` and logged; a stopped fanout worker or an encoding failure
+is only logged. None of them fail the local broadcast. The forward is queued
+before the local send and does not depend on it, so in BBMD mode an `Err` from
+`send_broadcast` can follow a forward that was already queued.
 
 ---
 
@@ -3084,7 +3160,7 @@ Transport wrappers must delegate `TransportPort::supports_local_nonrouter_number
 
 SC starts UNKNOWN with no configured SC Network Port API; unrelated configured objects provide no authority. SC logical broadcast is the BVLC broadcast destination VMAC. A direct unicast What-Is is valid, but its Number reply uses the Hub broadcast path, never the saved original-direct APDU response capability. Hub-relayed controls do not identify an originating TLS leaf; SC control-origin authorization remains separate (#518). Remaining data links and independent client media/mode qualification remain tracked by #879.
 
-B/IP BBMD and configured foreign modes start UNKNOWN with no registered Network Port authority. BBMD mode learns admitted Original-Broadcast, BDT Forwarded-NPDU and registered foreign-device DBTN announcements; its own Number reply is Original-Broadcast. It rejects an exact self UDP source tuple before forwarded delivery or fanout, preserving the self BDT row and admitted peers on the same IP at different ports. Configured foreign mode accepts structurally valid Forwarded-NPDU from alternate UDP senders under its existing compatibility policy and answers by DBTN to its configured BBMD. Logical broadcast conveys no authenticated origin. Registration rejection does not suppress DBTN attempts; the existing periodic registration loop continues. Shared-endpoint Number wire tests cover BBMD ServerOnly admission and Original-Broadcast replies, foreign ClientOnly alternate forwarding and DBTN through registration rejection/retry, and Both requester/responder progress during live controls plus stop/drop socket release. Linux loopback supplies the independent BBMD broadcast capture; foreign direct capture also runs on macOS. Existing controlled endpoint tests separately prove held-send cancellation and resumed stop. Broader shared-endpoint BBMD/foreign behavior remains experimental; these modes add no configured Network Port authority.
+B/IP BBMD and configured foreign modes start UNKNOWN with no registered Network Port authority. BBMD mode learns admitted Original-Broadcast, BDT Forwarded-NPDU and registered foreign-device DBTN announcements; its own Number reply is a local Original-Broadcast, which it also forwards as a Forwarded-NPDU to its BDT peers and registered foreign devices like its other broadcasts (#937). It rejects an exact self UDP source tuple before forwarded delivery or fanout, preserving the self BDT row and admitted peers on the same IP at different ports. Configured foreign mode accepts structurally valid Forwarded-NPDU from alternate UDP senders under its existing compatibility policy and answers by DBTN to its configured BBMD. Logical broadcast conveys no authenticated origin. Registration rejection does not suppress DBTN attempts; the existing periodic registration loop continues. Shared-endpoint Number wire tests cover BBMD ServerOnly admission and Original-Broadcast replies, foreign ClientOnly alternate forwarding and DBTN through registration rejection/retry, and Both requester/responder progress during live controls plus stop/drop socket release. Linux loopback supplies the independent BBMD broadcast capture; foreign direct capture also runs on macOS. Existing controlled endpoint tests separately prove held-send cancellation and resumed stop. Broader shared-endpoint BBMD/foreign behavior remains experimental; these modes add no configured Network Port authority.
 
 B/IPv6 starts UNKNOWN with no configured IPv6 Network Port authority. Normal mode learns admitted OriginalBroadcast announcements and answers by multicast OriginalBroadcast on the selected link. In the Rust configured foreign-device mode, an admitted Forwarded-NPDU from the configured BBMD is a logical broadcast despite its unicast UDP hop; replies use DBTN to that BBMD. A different BBMD endpoint cannot teach. Unicast NNI, routed controls and malformed payloads remain ineligible. Existing selected-link, source-address, destination/interface and VMAC checks still apply. There is no new IPv6 endpoint builder, number setter or Python foreign-device API.
 

@@ -480,7 +480,7 @@ async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     // 1. Mandatory local subnet broadcast MUST be received
     let local_frame = recv_bvll(&local_broadcast_sink).await;

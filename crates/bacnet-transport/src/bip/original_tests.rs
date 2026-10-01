@@ -153,7 +153,7 @@ async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await
@@ -166,7 +166,13 @@ async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
     );
     assert!(!received.link_layer_group);
 
-    handle_bvll_message(&msg, (Ipv4Addr::LOCALHOST.octets(), local_port), &ctx).await;
+    handle_bvll_message(
+        &msg,
+        (Ipv4Addr::LOCALHOST.octets(), local_port),
+        Delivery::Unicast,
+        &ctx,
+    )
+    .await;
     assert!(
         timeout(Duration::from_millis(100), npdu_rx.recv())
             .await
@@ -231,7 +237,7 @@ async fn original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await

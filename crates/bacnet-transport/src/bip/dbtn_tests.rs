@@ -86,7 +86,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await
@@ -163,7 +163,7 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     let result = recv_bvll(&origin_fd_sink).await;
     assert_eq!(result.function, BvlcFunction::BVLC_RESULT);

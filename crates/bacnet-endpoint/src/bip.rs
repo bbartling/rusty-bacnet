@@ -184,6 +184,11 @@ impl BipEndpointBuilder {
 
     /// Enables BBMD mode with the initial BDT (before start).
     ///
+    /// With a `0.0.0.0` interface, the BBMD's own B/IP address comes from the
+    /// BDT row at one of the host's addresses and the bound port, as described
+    /// at [`BipTransport::enable_bbmd`]; bind an explicit interface address to
+    /// avoid that choice.
+    ///
     /// Local Number controls have BBMD wire coverage; broader BBMD behavior
     /// remains experimental. BBMD controls require this first:
     /// [`foreign_device_policy`](Self::foreign_device_policy) /
