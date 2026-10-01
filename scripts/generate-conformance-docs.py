@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Generate draft BACnet conformance support documents from the ledger."""
+"""Generate draft BACnet conformance support documents from the ledger.
+
+With --check this also verifies that every test anchor in the ledger resolves
+(see check_ledger_anchors.py)."""
 
 from __future__ import annotations
 
@@ -7,6 +10,8 @@ import argparse
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
+
+import check_ledger_anchors
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +163,8 @@ def main() -> int:
         for path in stale:
             print(f"stale: {path.relative_to(ROOT)}")
         return 1
+    if args.check:
+        return check_ledger_anchors.check(data)
     return 0
 
 
