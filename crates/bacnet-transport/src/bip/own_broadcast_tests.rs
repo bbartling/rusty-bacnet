@@ -4,20 +4,20 @@ use super::*;
 use tokio::time::timeout;
 
 /// A global-broadcast Who-Is NPDU.
-const NPDU: &[u8] = &[0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
+pub(super) const NPDU: &[u8] = &[0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
 const LOCALHOST: [u8; 4] = [127, 0, 0, 1];
 
-async fn udp() -> UdpSocket {
+pub(super) async fn udp() -> UdpSocket {
     UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap()
 }
 
-fn port_of(socket: &UdpSocket) -> u16 {
+pub(super) fn port_of(socket: &UdpSocket) -> u16 {
     socket.local_addr().unwrap().port()
 }
 
-async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
+pub(super) async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     let mut recv_buf = [0u8; 2048];
     let (len, _addr) = timeout(Duration::from_secs(2), socket.recv_from(&mut recv_buf))
         .await
@@ -26,7 +26,7 @@ async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     decode_bvll(&recv_buf[..len]).unwrap()
 }
 
-async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
+pub(super) async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
     let mut recv_buf = [0u8; 2048];
     assert!(
         timeout(Duration::from_millis(100), socket.recv_from(&mut recv_buf))
@@ -41,7 +41,7 @@ fn assert_local_broadcast(frame: &BvllMessage) {
     assert_eq!(frame.payload.as_ref(), NPDU);
 }
 
-fn assert_own_forwarded(frame: &BvllMessage, origin: ([u8; 4], u16), label: &str) {
+pub(super) fn assert_own_forwarded(frame: &BvllMessage, origin: ([u8; 4], u16), label: &str) {
     assert_eq!(frame.function, BvlcFunction::FORWARDED_NPDU, "{label}");
     assert_eq!(frame.originating_ip, Some(origin.0), "{label}");
     assert_eq!(frame.originating_port, Some(origin.1), "{label}");
@@ -193,6 +193,38 @@ async fn bbmd_own_broadcast_targets_follow_bdt_masks_and_skip_own_entry() {
 }
 
 #[tokio::test]
+async fn bbmd_own_broadcast_skips_an_expired_foreign_device() {
+    let (socket, origin) = bbmd_socket().await;
+    let local_subnet = udp().await;
+    let live = ([192, 0, 2, 50], 47810);
+    let expired = ([192, 0, 2, 51], 47811);
+    let mut state = bbmd_state(origin.1, Vec::new(), &[live, expired]);
+    // Registered with a 60 s TTL: past it and the 30 s grace period.
+    state.backdate_foreign_device_for_test(expired.0, expired.1, Duration::from_secs(120));
+    // No worker: the queued job is inspected instead of sent.
+    let (bbmd, mut rx) = hand_wired_bbmd(
+        &socket,
+        state,
+        port_of(&local_subnet),
+        FanoutPolicy::default(),
+    );
+
+    bbmd.send_broadcast(NPDU).await.unwrap();
+
+    assert_local_broadcast(&recv_bvll(&local_subnet).await);
+    let job = rx.try_recv().expect("own broadcast queued a fanout job");
+    assert_own_forwarded(&decode_bvll(&job.frame).unwrap(), origin, "fanout frame");
+    assert_eq!(
+        job.targets,
+        vec![SocketAddrV4::new(Ipv4Addr::from(live.0), live.1)],
+        "only the live foreign device is a target"
+    );
+    assert!(rx.try_recv().is_err(), "exactly one fanout job");
+    let state = bbmd.bbmd_state().unwrap().lock().await;
+    assert_eq!(state.fdt_len_for_test(), 1, "the expired entry is purged");
+}
+
+#[tokio::test]
 async fn bbmd_own_broadcast_fanout_budgets_never_block_the_local_broadcast() {
     let (socket, origin) = bbmd_socket().await;
     let local_subnet = udp().await;
@@ -300,6 +332,9 @@ async fn started_bbmd_forwards_its_own_broadcasts_across_restart() {
                 .is_err(),
             "{round}: own broadcast echo must not be delivered"
         );
+        // Nor forwarded again as if another device had sent it.
+        assert_no_bvll(&bdt_peer, round).await;
+        assert_no_bvll(&foreign, round).await;
     }
     bbmd.stop().await.unwrap();
 }

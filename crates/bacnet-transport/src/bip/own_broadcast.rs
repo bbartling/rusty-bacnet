@@ -18,7 +18,9 @@ use super::fanout::FanoutDispatcher;
 
 /// Owned handle the send path uses to forward this BBMD's own broadcasts
 /// through the receive loop's fanout dispatcher, so the same budgets, queue
-/// and counters apply.
+/// and counters apply. The per-origin budget is keyed on the origin IP, so
+/// these forwards share it with everything forwarded with this BBMD's IP as
+/// origin, including the broadcasts it routes.
 pub(super) struct OwnBroadcastForwarder {
     bbmd: Arc<Mutex<BbmdState>>,
     fanout: FanoutDispatcher,
@@ -31,11 +33,13 @@ impl OwnBroadcastForwarder {
 
     /// Queue `npdu` as a Forwarded-NPDU whose originating address is this
     /// BBMD's own B/IP address, for every BDT entry but its own (inverted mask
-    /// ORed with the entry address) and every registered foreign device.
+    /// ORed with the entry address) and the registered foreign devices, at
+    /// most `ForeignDevicePolicy::max_fdt_fanout` of them.
     ///
-    /// Nothing is returned to the caller: as for an inbound
-    /// Original-Broadcast-NPDU, a throttled, refused or failed forward is
-    /// counted in the fanout counters and logged.
+    /// Nothing is returned to the caller, as for an inbound
+    /// Original-Broadcast-NPDU. Throttled targets, a full queue and failed
+    /// sends are counted in the fanout counters and logged; a closed fanout
+    /// worker or a Forwarded-NPDU that cannot be encoded is only logged.
     pub(super) async fn forward(&self, npdu: &[u8]) {
         let ((origin_ip, origin_port), targets, dedup_count) = {
             let mut state = self.bbmd.lock().await;
