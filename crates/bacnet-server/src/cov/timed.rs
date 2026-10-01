@@ -11,14 +11,23 @@
 //! Changes are normally reported as soon as they are captured. A change stays
 //! queued when its notification fails or is held back: a failed send, an
 //! unanswered confirmed report, DISABLE_INITIATION, an exhausted budget. The
-//! context's Max_Notification_Delay then bounds the wait, measured from its
-//! earliest queued change (§13.1, §13.16.1.1.4): [`TimedStore::next_due`]
-//! hands the server each context whose deadline has passed, and the server
-//! fans it out again. A confirmed report still outstanding, or communication
-//! still disabled, holds the context until the first attempt after that ends.
-//! Local policy: this backstop acts no sooner than one second after the
-//! earliest change, and while a context stays blocked it tries again at most
-//! once per delay (one second at least), so a persistent failure cannot spin.
+//! context's Max_Notification_Delay, an upper bound, then limits the wait,
+//! measured from its earliest queued change (§13.1, §13.16.1.1.4):
+//! [`TimedStore::next_due`] hands the server each context whose deadline has
+//! passed, and the server fans it out again.
+//!
+//! Local policy for that backstop:
+//! - it acts no sooner than one second after the earliest change;
+//! - after an attempt it waits the delay (one second at least) before the
+//!   next one, so a persistent failure cannot spin;
+//! - a confirmed hold-off moves the next attempt to the end of the hold-off,
+//!   and an outstanding confirmed report leaves the follow-up to its outcome;
+//! - [`TimedStore::rearm`] drops every wait when a block lifts
+//!   (communication re-enabled, a shorter delay admitted), so overdue changes
+//!   go out at once.
+//!
+//! Delays and waits live only with timestamped histories, so a context
+//! without one costs nothing here.
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what one notification APDU of the local maximum
@@ -119,6 +128,8 @@ struct TimedHistory {
     /// Sequence of the newest delivered change. An older change returned by
     /// a failed notification would contradict what was already delivered.
     committed: u64,
+    /// The context's Max_Notification_Delay, as last admitted.
+    delay: Duration,
     entries: VecDeque<TimedChange>,
 }
 
@@ -127,11 +138,10 @@ struct TimedHistory {
 pub(crate) struct TimedHistories {
     histories: HashMap<CovSubscriptionKey, TimedHistory>,
     context_bytes: HashMap<MultipleContextKey, usize>,
-    /// Max_Notification_Delay of each context, as last admitted.
-    delays: HashMap<MultipleContextKey, Duration>,
-    /// When the deadline backstop last handed out a context still pending.
-    attempted: HashMap<MultipleContextKey, Instant>,
-    /// Wakes [`TimedStore::next_due`] whenever a change is queued.
+    /// Earliest the deadline backstop may hand a context out again. Only a
+    /// context with a timestamped history has an entry.
+    not_before: HashMap<MultipleContextKey, Instant>,
+    /// Wakes [`TimedStore::next_due`] when a deadline may have moved earlier.
     wake: Arc<Notify>,
     next_seq: u64,
     next_incarnation: u64,
@@ -144,8 +154,7 @@ impl TimedHistories {
         Self {
             histories: HashMap::new(),
             context_bytes: HashMap::new(),
-            delays: HashMap::new(),
-            attempted: HashMap::new(),
+            not_before: HashMap::new(),
             wake: Arc::default(),
             next_seq: 1,
             next_incarnation: 1,
@@ -154,56 +163,93 @@ impl TimedHistories {
         }
     }
 
-    /// Record a context's admitted Max_Notification_Delay in seconds. Every
-    /// admission of the context, renewals included, sets it again.
+    /// Apply a context's admitted Max_Notification_Delay to its timestamped
+    /// histories. Every admission of the context, renewals included, calls
+    /// it; a context without one keeps nothing.
     pub(super) fn set_delay(&mut self, context: &MultipleContextKey, seconds: u32) {
-        self.delays
-            .insert(context.clone(), Duration::from_secs(u64::from(seconds)));
+        let delay = Duration::from_secs(u64::from(seconds));
+        let mut shorter = false;
+        for (key, history) in &mut self.histories {
+            if key.multiple_context() == Some(context) {
+                shorter |= delay < history.delay;
+                history.delay = delay;
+            }
+        }
+        if shorter {
+            self.rearm_context(context);
+        }
+    }
+
+    /// Drop every backstop wait: a block lifted, so overdue changes go out
+    /// at the next scan.
+    pub(crate) fn rearm(&mut self) {
+        self.not_before.clear();
+        self.wake.notify_one();
+    }
+
+    /// A shorter delay moves the context's deadline earlier: drop its wait
+    /// and wake the backstop to recompute.
+    fn rearm_context(&mut self, context: &MultipleContextKey) {
+        self.not_before.remove(context);
+        self.wake.notify_one();
+    }
+
+    /// A confirmed hold-off blocks `context` until `until`: the backstop's
+    /// next attempt waits for exactly that, not for its usual spacing.
+    pub(crate) fn hold_until(&mut self, context: &MultipleContextKey, until: Instant) {
+        if self
+            .histories
+            .keys()
+            .any(|key| key.multiple_context() == Some(context))
+        {
+            self.not_before.insert(context.clone(), until);
+            self.wake.notify_one();
+        }
     }
 
     /// Take the references with pending changes of every context whose
     /// deadline has passed at `now`, and the next deadline still ahead.
     ///
     /// A context is due at its earliest pending change plus its delay, but no
-    /// sooner than [`DEADLINE_FLOOR`] after that change, and no sooner than its
-    /// delay (the floor at least) after it was last handed out. Handing it out
-    /// starts that spacing.
+    /// sooner than [`DEADLINE_FLOOR`] after that change, nor before its wait
+    /// from a previous attempt or hold-off. Handing it out starts a wait of its
+    /// delay (the floor at least), in case the attempt is blocked again.
     pub(crate) fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
-        let mut earliest: HashMap<&MultipleContextKey, Instant> = HashMap::new();
+        // Earliest pending change and shortest delay per context.
+        let mut pending: HashMap<&MultipleContextKey, (Instant, Duration)> = HashMap::new();
         for (key, history) in &self.histories {
             let (Some(context), Some(first)) = (key.multiple_context(), history.entries.front())
             else {
                 continue;
             };
-            earliest
+            pending
                 .entry(context)
-                .and_modify(|at| *at = (*at).min(first.captured_at))
-                .or_insert(first.captured_at);
+                .and_modify(|(at, delay)| {
+                    *at = (*at).min(first.captured_at);
+                    *delay = (*delay).min(history.delay);
+                })
+                .or_insert((first.captured_at, history.delay));
         }
         let mut due = Vec::new();
         let mut next: Option<Instant> = None;
-        for (&context, &first) in &earliest {
-            let spacing = self
-                .delays
-                .get(context)
-                .copied()
-                .unwrap_or_default()
-                .max(DEADLINE_FLOOR);
+        for (&context, &(first, delay)) in &pending {
+            let spacing = delay.max(DEADLINE_FLOOR);
             let mut deadline = first + spacing;
-            if let Some(&attempted) = self.attempted.get(context) {
-                deadline = deadline.max(attempted + spacing);
+            if let Some(&wait) = self.not_before.get(context) {
+                deadline = deadline.max(wait);
             }
             if deadline <= now {
-                due.push(context.clone());
+                due.push((context.clone(), spacing));
             } else {
                 next = Some(next.map_or(deadline, |at| at.min(deadline)));
             }
         }
-        self.attempted
-            .retain(|context, _| earliest.contains_key(context));
-        for context in &due {
-            self.attempted.insert(context.clone(), now);
+        self.not_before
+            .retain(|context, _| pending.contains_key(context));
+        for (context, spacing) in &due {
+            self.not_before.insert(context.clone(), now + *spacing);
         }
+        let due: Vec<_> = due.into_iter().map(|(context, _)| context).collect();
         let keys = self
             .histories
             .iter()
@@ -218,9 +264,11 @@ impl TimedHistories {
         (keys, next)
     }
 
-    /// Bind a (re)published reference generation. A renewal keeps changes not
-    /// yet conveyed; its initial report is captured afresh.
-    pub(super) fn reset(&mut self, key: &CovSubscriptionKey, generation: u64) {
+    /// Bind a (re)published reference generation with its context's admitted
+    /// Max_Notification_Delay in seconds. A renewal keeps changes not yet
+    /// conveyed; its initial report is captured afresh.
+    pub(super) fn reset(&mut self, key: &CovSubscriptionKey, generation: u64, delay: u32) {
+        let delay = Duration::from_secs(u64::from(delay));
         let incarnation = self.next_incarnation;
         let history = self
             .histories
@@ -231,17 +279,23 @@ impl TimedHistories {
                 baseline: None,
                 latest: 0,
                 committed: 0,
+                delay,
                 entries: VecDeque::new(),
             });
         if history.incarnation == incarnation {
             self.next_incarnation += 1;
         }
+        let shorter = delay < history.delay;
         history.generation = generation;
         history.baseline = None;
+        history.delay = delay;
+        if let Some(context) = key.multiple_context().filter(|_| shorter) {
+            self.rearm_context(context);
+        }
     }
 
-    /// Drop the history of a removed reference, and its context's delay once
-    /// no timestamped reference of the context remains.
+    /// Drop the history of a removed reference, and its context's backstop
+    /// wait once no timestamped reference of the context remains.
     pub(super) fn remove(&mut self, key: &CovSubscriptionKey) {
         if let Some(history) = self.histories.remove(key) {
             let bytes: usize = history.entries.iter().map(|e| e.encoded_len).sum();
@@ -253,10 +307,15 @@ impl TimedHistories {
                 .keys()
                 .any(|other| other.multiple_context() == Some(context))
             {
-                self.delays.remove(context);
-                self.attempted.remove(context);
+                self.not_before.remove(context);
             }
         }
+    }
+
+    /// Timestamped histories and backstop waits held, for leak tests.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> (usize, usize) {
+        (self.histories.len(), self.not_before.len())
     }
 
     /// Latest captured or conveyed observation of a live generation.
@@ -521,6 +580,17 @@ impl TimedStore {
                 None => notified.await,
             }
         }
+    }
+
+    /// A block on notifications lifted (communication re-enabled): overdue
+    /// changes go out at the next scan instead of after a backstop wait.
+    pub(crate) fn rearm(&self) {
+        self.lock().rearm();
+    }
+
+    /// See [`TimedHistories::hold_until`].
+    pub(crate) fn hold_until(&self, context: &MultipleContextKey, until: Instant) {
+        self.lock().hold_until(context, until);
     }
 }
 

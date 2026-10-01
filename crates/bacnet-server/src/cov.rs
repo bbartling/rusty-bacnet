@@ -313,6 +313,16 @@ impl CovSubscriptionTable {
         purged_count
     }
 
+    /// Test fixture: let every subscription's lifetime run out now, without
+    /// waiting on the wall clock that lifetimes use.
+    #[cfg(test)]
+    pub(crate) fn expire_all_for_test(&mut self) {
+        let now = Instant::now();
+        for entry in self.subs.values_mut() {
+            entry.subscription.expires_at = Some(now);
+        }
+    }
+
     /// Get all active (non-expired) subscriptions for a given object.
     pub fn subscriptions_for(&mut self, oid: &ObjectIdentifier) -> Vec<&CovSubscriptionSnapshot> {
         self.purge_expired();

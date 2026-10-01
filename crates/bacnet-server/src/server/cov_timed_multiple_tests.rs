@@ -24,7 +24,7 @@ async fn initial_report_carries_admission_time() {
 }
 
 #[tokio::test]
-async fn initial_report_survives_the_clock_turning_invalid_after_admission() {
+async fn initial_report_captured_at_admission_survives_an_invalid_clock_at_preparation() {
     let mut h = Harness::start(ServerConfig::default()).await;
     h.set_clock(3);
     // Admission samples a valid clock; it is invalid by the time the initial

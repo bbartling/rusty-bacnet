@@ -182,7 +182,11 @@ impl CovSubscriptionTable {
         {
             let mut timed = self.timed.lock();
             if sub.timestamped && snapshot.key.multiple_context().is_some() {
-                timed.reset(&snapshot.key, generation);
+                timed.reset(
+                    &snapshot.key,
+                    generation,
+                    max_notification_delay.unwrap_or_default(),
+                );
             } else {
                 timed.remove(&snapshot.key);
             }

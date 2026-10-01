@@ -390,3 +390,168 @@ async fn life_safety_operation_change_reports_its_commit_time() {
     assert_eq!(envelope(&report), Some((at(42).local_date, time(42))));
     h.server.stop().await.unwrap();
 }
+
+/// A Life Safety Point whose Present_Value a write can set, unlike the bundled
+/// one, so one request can change it alongside Out_Of_Service.
+struct WritablePoint {
+    present_value: u32,
+    out_of_service: bool,
+}
+
+fn writable_point() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 2).unwrap()
+}
+
+impl bacnet_objects::traits::BACnetObject for WritablePoint {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        writable_point()
+    }
+
+    fn object_name(&self) -> &str {
+        "LSP-2"
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        Ok(match property {
+            PropertyIdentifier::OBJECT_IDENTIFIER => {
+                PropertyValue::ObjectIdentifier(writable_point())
+            }
+            PropertyIdentifier::OBJECT_NAME => PropertyValue::CharacterString("LSP-2".into()),
+            PropertyIdentifier::OBJECT_TYPE => {
+                PropertyValue::Enumerated(ObjectType::LIFE_SAFETY_POINT.to_raw())
+            }
+            PropertyIdentifier::PRESENT_VALUE => PropertyValue::Enumerated(self.present_value),
+            PropertyIdentifier::STATUS_FLAGS => PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![if self.out_of_service { 0x10 } else { 0 }],
+            },
+            PropertyIdentifier::OUT_OF_SERVICE => PropertyValue::Boolean(self.out_of_service),
+            _ => {
+                return Err(Error::Protocol {
+                    class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            }
+        })
+    }
+
+    fn write_property(
+        &mut self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        match (property, value) {
+            (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Enumerated(value)) => {
+                self.present_value = value;
+            }
+            (PropertyIdentifier::OUT_OF_SERVICE, PropertyValue::Boolean(value)) => {
+                self.out_of_service = value;
+            }
+            _ => {
+                return Err(Error::Protocol {
+                    class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                    code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                })
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[
+            PropertyIdentifier::OBJECT_IDENTIFIER,
+            PropertyIdentifier::OBJECT_NAME,
+            PropertyIdentifier::OBJECT_TYPE,
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::OUT_OF_SERVICE,
+        ])
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn life_safety_wpm_conveys_a_reference_its_exact_fanout_did_not_select() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(WritablePoint {
+            present_value: 0,
+            out_of_service: false,
+        }))
+        .unwrap();
+    })
+    .await;
+    // Two contexts: Status_Flags in one, Present_Value in the other.
+    h.subscribe_process(
+        856,
+        false,
+        vec![(writable_point(), vec![(SF, true)])],
+        Some(10),
+    )
+    .await;
+    h.notification().await;
+    h.subscribe_process(
+        857,
+        false,
+        vec![(writable_point(), vec![(PV, true)])],
+        Some(10),
+    )
+    .await;
+    h.notification().await;
+    h.set_clock(43);
+    // Present_Value changes for the request as a whole; Status_Flags goes out
+    // and back, so the request's exact fanout selects only the PV reference.
+    let start = tokio::time::Instant::now();
+    write_multiple(
+        &mut h,
+        &[
+            (
+                writable_point(),
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(true),
+                None,
+            ),
+            (writable_point(), PV, PropertyValue::Enumerated(3), None),
+            (
+                writable_point(),
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(false),
+                None,
+            ),
+        ],
+        53,
+    )
+    .await;
+    let first = h.notification().await;
+    let second = h.notification().await;
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "both contexts are told at once, not at the 10 s deadline"
+    );
+    let (flags_context, pv_context) = if first.subscriber_process_identifier == 856 {
+        (&first, &second)
+    } else {
+        (&second, &first)
+    };
+    assert_eq!(pv_context.subscriber_process_identifier, 857);
+    assert_eq!(
+        property_rows(&object_rows(pv_context, writable_point()), PV)
+            .last()
+            .cloned(),
+        Some((encode(PropertyValue::Enumerated(3)), Some(time(43))))
+    );
+    assert_eq!(
+        property_rows(&object_rows(flags_context, writable_point()), SF),
+        vec![(flags(0x1), Some(time(43))), (flags(0x0), Some(time(43)))],
+        "each attempt's Status_Flags change, at its commit: {flags_context:?}"
+    );
+    h.server.stop().await.unwrap();
+}

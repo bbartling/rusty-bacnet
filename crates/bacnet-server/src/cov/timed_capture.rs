@@ -21,12 +21,13 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::multiple_reads::MultipleReads;
 use super::timed::{TimedChange, TimedStore};
-use super::{CovNotificationKind, CovSubscriptionSnapshot, CovSubscriptionTable};
+use super::{
+    CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovSubscriptionTable,
+};
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use crate::life_safety_cov::{is_life_safety_object, LifeSafetyCovChange, LifeSafetyCovSnapshots};
 
 /// Live timestamped references whose changes a producer must capture.
-#[derive(Clone)]
 pub(crate) struct TimedCapture {
     store: TimedStore,
     refs: Vec<CovSubscriptionSnapshot>,
@@ -109,10 +110,14 @@ impl CovSubscriptionTable {
 }
 
 impl TimedCapture {
+    /// The kept references only: this runs per write attempt under the
+    /// database guard, so nothing else is cloned.
     fn select(&self, keep: impl Fn(&CovSubscriptionSnapshot) -> bool) -> Self {
         Self {
+            store: self.store.clone(),
             refs: self.refs.iter().filter(|sub| keep(sub)).cloned().collect(),
-            ..self.clone()
+            force: self.force,
+            frame: self.frame,
         }
     }
 
@@ -134,18 +139,18 @@ impl TimedCapture {
     }
 
     /// Queue each qualifying change under the committing mutation's database
-    /// guard, and report whether any was queued. A missing or invalid Device
-    /// clock captures nothing; the notification builder then applies its
-    /// clockless policy.
-    pub(crate) fn run(self, db: &ObjectDatabase) -> bool {
+    /// guard, and return the references that queued one. A missing or invalid
+    /// Device clock captures nothing; the notification builder then applies
+    /// its clockless policy.
+    pub(crate) fn run(self, db: &ObjectDatabase) -> Vec<CovSubscriptionKey> {
         if self.refs.is_empty() {
-            return false;
+            return Vec::new();
         }
         let Some(frame) = self.frame.or_else(|| {
             db.clock_frame()
                 .filter(|frame| frame.is_valid_actual_datetime())
         }) else {
-            return false;
+            return Vec::new();
         };
         let mut reads = MultipleReads::default();
         for sub in &self.refs {
@@ -162,7 +167,7 @@ impl TimedCapture {
             })
             .collect();
         let mut timed = self.store.lock();
-        let mut queued = false;
+        let mut queued = Vec::new();
         for (sub, prepared) in current {
             let key = sub.key();
             let generation = sub.generation();
@@ -175,11 +180,13 @@ impl TimedCapture {
             }
             let values =
                 reads.with_flags_companion(&sub.monitored_object_identifier, prepared.values);
-            queued |= timed.push(
+            if timed.push(
                 key,
                 generation,
                 TimedChange::new(frame, values, prepared.observation),
-            );
+            ) {
+                queued.push(key.clone());
+            }
         }
         queued
     }
@@ -196,8 +203,8 @@ pub(crate) struct TimedWriteCapture<'a> {
     /// State of the Life Safety object the current attempt writes, from
     /// before the attempt.
     life_safety: Option<LifeSafetyCovSnapshots>,
-    /// Life Safety objects with changes captured by some attempt.
-    life_safety_captured: Vec<ObjectIdentifier>,
+    /// Life Safety references some attempt queued a change for.
+    life_safety_queued: Vec<CovSubscriptionKey>,
 }
 
 impl<'a> TimedWriteCapture<'a> {
@@ -209,25 +216,17 @@ impl<'a> TimedWriteCapture<'a> {
             inner,
             capture,
             life_safety: None,
-            life_safety_captured: Vec::new(),
+            life_safety_queued: Vec::new(),
         }
     }
 
-    /// Life Safety objects whose attempts queued timestamped changes but which
-    /// have no change in the request's `exact` changes. Those compare the end
-    /// of the request with its start, so an object written out and back has
-    /// nothing to fan out there. Its ordinary fanout conveys the captured
-    /// changes; its untimestamped references find no change against their
-    /// baselines.
-    pub(crate) fn life_safety_without_exact_change(
-        &self,
-        exact: &[LifeSafetyCovChange],
-    ) -> Vec<ObjectIdentifier> {
-        self.life_safety_captured
-            .iter()
-            .copied()
-            .filter(|oid| !exact.iter().any(|change| change.object_identifier == *oid))
-            .collect()
+    /// Life Safety references whose attempts queued timestamped changes. The
+    /// request's exact fanout compares its end with its start, so it can miss
+    /// a reference whose property went out and back, or that only one attempt
+    /// selected. Revisiting these after that fanout conveys their changes
+    /// without waiting for the Max_Notification_Delay backstop.
+    pub(crate) fn life_safety_queued(&self) -> &[CovSubscriptionKey] {
+        &self.life_safety_queued
     }
 }
 
@@ -272,9 +271,10 @@ impl WriteCommitObserver for TimedWriteCapture<'_> {
         }
         if let Some(before) = self.life_safety.take() {
             for change in before.changes(db, std::slice::from_ref(&oid)) {
-                if self.capture.exact(&change).run(db) && !self.life_safety_captured.contains(&oid)
-                {
-                    self.life_safety_captured.push(oid);
+                for key in self.capture.exact(&change).run(db) {
+                    if !self.life_safety_queued.contains(&key) {
+                        self.life_safety_queued.push(key);
+                    }
                 }
             }
         }

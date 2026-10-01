@@ -26,6 +26,9 @@ pub(super) struct MutationEffects {
     pub(super) coarse_cov_oids: Vec<ObjectIdentifier>,
     pub(super) life_safety_cov_changes: Vec<LifeSafetyCovChange>,
     pub(super) staging_plans: Vec<StagingWritePlan>,
+    /// Timestamped references to evaluate again after the post-write fanout,
+    /// which may not have selected them (#856).
+    pub(super) timed_revisits: Vec<crate::cov::CovSubscriptionKey>,
 }
 
 /// Borrowed dispatch inputs; constructed only after the DCC precheck.
@@ -118,6 +121,7 @@ impl Request<'_> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            ..
         } = effects;
         if let Err(error) = self.authorize(|| {
             WritePropertyRequest::decode(&self.req.service_request)
@@ -187,6 +191,7 @@ impl Request<'_> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            timed_revisits,
         } = effects;
         let (outcome, exact_changes, plans) = {
             let mut db = db.write().await;
@@ -216,7 +221,7 @@ impl Request<'_> {
                 handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
             };
             let changes = snapshots.changes(&db, committed_oids);
-            coarse_cov_oids.extend(observer.life_safety_without_exact_change(&changes));
+            timed_revisits.extend_from_slice(observer.life_safety_queued());
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
             (outcome, changes, plans)
         };

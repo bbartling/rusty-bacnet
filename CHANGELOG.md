@@ -482,10 +482,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     coordinate untimestamped even when it did not qualify in that round.
   - **Max_Notification_Delay:** changes still queued because their notification
     failed or was held back (a failed send, an unacknowledged confirmed report,
-    DISABLE_INITIATION once lifted) go out once the context's delay has passed
-    since the earliest of them, without waiting for another change (§13.1,
-    §13.16.1.1.4). The backstop acts no sooner than one second after the change
-    and retries a context that is still blocked at most once per delay.
+    DISABLE_INITIATION) go out once the context's delay has passed since the
+    earliest of them, without waiting for another change (§13.1, §13.16.1.1.4).
+    Overdue changes go out as soon as nothing blocks them: when communication is
+    re-enabled (by request or timer), when a renewal shortens the delay, at the
+    end of a confirmed hold-off, or on the Ack of an outstanding report. The
+    backstop acts no sooner than one second after the change and otherwise
+    retries a blocked context at most once per delay. The delay and the
+    backstop's wait are kept only for contexts with timestamped references.
   - **Initial report:** the report after admission is stamped with the admission
     time, taken from the same clock sample the admission check validated. A
     renewal keeps unconveyed changes.

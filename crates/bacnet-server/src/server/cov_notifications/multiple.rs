@@ -189,6 +189,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // That report's Ack, or the first fanout after a hold-off, sends
                 // it; nothing is drained until then.
                 if !table.context_idle(&context, subscriptions) {
+                    // Pending timestamped changes are retried when a
+                    // hold-off ends, not after the backstop's usual wait.
+                    if let Some(until) = table.context_hold_until(&context) {
+                        table.timed().hold_until(&context, until);
+                    }
                     return;
                 }
                 // A failed report's changes can sit on any object of the

@@ -2187,11 +2187,16 @@ Changes are reported as soon as they happen. When their notification fails or is
 held back (a failed send, a confirmed report that went unacknowledged,
 DISABLE_INITIATION, an exhausted budget), `Max_Notification_Delay` bounds the
 wait: once the delay has passed since the earliest queued change, the context is
-fanned out again without waiting for another change (§13.1, §13.16.1.1.4). A
-context whose confirmed report is still outstanding, or whose communication is
-still disabled, sends at the first attempt after that ends. As local policy the
-backstop acts no sooner than one second after the change, and retries a blocked
-context at most once per delay (one second at least). A change no producer captured, such as
+fanned out again without waiting for another change (§13.1, §13.16.1.1.4). The
+delay is an upper bound, so once nothing blocks them overdue changes go out
+promptly: re-enabling communication (by DeviceCommunicationControl or when its
+timer expires), or admitting a shorter delay, retries them at once; a confirmed
+hold-off moves the retry to the end of the hold-off; and the Ack of a confirmed
+report still outstanding sends whatever it held back. As local policy the
+backstop acts no sooner than one second after the change, and otherwise retries
+a blocked context at most once per delay (one second at least). Timestamped
+WritePropertyMultiple changes of Life Safety references that the request's
+exact fanout did not select are evaluated again right after it. A change no producer captured, such as
 a raw database mutation, still reports through the builder's current-state
 fallback, stamped when the notification is prepared.
 

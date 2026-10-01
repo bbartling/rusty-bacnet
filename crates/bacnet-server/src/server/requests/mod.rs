@@ -499,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            timed_revisits,
         } = effects;
 
         // LSO-only replay store (server level, never handler/object level).
@@ -653,6 +654,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &life_safety_cov_changes,
         )
         .await;
+        // WritePropertyMultiple (SimpleACK or Error, never a ComplexACK) may
+        // have captured changes that fanout did not select (#856).
+        if !timed_revisits.is_empty() {
+            cov_table.read().await.revisits().request(timed_revisits);
+        }
 
         for notification in &initial_cov_notifications {
             match notification {
