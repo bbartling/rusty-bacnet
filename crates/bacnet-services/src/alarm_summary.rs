@@ -274,12 +274,13 @@ mod tests {
 
     #[test]
     fn acknowledged_transitions_keep_wire_bit_order() {
-        // TO_OFFNORMAL rides the most significant bit of the content octet.
-        let encoded = ack_with_alarm_state(&[0]);
+        // TO_OFFNORMAL rides the most significant bit of the content octet, then
+        // TO_FAULT. The vector is asymmetric, so reversing the order fails it.
+        let encoded = ack_with_fields(&[0], 5, &[0b1100_0000]);
         let decoded = GetAlarmSummaryAck::decode(&encoded).unwrap();
         assert_eq!(
             decoded.entries[0].acknowledged_transitions,
-            EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+            EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT
         );
         let mut reencoded = BytesMut::new();
         decoded.encode(&mut reencoded);

@@ -76,7 +76,7 @@ pub(super) fn ack_required_for_transition(
     };
     match notification_class.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
         Ok(PropertyValue::BitString { data, .. }) => {
-            EventTransitionBits::from_bacnet(&data).contains(transition_bit)
+            EventTransitionBits::from_bacnet(&data).intersects(transition_bit)
         }
         _ => false,
     }

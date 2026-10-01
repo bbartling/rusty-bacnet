@@ -33,7 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bitstring::EventTransitionBits`, and drops `notification_class`: the ACK has
   no such member, so encode ignored it and decode always set 0.
   `AlarmSummaryEntry.acknowledged_transitions` is an `EventTransitionBits`
-  rather than an `(unused_bits, data)` pair. In `bacnet-types`,
+  rather than an `(unused_bits, data)` pair, so `GetAlarmSummaryAck::encode`
+  always writes the canonical three-bit string. Decode already accepted only that
+  form. In `bacnet-types`,
   `FaultParameters::FaultLifeSafety.fault_values` is a `Vec<LifeSafetyState>`,
   and `mode_for_reference` becomes `mode_property_reference`, after the
   production's field name. The unused bit-position enum
@@ -52,8 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tick` take a `Reliability`, and `EventTransition::bit_mask` returns an
   `EventTransitionBits`. `bacnet_objects::event::LimitEnable` is removed in favour
   of the `bacnet_types::bitstring::LimitEnable` bitflags it duplicated: `BOTH` and
-  `NONE` become `all()` and `empty()`, `to_bits`/`from_bits` become
-  `to_bacnet`/`from_bacnet`, and the two bools become the `LOW_LIMIT_ENABLE` and
+  `NONE` become `all()` and `empty()`, `to_bits()`/`from_bits(u8)` become
+  `to_bacnet()`/`from_bacnet(&[u8])`, which takes the bit string's content
+  octets, and the two bools become the `LOW_LIMIT_ENABLE` and
   `HIGH_LIMIT_ENABLE` flags. `BACnetObject::acknowledge_alarm` and
   `set_acked_transitions_internal` take the transition as an
   `EventTransitionBits`, and so does `EventEnrollmentObject::set_event_enable`.

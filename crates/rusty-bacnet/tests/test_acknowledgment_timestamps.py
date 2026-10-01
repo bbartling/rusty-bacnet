@@ -136,6 +136,9 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
         client_method = method(classes["BACnetClient"], "acknowledge_alarm_request")
         stub_args = [*client_method.args.posonlyargs, *client_method.args.args]
         self.assertEqual([arg.arg for arg in stub_args], expected)
+        event_state_annotation = stub_args[4].annotation
+        assert event_state_annotation is not None
+        self.assertEqual(ast.unparse(event_state_annotation), "EventState")
         timestamp_annotation = stub_args[5].annotation
         acknowledgment_annotation = stub_args[7].annotation
         self.assertIsNotNone(timestamp_annotation)
