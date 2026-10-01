@@ -95,8 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Timer. Event Enrollment stores Event_Type as an `EventType`, so
   `EventEnrollmentObject::new` takes an `EventType` and `set_event_state` an
   `EventState`. The Python `BACnetServer.add_event_enrollment` takes an
-  `EventType`, defaulting to `EventType.CHANGE_OF_BITSTRING`, instead of an int.
-  The Python `get_enrollment_summary` keeps its int `acknowledgment_filter`.
+  `EventType`, defaulting to `EventType.CHANGE_OF_BITSTRING`, instead of an int,
+  and the Python `get_enrollment_summary` takes the new `AcknowledgmentFilter`
+  class, defaulting to `AcknowledgmentFilter.ALL`, instead of an int.
   Property reads return the same enumerated values (#930).
 
 - Optional dependencies are no longer published as features. Feature lists now

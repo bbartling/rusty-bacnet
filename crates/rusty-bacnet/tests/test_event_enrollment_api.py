@@ -1,48 +1,71 @@
-"""Artifact tests for the typed Event Enrollment registration API (#930)."""
+"""Artifact tests for the typed Event Enrollment and enrollment-summary APIs (#930)."""
 
 from __future__ import annotations
 
 import ast
+import inspect
 import unittest
 from pathlib import Path
 from typing import Any
 
 import rusty_bacnet
-from rusty_bacnet import BACnetServer, EventType
+from rusty_bacnet import (
+    AcknowledgmentFilter,
+    BACnetClient,
+    BACnetServer,
+    EventType,
+    ObjectIdentifier,
+    ObjectType,
+    PropertyIdentifier,
+)
 
 
-def stub_method() -> ast.FunctionDef:
+def stub_method(class_name: str, method_name: str) -> ast.FunctionDef:
     stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
     tree = ast.parse(stub_path.read_text(encoding="utf-8"), filename=str(stub_path))
-    server = next(
+    cls = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "BACnetServer"
+        if isinstance(node, ast.ClassDef) and node.name == class_name
     )
     return next(
         node
-        for node in server.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "add_event_enrollment"
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
     )
 
 
-class EventEnrollmentApiTests(unittest.TestCase):
-    def test_stub_annotates_event_type_as_the_enum(self) -> None:
-        method = stub_method()
-        stub_args = [*method.args.posonlyargs, *method.args.args]
-        self.assertEqual(
-            [arg.arg for arg in stub_args],
-            ["self", "instance", "name", "event_type"],
-        )
-        annotation = stub_args[-1].annotation
-        assert annotation is not None
-        self.assertEqual(ast.unparse(annotation), "EventType")
+def stub_parameter(method: ast.FunctionDef, name: str) -> tuple[str, bool]:
+    """Return a parameter's annotation and whether the stub gives it a default."""
+    args = [*method.args.posonlyargs, *method.args.args]
+    index = next(i for i, arg in enumerate(args) if arg.arg == name)
+    annotation = args[index].annotation
+    assert annotation is not None
+    has_default = index >= len(args) - len(method.args.defaults)
+    return ast.unparse(annotation), has_default
 
-    def test_event_type_is_optional_typed_and_rejects_ints(self) -> None:
+
+class EventEnrollmentApiTests(unittest.IsolatedAsyncioTestCase):
+    def test_runtime_and_stub_give_event_type_a_default(self) -> None:
+        parameters = inspect.signature(BACnetServer.add_event_enrollment).parameters
+        self.assertEqual(
+            list(parameters), ["self", "instance", "name", "event_type"]
+        )
+        # PyO3 renders a non-literal default as `...`; the read-back test
+        # below checks which value it is.
+        self.assertIsNot(parameters["event_type"].default, inspect.Parameter.empty)
+        self.assertEqual(
+            stub_parameter(
+                stub_method("BACnetServer", "add_event_enrollment"), "event_type"
+            ),
+            ("EventType", True),
+        )
+
+    async def test_event_type_reads_back_including_proprietary_values(self) -> None:
         server = BACnetServer(
             device_instance=420_809,
             device_name="Event Enrollment Artifact Test",
+            interface="127.0.0.1",
             port=0,
         )
         server.add_event_enrollment(1, "EE-default")
@@ -52,6 +75,43 @@ class EventEnrollmentApiTests(unittest.TestCase):
         invalid_call: Any = server.add_event_enrollment
         with self.assertRaises(TypeError):
             invalid_call(4, "EE-int", 5)
+
+        await server.start()
+        try:
+            for instance, expected in ((1, 0), (2, 5), (3, 600)):
+                with self.subTest(instance=instance):
+                    value = await server.read_property(
+                        ObjectIdentifier(ObjectType.EVENT_ENROLLMENT, instance),
+                        PropertyIdentifier.EVENT_TYPE,
+                    )
+                    self.assertEqual(value.value, expected)
+        finally:
+            await server.stop()
+
+
+class AcknowledgmentFilterApiTests(unittest.TestCase):
+    def test_constants_carry_the_request_values(self) -> None:
+        self.assertEqual(
+            [
+                AcknowledgmentFilter.ALL.to_raw(),
+                AcknowledgmentFilter.ACKED.to_raw(),
+                AcknowledgmentFilter.NOT_ACKED.to_raw(),
+            ],
+            [0, 1, 2],
+        )
+
+    def test_runtime_and_stub_give_the_filter_a_default(self) -> None:
+        parameter = inspect.signature(BACnetClient.get_enrollment_summary).parameters[
+            "acknowledgment_filter"
+        ]
+        self.assertIsNot(parameter.default, inspect.Parameter.empty)
+        self.assertEqual(
+            stub_parameter(
+                stub_method("BACnetClient", "get_enrollment_summary"),
+                "acknowledgment_filter",
+            ),
+            ("AcknowledgmentFilter", True),
+        )
 
 
 if __name__ == "__main__":

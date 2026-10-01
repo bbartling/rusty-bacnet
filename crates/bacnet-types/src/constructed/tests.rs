@@ -260,9 +260,9 @@ fn bacnet_destination_construction() {
         issue_confirmed_notifications: true,
         transitions: EventTransitionBits::all(),
     };
-    assert!(dest.valid_days.contains(DaysOfWeek::SUNDAY));
+    assert_eq!(dest.valid_days, DaysOfWeek::all());
     assert!(dest.issue_confirmed_notifications);
-    assert!(dest.transitions.contains(EventTransitionBits::TO_NORMAL));
+    assert_eq!(dest.transitions, EventTransitionBits::all());
 }
 
 // --- LogDatum ---

@@ -881,6 +881,21 @@ class EventState:
     def __hash__(self) -> int: ...
 
 
+class AcknowledgmentFilter:
+    """GetEnrollmentSummary acknowledgment filter (Clause 13.11.1.1)."""
+
+    ALL: AcknowledgmentFilter
+    ACKED: AcknowledgmentFilter
+    NOT_ACKED: AcknowledgmentFilter
+
+    @staticmethod
+    def from_raw(value: int) -> AcknowledgmentFilter: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
 class EnrollmentSummaryEventStateFilter:
     """GetEnrollmentSummary event-state filter (Clause 13.11.1.1)."""
 
@@ -1948,7 +1963,7 @@ class BACnetClient:
     def get_enrollment_summary(
         self,
         address: str,
-        acknowledgment_filter: int = 0,
+        acknowledgment_filter: AcknowledgmentFilter = ...,
         event_state_filter: Optional[EnrollmentSummaryEventStateFilter] = None,
         event_type_filter: Optional[EventType] = None,
         min_priority: Optional[int] = None,

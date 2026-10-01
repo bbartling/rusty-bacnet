@@ -504,7 +504,9 @@ impl BACnetObject for AuditLogObject {
                         .to_raw(),
                 ))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
+            }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }

@@ -13,14 +13,14 @@ impl BACnetClient {
 
     /// Get enrollment summary from a remote device.
     ///
-    /// `acknowledgment_filter`: 0=all, 1=acked, 2=not-acked.
+    /// `acknowledgment_filter` defaults to `AcknowledgmentFilter.ALL`.
     /// Returns a list of dicts with `object_id`, `event_type`, `event_state`, `priority`, `notification_class`.
-    #[pyo3(signature = (address, acknowledgment_filter=0, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None))]
+    #[pyo3(signature = (address, acknowledgment_filter=PyAcknowledgmentFilter { inner: AcknowledgmentFilter::ALL }, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None))]
     fn get_enrollment_summary<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        acknowledgment_filter: u32,
+        acknowledgment_filter: PyAcknowledgmentFilter,
         event_state_filter: Option<PyEnrollmentSummaryEventStateFilter>,
         event_type_filter: Option<PyEventType>,
         min_priority: Option<u8>,
@@ -28,6 +28,7 @@ impl BACnetClient {
         notification_class_filter: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let af = acknowledgment_filter.to_rust();
         let es = event_state_filter.map(|e| e.to_rust());
         let et = event_type_filter.map(|e| e.to_rust());
         let pf = match (min_priority, max_priority) {
@@ -47,7 +48,7 @@ impl BACnetClient {
                 })?)
             };
             let req = GetEnrollmentSummaryRequest {
-                acknowledgment_filter: AcknowledgmentFilter::from_raw(acknowledgment_filter),
+                acknowledgment_filter: af,
                 enrollment_filter: None, // not exposed in Python API
                 event_state_filter: es,
                 event_type_filter: et,

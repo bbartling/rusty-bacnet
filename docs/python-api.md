@@ -1031,16 +1031,16 @@ Get a summary of all active alarms on a device.
 raw = await client.get_alarm_summary("192.168.1.100:47808")
 ```
 
-#### `get_enrollment_summary(address, acknowledgment_filter, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None) -> list[dict]`
+#### `get_enrollment_summary(address, acknowledgment_filter=AcknowledgmentFilter.ALL, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None) -> list[dict]`
 
 Get enrollment summary with filters.
 
 ```python
-from rusty_bacnet import EnrollmentSummaryEventStateFilter
+from rusty_bacnet import AcknowledgmentFilter, EnrollmentSummaryEventStateFilter
 
 summaries = await client.get_enrollment_summary(
     "192.168.1.100:47808",
-    acknowledgment_filter=0,                        # 0=all, 1=acked, 2=not-acked
+    acknowledgment_filter=AcknowledgmentFilter.NOT_ACKED,
     event_state_filter=EnrollmentSummaryEventStateFilter.OFFNORMAL,
     min_priority=0,
     max_priority=255,

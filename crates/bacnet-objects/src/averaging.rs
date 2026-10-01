@@ -4,7 +4,7 @@
 //! a referenced object property.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -148,7 +148,9 @@ impl BACnetObject for AveragingObject {
                     }
                 }
             }
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

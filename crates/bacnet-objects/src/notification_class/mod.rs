@@ -17,7 +17,7 @@
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use bacnet_types::MacAddr;
@@ -111,7 +111,7 @@ impl BACnetObject for NotificationClass {
                 ObjectType::NOTIFICATION_CLASS.to_raw(),
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(0)) // normal
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
@@ -338,8 +338,10 @@ fn find_notification_class(
 /// projected into an `EventNotification` come from the NotificationClass
 /// referenced by the event-generating object's `Notification_Class` property,
 /// selected by the transition coordinate (TO_OFFNORMAL, TO_FAULT, or
-/// TO_NORMAL). Both properties are 3-element arrays ordered
-/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
+/// TO_NORMAL). `Priority` is a 3-element array ordered
+/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`, indexed by [`EventTransition::index`];
+/// `Ack_Required` is a `BACnetEventTransitionBits` string, tested with
+/// [`EventTransition::bit_mask`].
 ///
 /// When no NotificationClass matches the given number (the object's
 /// `Notification_Class` was never configured or points at a missing class),

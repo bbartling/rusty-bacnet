@@ -104,6 +104,12 @@ py_bacnet_enum!(
 );
 py_bacnet_enum!("EventState", PyEventState, bacnet_enums::EventState, u32);
 py_bacnet_enum!(
+    "AcknowledgmentFilter",
+    PyAcknowledgmentFilter,
+    bacnet_enums::AcknowledgmentFilter,
+    u32
+);
+py_bacnet_enum!(
     "EnrollmentSummaryEventStateFilter",
     PyEnrollmentSummaryEventStateFilter,
     bacnet_enums::EnrollmentSummaryEventStateFilter,

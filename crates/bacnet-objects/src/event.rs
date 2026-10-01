@@ -128,9 +128,9 @@ impl EventTransition {
         }
     }
 
-    /// Positional index into the NotificationClass `PRIORITY` and
-    /// `ACK_REQUIRED` arrays, both ordered `[TO_OFFNORMAL, TO_FAULT,
-    /// TO_NORMAL]` to select the priority and acknowledgment requirement.
+    /// Positional index into the NotificationClass `PRIORITY` array, ordered
+    /// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`. `ACK_REQUIRED` is a bit string:
+    /// test it with [`EventTransition::bit_mask`].
     pub fn index(self) -> usize {
         match self {
             EventTransition::ToOffnormal => 0,
