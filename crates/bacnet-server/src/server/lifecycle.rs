@@ -5,11 +5,32 @@ use crate::committed_cov::BackgroundCommit;
 
 #[path = "lifecycle_period.rs"]
 mod period;
+use super::heap_futures::boxed;
 use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
 pub(super) use period::event_enrollment_period;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    pub(super) async fn start_with_clock_mode_and_bindings(
+    /// Start a server: every public start and build path ends here. The
+    /// startup future is on the heap, which keeps theirs small (#953).
+    pub(super) fn start_with_clock_mode_and_bindings(
+        config: ServerConfig,
+        db: ObjectDatabase,
+        transport: T,
+        clock_config: Option<ClockConfig>,
+        configured_device_bindings: Vec<DeviceBinding>,
+    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, Error>>>> {
+        boxed(|| {
+            Self::start_on_heap(
+                config,
+                db,
+                transport,
+                clock_config,
+                configured_device_bindings,
+            )
+        })
+    }
+
+    async fn start_on_heap(
         mut config: ServerConfig,
         mut db: ObjectDatabase,
         transport: T,
@@ -37,7 +58,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (clock, monotonic_origin) = period::install_database_clocks(&mut db, clock_config);
 
         let (network, mut apdu_rx, audit_routes, network_controls) =
-            super::network_port::start(&mut db, &config, transport, audit_routes).await?;
+            boxed(|| super::network_port::start(&mut db, &config, transport, audit_routes)).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -78,8 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let network = Arc::try_unwrap(network).map_err(|_| {
                     Error::Encoding("startup cleanup has an unexpected network owner".into())
                 })?;
-                super::network_port::StartingNetwork::from_network(network)
-                    .cleanup()
+                boxed(|| super::network_port::StartingNetwork::from_network(network).cleanup())
                     .await?;
                 return Err(error);
             }
@@ -126,7 +146,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             time_sync_limiter: time_sync_limiter.clone(),
             request_tasks: Arc::clone(&request_tasks),
         };
-        let dispatch_task = spawn_owned(audit_owner.clone(), async move {
+        let dispatch_task = spawn_owned(audit_owner.clone(), move || async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
             let mut ingress_open = true;
@@ -574,7 +594,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         });
 
         let cov_table_for_purge = Arc::clone(&cov_table);
-        let cov_purge_task = spawn_owned(audit_owner.clone(), async move {
+        let cov_purge_task = spawn_owned(audit_owner.clone(), move || async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -599,7 +619,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let fault_detection_task = if config.enable_fault_detection {
             let fanout = cov_fanout.clone();
-            Some(spawn_owned(audit_owner.clone(), async move {
+            Some(spawn_owned(audit_owner.clone(), move || async move {
                 let detector = crate::fault_detection::FaultDetector::default();
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
                 loop {
@@ -651,13 +671,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None
         };
 
-        let trend_log_task = Some(spawn_owned(
-            audit_owner.clone(),
-            crate::trend_log::run(Arc::clone(&db)),
-        ));
+        let trend_log_task = Some(spawn_owned(audit_owner.clone(), || {
+            crate::trend_log::run(Arc::clone(&db))
+        }));
 
         let schedule_fanout = cov_fanout.clone();
-        let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), async move {
+        let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), move || async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
@@ -691,21 +710,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
-        let intrinsic_reporting_task = Some(spawn_owned(
-            audit_owner.clone(),
+        let intrinsic_reporting_task = Some(spawn_owned(audit_owner.clone(), || {
             intrinsic::run(
                 cov_fanout.clone(),
                 Arc::clone(&learned_routers),
                 Arc::clone(&device_bindings),
-            ),
-        ));
+            )
+        }));
 
         // Reports what changed while a confirmed report was outstanding, once
         // it is acknowledged (#896).
-        let cov_revisit_task = Some(spawn_owned(
-            audit_owner.clone(),
-            cov_fanout.clone().run_revisits(),
-        ));
+        let cov_revisit_task = Some(spawn_owned(audit_owner.clone(), || {
+            cov_fanout.clone().run_revisits()
+        }));
 
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
@@ -753,7 +770,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_revisit_task,
             local_mac,
         };
-        server.execute_initial_staging_plans().await;
+        boxed(|| server.execute_initial_staging_plans()).await;
         Ok(server)
     }
 }
