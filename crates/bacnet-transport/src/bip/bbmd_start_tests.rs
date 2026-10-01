@@ -103,6 +103,21 @@ fn wildcard_selection_without_own_row_needs_a_local_non_loopback_route() {
     }
 }
 
+#[test]
+fn wildcard_selection_trusts_a_non_loopback_route_when_addresses_cannot_be_listed() {
+    // Windows: no local address list, so no row can be confirmed as local.
+    let rows = [row(LAN, PORT), row(REMOTE_PEER, PORT)];
+    assert_eq!(select(&rows, &[], Some(LAN)).unwrap(), LAN);
+    for route in [None, Some(Ipv4Addr::LOCALHOST)] {
+        let text = select(&rows, &[], route).unwrap_err().to_string();
+        assert!(
+            text.contains("the host's addresses cannot be listed")
+                && text.contains("bind an explicit interface address"),
+            "{route:?}: {text}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn wildcard_bbmd_uses_its_own_bdt_row_as_origin_and_local_mac() {

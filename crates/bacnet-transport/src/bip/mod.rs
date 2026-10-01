@@ -173,10 +173,11 @@ impl BipTransport {
     /// with (the persisted BDT when that loads): the one row whose IP is a
     /// local IPv4 address and whose port is the bound port. With no such row
     /// it uses the local address toward the default route if that is not
-    /// loopback. Several such rows, or no usable address, fail `start()`; on
-    /// platforms where local addresses cannot be listed (Windows) a wildcard
-    /// BBMD therefore needs an explicit interface. Each start repeats the
-    /// choice, and the self row the BBMD appended follows it.
+    /// loopback. Several such rows, or no usable address, fail `start()`. On
+    /// platforms where local addresses cannot be listed (Windows) it uses a
+    /// non-loopback default-route address and logs a warning, so an explicit
+    /// interface is the reliable choice there. Each start repeats the choice,
+    /// and the self row the BBMD appended follows it.
     pub fn enable_bbmd(&mut self, bdt: Vec<BdtEntry>) {
         self.bbmd_config = Some(BbmdConfig {
             initial_bdt: bdt,

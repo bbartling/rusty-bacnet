@@ -1341,7 +1341,8 @@ one):
 Each `start()` repeats this, so a restart follows a changed address. The self
 row the BBMD appended moves with it, and rows listed in the BDT stay. A failed
 `start()` keeps the BBMD configuration. Where the transport cannot list local
-addresses (currently Windows), a wildcard BBMD needs an explicit interface. On
+addresses (currently Windows), a wildcard BBMD uses a non-loopback
+default-route address and logs a warning; bind an explicit interface there. On
 a multihomed host, prefer an explicit interface and that subnet's broadcast
 address, so the echo of each broadcast comes back from the BBMD's own address.
 

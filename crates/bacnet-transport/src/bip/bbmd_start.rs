@@ -15,6 +15,10 @@
 //! - with none, the address the host uses toward its default route, but only
 //!   when that is a local, non-loopback address; otherwise `start()` fails.
 //!
+//! Where the host's addresses cannot be listed (currently Windows), no row can
+//! be confirmed as local, so a non-loopback default-route address is used, with
+//! a warning recommending an explicit interface.
+//!
 //! Every start repeats the choice, so a restart follows address changes.
 
 use std::fmt;
@@ -108,6 +112,24 @@ pub(super) fn select_wildcard_bbmd_ip(
     own.dedup();
     match own.as_slice() {
         [ip] => Ok(*ip),
+        [] if local_unicast_ips.is_empty() => route_ip
+            .filter(|ip| !ip.is_loopback())
+            .inspect(|ip| {
+                warn!(
+                    own_ip = %ip,
+                    "BBMD bound to 0.0.0.0 on a host whose addresses cannot be listed: \
+                     using the default-route address as its own B/IP address; bind an \
+                     explicit interface address to choose it"
+                );
+            })
+            .ok_or_else(|| {
+                let route = route_ip.map_or_else(|| "none".to_owned(), |ip| ip.to_string());
+                own_address_error(format!(
+                    "BBMD bound to 0.0.0.0 cannot determine its own B/IP address: the host's \
+                     addresses cannot be listed and the default-route address ({route}) is \
+                     not a non-loopback address; bind an explicit interface address"
+                ))
+            }),
         [] => route_ip
             .filter(|ip| !ip.is_loopback() && local_unicast_ips.contains(ip))
             .ok_or_else(|| {

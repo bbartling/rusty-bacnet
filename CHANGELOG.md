@@ -1334,8 +1334,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A B/IP BBMD bound to `0.0.0.0` now fails `start()` unless exactly one BDT row
   names a local address at the bound port, or, with no such row, the host has a
   non-loopback default-route address. On Windows, where local addresses cannot
-  be listed, it always fails. Binding the BBMD's interface address avoids all of
-  this (#937); see the [BBMD section](docs/rust-api.md#bbmd) of the Rust API
+  be listed, it uses a non-loopback default-route address with a warning.
+  Binding the BBMD's interface address avoids all of this (#937); see the [BBMD section](docs/rust-api.md#bbmd) of the Rust API
   guide.
 
 ## [0.11.0] - 2026-09-06
