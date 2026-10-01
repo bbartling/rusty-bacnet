@@ -1,3 +1,4 @@
+use crate::server::heap_futures::boxed;
 use crate::server::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
@@ -21,6 +22,10 @@ pub(super) const PASSWORD: &str = "test-only-dcc";
 type Transport = ScTransport<TlsWebSocket>;
 type Server = BACnetServer<Transport>;
 
+// `#[tokio::test]` polls on the test thread, whose stack is 2 MiB. Each
+// fixture step boxes the futures it awaits, so a test body's debug-build poll
+// frame holds pointers rather than every step's whole future: unboxed, these
+// tests needed 1 to 1.2 MiB of stack in a macOS debug build (#953).
 pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), future)
         .await
@@ -128,13 +133,15 @@ impl Fixture {
     }
 
     pub async fn hub(&mut self, certs: &Certificates) {
-        let hub = bounded(ScHub::start_with_tls_config(
-            "127.0.0.1:0",
-            certs.hub.clone(),
-            [2, 0, 0, 0, 0, 9],
-            [9; 16], // Fixed test-only hosting device identity.
-            ScHubHandshakeTimeouts::default(),
-        ))
+        let hub = bounded(boxed(|| {
+            ScHub::start_with_tls_config(
+                "127.0.0.1:0",
+                certs.hub.clone(),
+                [2, 0, 0, 0, 0, 9],
+                [9; 16], // Fixed test-only hosting device identity.
+                ScHubHandshakeTimeouts::default(),
+            )
+        }))
         .await
         .unwrap();
         self.url = format!("wss://127.0.0.1:{}", hub.local_addr().unwrap().port());
@@ -151,26 +158,18 @@ impl Fixture {
             .unwrap(),
         ))
         .unwrap();
-        self.server = Some(
-            bounded(
-                builder
-                    .hub_url(&self.url)
-                    .tls_config(certs.clients[0].clone())
-                    .vmac(SERVER)
-                    .device_uuid(sc_builder::TEST_DEVICE_UUID)
-                    .database(db)
-                    .build(),
-            )
-            .await
-            .unwrap(),
-        );
+        let builder = builder
+            .hub_url(&self.url)
+            .tls_config(certs.clients[0].clone())
+            .vmac(SERVER)
+            .device_uuid(sc_builder::TEST_DEVICE_UUID)
+            .database(db);
+        self.server = Some(bounded(boxed(|| builder.build())).await.unwrap());
         for (index, vmac) in PEERS.into_iter().enumerate() {
-            let ws = bounded(TlsWebSocket::connect(
-                &self.url,
-                certs.clients[index + 1].clone(),
-            ))
-            .await
-            .unwrap();
+            let tls = certs.clients[index + 1].clone();
+            let ws = bounded(boxed(|| TlsWebSocket::connect(&self.url, tls)))
+                .await
+                .unwrap();
             // Register ownership before the cancellable SC handshake.
             self.peers.push(Peer {
                 transport: ScTransport::new(ws, vmac).with_device_uuid([index as u8 + 1; 16]),
@@ -178,10 +177,10 @@ impl Fixture {
                 next_invoke: 1,
             });
             let peer = self.peers.last_mut().unwrap();
-            peer.receiver = Some(bounded(peer.transport.start()).await.unwrap());
+            peer.receiver = Some(bounded(boxed(|| peer.transport.start())).await.unwrap());
             // start() awaits ConnectAccept; ReadProperty proves end-to-end service
             // dispatch, not merely TLS admission or a timeout interpreted as denial.
-            self.read_property(index).await;
+            boxed(|| self.read_property(index)).await;
         }
     }
 
@@ -223,10 +222,10 @@ impl Fixture {
             },
         )
         .unwrap();
-        bounded(peer.transport.send_unicast(&wire, &SERVER))
+        bounded(boxed(|| peer.transport.send_unicast(&wire, &SERVER)))
             .await
             .unwrap();
-        let response = bounded(async {
+        let response = bounded(boxed(|| async {
             loop {
                 let incoming = peer
                     .receiver
@@ -248,7 +247,7 @@ impl Fixture {
                 );
                 return apdu;
             }
-        })
+        }))
         .await;
         (invoke, response)
     }
@@ -262,14 +261,15 @@ impl Fixture {
             property_array_index: None,
         }
         .encode(&mut data);
-        let (id, response) = self
-            .exchange(
+        let (id, response) = boxed(|| {
+            self.exchange(
                 peer,
                 ConfirmedServiceChoice::READ_PROPERTY,
                 data.freeze(),
                 None,
             )
-            .await;
+        })
+        .await;
         let Apdu::ComplexAck(ack) = response else {
             panic!("expected ReadProperty ACK, got {response:?}")
         };
@@ -304,14 +304,15 @@ impl Fixture {
         .encode(&mut data)
         .unwrap();
         let before = self.server().dcc_outcome_counters();
-        let (id, response) = self
-            .exchange(
+        let (id, response) = boxed(|| {
+            self.exchange(
                 peer,
                 ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
                 data.freeze(),
                 source,
             )
-            .await;
+        })
+        .await;
         let mut after = before;
         let error = match expected {
             Outcome::Accepted => {
@@ -359,18 +360,18 @@ impl Fixture {
         let mut clean = true;
         for peer in &mut self.peers {
             clean &= matches!(
-                tokio::time::timeout(Duration::from_secs(5), peer.transport.stop()).await,
+                tokio::time::timeout(Duration::from_secs(5), boxed(|| peer.transport.stop())).await,
                 Ok(Ok(()))
             );
         }
         if let Some(server) = &mut self.server {
             clean &= matches!(
-                tokio::time::timeout(Duration::from_secs(5), server.stop()).await,
+                tokio::time::timeout(Duration::from_secs(5), boxed(|| server.stop())).await,
                 Ok(Ok(()))
             );
         }
         if let Some(hub) = &mut self.hub {
-            clean &= tokio::time::timeout(Duration::from_secs(5), hub.stop())
+            clean &= tokio::time::timeout(Duration::from_secs(5), boxed(|| hub.stop()))
                 .await
                 .is_ok();
             // Successful stop releases the listener before returning.
@@ -391,8 +392,11 @@ pub(super) enum Outcome {
 
 pub(super) async fn run(test: impl AsyncFnOnce(&mut Fixture)) {
     let mut fixture = Fixture::default();
-    let result = AssertUnwindSafe(test(&mut fixture)).catch_unwind().await;
-    let clean = fixture.stop().await;
+    let body = &mut fixture;
+    let result = AssertUnwindSafe(boxed(move || test(body)))
+        .catch_unwind()
+        .await;
+    let clean = boxed(|| fixture.stop()).await;
     assert!(clean, "SC fixture failed joined cleanup");
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
