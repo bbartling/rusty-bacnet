@@ -81,11 +81,16 @@ async fn a_raw_peer_that_never_closes_gets_fin_and_releases_its_slots() {
     listener.stop().await;
 }
 
+/// The socket is dropped and the slots come back. Whether the byte cap or the
+/// linger ends the drain isn't observable here; tls_reject's unit tests prove
+/// the cap.
 #[tokio::test]
-async fn a_raw_peer_that_keeps_writing_is_cut_off_and_releases_its_slots() {
+async fn a_raw_peer_that_keeps_writing_is_dropped_and_releases_its_slots() {
     let ca = TestCa::generate();
     let (mut listener, _rx) = start_listener(&ca, |c| c).await;
     let mut raw = TcpStream::connect(listener.local_addr()).await.unwrap();
+    // The TLS accept waits for a ClientHello, so the slots are held now.
+    wait_counts(&listener, 1, 1).await;
     let writer = tokio::spawn(async move {
         raw.write_all(b"not a TLS record\r\n\r\n").await.unwrap();
         let junk = [0x17u8; 4096];
