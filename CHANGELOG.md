@@ -211,13 +211,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A BBMD bound to `0.0.0.0` now reads its own address from the BDT it starts
   with: the one row at a local IPv4 address and the bound port, or else the
-  local address toward the default route if that is not loopback. `start()`
-  fails, asking for an explicit interface, when several rows qualify or no
-  usable address is found. Before, it took the default-route address or
-  127.0.0.1, so a multihomed or offline BBMD forwarded with the wrong origin
-  and could forward to itself. Each start chooses again, moving the self row
-  the BBMD appended, and a failed start keeps the BBMD configuration.
-  `BbmdState::local_address` and `BbmdState::set_local_address` are new.
+  local address toward the default route if that is one of the host's
+  addresses and not loopback. `start()` fails, asking for an explicit
+  interface, when several rows qualify or no usable address is found. A
+  persisted BDT that loads is authoritative: a failure to choose from it fails
+  `start()` rather than falling back to the configured BDT (a self row that
+  would overflow it still falls back, with a warning). Where local addresses
+  cannot be listed (Windows), a row is local when a socket can bind to its IP;
+  with no such row, any non-loopback default-route address is used, with a
+  warning. Before, it took the default-route address or 127.0.0.1, so a
+  multihomed or offline BBMD forwarded with the wrong origin and could forward
+  to itself. Each start of a `0.0.0.0` BBMD chooses again, moving the self row
+  the BBMD appended; a failed start keeps the BBMD configuration, and a failed
+  restart keeps its BDT and FDT. With broadcast address 255.255.255.255 and an
+  own address that is not the default-route address, `start()` warns that the
+  kernel may send broadcasts from another interface, whose echo would not be
+  recognised. `BbmdState::local_address` is new.
+
+  A BBMD no longer rebroadcasts on its subnet a Forwarded-NPDU that arrived by
+  broadcast, to the configured broadcast address or 255.255.255.255, even from
+  a peer whose BDT mask calls for a local rebroadcast; it still sends it to its
+  foreign devices. The subnet already received it (Annex J.4.5), and a BDT row
+  that is the BBMD itself under another address could otherwise loop it.
 
 - The PICS generator's `CharacterSet` now offers exactly the six character sets
   in Annex A's "Character Sets Supported" section, each printed with its Annex A
@@ -1332,11 +1347,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   describe new `ServerConfig` fields and limits that large requests may need raised.
 
 - A B/IP BBMD bound to `0.0.0.0` now fails `start()` unless exactly one BDT row
-  names a local address at the bound port, or, with no such row, the host has a
-  non-loopback default-route address. On Windows, where local addresses cannot
-  be listed, it uses a non-loopback default-route address with a warning.
-  Binding the BBMD's interface address avoids all of this (#937); see the [BBMD section](docs/rust-api.md#bbmd) of the Rust API
-  guide.
+  names a local address at the bound port, or, with no such row, the host's
+  default-route address is one of its own addresses and not loopback. A loaded
+  persisted BDT decides on its own; the configured BDT is not tried after it.
+  On Windows, where local addresses cannot be listed, rows are checked by
+  binding a socket to their IP, and with no local row any non-loopback
+  default-route address is used with a warning. Binding the BBMD's interface
+  address avoids all of this (#937); see the
+  [BBMD section](docs/rust-api.md#bbmd) of the Rust API guide.
 
 ## [0.11.0] - 2026-09-06
 

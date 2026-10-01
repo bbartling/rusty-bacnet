@@ -1335,16 +1335,33 @@ one):
   the bound port;
 - if several rows qualify, `start()` fails and asks for an explicit interface;
 - if none does, the host's local address toward its default route, but only
-  when it is not loopback; otherwise `start()` fails and asks for an explicit
-  interface or the BBMD's own row in the BDT.
+  when it is one of the host's addresses and not loopback; otherwise `start()`
+  fails and asks for an explicit interface or the BBMD's own row in the BDT.
 
-Each `start()` repeats this, so a restart follows a changed address. The self
-row the BBMD appended moves with it, and rows listed in the BDT stay. A failed
-`start()` keeps the BBMD configuration. Where the transport cannot list local
-addresses (currently Windows), a wildcard BBMD uses a non-loopback
-default-route address and logs a warning; bind an explicit interface there. On
-a multihomed host, prefer an explicit interface and that subnet's broadcast
+A persisted BDT that loads is authoritative here: if no own address can be
+chosen from it, `start()` fails rather than falling back to the configured
+BDT. Only a self row that would push the persisted BDT past 128 entries still
+falls back to the configured BDT, with a warning.
+
+Each `start()` of a `0.0.0.0` BBMD repeats this, so a restart follows a
+changed address. The self row the BBMD appended moves with it, and rows listed
+in the BDT stay. A failed `start()` keeps the BBMD configuration, and a failed
+restart leaves its BDT and FDT as they were. Where the transport cannot list
+local addresses (currently Windows), a row counts as local when a socket can
+bind to its IP, and the same rules apply, except that with no local row any
+non-loopback default-route address is used and a warning is logged; bind an
+explicit interface there.
+
+On a multihomed host, prefer an explicit interface and that subnet's broadcast
 address, so the echo of each broadcast comes back from the BBMD's own address.
+A `0.0.0.0` BBMD whose broadcast address is 255.255.255.255 and whose own
+address is not the default-route address logs a warning at start: the kernel
+may send its broadcasts from another interface, and their echo is then not
+recognised as its own. Whatever its own address, a BBMD never rebroadcasts on
+its subnet a Forwarded-NPDU that arrived by broadcast (to the configured
+broadcast address or 255.255.255.255), since the subnet already received it;
+it still sends it to its foreign devices. This also stops a BDT row that is
+the BBMD itself under another address from looping a broadcast.
 
 A BBMD forwards its own broadcasts as well as those of other devices on its
 subnet (Annex J.4.5). Each `send_broadcast` in BBMD mode queues a
