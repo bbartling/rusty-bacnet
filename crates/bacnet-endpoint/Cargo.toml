@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Single-owner BACnet endpoint session above client/server roles (RB-18 public API)"
+description = "BACnet endpoint that owns one transport and runs client and server roles through it"
 
 [dependencies]
 bacnet-types.workspace = true

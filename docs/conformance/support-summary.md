@@ -91,7 +91,7 @@
 | `BACNET-19-COMMAND-SOURCE-TRACKING` | Clause 19.5.1 command source tracking and 19.5.1.3 source correction; Tables 12-3, 12-4, 12-8, 12-10, 12-22, 12-23; Clause 21 BACnetValueSource and BACnetTimeStamp | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-13-VALUE-SOURCE-COV` | Table 13-1 and Table 13-1a-2; Clause 19.5.2; Clauses 13.15, 13.16.3, 13.17.3.1.2.4 and 13.18.3.1.2.4 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
-| `BACNET-A-PICS` | Annex A | P1 | in-progress | 2 |
+| `BACNET-A-PICS` | Annex A | P1 | in-progress | 0 |
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |
 | `BACNET-J-ORIGINAL-BROADCAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |

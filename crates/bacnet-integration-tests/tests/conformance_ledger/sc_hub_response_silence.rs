@@ -278,8 +278,6 @@ fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
     ] {
         assert!(section.contains(phrase), "{phrase}");
     }
-    for file in ["README.md", "CHANGELOG.md"] {
-        assert!(read_repo_file(file).contains("#hub-address-resolution-transit"));
-    }
+    assert!(read_repo_file("CHANGELOG.md").contains("#hub-address-resolution-transit"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }

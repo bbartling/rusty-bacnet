@@ -67,7 +67,7 @@ cargo build --release
 
 ## Discovery notes
 
-- Binds **`0.0.0.0:47808`** with directed broadcast (rusty-bacnet-mcp style) so subnet Who-Is reaches the socket on Linux.
+- Binds **`0.0.0.0:47808`** with directed broadcast so subnet Who-Is reaches the socket on Linux.
 - Sends startup + periodic **I-Am** via the server transport (correct BIP MAC), so network scanners find the device without a Who-Is.
 - Use **`--replace-existing`** only when you intend to free UDP `:47808` (kills other listeners on that port).
 - Exits immediately if UDP bind fails when the port is already in use.

@@ -79,4 +79,4 @@ Python startup and close serialize through the native lifecycle owner. If startu
 
 ## Next steps
 
-[Register a NORMAL B/IP receiving port](/rusty-bacnet/development/network-number/) · [Compare transport evidence](/rusty-bacnet/development/transports/) · [Exact Rust endpoint APIs](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#bacnet-endpoint-forward-path-rb-18)
+[Register a NORMAL B/IP receiving port](/rusty-bacnet/development/network-number/) · [Compare transport evidence](/rusty-bacnet/development/transports/) · [Exact Rust endpoint APIs](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#bacnet-endpoint)

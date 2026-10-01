@@ -10,7 +10,7 @@ These documents describe the **current development checkout**, including unrelea
 | What is the exact Rust API or feature boundary? | [Rust API](rust-api.md) |
 | How do I configure and close a Python owner? | [Python API](python-api.md) |
 | Which CLI arguments does the current checkout accept? | [CLI reference](CLI.md) |
-| Should I use a shared endpoint or a standalone owner? | [Endpoint roles and scope](rust-api.md#bacnet-endpoint-forward-path-rb-18) |
+| Should I use a shared endpoint or a standalone owner? | [Endpoint roles and scope](rust-api.md#bacnet-endpoint) |
 | Is a Network Port registered, or is its number passively learned? | [Registration and local Number controls](rust-api.md#registered-bip-network-port) |
 | Which clauses have bounded evidence? | [Support summary](conformance/support-summary.md), [detailed ledger](conformance/standard-135-2020-ledger.md) |
 | Which checks are required before merge? | [CI and merge evidence](ci.md) |

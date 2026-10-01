@@ -26,8 +26,6 @@ exclude = [
 # rusty-bacnet's tests link libpython, so they need a Python with its shared library.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
 # Use `cargo nextest run -p rusty-bacnet`.
-# BTL test harness now lives at https://github.com/jscott3201/rusty-bacnet-btl-harness
-# HTTP/MCP gateway now lives at https://github.com/jscott3201/rusty-bacnet-mcp
 default-members = [
     "crates/bacnet-types",
     "crates/bacnet-encoding",

@@ -574,7 +574,6 @@ fn sc_identity_closeout_maps_six_criteria_without_promoting_excluded_guarantees(
 fn sc_identity_closeout_links_and_symbol_anchors_resolve_offline() {
     let target = "conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout";
     for (doc, prefix) in [
-        ("README.md", "docs/"),
         ("CHANGELOG.md", "docs/"),
         ("docs/rust-api.md", ""),
         ("docs/python-api.md", ""),

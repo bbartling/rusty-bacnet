@@ -1,120 +1,171 @@
 # Rusty BACnet
 
-A BACnet protocol stack in Rust, with Python bindings and a command-line tool.
-Use it to build BACnet clients, model devices and serve their properties, or
-explore protocol behavior in a local lab. The project targets ASHRAE Standard
-135-2020 and tracks implementation evidence at the clause level.
+A BACnet protocol stack written in Rust, with Python bindings and a command-line
+tool. Use it to build BACnet clients, model devices and serve their objects, or
+explore protocol behavior in a local lab. It targets ASHRAE Standard 135-2020.
+It isn't BTL certified; [Conformance](#conformance) explains what is covered.
 
+[![crates.io](https://img.shields.io/crates/v/bacnet-client.svg)](https://crates.io/crates/bacnet-client)
+[![PyPI](https://img.shields.io/pypi/v/rusty-bacnet.svg)](https://pypi.org/project/rusty-bacnet/)
+[![docs.rs](https://img.shields.io/docsrs/bacnet-client)](https://docs.rs/bacnet-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **[Documentation](https://jscott3201.github.io/rusty-bacnet/)** ·
-[Installation](#installation) · [Quickstarts](#read-a-property) ·
-[Capabilities](#capabilities-and-conformance) · [Transports](#transports-and-platforms) ·
-[Contributing](#development-and-contributing)
+[Install](#install) · [Quickstart](#quickstart) · [Transports](#transports) ·
+[Crates](#crates) · [Find it in the docs](#find-it-in-the-docs) ·
+[Contributing](#contributing)
 
-> **Choose documentation for your version.** This README on `dev` describes the
-> current checkout, including unreleased changes. Published Python and Rust
-> packages and the hosted getting-started guides currently target **0.11.0**.
-> The workspace still carries that version number; it does not mean all changes
-> on `dev` are in the published packages. Use the [0.11.0 release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0)
-> and [versioned Rust API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/)
-> for a released deployment. The [SC migration section](#bacnetsc-current-development-checkout)
-> below specifically requires a current source build.
+> [!NOTE]
+> **Release and branch.** The latest release is **0.11.0**. The published
+> packages, the hosted guides and docs.rs all describe that release. This README
+> and the reference docs in [`docs/`](docs/) follow the `dev` branch, which may
+> include unreleased changes. Those are listed under *Unreleased* in the
+> [changelog](CHANGELOG.md).
+>
+> **Pre-1.0.** Public APIs can change in any minor release while obsolete APIs
+> are removed. They freeze at 1.0.0.
 
-> **API stability:** Public APIs are unfrozen before **1.0.0** and may change as
-> obsolete APIs are removed. APIs freeze at **1.0.0**, with compatibility
-> preserved thereafter.
+## Features
 
-## What is included?
+- **Async Rust client and server.** Built on Tokio. Transaction handling,
+  segmentation, discovery, COV subscriptions, and alarm and event services, with
+  the protocol layers split into separate crates you can depend on individually.
+- **Object models.** A server-side object database with standard object types,
+  property metadata, commandable outputs, intrinsic reporting, and draft PICS
+  generation from your server's configuration.
+- **Five data links.** BACnet/IP, BACnet/IPv6, BACnet/SC (secure WebSocket/TLS,
+  including a hub), MS/TP over serial, and Ethernet on Linux. See
+  [Transports](#transports).
+- **Routing.** A network layer with router tables, routed requests and BBMD and
+  foreign-device support for BACnet/IP.
+- **Python bindings.** `BACnetClient`, `BACnetServer` and `ScHub` with asyncio
+  support, typed enums and values, and async COV notification streams. Python and
+  Rust expose different configuration surfaces, so check the Python API before
+  assuming a Rust option exists there.
+- **CLI.** The `bacnet` tool does discovery, reads and writes, COV
+  subscriptions, alarms, file transfer and BBMD management over BACnet/IP,
+  BACnet/IPv6 and BACnet/SC, with an interactive shell and optional packet
+  capture.
+- **Shared endpoints** (unreleased, on `dev`). One device can send requests and
+  answer a limited set of them (ReadProperty by default) through a single
+  BACnet/IP, BACnet/SC or MS/TP transport, from Rust or Python. Use the
+  standalone server when you need its full service set.
 
-- Async Rust client and server APIs, with protocol encoding, network routing,
-  transaction handling, and object models in separate crates.
-- Shared endpoint APIs let one device initiate requests and serve a bounded
-  request set through one transport owner. Rust supports B/IP, SC and MS/TP
-  composition; Python also exposes owners for those transports. See
-  [shared endpoints](#shared-endpoints-current-development-checkout) for the
-  server-role limits.
-- Python client, server, and SC hub bindings, typed values and exceptions, and
-  async COV notification streams. Python and Rust expose different configuration
-  surfaces; do not assume feature parity.
-- BACnet/IP, BACnet/IPv6, BACnet/SC, MS/TP, and Linux Ethernet code paths, subject
-  to the feature, platform, and qualification limits below.
-- A `bacnet` CLI for targeted reads, discovery, an interactive shell, and optional
-  packet capture. Operations that change devices require separate authorization.
+> [!IMPORTANT]
+> Only use this on networks and devices you are authorized to access.
+> Discovery generates network traffic. Writes, device management, time
+> synchronization and file transfers can change real equipment. Start with the
+> loopback examples below. Rusty BACnet makes no physical-safety guarantee.
 
-**Work only on networks and devices you are authorized to access.** Start with
-the loopback examples below. Discovery creates network traffic; writes, device
-management, time synchronization, and file operations can affect real equipment.
-This library does not provide a physical-safety guarantee. BACnet/SC credential
-validation is not authorization to perform a BACnet operation.
+## Install
 
-## Installation
+CI tests on Linux. macOS is checked locally. Windows builds are published but
+not currently tested.
 
-### Python: published package
-
-The distribution is [`rusty-bacnet`](https://pypi.org/project/rusty-bacnet/0.11.0/);
-the import name is `rusty_bacnet`. Python **3.11 or newer** is required.
+### Python
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install --only-binary=:all: "rusty-bacnet==0.11.0"
+python -m pip install rusty-bacnet
 ```
 
-The wheel-only command avoids an unexpected native build. If no compatible
-wheel exists for your interpreter and platform, use the [source-build steps](#build-from-source)
-with the required Rust/native toolchain. A Python version constraint does not
-promise wheels for every interpreter, architecture, or free-threaded build.
+This needs Python 3.11 or newer. The import name is `rusty_bacnet`. Wheels are
+published for CPython 3.11–3.13 on Linux (glibc; x86_64, aarch64), macOS
+(x86_64, arm64) and Windows (x64). On any other Python version (including 3.14),
+platform or musl-based Linux, pip builds from source, which needs Rust 1.93 or
+newer and a C compiler. Add `--only-binary=:all:` to fail fast instead.
 
-### Rust: published crates
+### Rust
 
-Add only the crates you need. The read example below uses aligned 0.11.0
-dependencies; the declared minimum Rust version is **1.93**.
+Add only the crates you need. Most applications start with the client or the
+server crate:
 
 ```toml
 [dependencies]
-bacnet-client = "=0.11.0"
-bacnet-types = "=0.11.0"
-bacnet-encoding = "=0.11.0"
+bacnet-client = "0.11"
+bacnet-types = "0.11"
+bacnet-encoding = "0.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-See the [released client API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/)
-or the [checkout's Rust reference](docs/rust-api.md) for lower-level transports,
-routed requests, server configuration, and crate-specific features.
+The minimum supported Rust version is **1.93**.
 
-### CLI: release binary or source build
+### CLI
 
-Download the appropriate `bacnet` executable from the
-[0.11.0 release assets](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0).
-Assets are provided for Linux amd64/arm64, macOS amd64/arm64, and Windows amd64.
-An available binary is not a guarantee that every optional transport or capture
-feature is enabled or qualified on that platform. Check its `--help` and release notes.
+Download the `bacnet-<os>-<arch>` file for your platform from the
+[latest release](https://github.com/jscott3201/rusty-bacnet/releases/latest),
+rename it to `bacnet` (`bacnet.exe` on Windows), make it executable and put it
+on your `PATH`.
+- Builds exist for Linux (amd64, arm64), macOS (amd64, arm64) and Windows
+  (amd64).
+- All of them include BACnet/SC.
+- The Linux builds also include packet capture. They need glibc 2.39 or newer
+  (for example Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu).
 
-Alternatively, from a checkout:
+On other systems, build it from a checkout. Add `,pcap` to the features for
+capture, which needs the libpcap headers:
 
 ```bash
-cargo install --path crates/bacnet-cli --locked
-# Include BACnet/SC when needed:
 cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
 
-The CLI enables IPv6 through its dependencies; it has no separate `ipv6` feature
-switch. Packet capture is a separate `pcap` feature and needs the native capture
-library and appropriate permissions. Do not confuse capture filters with the
-Linux Ethernet transport.
+### Build from source
 
-## Read a property
+To try unreleased features from `dev`, such as shared endpoints, build from a
+checkout. A `dev` build still reports version 0.11.0, so record the commit you
+built.
 
-Start the [local Python server](#run-a-local-python-server) in another terminal
-before running either example. Both readers use loopback and an ephemeral local
-UDP port (`0`), so they do not compete with the server's port `47808`. These
-examples send a targeted ReadProperty request, not discovery or a write.
+- **Python:** in a virtual environment, run `python -m pip install "maturin>=1,<2"`,
+  then `maturin develop --release --manifest-path crates/rusty-bacnet/Cargo.toml --locked`.
+- **Rust:** depend on the git branch, for example
+  `bacnet-client = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }`.
 
-### Python reader
+## Quickstart
 
-Save as `read_property.py` and run `python read_property.py` in your environment.
+These examples run entirely on loopback. Start the server in one terminal and
+leave it running. Then read from it in a second terminal with Python, Rust or
+the CLI.
+
+### 1. Run a local server (Python)
+
+Save this as `local_server.py` and run `python local_server.py`. It serves one
+simulated temperature sensor on `127.0.0.1:47808`. Stop it with **Ctrl+C**.
+
+```python
+import asyncio
+from rusty_bacnet import BACnetServer
+
+
+async def main():
+    server = BACnetServer(
+        device_instance=1234,
+        device_name="Local BACnet lab",
+        interface="127.0.0.1",
+        port=47808,
+        broadcast_address="127.0.0.1",
+    )
+    # Units 62 = degrees Celsius. Add objects before starting the server.
+    server.add_analog_input(1, "Zone temperature", units=62, present_value=22.5)
+    try:
+        await server.start()
+        print(f"Listening at {await server.local_address()}", flush=True)
+        await asyncio.Event().wait()
+    finally:
+        await server.stop()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+```
+
+Before you leave loopback, pick a device instance that is unique on your
+network.
+
+### 2. Read a property
+
+**Python:**
 
 ```python
 import asyncio
@@ -122,6 +173,7 @@ from rusty_bacnet import BACnetClient, ObjectIdentifier, ObjectType, PropertyIde
 
 
 async def main():
+    # Port 0 picks a free local port, so it doesn't clash with the server.
     async with BACnetClient(
         interface="127.0.0.1", port=0, broadcast_address="127.0.0.1"
     ) as client:
@@ -130,21 +182,14 @@ async def main():
             ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
             PropertyIdentifier.PRESENT_VALUE,
         )
-        print(value.value)  # 22.5 from the local example server
+        print(value.value)  # 22.5
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-The context manager starts and stops the client, including when a request fails.
-For device discovery, routed addresses, multiple-property reads, COV, and error
-handling, continue with the [Python guide](https://jscott3201.github.io/rusty-bacnet/start/python/)
-or [checkout API reference](docs/python-api.md).
-
-### Rust reader
-
-With the dependencies above, put this in `src/main.rs` and run `cargo run`:
+**Rust:** create a project with `cargo new`, add the dependencies from
+[Install](#rust), replace `src/main.rs` with the following, then `cargo run`:
 
 ```rust
 use bacnet_client::client::BACnetClient;
@@ -163,391 +208,152 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .await?;
 
-    // BACnet/IP MAC: four IPv4 octets, then the two-byte UDP port (47808).
+    // A BACnet/IP address: four IPv4 octets, then the UDP port (0xBAC0 = 47808).
     let address = [127, 0, 0, 1, 0xBA, 0xC0];
     let response = client
         .read_property(&address, oid, PropertyIdentifier::PRESENT_VALUE, None)
         .await;
-    client.stop().await?; // also stop before returning a request error
+    client.stop().await?;
 
     let ack = response?;
     let (value, _) = decode_application_value(&ack.property_value, 0)?;
-    println!("Value: {value:?}");
+    println!("{value:?}");
     Ok(())
 }
 ```
 
-See the [Rust guide](https://jscott3201.github.io/rusty-bacnet/start/rust/)
-for a larger application and the [architecture guide](docs/architecture.md) for
-the boundary between transport MACs, network routing, and BACnet device identity.
-
-## Run a local Python server
-
-Save as `local_server.py`, then run `python local_server.py`. It exposes a
-simulated temperature on loopback only; it does not control physical equipment.
-Add objects before starting the server. Stop it with **Ctrl+C**.
-
-```python
-import asyncio
-from rusty_bacnet import BACnetServer
-
-
-async def main():
-    server = BACnetServer(
-        device_instance=1234,
-        device_name="Local BACnet lab",
-        interface="127.0.0.1",
-        port=47808,
-        broadcast_address="127.0.0.1",
-    )
-    server.add_analog_input(1, "Zone temperature", units=62, present_value=22.5)
-    try:
-        await server.start()
-        print(f"Listening at {await server.local_address()}", flush=True)
-        await asyncio.Event().wait()
-    finally:
-        await server.stop()
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-```
-
-Units `62` mean degrees Celsius. Keep device identifiers unique when moving
-beyond this isolated lab. See the [local-lab guide](https://jscott3201.github.io/rusty-bacnet/start/local-lab/)
-and [examples directory](examples/) for other setups; review their network and
-credential requirements before running them.
-
-In the current development checkout, Python `BACnetServer` exposes the native
-static `mutation_policy="permissive" | "deny_all"` option. Deny-all covers ten
-confirmed mutation services; reads and trusted local writes remain available.
-DCC, ReinitializeDevice, LifeSafety and Audit retain separate controls. See the
-[exact service coverage](docs/mutation-policy.md#python-configuration) and
-`BACNET-LOCAL-MUTATION-POLICY`
-[evidence](docs/conformance/standard-135-2020-ledger.md#python-standalone-mutation-policy).
-
-## CLI reads
-
-With the same local server running:
+**CLI:**
 
 ```bash
-bacnet --help
 bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:47808 ai:1 pv
 bacnet --interface 127.0.0.1 --port 0 --json readm 127.0.0.1:47808 ai:1 pv,object-name
 ```
 
-`ai:1` is Analog Input instance 1 and `pv` is Present_Value. The
-[CLI reference](docs/CLI.md) covers the shell, output formats, discovery,
-subscriptions, and optional capture. Treat write, object-management, file,
-time-sync, and BBMD-management commands as advanced operations requiring explicit
-permission—not as connectivity checks. For SC, use a build with `sc-tls` and the
-current reference's complete CA/certificate/key and provisioned-identity options.
+`ai:1` is Analog Input 1 and `pv` is Present_Value. Next, try discovery, COV
+subscriptions and multi-property reads in the
+[Python guide](https://jscott3201.github.io/rusty-bacnet/start/python/),
+[Rust guide](https://jscott3201.github.io/rusty-bacnet/start/rust/) or
+[CLI reference](docs/CLI.md). The [`examples/`](examples/) directory has
+complete Rust, Python and Docker setups.
 
-## Capabilities and conformance
+## Transports
 
-**Rusty BACnet does not claim BTL certification or full BACnet conformance.**
-Implemented code, passing interoperability examples, and support backed by
-clause-specific evidence are different things. Use the
-[Standard 135-2020 ledger](docs/conformance/standard-135-2020-ledger.md),
-[draft PICS](docs/conformance/pics-draft.md), and
-[machine-readable evidence](docs/conformance/bacnet-135-2020.json) to check the
-particular service, object, direction, and configuration you need.
+BACnet/IP is always available. The other transports are opt-in Cargo features
+of `bacnet-transport`:
+- `bacnet-client` also has `ipv6` and `sc-tls` features.
+- `bacnet-server` and `bacnet-endpoint` have `sc-tls`.
 
-| Area | Scope and important limits |
-|---|---|
-| Property access and objects | Client/server paths for single and multiple-property access, with common and extended object models. Unhandled unindexed writes on built-ins distinguish absent properties (`UNKNOWN_PROPERTY`) from present read-only properties (`WRITE_ACCESS_DENIED`), including NULL values. Indexed WP/WPM also report `UNKNOWN_PROPERTY` for absence established by nonempty effective metadata, while served scalars/LISTs retain `PROPERTY_IS_NOT_AN_ARRAY` and arrays retain their write rules; [evidence and limits](docs/conformance/support-summary.md#ledger-rows). Served properties, writable behavior, and optional functionality are object-specific; an object constructor is not a declaration of full object conformance. |
-| Shared endpoints | One transport owner composes initiating and executing roles. The default responder serves ReadProperty; Rust additionally offers authorized Device.Description and active source Audit recipient writes as an explicit opt-in. This is a bounded server role, not parity with the standalone server. Python awaited close joins earlier admitted startup and cleanup. |
-| Registered B/IP Network Port | Explicit selection associates one built-in port with one owned NORMAL B/IP transport. Startup publishes actual IP/MAC and the assigned UDP port when configured with `port=0`; active Python B/IP address/status use that bound snapshot. Full-server RP/RPM and endpoint RP resolve the receiving-port wildcard. Multiport routing, rebind and BBMD/foreign registration are outside this profile. See [API contract](docs/rust-api.md#registered-bip-network-port), [Python usage](docs/python-api.md#registered-bip-network-port), and [ledger evidence](docs/conformance/standard-135-2020-ledger.md#registered-normal-bip-network-port). |
-| Discovery, routing, and COV | Rust client/network components and Python APIs expose discovery, routed requests, subscriptions, and notifications. Consult the individual API for address forms, notification delivery, and lifecycle ownership. |
-| Events, logs, files, and device management | APIs and server handlers exist for selected services, with configuration, authorization, resource, and persistence limits. Client availability does not imply equivalent server execution or Python configuration support. |
-| LifeSafetyOperation | Authorized Rust server execution covers modeled silence/unsilence and application-owned resets, with exact COV changes and bounded response replay. Reset requires explicit arming and an executor; no physical state is inferred. See [execution and COV limits](docs/rust-api.md#life-safety-execution-and-cov) for property coverage, replay bounds, and deferred object behavior. This is not full Life Safety object conformance or physical-safety qualification. |
-| Audit services | Rust and Python expose client notification/query helpers, explicit Audit Log reception policies, configured target reporting with multiple Reporters, overlap health and optional bounded delayed batching, AV/BV object-owned policy overrides, and direct B/IP parent forwarding. Python selects one registered Audit Log with an explicit `deny_all` or `allow_all` policy before startup; unconfigured reception is denied. Rust endpoint source reporting covers direct B/IP ReadProperty, ReadRange, bounded explicit ReadPropertyMultiple and WriteProperty. Initiating WP requires explicit commandability in Rust/Python, independently of the bounded responder profile. RPM produces one value-free record per eligible occurrence; RP/RR produce one per eligible operation. Source filters can suppress records. Read values stay with the caller; WRITE records retain complete encoded values through 32 bytes. Rust/Python endpoint RPM accepts 1–64 explicit references on concrete objects, with unsegmented request/ACK bounds. These subsets do not imply full Audit Reporter, BIBB or BTL conformance. |
+These turn on each crate's builders for those transports. The Python package
+includes BACnet/IPv6, BACnet/SC and MS/TP, but not Ethernet.
 
-For one NORMAL B/IP, BACnet/SC or MS/TP link, the full server and shared endpoint answer local unicast or broadcast What-Is-Network-Number with a local-broadcast Network-Number-Is when the number is known, and learn valid logical-broadcast announcements with configured-source precedence. Full B/IP servers and shared endpoints also own these controls in BBMD and configured foreign-device modes, answering by Original-Broadcast or DBTN to the configured BBMD respectively. Full B/IPv6 servers cover normal multicast and configured foreign-device modes. NORMAL B/IP registration supplies its configured number; SC, MS/TP, B/IPv6 and unregistered B/IP start unknown and never borrow a declared row. Standalone clients also own passive UNKNOWN-state controls on opted-in transports. Linux Ethernet full servers and clients are qualified on an isolated virtual link with actual LLC frame capture, own-address/all-FF admission and raw-socket cleanup; Rust client wire evidence also covers NORMAL and BBMD/foreign B/IP loopback, constrained-TLS SC Hub/direct queries, and normal/configured-foreign B/IPv6 on an isolated Linux link. Full-server/shared-endpoint MS/TP evidence uses simulated standard frames in both execution modes, with no physical RS-485 timing claim; independent standalone-client MS/TP frame qualification remains under #879. See [Network Number behavior](docs/rust-api.md#local-network-number-controls) and the `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [bounded evidence](docs/conformance/support-summary.md#ledger-rows). This does not claim a complete Network Port profile, broader shared-endpoint B/IP BBMD/foreign qualification, an IPv6 endpoint builder, full client media/mode qualification, remaining-link support or multiport routing.
-
-Audit records contain peer-reported identities, not authenticated provenance.
-Notification storage uses the database's write path and depends on synchronous
-storage availability. See [Rust Audit configuration and limits](docs/rust-api.md#audit-services)
-and [Python Audit APIs](docs/python-api.md#audit-services), including the
-[receiver policy](docs/python-api.md#inbound-audit-notification-sink),
-[target Reporters](docs/python-api.md#target-audit-reporters),
-[delayed target controls and limits](docs/delayed-target-audit.md),
-[AV/BV policy](docs/rust-api.md#object-owned-avbv-audit-policy), and
-[direct B/IP parent forwarding](docs/python-api.md#direct-audit-log-parent-forwarding).
-Python's receiver policy is an all-or-none choice, not a sender allowlist or
-authentication callback. The narrow Rust source producer is documented under
-[endpoint read reporting](docs/rust-api.md#bounded-endpoint-source-read-reporting)
-and [direct endpoint WriteProperty and source WRITE reporting](docs/rust-api.md#direct-endpoint-writeproperty-and-source-write-reporting),
-with the [conformance ledger](docs/conformance/standard-135-2020-ledger.md#endpoint-writeproperty-source-write)
-recording the bounded evidence.
-The standalone target and bounded endpoint source profiles share the
-[Device recipient contract](docs/device-audit-recipient.md), including atomic
-old/new change notifications. Broader Audit completion remains tracked in
-[#345](https://github.com/jscott3201/rusty-bacnet/issues/345).
-The server does not claim execution of WriteGroup, Virtual Terminal, or
-PrivateTransfer services merely because a client can send them.
-
-## Shared endpoints: current development checkout
-
-Use a shared endpoint when one BACnet Device must both initiate requests and
-respond through the same socket, SC node or MS/TP serial owner. The Rust
-[`bacnet-endpoint` API](docs/rust-api.md#bacnet-endpoint-forward-path-rb-18)
-composes client and server roles under one lifecycle. Python provides
-[`BipEndpoint`, `ScEndpoint` and `MstpEndpoint`](docs/python-api.md#endpoint-one-transport-both-roles)
-with corresponding role handles. These APIs require a current source build.
-
-The default endpoint responder supports ReadProperty. Rust's
-[authorized Device writes](docs/rust-api.md#authorized-endpoint-device-writes)
-is a separate opt-in capability and is not exposed in Python. Consult that
-contract before enabling it. Use the standalone server when you need its broader service surface. One-owner
-loopback proofs do not establish physical MS/TP timing or full device-profile
-conformance. Python MS/TP API and setup checks also do not qualify a physical
-serial adapter.
-
-## Transports and platforms
-
-These are implemented code paths, not an all-platform or hardware-qualification
-matrix. Flags in this table belong to **`bacnet-transport`**; other crates have
-their own feature sets. Check their Cargo manifests rather than applying one
-flag list to the whole workspace.
-
-| Transport | Feature | Scope |
+| Transport | Feature | Notes |
 |---|---|---|
-| BACnet/IP (UDP/IPv4) | Available without optional features | Client/server transport and BBMD-related paths; see Annex J evidence. |
-| BACnet/IPv6 (UDP multicast) | `ipv6` | Current source selects one concrete link/address (ambiguous `::` fails), preserving source and receive-interface metadata. Isolated Linux wire and macOS loopback evidence; Windows runtime and deployment-network behavior remain unqualified. See [IPv6 API policy](docs/rust-api.md#bip6-ipv6) and [Annex U evidence](docs/conformance/standard-135-2020-ledger.md#annex-u-bacnetipv6). |
-| BACnet/SC nodes and hub | `sc-tls` | WebSocket/TLS code for nodes and an accepting relay hub; current-development security and admission limits below. |
-| MS/TP | `serial`; `serial-gpio` for GPIO support | Protocol core, serial adapter, and loopback evidence. Kernel RS-485/ioctl and GPIO facilities are Linux-specific; physical timing is not qualified across operating systems or adapters. |
-| Ethernet (802.3 LLC) | `ethernet` | Linux `AF_PACKET` transport, not a generic BPF backend. Requires suitable interface permissions and platform qualification. |
+| BACnet/IP (UDP/IPv4) | none | Includes BBMD and foreign-device registration. NAT traversal and B/IP multicast are not implemented. |
+| BACnet/IPv6 | `ipv6` | Binds one concrete interface and address. With `::`, startup fails if the host has more than one candidate, so pass a concrete address. |
+| BACnet/SC | `sc-tls` | Nodes, direct connections and a hub over TLS 1.3. Requires a site CA, a certificate and key for each device, and a provisioned device UUID. |
+| MS/TP | `serial` (`serial-gpio` for GPIO direction control) | Standard frames only (no extended or COBS frames). RS-485 kernel options and GPIO are Linux-only. Evidence comes from a simulator and loopback; on-wire timing isn't qualified on any adapter or OS. |
+| Ethernet (802.3 LLC) | `ethernet` | Linux only (`AF_PACKET`). Needs `CAP_NET_RAW` or root. |
 
-Annex J NAT traversal and IPv4 BACnet/IP multicast (B/IP-M) are **not claimed** by
-the current BACnet/IP transport. Loopback or protocol tests do not establish
-serial hardware timing, deployed-network behavior, or cross-OS support.
+The BACnet/IPv6 and BACnet/SC notes describe `dev`. In 0.11.0, BACnet/IPv6 can
+fall back to a wildcard address, and the CLI loads SC trust from the system
+roots. The [BACnet/SC guide](https://jscott3201.github.io/rusty-bacnet/guides/bacnet-sc/)
+covers the release.
 
-## BACnet/SC: current development checkout
+How to configure each one:
+- [Transport configuration](docs/rust-api.md#transport-configuration-examples) (Rust)
+- [Python transport examples](docs/python-api.md#transport-configuration-examples)
+- [MS/TP guide](https://jscott3201.github.io/rusty-bacnet/guides/mstp/)
 
-Local receive capacity is independent of negotiated outgoing limits. Current
-Rust server startup requires the selected Device declaration to match its
-locally clamped receive ceiling; raw Device/I-Am 1474 stays 1474 while originated
-confirmed notification headers advertise 1024. SC nodes receive NPDU 1478 for
-local APDU 1476 on each connection direction. See the [directional capacity API](docs/rust-api.md#local-receive-capacity-and-outgoing-limits)
-and `BACNET-12-LOCAL-APDU-CAPACITY` in the [conformance evidence](docs/conformance/support-summary.md#ledger-rows).
+## Crates
 
-**This section describes unreleased source behavior, not the installed 0.11.0
-package contract.** Build from current source if you need these changes. Review
-the [Python SC migration](docs/python-api.md#bacnetsc-secure-connect),
-[Rust node migration](docs/rust-api.md#bacnetsc-client-transport), and
-[Rust hub migration](docs/rust-api.md#bacnetsc-hub) before updating an existing deployment.
+| Crate | Purpose |
+|---|---|
+| [`bacnet-types`](https://crates.io/crates/bacnet-types) | Enums, primitives, bit strings and errors (`no_std` capable) |
+| [`bacnet-encoding`](https://crates.io/crates/bacnet-encoding) | ASN.1 tags, APDU/NPDU codecs, segmentation |
+| [`bacnet-services`](https://crates.io/crates/bacnet-services) | Service request and response types |
+| [`bacnet-transport`](https://crates.io/crates/bacnet-transport) | BACnet/IP, BACnet/IPv6, BACnet/SC, MS/TP and Ethernet data links |
+| [`bacnet-network`](https://crates.io/crates/bacnet-network) | Network layer and routing |
+| [`bacnet-client`](https://crates.io/crates/bacnet-client) | Async client |
+| [`bacnet-objects`](https://crates.io/crates/bacnet-objects) | `BACnetObject` trait, object database and object types |
+| [`bacnet-server`](https://crates.io/crates/bacnet-server) | Async server: dispatch, COV, events, scheduling, PICS |
+| [`bacnet-endpoint-core`](https://crates.io/crates/bacnet-endpoint-core) | Shared ownership and transaction coordination for endpoints |
+| [`bacnet-endpoint`](crates/bacnet-endpoint) | One transport owner for both client and server roles (on `dev`, not yet on crates.io) |
+| [`bacnet-cli`](crates/bacnet-cli) | The `bacnet` command-line tool (release binaries; not on crates.io) |
 
-### Credentials and device identity
+The others are on crates.io at 0.11.0. The Python package is built from
+[`crates/rusty-bacnet`](crates/rusty-bacnet) with
+[maturin](https://www.maturin.rs/). The [architecture guide](docs/architecture.md)
+shows how the layers fit together.
 
-- Built-in hub and node paths use TLS 1.3 as local policy. Supply an explicit site
-  CA and matching certificate/private key. Python `ScHub` requires `ca_cert`,
-  `cert`, and `key`; Python SC clients/servers require `sc_ca_cert`,
-  `sc_client_cert`, and `sc_client_key`. There is no insecure hub mode or
-  system-root fallback in these paths. Credentials are validated before the hub
-  binds or the built-in node dials; omission of required paths is an error.
-- Provision a **nonzero 16-byte Device UUID before deployment**, store it durably,
-  and reuse it for that device's lifetime. Distinct devices need distinct
-  identities; do not generate a new UUID on every start. Python nodes use
-  `sc_device_uuid`; the hub's hosting device uses `device_uuid`. Local VMACs must
-  be six bytes and neither all-zero nor all-ff.
-- Raw Rust `ScTransport::new(ws, vmac)` remains a two-argument, unconfigured
-  constructor. Call `.with_device_uuid(...)` before `start()`. Startup rejects
-  missing/all-zero UUIDs and all-zero/all-ff local VMACs before **transport-owned
-  I/O**, not creation or dialing of the caller's `ws`.
-- UUID bytes are not validated for version/variant bits. There is no
-  automatic certificate-to-UUID binding, durable identity-change detection, or
-  enforced lifetime immutability. Post-start mutation through Rust's public `connection()`
-  is outside this startup guard. See the [identity validation scope](docs/conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout).
+## Find it in the docs
 
-Optional Hub `certificate_bindings` restrict registration to configured leaf
-SHA-256 digests, UUIDs and VMACs, including offline reservations and listed
-renewal certificates. Python uses frozen `ScHubCertificateBinding` groups; Rust
-uses `ScHubCertificateBindings` on `ScHubTlsConfig`. Absent bindings retain
-CA-valid admission. See [Rust configuration](docs/rust-api.md#hub-certificate-bindings),
-[Python configuration](docs/python-api.md#hub-certificate-bindings), and
-[scoped evidence](docs/conformance/standard-135-2020-ledger.md#hub-certificate-bindings).
-Every Hub feeding a trusted router ingress must enforce its installation policy;
-this does not authenticate relayed operations end to end or direct SC peers.
+The [hosted guides](https://jscott3201.github.io/rusty-bacnet/) cover the
+0.11.0 release. The [`docs/`](docs/) references track `dev`.
 
-Opt-in direct listeners and outbound discovery share UUID/VMAC membership.
-A successful same-UUID Connect replaces the old direct connection; a VMAC
-owned by another UUID is rejected. `with_max_established_peers(M)` bounds
-established accepted peers separately from pending handshakes and physical
-sockets. See [direct peer limits and migration](docs/rust-api.md#direct-peer-membership-and-limits)
-and the [scoped evidence](docs/conformance/standard-135-2020-ledger.md#direct-peer-membership).
+| Topic | Where to look |
+|---|---|
+| Installing and first steps | [Installation](https://jscott3201.github.io/rusty-bacnet/start/installation/), [choose your path](https://jscott3201.github.io/rusty-bacnet/start/choose-your-path/), [local lab](https://jscott3201.github.io/rusty-bacnet/start/local-lab/) |
+| Rust API | [docs.rs](https://docs.rs/bacnet-client) (release), [`docs/rust-api.md`](docs/rust-api.md) (dev) |
+| Python API | [v0.11.0](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/python-api.md) (release), [`docs/python-api.md`](docs/python-api.md) (dev) |
+| CLI | [v0.11.0](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/CLI.md) (release), [`docs/CLI.md`](docs/CLI.md) (dev) |
+| Discovery and COV | [Discovery](https://jscott3201.github.io/rusty-bacnet/guides/discovery/), [observing changes](https://jscott3201.github.io/rusty-bacnet/guides/observe-changes/) |
+| BACnet/SC: credentials, device identity, hub policy | [Rust node](docs/rust-api.md#bacnetsc-client-transport), [Rust hub](docs/rust-api.md#bacnetsc-hub), [Python](docs/python-api.md#bacnetsc-secure-connect), [hub certificate bindings](docs/python-api.md#hub-certificate-bindings) |
+| Shared endpoints (dev) | [Rust](docs/rust-api.md#bacnet-endpoint), [Python](docs/python-api.md#endpoint-one-transport-both-roles) |
+| Writes and authorization | [Safe writes](https://jscott3201.github.io/rusty-bacnet/guides/safe-writes/), [mutation policy](docs/mutation-policy.md), [Device Communication Control](docs/dcc-policy.md) |
+| Audit reporting | [Rust](docs/rust-api.md#audit-services), [Python](docs/python-api.md#audit-services), [target reporters](docs/target-audit-reporters.md) |
+| Policy and resource limits | [Engineering docs index](docs/README.md#policy-and-resource-contracts) |
+| Upgrading between releases | [Upgrade guide](https://jscott3201.github.io/rusty-bacnet/project/upgrading/), [changelog](CHANGELOG.md) |
+| Troubleshooting | [Troubleshooting guide](https://jscott3201.github.io/rusty-bacnet/help/troubleshooting/) |
 
-Current source also carries the verified direct TLS leaf fingerprint
-and connection incarnation into native server authorization and receive
-reassembly. Queued work retains its admitting identity across replacement;
-different incarnations cannot share duplicate/replay or partial request state.
-See the [Rust identity API and limits](docs/rust-api.md#accepted-direct-tls-identity).
-These APIs postdate published 0.11.0. Native `BACnetServer` accepted-direct
-confirmed replies, LSO replay, and segmented-request controls now stay on the
-original socket; stale or missing response authority fails closed. Unconfirmed
-Who-Is/Who-Has discovery replies retain ordinary routing. Response sizing includes
-the original peer's NPDU/BVLC limits and actual routing overhead. Registered
-transport teardown also seals its listener, even when the application retains
-the listener handle.
-See [server response confinement and limits](docs/rust-api.md#accepted-direct-server-responses).
-The standalone client's inbound confirmed notification replies and the shared
-endpoint responder also use this original route, checked before any MS/TP prompt
-channel. The endpoint retains its bounded response queue and unsegmented service
-scope; an oversized read response selects its existing Abort. See the
-[client/endpoint reply scope](docs/rust-api.md#accepted-direct-client-and-endpoint-replies).
-Established accepted/outbound direct sockets now carry ordinary unicast traffic.
-The built-in `with_direct_tls` dialer supplies verified outbound intake and original
-reply authority; custom dialers remain send-only. The shared socket queue is bounded,
-and uncertain writes are never retried through a fallback route. Outgoing client and
-native notification transactions retain standard address/Invoke-ID correlation,
-including Hub/direct path switching and matching replacement-peer responses.
-See [bidirectional direct behavior and limits](docs/rust-api.md#bidirectional-direct-traffic).
-Hub-relayed end-to-end identity and optional strict historical-route filtering
-remain separate. Ordinary confirmed duplicate detection now
-ends at local encoded reply issuance (or the segmented response's terminal
-outcome), allowing immediate Invoke ID reuse; LSO completed replay remains a
-separate policy. See [transaction lifetimes](docs/rust-api.md#confirmed-transaction-lifetimes).
+## Conformance
 
-CA membership alone is not BACnet-operation authorization and does not bind a
-certificate to a VMAC or Device UUID. These checks are not a claim of the entire
-Annex AB security profile or qualification of your credential provisioning.
+Rusty BACnet is **not BTL certified** and does not claim full BACnet
+conformance. Support is tracked clause by clause, with the evidence and open
+gaps for each, in the
+[support summary](docs/conformance/support-summary.md),
+[Standard 135-2020 ledger](docs/conformance/standard-135-2020-ledger.md) and
+[draft PICS](docs/conformance/pics-draft.md). Check the specific service, object
+and transport you rely on there.
 
-### Compatibility and forwarding limits
+## Contributing
 
-- Hub admission can inspect a fixed current UUID/VMAC conflict classification in
-  Rust; Python offers `admission_policy="deny_uuid_replacement"` to preserve an
-  incumbent. This is opt-in local security policy before protocol acceptance.
-  Default known-UUID replacement remains, and UUID equality is not certificate
-  identity proof. See [conflict-aware admission](docs/conformance/standard-135-2020-ledger.md#hub-conflict-aware-admission).
-
-- Rust and Python Hub configuration supports monotonic, scan-driven optional
-  probes, one transit relay send budget (default five seconds), and
-  sender/global broadcast-rate limits. Probe ACK age is checked on later scans;
-  it is not a hard closure deadline or a replacement for node keepalive.
-  The relay budget includes NPDU/opaque unicast, each concurrent broadcast
-  recipient, and forwarded BVLC-Result; control and shutdown sends stay separate.
-  See [Hub operator policy](docs/conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
-
-- Rust and Python Hub status expose fixed, saturating per-start outcome counters
-  for admission, handshake deadlines, eligible unicast drops/failures, and actual
-  heartbeat retirement. Counts describe decisions, not delivery acknowledgments;
-  they contain no peer identities. See [Hub outcome status](docs/conformance/standard-135-2020-ledger.md#hub-outcome-status).
-
-- After TLS/WebSocket establishment, an all-zero peer UUID in Connect-Request is
-  rejected before registration/replacement; eligible Requests receive
-  `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not a duplicate-VMAC error.
-  Initiating nodes silently discard Connect-Accept with a zero UUID, preserving
-  state, peer limits, and the original Connect deadline. A later valid Accept
-  can complete the handshake; otherwise that original wait expires. See
-  [peer UUID admission](docs/conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
-- Zero advertised Max-BVLC or Max-NPDU is rejected by a **zero-only local policy**:
-  eligible Requests receive 7/80 and nodes silently discard invalid Accepts
-  without resetting the original deadline or committing peer limits. Positive
-  values, including tiny or inverted pairs, still pass this check; that is not
-  a serviceability guarantee or universal minimum-capacity conformance claim.
-  Defaults and outgoing budgets are unchanged. See [zero-capacity admission](docs/conformance/standard-135-2020-ledger.md#received-zero-capacity-admission).
-- Registered, correctly addressed unknown BVLC functions can transit the hub as
-  opaque bytes, with source stamping, no source echo, encoded BVLC limits, and
-  a guarded Result return path. Pre-registration frames are not forwarded.
-  This does not add general forwarding for other known BVLC functions; see the
-  [bounded forwarding and rejection scope](docs/conformance/standard-135-2020-ledger.md#hub-unknown-transit-and-result-return).
-- The hub also supports [unicast Address-Resolution/ACK transit](docs/conformance/standard-135-2020-ledger.md#hub-address-resolution-transit)
-  with opaque URI bytes (including empty ACK lists) and guarded Result-for-Request
-  return. Broadcasts and nonforwardable ACKs are silent. This is **hub transit
-  only**, not node Address-Resolution support, URI parsing/discovery, or direct
-  connections; other known-function forwarding remains outside this scope.
-
-## Development and contributing
-
-Bug reports, documentation improvements, test cases, and focused patches are
-welcome. Start with a small reproducible example and keep changes scoped to a
-protocol boundary or user-visible behavior. Include tests for changed behavior
-and update the relevant evidence/docs without broadening support claims.
-
-### Build from source
-
-For **current development**, clone `dev`; use the `v0.11.0` tag instead when you
-need that release's source. The checked-in toolchain is 1.97.1, distinct from the
-declared minimum Rust version 1.93. Native build requirements depend on the
-selected transport, TLS provider, and Python interpreter.
+Bug reports, test cases, documentation fixes and focused patches are welcome.
+See the [contributing guide](https://jscott3201.github.io/rusty-bacnet/project/contributing/).
 
 ```bash
-git clone --branch dev https://github.com/jscott3201/rusty-bacnet.git
+git clone https://github.com/jscott3201/rusty-bacnet.git
 cd rusty-bacnet
+cargo install cargo-nextest --locked   # 0.9.145 or newer
 cargo build --locked
-```
-
-For Python source development, activate a virtual environment first:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install "maturin>=1,<2" pytest pytest-subtests
-maturin develop --manifest-path crates/rusty-bacnet/Cargo.toml --locked
-python -m pytest --import-mode=append -q crates/rusty-bacnet/tests
-```
-
-The Python package builds a native PyO3 extension. Rust compilation alone does
-not verify its installed Python API; run the Python tests with the interpreter
-and artifact you intend to use. A source build from `dev` may still report 0.11.0
-as its version, so record the source revision as well.
-
-### Useful checks
-
-From the repository root, with the selected Python environment active for the
-binding check:
-
-```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked
 cargo test --doc --workspace --exclude rusty-bacnet --locked
-cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
-cargo nextest run -p rusty-bacnet --locked
-cargo fmt --all --check
-cargo nextest run -p bacnet-integration-tests --test conformance_ledger --locked
-python3 scripts/generate-conformance-docs.py --check
 ```
 
-Tests run with [cargo-nextest](https://nexte.st) 0.9.145 or later
-(`cargo install cargo-nextest --locked`); it skips doctests, hence the
-separate `cargo test --doc`. The Python `cdylib` is excluded from those
-workspace test commands intentionally; its Rust tests link the active
-environment's libpython, and its installed-package tests are separate.
-Optional-feature tests and system dependencies depend on your
-platform—consult the manifests and CI jobs before enabling serial, Ethernet,
-SC, or capture features.
+nextest skips doctests, which is why `cargo test --doc` is a separate step. The
+repository pins Rust 1.97.1 in `rust-toolchain.toml`. For Python binding
+development (on Windows, activate with `.venv\Scripts\activate`; the BACnet/SC
+tests also need the `openssl` command):
 
-### Repository map
+```bash
+python -m venv .venv && source .venv/bin/activate
+python -m pip install "maturin>=1,<2"
+maturin develop --manifest-path crates/rusty-bacnet/Cargo.toml --locked
+python -m unittest discover -s crates/rusty-bacnet/tests
+```
 
-- `crates/`: types/codecs/services, transports/network/endpoint core, clients,
-  object models/server, Python bindings, CLI, and integration tests.
-- `examples/`: Rust, Python, and container-based labs.
-- `docs/`: checkout API references, architecture, and conformance evidence.
-- `website/`: sources for the hosted documentation.
-- `benchmarks/`: benchmark workloads. [Benchmarks.md](Benchmarks.md) is a
-  **historical 0.8.0 report from March 2026**, not current performance qualification;
-  its retired server-auth-only SC setup must not be treated as a current example.
+[`docs/ci.md`](docs/ci.md) lists the full set of checks CI runs, including
+clippy, rustdoc and the feature matrix.
 
-Not every workspace package is published: the Python binding crate is a
-non-published Rust `cdylib`, and integration tests are internal test infrastructure.
+When you [open an issue](https://github.com/jscott3201/rusty-bacnet/issues),
+include:
+- the version or commit;
+- your OS and the transport you use;
+- a minimal reproduction that leaves out credentials and captures from real
+  networks.
 
-## Documentation, help, and companion projects
-
-- [Hosted guides](https://jscott3201.github.io/rusty-bacnet/) — currently for 0.11.0;
-  [installation](https://jscott3201.github.io/rusty-bacnet/start/installation/) and
-  [support scope](https://jscott3201.github.io/rusty-bacnet/project/support/).
-- Checkout references: [Rust](docs/rust-api.md), [Python](docs/python-api.md),
-  [CLI](docs/CLI.md), [architecture](docs/architecture.md), and [changelog](CHANGELOG.md).
-- [Issues](https://github.com/jscott3201/rusty-bacnet/issues) — include the package
-  version/source revision, OS, transport, and a sanitized minimal reproduction.
-  Do not post private keys, credentials, sensitive deployment
-  details, or captures from real networks. Prefer synthetic/local-lab fixtures.
-- [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — companion MCP gateway.
-- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — companion test harness;
-  its existence is not a certification or a substitute for the project's conformance evidence.
+Report security vulnerabilities privately as described in the
+[security policy](.github/SECURITY.md).
 
 ## License
 
-Rusty BACnet is available under the [MIT License](LICENSE).
+[MIT](LICENSE)

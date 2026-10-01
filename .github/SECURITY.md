@@ -2,9 +2,15 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+Before 1.0, security fixes land on `dev` and ship in the next release, which may
+be a new minor version (for example 0.12.0). Fixes aren't backported to older
+release lines, so upgrade to the latest release to receive them.
+
+| Version                            | Supported          |
+| ---------------------------------- | ------------------ |
+| `dev` branch                       | :white_check_mark: |
+| Latest release (currently 0.11.x)  | :white_check_mark: |
+| Older releases                     | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -25,7 +31,8 @@ You should receive an acknowledgment within 48 hours. We will work with you to u
 
 This policy covers:
 
-- The Rust crate workspace (`bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-transport`, `bacnet-network`, `bacnet-objects`, `bacnet-client`, `bacnet-server`)
+- The Rust crates in this repository (`bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-transport`, `bacnet-network`, `bacnet-objects`, `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`)
+- The `bacnet` CLI (`bacnet-cli`)
 - The Python bindings (`rusty-bacnet`)
 - BACnet protocol handling (parsing, encoding, transport security)
 
