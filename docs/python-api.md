@@ -4,7 +4,7 @@
 
 This reference describes current development-source APIs, including unreleased
 changes. The [published package](https://pypi.org/project/rusty-bacnet/0.11.0/)
-and the site’s release tutorials target **0.11.0**; see the [installation guidance](../README.md#installation)
+and the site’s release tutorials target **0.11.0**; see the [installation guidance](../README.md#install)
 for that release. To use the checkout APIs described here, follow
 [Build from source](../README.md#build-from-source).
 

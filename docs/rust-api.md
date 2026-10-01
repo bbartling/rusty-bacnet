@@ -1,11 +1,11 @@
 # Rust API Reference
 
-Rusty BACnet is a workspace of 8 published crates implementing the BACnet protocol stack (ASHRAE 135-2020).
+Rusty BACnet is a workspace of library crates implementing the BACnet protocol stack (ASHRAE 135-2020). The [README crate table](../README.md#crates) lists which are on crates.io.
 
 This reference describes current development-source APIs, including unreleased
 changes. Published crates and the site’s release tutorials target **0.11.0**; use the
 [versioned Rust API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/) and
-[installation guidance](../README.md#installation) for that release. To use the
+[installation guidance](../README.md#install) for that release. To use the
 checkout APIs described here, follow [Build from source](../README.md#build-from-source).
 
 ## Crate Dependency Order
@@ -3118,7 +3118,7 @@ other links. This is a logical announced address, not physical NIC provenance.
 Cancelled startup can be stopped and joined; transport cleanup failures are
 reported by endpoint stop rather than discarded.
 
-## bacnet-endpoint (forward path, RB-18)
+## bacnet-endpoint
 
 `bacnet-endpoint` composes client and server roles for one BACnet device under
 one transport owner. One `EndpointSession` owns the transport, ingress, and

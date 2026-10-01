@@ -4,18 +4,18 @@ The `bacnet` command-line tool provides interactive and scripted access to BACne
 
 ## Installation
 
+`bacnet-cli` is not published on crates.io. Download a release binary (see
+[Pre-built Binaries](#pre-built-binaries)) or install from a checkout:
+
 ```bash
-# From source
-cargo install bacnet-cli
+# From a checkout of this repository
+cargo install --path crates/bacnet-cli --locked
 
 # With packet capture support (requires libpcap)
-cargo install bacnet-cli --features pcap
+cargo install --path crates/bacnet-cli --locked --features pcap
 
 # With BACnet/SC support
-cargo install bacnet-cli --features sc-tls
-
-# Pre-built binaries (from GitHub Releases)
-# Linux builds include pcap support by default
+cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
 
 ## Global Options
@@ -511,4 +511,4 @@ Available from [GitHub Releases](https://github.com/jscott3201/rusty-bacnet/rele
 | `bacnet-macos-arm64` | macOS Apple Silicon | sc-tls |
 | `bacnet-windows-amd64.exe` | Windows x86_64 | sc-tls |
 
-Linux binaries include packet capture support out of the box. macOS/Windows users who need capture can build from source with `--features pcap`.
+Linux binaries include packet capture support out of the box. macOS/Windows users who need capture can build from source with `--features pcap`. The Linux binaries need glibc 2.39 or newer (for example Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu). Rename the downloaded file to `bacnet` (`bacnet.exe` on Windows) and put it on your `PATH`.
