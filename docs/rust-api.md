@@ -1903,8 +1903,8 @@ the live target context; unrelated expired-entry purging and counters may still 
 Changing route preserves unreplaced selected-value/flags observations and reference
 generations, while a private route ownership token fences every old-route snapshot.
 The exception is a confirmed context whose report is outstanding, or failed and
-still owed, at the move: its kept untimestamped references forget their
-observations, as described for fenced reports below (#923).
+still owed, at the move: the kept untimestamped references that report carried
+forget their observations, as described for fenced reports below (#923).
 The routed address is a claimed protocol identity, not authentication; existing
 mutation authorization still precedes subscription handling.
 
@@ -2017,18 +2017,24 @@ initial report goes first carries them as first reports, and the other finds the
 context busy. The fenced report may already have reached the subscriber, so the
 follow-up can repeat changes of the kept references.
 
-Because no Ack of the fenced report counts, its delivery cannot be ruled out, and
-the subscriber may hold values newer than the baselines. So the same fence first
-clears the baseline of every kept untimestamped reference (#923), and the
-follow-up reports the current value of each one. This covers a fence during the
-hold-off after a failed report too, since that report may have arrived even though
-its Ack did not. Without the reset, a kept reference that went back to its old
-baseline value before the follow-up would look unchanged, and the subscriber would
-keep the value the fenced report carried until the reference changed again.
-Timestamped references keep their baselines: the fenced report's history returns
-to their queue and a change back is captured as one more change, so the follow-up
-carries both. A fence while the context is idle clears nothing, since the last Ack
-settled every baseline.
+Because the fenced report's outcome no longer counts, its delivery cannot be ruled
+out, and the subscriber may hold values newer than the baselines. So the same
+fence first clears the baseline of each kept untimestamped reference that report
+carried (#923), and the follow-up reports the current value of each one. This
+covers a fence during the hold-off after a failed report too. Without the reset, a
+carried reference that went back to its old baseline value before the follow-up
+would look unchanged, and the subscriber would keep the value the fenced report
+carried until the reference changed again. References the report did not carry
+keep their acknowledged baselines, so the follow-up does not grow to the whole
+context. Timestamped references keep their baselines too: the fenced report's
+history returns to their queue and a change back is captured as one more change,
+so the subscriber ends at the current value. A fence while no report is
+outstanding or owed clears nothing.
+
+The same gap remains without a fence, and is accepted: a failed report keeps its
+baselines, so if it did arrive (only its Acks were lost) and the value goes back
+during the hold-off, the owed follow-up sees no change and nothing is sent again.
+A fence that comes after the owed follow-up has been taken clears nothing either.
 
 The follow-up task handles each batch of references on its own. If evaluating a
 batch panics, the panic is caught (in unwind builds) and logged with the number of

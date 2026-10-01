@@ -469,7 +469,8 @@ including an empty renewal of an existing context, retargets every retained
 reference. Cancellation removes matching targets without retargeting survivors;
 route changes fence old snapshots while preserving unreplaced observations. The
 exception is a confirmed context whose report is outstanding, or failed and still
-owed, at the move: its kept untimestamped references report afresh (#923).
+owed, at the move: the kept untimestamped references that report carried report
+afresh (#923).
 Different accepted array indexes stay distinct, and exact duplicate Multiple
 references use final options once. Peer cleanup follows the current route for
 all families. Claimed BACnet addresses do not establish authentication.

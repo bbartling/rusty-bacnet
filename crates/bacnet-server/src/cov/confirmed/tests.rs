@@ -279,10 +279,13 @@ fn a_busy_context_resubscription_fences_the_report() {
 }
 
 #[test]
-fn a_fence_while_owed_forgets_only_kept_untimestamped_baselines() {
+fn a_fence_while_owed_forgets_only_carried_kept_untimestamped_baselines() {
     let mut table = CovSubscriptionTable::new();
     let kept = table
         .admit_for_test(reference(PropertyIdentifier::PRESENT_VALUE), 0)
+        .unwrap();
+    let uncarried = table
+        .admit_for_test(reference(PropertyIdentifier::RELIABILITY), 0)
         .unwrap();
     let mut proposal = reference(PropertyIdentifier::STATUS_FLAGS);
     proposal.timestamped = true;
@@ -292,15 +295,26 @@ fn a_fence_while_owed_forgets_only_kept_untimestamped_baselines() {
         .unwrap();
     let report = ticket(&kept);
     let flight = table
-        .begin_confirmed(report, [&kept, &stamped, &relisted])
+        .begin_confirmed(report, [&kept, &uncarried, &stamped, &relisted])
         .unwrap();
-    for (sub, v) in [(&kept, 1.0), (&stamped, 2.0), (&relisted, 3.0)] {
+    for (sub, v) in [
+        (&kept, 1.0),
+        (&uncarried, 5.0),
+        (&stamped, 2.0),
+        (&relisted, 3.0),
+    ] {
         assert!(table.complete_observation(sub, report, value(v)));
     }
     drop(flight);
-    let baselines =
-        |table: &CovSubscriptionTable| [&kept, &stamped, &relisted].map(|sub| baseline(table, sub));
-    let acknowledged = [Some(value(1.0)), Some(value(2.0)), Some(value(3.0))];
+    let baselines = |table: &CovSubscriptionTable| {
+        [&kept, &uncarried, &stamped, &relisted].map(|sub| baseline(table, sub))
+    };
+    let acknowledged = [
+        Some(value(1.0)),
+        Some(value(5.0)),
+        Some(value(2.0)),
+        Some(value(3.0)),
+    ];
 
     // A route change while the context is idle: the Ack settled every baseline.
     let home = kept.endpoint();
@@ -323,11 +337,12 @@ fn a_fence_while_owed_forgets_only_kept_untimestamped_baselines() {
     refresh(&mut table, &kept, &home, vec![relisting]);
     assert_eq!(
         baselines(&table),
-        [None, Some(value(2.0)), Some(value(4.0))],
-        "the kept untimestamped reference reports afresh; the timestamped one \
+        [None, Some(value(5.0)), Some(value(2.0)), Some(value(4.0))],
+        "the carried kept untimestamped reference reports afresh; one the report \
+         did not carry keeps its acknowledged baseline, the timestamped one \
          queues its changes, and the relisted one is what its request admitted"
     );
-    assert_eq!(table.revisits().queued().len(), 3);
+    assert_eq!(table.revisits().queued().len(), 4);
     drop(flight);
 }
 
@@ -336,8 +351,9 @@ async fn a_resubscription_during_a_hold_off_starts_unmarked() {
     let mut table = CovSubscriptionTable::new();
     let (a, b) = context(&mut table);
     assert!(table.complete_for_test(&b, value(2.0)));
+    let acknowledged = live(&table, &b);
     table
-        .begin_confirmed(ticket(&a), [&a])
+        .begin_confirmed(ticket(&a), [&a, &acknowledged])
         .unwrap()
         .failed(Duration::from_secs(60));
     let context = a.key().multiple_context().unwrap().clone();

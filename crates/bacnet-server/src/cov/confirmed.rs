@@ -35,15 +35,22 @@
 //! its outstanding report stops retrying, and can neither complete nor unmark
 //! the coordinate.
 //!
-//! A fenced report may still have reached the subscriber, whose Ack then counts
-//! for nothing. So when the old marker owed a follow-up (its report was
+//! A fenced report's outcome no longer counts, yet it may have reached the
+//! subscriber. So when the old marker owed a follow-up (its report was
 //! outstanding, or had failed and was holding off or owed), every reference of
-//! the context is evaluated again, and the untimestamped references the
-//! re-subscription kept first forget their baselines (#923). The follow-up then
-//! reports their current value even if it went back to the baseline after the
-//! fenced report, which the subscriber would otherwise keep showing. Timestamped
-//! references need no reset: the fenced report's history returns to their queue,
-//! and a change back is captured as a change of its own.
+//! the context is evaluated again, and the untimestamped references that report
+//! carried and the re-subscription kept first forget their baselines (#923).
+//! The follow-up then reports their current value even if it went back to the
+//! baseline, which the subscriber would otherwise keep showing. References the
+//! report did not carry keep their acknowledged baselines, so the follow-up does
+//! not grow to the whole context. Timestamped references need no reset: the
+//! fenced report's history returns to their queue, and a change back is captured
+//! as one more change, so the subscriber ends at the current value.
+//!
+//! Without a fence the same gap remains, and is accepted: a failed report keeps
+//! its baselines, so if it did arrive (only its Acks were lost) and the value
+//! goes back before the follow-up, nothing is sent again. A fence after the owed
+//! follow-up has been taken clears nothing either.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -66,6 +73,10 @@ struct FlightState {
     hold_until: Option<Instant>,
     /// Replaced by a fresh marker: an outstanding report stops retrying.
     fenced: bool,
+    /// References the outstanding report carried, kept while a failed one is
+    /// holding off or owed, and cleared once it is acknowledged or its owed
+    /// follow-up is taken.
+    carried: HashSet<CovSubscriptionKey>,
 }
 
 #[derive(Debug, Default)]
@@ -91,10 +102,11 @@ impl FlightMarker {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    /// An outstanding report, or a failed one still holding off or owed.
-    fn owes_follow_up(&self) -> bool {
+    /// If a report is outstanding, or a failed one is still holding off or
+    /// owed, the references it carried.
+    fn owed_carried(&self) -> Option<HashSet<CovSubscriptionKey>> {
         let state = self.state();
-        state.ticket != 0 || state.hold_until.is_some()
+        (state.ticket != 0 || state.hold_until.is_some()).then(|| state.carried.clone())
     }
 
     /// No outstanding report and no hold-off in force at `now`.
@@ -109,6 +121,7 @@ impl FlightMarker {
         let owed = state.ticket == 0 && state.hold_until.is_some_and(|until| now >= until);
         if owed {
             state.hold_until = None;
+            state.carried.clear();
         }
         owed
     }
@@ -130,6 +143,9 @@ impl FlightMarker {
         if state.ticket == ticket.get() {
             state.ticket = 0;
             state.hold_until = hold_until;
+            if hold_until.is_none() {
+                state.carried.clear();
+            }
         }
     }
 }
@@ -263,6 +279,7 @@ impl CovSubscriptionTable {
         };
         let now = Instant::now();
         let mut marker: Option<FlightMarker> = None;
+        let mut carried = HashSet::new();
         for snapshot in snapshots {
             if !self.is_current(snapshot) {
                 return Err(BeginRefusal::NotCurrent);
@@ -275,11 +292,15 @@ impl CovSubscriptionTable {
             // context's marker.
             debug_assert!(marker.as_ref().is_none_or(|known| known.same(current)));
             marker.get_or_insert_with(|| current.clone());
+            carried.insert(snapshot.key().clone());
         }
         let Some(marker) = marker else {
             return Err(BeginRefusal::NotCurrent);
         };
-        marker.state().ticket = ticket.get();
+        let mut state = marker.state();
+        state.ticket = ticket.get();
+        state.carried = carried;
+        drop(state);
         Ok(ConfirmedFlight { marker, ticket })
     }
 
@@ -312,8 +333,9 @@ impl CovSubscriptionTable {
     /// failed and still owed a follow-up, nothing on the old marker can finish
     /// the job, yet the report may have reached the subscriber: every
     /// reference, kept or relisted, is evaluated again, and each kept
-    /// untimestamped one forgets its baseline first, so the follow-up reports
-    /// its current value (#923). Listed references have no baseline either, so
+    /// untimestamped one the report carried forgets its baseline first, so the
+    /// follow-up reports its current value (#923). Listed references have no
+    /// baseline either, so
     /// whichever of this follow-up and the initial report goes first carries
     /// them as first reports, and the other finds the context busy.
     pub(super) fn fence_context_flight(
@@ -322,13 +344,14 @@ impl CovSubscriptionTable {
         replaced: &FlightMarker,
         listed: &HashSet<CovSubscriptionKey>,
     ) {
-        if replaced.owes_follow_up() {
+        if let Some(carried) = replaced.owed_carried() {
+            debug_assert!(context.confirmed, "only confirmed contexts owe follow-ups");
             // Measured against a baseline the subscriber may have left behind,
-            // a value that went back to it would never be reported again.
+            // a carried value that went back to it would never be reported again.
             for entry in self.subs.values_mut() {
                 if entry.key.multiple_context() == Some(context)
-                    && entry.issue_confirmed_notifications
                     && !entry.timestamped
+                    && carried.contains(&entry.key)
                     && !listed.contains(&entry.key)
                 {
                     entry.subscription.last_notified_observation = None;

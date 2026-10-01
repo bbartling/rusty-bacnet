@@ -230,21 +230,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A context whose report is replaced while outstanding or owed re-evaluates
     all its references, so a held change still reaches a new route, and newly
     listed references still get their first report. Such a follow-up can repeat
-    changes the replaced report already delivered.
+    changes the replaced report already delivered, and it reports the current
+    value of each kept untimestamped reference the replaced report carried, since
+    that report may have reached the subscriber and a value that went back to
+    the old baseline would otherwise never be re-sent (#923). If a failed report
+    did arrive without being replaced, a value that goes back during the hold-off
+    is still not re-sent; that gap is accepted.
   Peer and global in-flight limits, event budgets and the unconfirmed path are
   unchanged. Re-reporting after the standard's retries end is local policy.
-
-- A confirmed COV-multiple context no longer leaves its subscriber with a stale
-  value when its report is replaced, by a route change or a re-subscription,
-  while the report is outstanding or a failed one is still holding off or owed
-  (#923). The replaced report may have reached the subscriber even though its
-  Ack no longer counts. Before, an untimestamped reference that the replacement
-  kept, and that went back to its old baseline value before the follow-up,
-  looked unchanged, so the subscriber kept the replaced report's value until
-  the next change. Now such references forget their baselines when the report
-  is replaced, and the follow-up reports their current value. Timestamped
-  references, which already queued the change back, and contexts replaced while
-  idle are unchanged.
 
 - The VT, WriteGroup, Who-Am-I and You-Are codecs now put the same bytes on
   the wire as the Clause 21 grammar, so peers that follow the standard can

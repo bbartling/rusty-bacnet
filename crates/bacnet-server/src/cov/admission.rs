@@ -33,8 +33,8 @@ impl CovSubscriptionTable {
     /// unless it lists references while the context's confirmed report is
     /// outstanding or holding off, which fences it the same way (#896). A fence
     /// while that report is outstanding, holding off or owed also clears the
-    /// observations of the kept untimestamped references, since the fenced
-    /// report may have reached the subscriber (#923).
+    /// observations of the kept untimestamped references it carried, since the
+    /// fenced report may have reached the subscriber (#923).
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
