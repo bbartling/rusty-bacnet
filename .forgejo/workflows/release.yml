@@ -180,13 +180,13 @@ jobs:
             | jq -r '.packages[] | select(.publish != []) | "--package=\(.name)"')
           # shellcheck disable=SC2086 # One flag per word.
           cargo package --locked --no-verify $packages
-          mkdir crates
-          cp target/package/*.crate crates/
+          mkdir crate-files
+          cp target/package/*.crate crate-files/
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) maturin sdist -m crates/rusty-bacnet/Cargo.toml --out dist
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
         with:
           name: crates
-          path: crates/
+          path: crate-files/
           if-no-files-found: error
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
         with:
