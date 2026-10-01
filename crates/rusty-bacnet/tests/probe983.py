@@ -27,7 +27,9 @@ T0 = time.time()
 
 
 def stamp():
-    return f"{time.time() - T0:9.3f}"
+    now = time.time()
+    wall = time.strftime("%H:%M:%S", time.gmtime(now)) + f".{int(now * 1000) % 1000:03d}"
+    return f"{now - T0:9.3f} {wall}"
 
 
 def log(msg):
@@ -181,6 +183,22 @@ async def check_accept(self, api, recover, limits=None):
             + " ".join(f"{k}={v:.3f}" for k, v in marks.items()))
 
 
+class StampedResult(unittest.TextTestResult):
+    def startTest(self, test):
+        log(f"START {test.id()}")
+        super().startTest(test)
+
+
+def timed_setup_class(original):
+    def setup(cls):
+        log(f"setUpClass {cls.__name__} begin")
+        try:
+            original.__func__(cls)
+        finally:
+            log(f"setUpClass {cls.__name__} end")
+    return classmethod(setup)
+
+
 class Stamp(logging.Formatter):
     def format(self, record):
         return f"[{record.created - T0:9.3f}] {record.name} {record.getMessage()[-400:]}"
@@ -195,18 +213,20 @@ def main():
     proc = subprocess.Popen([sys.executable, "-c", MONITOR, str(T0)])
     threading.Thread(target=gil_monitor, daemon=True).start()
     accept.AcceptUuidTests.check_accept = check_accept
+    mtls.MtlsFixture.setUpClass = timed_setup_class(mtls.MtlsFixture.setUpClass)
     log(f"start mode={mode} python={sys.version.split()[0]} platform={sys.platform} cpus={os.cpu_count()}")
     try:
         if mode == "suite":
             here = os.path.dirname(os.path.abspath(__file__))
             suite = unittest.defaultTestLoader.discover(here)
-            unittest.TextTestRunner(verbosity=1).run(suite)
+            unittest.TextTestRunner(verbosity=1, resultclass=StampedResult).run(suite)
         else:
             names = []
             for _ in range(int(mode)):
                 names += ["test_sc_accept_uuid.AcceptUuidTests.test_native_nodes_nil_accept_expires_without_connecting",
                           "test_sc_accept_uuid.AcceptUuidTests.test_native_nodes_wait_silently_then_accept_valid_uuid"]
-            unittest.main(module=None, argv=["probe983", *names], exit=False, verbosity=1)
+            unittest.main(module=None, argv=["probe983", *names], exit=False, verbosity=1,
+                          testRunner=unittest.TextTestRunner(verbosity=1, resultclass=StampedResult))
     finally:
         proc.kill()
     log("done")

@@ -146,18 +146,22 @@ jobs:
           "$bin/python" --version
           "$bin/python" -m pip install --disable-pip-version-check "maturin==$MATURIN_VERSION"
           "$bin/maturin" develop -m crates/rusty-bacnet/Cargo.toml --locked
+      # TEMPORARY (#983): time AcceptUuidTests on a cold Windows runner, with
+      # per-second CPU samples. REMOVE BEFORE MERGE.
+      - name: TEMPORARY probe for 983 (cold)
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: |
+          pwsh -NoProfile -File crates/rusty-bacnet/tests/probe983-cpu.ps1 > "$RUNNER_TEMP/cpu.txt" 2>&1 &
+          sampler=$!
+          python crates/rusty-bacnet/tests/probe983.py suite || true
+          wait $sampler || true
+          cat "$RUNNER_TEMP/cpu.txt"
       # The SC tests make certificates with the openssl CLI.
       - name: Python tests
         if: ${{ !cancelled() }}
         run: |
           openssl version
           python -m unittest discover -s crates/rusty-bacnet/tests
-      # TEMPORARY (#983): time AcceptUuidTests on Windows. REMOVE BEFORE MERGE.
-      - name: TEMPORARY probe for 983
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
-        run: |
-          python crates/rusty-bacnet/tests/probe983.py suite
-          python crates/rusty-bacnet/tests/probe983.py 30
       # The crate's lib unit tests and integration tests, linked against the
       # setup-python interpreter's libpython (#919), not the venv's.
       - name: PyO3 crate Rust tests
