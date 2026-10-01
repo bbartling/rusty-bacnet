@@ -194,19 +194,22 @@ pub(super) async fn serve_connection(
     let clients = &ctx.clients;
     let tls_deadline = admission.tls_deadline;
     // TLS handshake
-    let tls_stream = match super::deadlines::before(tls_deadline, acceptor.accept(tcp_stream)).await
-    {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            warn!("Hub TLS handshake failed for {peer_addr}: {e}");
-            return;
-        }
-        Err(()) => {
-            super::outcomes::increment(&clients.outcomes.tls_timeouts);
-            debug!("Hub TLS handshake deadline expired for {peer_addr}");
-            return;
-        }
-    };
+    let tls_stream =
+        match super::deadlines::before(tls_deadline, acceptor.accept(tcp_stream).into_fallible())
+            .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err((e, tcp_stream))) => {
+                warn!("Hub TLS handshake failed for {peer_addr}: {e}");
+                crate::tls_reject::close_after_alert(tcp_stream, tls_deadline).await;
+                return;
+            }
+            Err(()) => {
+                super::outcomes::increment(&clients.outcomes.tls_timeouts);
+                debug!("Hub TLS handshake deadline expired for {peer_addr}");
+                return;
+            }
+        };
     let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
         tls_stream.get_ref().1.peer_certificates(),
     );

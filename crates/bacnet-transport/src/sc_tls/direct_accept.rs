@@ -480,19 +480,20 @@ async fn serve_connection(
     membership: Arc<DirectMembership>,
     pending: AcceptGuard,
 ) {
-    let tls_stream =
-        match tokio::time::timeout(config.connect_timeout, config.tls.acceptor().accept(tcp)).await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                warn!("direct TLS handshake failed for {peer_addr}: {e}");
-                return;
-            }
-            Err(_) => {
-                debug!("direct TLS handshake timed out for {peer_addr}");
-                return;
-            }
-        };
+    let tls_deadline = tokio::time::Instant::now() + config.connect_timeout;
+    let accept = config.tls.acceptor().accept(tcp).into_fallible();
+    let tls_stream = match tokio::time::timeout_at(tls_deadline, accept).await {
+        Ok(Ok(s)) => s,
+        Ok(Err((e, tcp))) => {
+            warn!("direct TLS handshake failed for {peer_addr}: {e}");
+            crate::tls_reject::close_after_alert(tcp, tls_deadline).await;
+            return;
+        }
+        Err(_) => {
+            debug!("direct TLS handshake timed out for {peer_addr}");
+            return;
+        }
+    };
     let Some(leaf_sha256) = verified_leaf_sha256(tls_stream.get_ref().1.peer_certificates()) else {
         warn!("direct TLS peer has no verified leaf certificate");
         return;
