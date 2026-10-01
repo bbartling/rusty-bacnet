@@ -79,7 +79,7 @@ impl TlsWebSocket {
     /// }
     /// ```
     pub async fn connect(url: &str, tls_config: ScNodeTlsConfig) -> Result<Self, Error> {
-        Self::connect_with_subprotocol(url, tls_config, BACNET_SC_HUB_SUBPROTOCOL).await
+        boxed(|| Self::connect_with_subprotocol(url, tls_config, BACNET_SC_HUB_SUBPROTOCOL)).await
     }
 
     /// Dial a direct-connection peer `wss` URI with node operational credentials.
@@ -95,9 +95,13 @@ impl TlsWebSocket {
     /// exchange. Discovery triggering, routing over the connection, inbound
     /// (accept-side) paths, and hub/failover interaction are out of scope.
     pub async fn connect_direct(url: &str, tls_config: ScNodeTlsConfig) -> Result<Self, Error> {
-        Self::connect_with_subprotocol(url, tls_config, BACNET_SC_DIRECT_SUBPROTOCOL).await
+        boxed(|| Self::connect_with_subprotocol(url, tls_config, BACNET_SC_DIRECT_SUBPROTOCOL))
+            .await
     }
 
+    // Each stage's future is boxed: the tokio-tungstenite handshake below
+    // already takes about 125 KB of stack in a debug build, and unboxed, these
+    // futures made this frame and connect's 51 KB rather than 24 KB (#953).
     async fn connect_with_subprotocol(
         url: &str,
         tls_config: ScNodeTlsConfig,
@@ -109,19 +113,19 @@ impl TlsWebSocket {
         let request = tokio_tungstenite::tungstenite::ClientRequestBuilder::new(uri)
             .with_sub_protocol(subprotocol);
 
-        let socket = crate::tcp_connect::connect(&addr).await.map_err(|e| {
-            ScConnectError::WebSocket {
-                kind: ScWebSocketErrorKind::TcpDial,
-                message: format!("WebSocket TCP dial to {addr} failed: {e}"),
-            }
-            .into_bacnet_error_with_io_kind(e.kind())
-        })?;
+        let socket = boxed(|| crate::tcp_connect::connect(&addr))
+            .await
+            .map_err(|e| {
+                ScConnectError::WebSocket {
+                    kind: ScWebSocketErrorKind::TcpDial,
+                    message: format!("WebSocket TCP dial to {addr} failed: {e}"),
+                }
+                .into_bacnet_error_with_io_kind(e.kind())
+            })?;
 
         disable_nagle(&socket);
         let peer_address = socket.peer_addr().map_err(Error::Transport)?;
-        let tls_stream = tls_config
-            .into_connector()
-            .connect(server_name, socket)
+        let tls_stream = boxed(|| tls_config.into_connector().connect(server_name, socket))
             .await
             .map_err(|e| {
                 ScConnectError::WebSocket {
@@ -136,13 +140,15 @@ impl TlsWebSocket {
                 .ok_or_else(|| {
                     Error::Encoding("verified TLS peer has no leaf certificate".into())
                 })?;
-        let (ws_stream, response) = tokio_tungstenite::client_async_with_config(
-            request,
-            tls_stream,
-            // Public local capacities remain mutable u16 values. The adapter
-            // bounds its first Vec copy; protocol layers apply current limits.
-            Some(crate::sc_limits::websocket(u16::MAX as usize)),
-        )
+        let (ws_stream, response) = boxed(|| {
+            tokio_tungstenite::client_async_with_config(
+                request,
+                tls_stream,
+                // Public local capacities remain mutable u16 values. The adapter
+                // bounds its first Vec copy; protocol layers apply current limits.
+                Some(crate::sc_limits::websocket(u16::MAX as usize)),
+            )
+        })
         .await
         .map_err(map_websocket_upgrade_error)?;
         if subprotocol == BACNET_SC_DIRECT_SUBPROTOCOL {
@@ -159,6 +165,14 @@ impl TlsWebSocket {
             read: Mutex::new(read),
         })
     }
+}
+
+/// Create the future `make` returns and move it to the heap, so awaiting it
+/// costs the caller's state and debug-build poll frame a pointer rather than
+/// the whole future (#953). For connection setup and per-connection tasks,
+/// not per-frame paths.
+pub(crate) fn boxed<F: std::future::Future>(make: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(make())
 }
 
 // A finite unit of receive scheduling, shared with deterministic frame tests.

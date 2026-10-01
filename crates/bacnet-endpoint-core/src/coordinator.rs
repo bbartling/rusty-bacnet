@@ -289,9 +289,12 @@ struct ActiveLease {
     terminal_claimed: bool,
 }
 
+// The per-invoke-ID tables live on the heap. Inline, they made the state about
+// 18 KB, and a debug build built and moved it through several stack frames
+// (about 110 KB of stack) on every server, client and endpoint start (#953).
 struct CoordinatorState {
-    slots: [Option<ActiveLease>; INVOKE_ID_COUNT],
-    last_released: [Option<u64>; INVOKE_ID_COUNT],
+    slots: Box<[Option<ActiveLease>]>,
+    last_released: Box<[Option<u64>]>,
     next_invoke_id: usize,
     last_generation: u64,
     active_count: usize,
@@ -300,8 +303,8 @@ struct CoordinatorState {
 impl CoordinatorState {
     fn new() -> Self {
         Self {
-            slots: std::array::from_fn(|_| None),
-            last_released: [None; INVOKE_ID_COUNT],
+            slots: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
+            last_released: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
             next_invoke_id: 0,
             last_generation: 0,
             active_count: 0,
