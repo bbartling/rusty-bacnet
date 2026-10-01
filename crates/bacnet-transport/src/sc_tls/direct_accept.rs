@@ -471,6 +471,9 @@ pub(super) fn verified_leaf_sha256(
     )
 }
 
+// Each stage's future is boxed, once per connection, as in the hub's
+// serve_connection: unboxed, the TLS accept, the tokio-tungstenite upgrade and
+// the peer loop all put their whole futures in this debug-build frame (#953).
 async fn serve_connection(
     tcp: tokio::net::TcpStream,
     peer_addr: SocketAddr,
@@ -481,8 +484,12 @@ async fn serve_connection(
     pending: AcceptGuard,
 ) {
     let tls_deadline = tokio::time::Instant::now() + config.connect_timeout;
-    let accept = config.tls.acceptor().accept(tcp).into_fallible();
-    let tls_stream = match tokio::time::timeout_at(tls_deadline, accept).await {
+    let tls_stream = match super::boxed(|| {
+        let accept = config.tls.acceptor().accept(tcp).into_fallible();
+        tokio::time::timeout_at(tls_deadline, accept)
+    })
+    .await
+    {
         Ok(Ok(s)) => s,
         Ok(Err((e, tcp))) => {
             warn!("direct TLS handshake failed for {peer_addr}: {e}");
@@ -498,14 +505,16 @@ async fn serve_connection(
         warn!("direct TLS peer has no verified leaf certificate");
         return;
     };
-    let ws_stream = match tokio::time::timeout(
-        config.connect_timeout,
-        tokio_tungstenite::accept_hdr_async_with_config(
-            tls_stream,
-            direct_subprotocol_response,
-            Some(crate::sc_limits::websocket(config.max_bvlc_length as usize)),
-        ),
-    )
+    let ws_stream = match super::boxed(|| {
+        tokio::time::timeout(
+            config.connect_timeout,
+            tokio_tungstenite::accept_hdr_async_with_config(
+                tls_stream,
+                direct_subprotocol_response,
+                Some(crate::sc_limits::websocket(config.max_bvlc_length as usize)),
+            ),
+        )
+    })
     .await
     {
         Ok(Ok(ws)) => ws,
@@ -519,10 +528,12 @@ async fn serve_connection(
         }
     };
     let (mut write, mut read) = ws_stream.split();
-    let (member, _limits) = match tokio::time::timeout(
-        config.connect_timeout,
-        serve_handshake(&mut write, &mut read, &config, peer_addr, &membership),
-    )
+    let (member, _limits) = match super::boxed(|| {
+        tokio::time::timeout(
+            config.connect_timeout,
+            serve_handshake(&mut write, &mut read, &config, peer_addr, &membership),
+        )
+    })
     .await
     {
         Ok(Some(member)) => member,
@@ -535,20 +546,22 @@ async fn serve_connection(
     let _retire = RetireMember(&member);
     let response = crate::port::DirectResponse::new(&member, identity);
     let mut responses = member.take_writes();
-    serve_npdu_loop(
-        &mut write,
-        &mut read,
-        &config,
-        AdmittedDirectPeer {
-            address: peer_addr,
-            member: &member,
-            identity,
-            response,
-        },
-        &npdu_tx,
-        &npdu_admission,
-        &mut responses,
-    )
+    super::boxed(|| {
+        serve_npdu_loop(
+            &mut write,
+            &mut read,
+            &config,
+            AdmittedDirectPeer {
+                address: peer_addr,
+                member: &member,
+                identity,
+                response,
+            },
+            &npdu_tx,
+            &npdu_admission,
+            &mut responses,
+        )
+    })
     .await;
 }
 
