@@ -103,9 +103,14 @@ contains:
   download checked against its SHA-256;
 - the apt packages the jobs need;
 - for the [release](#release): zig and cargo-zigbuild, the
-  `aarch64-unknown-linux-gnu` Rust target, a static libpcap for each release
-  target with its licence, uv for the artifact test's extra Pythons, and
-  `qemu-aarch64-static` with the aarch64 glibc to run the arm64 CLI.
+  `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`
+  and `x86_64-pc-windows-msvc` Rust targets, a static libpcap for each Linux
+  release target with its licence, cargo-xwin with Microsoft's CRT and Windows
+  SDK in `/opt/xwin`, clang (for clang-cl) and nasm, Rust's `llvm-tools`
+  (llvm-ar for cargo-xwin, llvm-objdump and llvm-readobj for the artifact
+  test), uv for the artifact test's extra Pythons, and `qemu-aarch64-static`
+  with the aarch64 glibc to run the arm64 CLI. See
+  [macOS and Windows builds](#macos-and-windows-builds).
 
 The jobs no longer spend time on apt, rustup or tool downloads.
 
@@ -247,8 +252,9 @@ merge comes from that PR's run, not an older one.
 
 [`.forgejo/workflows/release.yml`](../.forgejo/workflows/release.yml) builds,
 tests and publishes a release from Forgejo (#943). It took over while GitHub
-Actions is disabled on the mirror (#905). It builds the Linux artifacts only,
-and no release is tagged until it also builds macOS and Windows (#944).
+Actions was disabled on the mirror (#905). The Linux runner cross-compiles every
+artifact: Linux and macOS with zig, Windows for the MSVC target with cargo-xwin
+(#944).
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) now runs
 only when dispatched by hand, so re-enabling Actions can't publish a tag twice.
@@ -296,9 +302,9 @@ the release.
 | CI image | Pulls `CI_IMAGE` into the VM's Docker. Only `ci.yml` builds the image, and its image job fails if `release.yml` carries another tag. |
 | Validate | Runs the release script tests (`scripts/release/test_*.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a release, checks that the publish secrets are set and runs the [preflight](#preflight), before anything is built; a dry run runs the preflight's read-only part. Extracts the notes with `changelog_notes.py`, writes `THIRD-PARTY-NOTICES`, then runs the [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then the crates.io job's plan (read only), `cargo package` for the `crates` artifact, and `maturin sdist`. |
-| Wheels (x86_64, aarch64) | `maturin build --release --locked --zig --compatibility manylinux2014` for CPython 3.11 to 3.14. The image has only Python 3.12; maturin uses its bundled sysconfig for the others. |
-| CLI (amd64, arm64) | `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. |
-| Test the artifacts | `check_artifacts.py`: one wheel per Python and architecture with the right tags, version (the workspace version in PEP 440 form) and extension module, `THIRD-PARTY-NOTICES` in each wheel and the sdist, the right ELF architecture, nothing above glibc 2.17 (`objdump -T`), no dynamic libpcap. The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. The quickstart read again with the server on each other x86_64 wheel, in CPython 3.11, 3.13 and 3.14 from `uv python install`. The arm64 CLI's `--version`, `--help` and offline capture under `qemu-aarch64-static`. |
+| Wheels (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | `maturin build --release --locked` for CPython 3.11 to 3.14: with `--zig --compatibility manylinux2014` for Linux, `--zig` for macOS, and maturin's built-in xwin for Windows ([macOS and Windows builds](#macos-and-windows-builds)). The image has only Python 3.12; maturin uses its bundled sysconfig for the others and for macOS and Windows. |
+| CLI (linux-amd64, linux-arm64, macos-amd64, macos-arm64, windows-amd64) | Linux: `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. macOS: `cargo zigbuild` with `--features sc-tls`. Windows: `cargo xwin build` with `--features sc-tls` and the C runtime linked statically. |
+| Test the artifacts | `check_artifacts.py`: one wheel per Python and platform with the right tags, version (the workspace version in PEP 440 form) and extension module, and `THIRD-PARTY-NOTICES` in each wheel and the sdist. For every binary, its architecture and linkage: ELF with nothing above glibc 2.17 (`objdump -T`) and no dynamic libpcap; Mach-O with the tag's minimum macOS and only the expected libraries and flat lookups (`llvm-objdump`); PE with only the expected DLLs (`llvm-readobj`). The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. The quickstart read again with the server on each other x86_64 wheel, in CPython 3.11, 3.13 and 3.14 from `uv python install`. The arm64 CLI's `--version`, `--help` and offline capture under `qemu-aarch64-static`. |
 | Release API (dry run) | Dry runs only. `release_api.py forgejo --dry-run` against Forgejo with the job token, and `release_api.py github --dry-run` if `GH_RELEASE_TOKEN` is set (otherwise a notice says it was skipped). Both read only, for the tag `v<version>`. |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `maturin upload --skip-existing` of the wheels and the sdist. |
@@ -310,8 +316,24 @@ a time in the order above. A failure stops the jobs after it: each publish
 job's `if:` starts with `success() &&`, because Forgejo leaves the implicit
 `success()` to the runner. Release builds use no Rust cache.
 
-Not tested at run time: the aarch64 wheels (only their tags, module names, ELF
-machine and glibc symbols are checked) and the arm64 CLI's network commands.
+#### What is and isn't tested
+
+The runner is Linux x86_64, so the release runs only the x86_64 Linux wheels
+and CLI, and the arm64 Linux CLI under qemu. Everything else gets the static
+checks above:
+
+- the aarch64 Linux wheels: tags, module names, ELF machine and glibc symbols;
+  the arm64 CLI's network commands aren't run;
+- the macOS wheels and CLI: tags, module names, Mach-O CPU type, minimum macOS,
+  loaded libraries and flat lookups. They are run by hand on an Apple Silicon
+  Mac before a release depends on them: the arm64 wheel with the Python suite,
+  and the arm64 CLI with `--version` and the README quickstart read against a
+  local Python server. The x86_64 ones run there only under Rosetta, if it's
+  installed;
+- the Windows wheels and CLI: tags, module names, PE machine, kind (console
+  program or DLL) and imported DLLs. Nothing here runs them.
+
+Running the macOS x86_64 and Windows artifacts on real hosts is #951.
 
 ### CI gate
 
@@ -366,10 +388,11 @@ PyPI, which can't be undone. Validate's "Release preflight" step runs
      `target_commitish: <commit>`. Neither host creates a tag for a draft.
    - The release list again, which must show the new draft: proof that the
      token sees drafts, which resuming a release depends on.
-   - Three uploads named like the release's assets: `bacnet-linux-amd64` (one
-     byte, extension-less like the CLI binaries, `SHA256SUMS` and
-     `THIRD-PARTY-NOTICES`), `rusty_bacnet-0.0.0-py3-none-any.whl` (an empty
-     zip) and `rusty_bacnet-0.0.0.tar.gz` (an empty gzip). This proves the
+   - Four uploads named like the release's assets: `bacnet-linux-amd64` (one
+     byte, extension-less like the Linux and macOS CLI binaries, `SHA256SUMS`
+     and `THIRD-PARTY-NOTICES`), `bacnet-windows-amd64.exe` (two bytes),
+     `rusty_bacnet-0.0.0-py3-none-any.whl` (an empty zip) and
+     `rusty_bacnet-0.0.0.tar.gz` (an empty gzip). This proves the
      host's allowed attachment types (Forgejo's `[repository.release]
      ALLOWED_TYPES`) accept every kind.
    - The [final check](#draft-then-publish) on the draft: on GitHub, each
@@ -474,16 +497,25 @@ lacks as a warning.
   with a `SHA256SUMS` file:
   - `bacnet-linux-amd64` and `bacnet-linux-arm64`, with BACnet/SC and packet
     capture;
+  - `bacnet-macos-amd64`, `bacnet-macos-arm64` and `bacnet-windows-amd64.exe`,
+    with BACnet/SC (no packet capture, as in 0.11.0);
   - `rusty_bacnet-<version>.tar.gz`, the sdist;
-  - eight wheels, `rusty_bacnet-<version>-cp3XY-cp3XY-manylinux_2_17_<arch>.manylinux2014_<arch>.whl`
-    for CPython 3.11 to 3.14 on x86_64 and aarch64;
+  - twenty wheels, `rusty_bacnet-<version>-cp3XY-cp3XY-<platform>.whl` for
+    CPython 3.11 to 3.14 on five platforms:
+    `manylinux_2_17_x86_64.manylinux2014_x86_64`,
+    `manylinux_2_17_aarch64.manylinux2014_aarch64`, `macosx_10_12_x86_64`,
+    `macosx_11_0_arm64` and `win_amd64`;
   - `THIRD-PARTY-NOTICES`.
+
+  That is 0.11.0's asset names (the five CLI binaries on GitHub, the wheels
+  and sdist on PyPI) plus the CPython 3.14 wheels and `THIRD-PARTY-NOTICES`.
 - `release-notes`: `notes.md` for Forgejo, and `notes-github.md` for GitHub.
   GitHub refuses bodies over 125,000 characters, so a longer section is cut at
   120,000 with a link to the full `CHANGELOG.md`, closing any code block the
   cut leaves open. The 0.11.0 section is about 171,000.
 - `notices`: `THIRD-PARTY-NOTICES`, which the sdist and wheel jobs build in.
-- `crates`, `sdist`, `wheels-<arch>` and `cli-<arch>`: each build job's output.
+- `crates`, `sdist`, `wheels-<platform>` and `cli-<platform>`: each build
+  job's output.
 
 The Linux binaries and wheels need glibc 2.17 or newer, which covers
 RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later. zig links them against that
@@ -494,6 +526,92 @@ linked binary couldn't run on both. The pcap crate links `-lpcap` as a shared
 library and zig won't fall back to an archive, so the image puts a one-line
 linker script named `libpcap.so` next to `libpcap.a`.
 
+### macOS and Windows builds
+
+The Linux runner cross-compiles these too, in the CI image (#944).
+
+**macOS** (`x86_64-apple-darwin`, `aarch64-apple-darwin`) uses zig, through
+cargo-zigbuild for the CLI and `maturin build --zig` for the wheels. zig carries
+the macOS libc headers and libSystem link stubs. No Apple SDK is involved: its
+licence doesn't allow redistributing it. rustc warns in these jobs that `xcrun`
+can't find an SDK; zig doesn't need one.
+
+- **Minimum macOS.** 10.12 on x86_64 and 11.0 on arm64, as in 0.11.0's wheel
+  tags (`macosx_10_12_x86_64`, `macosx_11_0_arm64`) and Rust's defaults.
+  `MACOSX_DEPLOYMENT_TARGET` sets it, and maturin derives the wheel tag from
+  it. cargo-zigbuild passes zig a target without an OS version
+  (`<arch>-macos-none`), for which zig defaults to macOS 13, and zig ignores
+  `-mmacosx-version-min`. The jobs therefore set
+  `CARGO_ZIGBUILD_ZIG_PATH` to
+  [`scripts/release/zig-macos.sh`](../scripts/release/zig-macos.sh), which
+  writes the version into zig's target (`x86_64-macos.10.12-none`) and fails
+  on a macOS target without `MACOSX_DEPLOYMENT_TARGET`. The x86_64 binaries
+  carry `LC_VERSION_MIN_MACOSX` 10.12 and the arm64 ones `LC_BUILD_VERSION`
+  with `minos 11.0`; the artifact test checks each against its tag.
+- **Apple frameworks.** zig has none, so linking any `-framework` fails. Two
+  sets of crates in the macOS dependency trees linked one:
+  - `security-framework` and `core-foundation`, through `rustls-native-certs`,
+    which tokio-tungstenite's `rustls-tls-native-roots` feature turned on.
+    BACnet/SC never used the system's root certificates (it runs its own
+    tokio-rustls handshake against its configured trust anchors), so the
+    workspace dropped tungstenite's TLS features, and the CLI links no
+    framework at all.
+  - `serialport` (through `tokio-serial`, for MS/TP, which the Python package
+    enables on every platform) links IOKit and CoreFoundation, through
+    `io-kit-sys` and `core-foundation-sys`. The wheels keep MS/TP:
+    [`scripts/release/macos-frameworks`](../scripts/release/macos-frameworks)
+    holds a text stub (`.tbd`) for each of the two frameworks, with only its
+    install name and versions and no symbols, which the wheel jobs pass to the
+    linker with `-F`. The extension module then has a load command for each
+    framework, and leaves its references to them, like those to Python's C
+    API, to a flat lookup when it's loaded: maturin links macOS extension
+    modules with `-undefined dynamic_lookup`. The stubs contain nothing from
+    Apple's SDK.
+
+  The artifact test checks that an extension module loads only libSystem,
+  libiconv, libcharset, IOKit and CoreFoundation, and that every symbol it
+  leaves to a flat lookup is Python's, CoreFoundation's or IOKit's. A CLI
+  binary may load only the first three and may leave nothing to a flat
+  lookup. libcharset comes from cargo-zigbuild's libiconv stub and is part of
+  macOS.
+- **AWS-LC** (`aws-lc-sys`, for BACnet/SC) builds with zig's clang for both
+  architectures with its default builder, assembly included. It needs no
+  CMake, no bindgen (its bindings for both targets are pregenerated) and no
+  `AWS_LC_SYS_NO_ASM`.
+
+**Windows** (`x86_64-pc-windows-msvc`) uses cargo-xwin for the CLI and
+maturin's built-in xwin, the same cargo-xwin 0.23.1, for the wheels.
+
+- **CRT and SDK.** The image holds Microsoft's CRT (MSVC 14.44.17.14) and
+  Windows SDK 10.0.26100 for x86_64 in `/opt/xwin` (630 MB), put there by xwin
+  0.10.0 from a pinned Visual Studio 2022 17.14.41 channel manifest; xwin
+  checks each download's SHA-256 against the manifest. Building the image
+  accepts Microsoft's licence terms for them, which the owner accepted, and the
+  image stays in the private registry. `XWIN_CACHE_DIR=/opt/xwin` and the
+  `DONE` file, which lists the architectures cargo-xwin has, stop cargo-xwin
+  and maturin from downloading a copy of their own. To move to a newer CRT or
+  SDK, update `VS_CHANNEL_URL` and `VS_CHANNEL_SHA256` in the Dockerfile
+  (`curl -sI https://aka.ms/vs/17/release/channel` shows the current URL), and
+  `MSVC_CRT_VERSION` and `WINDOWS_SDK_VERSION` (`xwin --accept-license
+  --manifest <file> list` shows what a manifest offers).
+- **Toolchain.** clang-cl is apt's clang 18, lld-link is rust-lld, and
+  llvm-lib is llvm-tools' llvm-ar; cargo-xwin links the last two. AWS-LC
+  compiles with clang-cl, and nasm assembles its x86_64 assembly from source,
+  so the prebuilt NASM objects that `aws-lc-sys` ships aren't used.
+- **Python.** PyO3 0.29 links each extension module to its `pythonXY.dll`
+  with raw-dylib, so no import library is needed. The artifact test checks
+  that each wheel's `.pyd` imports its own Python's DLL and no other.
+- **C runtime.** The CLI links it statically (`-C target-feature=+crt-static`;
+  cargo-xwin then links `libucrt` instead of `ucrt`), so it imports only
+  Windows system DLLs and needs no Visual C++ Redistributable, which 0.11.0's
+  did (`VCRUNTIME140.dll`). The wheels link it dynamically, like other
+  extension modules: Python for Windows ships `VCRUNTIME140.dll`, and the
+  Universal CRT (`api-ms-win-crt-*`) is part of Windows 10 and later. The
+  artifact test enforces both.
+- **No PDB.** Both link with `/DEBUG:NONE` and `/Brepro`: the release ships
+  no PDB, and without one the CLI rebuilds identically (see
+  [Re-running a partial release](#re-running-a-partial-release)).
+
 ### Third-party notices
 
 `scripts/release/third_party_notices.py` writes `THIRD-PARTY-NOTICES`: Rusty
@@ -501,25 +619,31 @@ BACnet's own licence, then every third-party component in the release
 binaries with the licence files it ships, identical texts printed once.
 
 - The crates come from `cargo tree --locked --offline -e normal,no-proc-macro`
-  for the CLI (`-p bacnet-cli --features sc-tls,pcap`) and the Python extension
-  (`-p rusty-bacnet`) on both Linux targets, so build scripts, proc-macros and
-  dev-dependencies, which neither binary contains, are left out. The licence
+  for the CLI (`-p bacnet-cli --features sc-tls,pcap` on Linux, `--features
+  sc-tls` on macOS and Windows) and the Python extension (`-p rusty-bacnet`) on
+  each of the five release targets, so build scripts, proc-macros,
+  dev-dependencies and crates for other platforms, which no release binary
+  contains, are left out. Platform crates such as `windows-sys` and
+  `io-kit-sys` are in because a release binary contains them. The licence
   files are the ones at each crate's root, plus three for the C library that
   `aws-lc-sys` bundles: `aws-lc/LICENSE`, fiat-crypto's
   `aws-lc/third_party/fiat/LICENSE` (MIT), and the licence comment of
-  jitterentropy's `jitterentropy.h`, which is built on Linux and whose
-  BSD-3-Clause terms AWS-LC elects (the crate doesn't ship jitterentropy's
-  `LICENSE`).
+  jitterentropy's `jitterentropy.h`, which is built on Linux and Windows and
+  whose BSD-3-Clause terms AWS-LC elects (the crate doesn't ship
+  jitterentropy's `LICENSE`).
 - Every component's row gives where its source is: a crate's crates.io page
   for that version (`https://crates.io/crates/{name}/{version}`), or its
   repository if it isn't from crates.io; libpcap's release tarball on
   tcpdump.org. MPL-2.0 needs this for `serialport`, which is in the wheels.
 - Generation fails if a crate ships no licence file while its licence
-  expression has any identifier other than the public-domain-like `0BSD`,
-  `CC0-1.0`, `MIT-0`, `Unlicense` and `WTFPL` (so MIT, BSD-*, ISC,
-  Apache-2.0, MPL-2.0 and unknown ones all count), unless
-  `ALLOW_NO_LICENSE_FILE` in the script names it with the reason. The list is
-  empty: every such crate ships a licence file.
+  expression has any identifier other than `0BSD`, `BSL-1.0`, `CC0-1.0`,
+  `MIT-0`, `Unlicense` and `WTFPL`, whose terms don't ask for the notice in a
+  binary (so MIT, BSD-*, ISC, Apache-2.0, MPL-2.0 and unknown ones all count),
+  unless `ALLOW_NO_LICENSE_FILE` in the script names it with the reason. The
+  list is empty: every such crate ships a licence file. One crate ships none
+  and is listed at the end with its reason: `clipboard-win` (BSL-1.0, in the
+  Windows CLI through rustyline), whose licence exempts machine-executable
+  object code.
 - libpcap's licence and version come from `/opt/libpcap` in the CI image.
 - The file depends only on `Cargo.lock`, the crate sources and libpcap, so a
   rebuild writes the same file.
@@ -553,6 +677,15 @@ Rebuilding a commit has given identical files: two dry runs of `685e23ed`
 nothing enforces it. If a rebuild ever differed, PyPI would keep the files it
 already has, a published release wouldn't change, and `SHA256SUMS` would
 still list exactly what each release holds.
+
+The macOS and Windows builds were checked the same way on the runner VM, two
+clean builds of one commit with the same paths (#944). The macOS CLI and wheel
+matched. The Windows CLI matched once it was linked without a PDB and with
+lld-link's `/Brepro` (`-C link-arg=/DEBUG:NONE -C link-arg=/Brepro`); before,
+its timestamps and PDB build ID changed on every build. The Windows wheels get
+the same flags but still differ between two `maturin build` runs, in most of
+the `.pyd`'s code, although two `cargo xwin build` runs of the same library
+match. The cause, somewhere in maturin's xwin build, is not known yet.
 
 ### Secrets
 

@@ -70,9 +70,11 @@ python -m pip install rusty-bacnet
 
 This needs Python 3.11 or newer. The import name is `rusty_bacnet`. Wheels are
 published for CPython 3.11–3.13 on Linux (glibc; x86_64, aarch64), macOS
-(x86_64, arm64) and Windows (x64). On any other Python version (including 3.14),
-platform or musl-based Linux, pip builds from source, which needs Rust 1.93 or
-newer and a C compiler. Add `--only-binary=:all:` to fail fast instead.
+(x86_64 on 10.12 or later, arm64 on 11.0 or later) and Windows (x64), and from
+0.12.0 for CPython 3.14 as well, on the same platforms. On any other Python
+version, platform or musl-based Linux, pip builds from source, which needs
+Rust 1.93 or newer and a C compiler. Add `--only-binary=:all:` to fail fast
+instead.
 
 ### Rust
 
@@ -99,9 +101,11 @@ on your `PATH`.
   (amd64), all with BACnet/SC. The Linux builds also include packet capture.
   They need glibc 2.39 or newer (for example Ubuntu 24.04) and libpcap
   (`libpcap0.8` on Debian and Ubuntu).
-- From 0.12.0, the Linux builds need only glibc 2.17 or newer (RHEL/CentOS 7,
-  Debian 8, Ubuntu 14.04 and later) and no libpcap package, because they link
-  it statically.
+- From 0.12.0, the same five builds are published. The Linux builds need only
+  glibc 2.17 or newer (RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later) and no
+  libpcap package, because they link it statically. The macOS builds need
+  macOS 10.12 (amd64) or 11.0 (arm64) or later. The Windows build links the C
+  runtime statically, so it no longer needs the Visual C++ Redistributable.
 
 From 0.12.0, `bacnet-cli` is also published on crates.io, so once that release
 is out, `cargo install bacnet-cli --locked --features sc-tls` builds it on any
