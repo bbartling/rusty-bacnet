@@ -229,8 +229,9 @@ PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
 Every step runs even when an earlier one failed, so one run reports each
 failure. `STACK_GUARD_TESTS` (in the workflow's `env`) selects the tests that
 start servers, endpoints, SC hubs and TLS sessions, and the CLI's; the guard
-step runs `--no-run` first because rustc reads `RUST_MIN_STACK` too, and adds
-about a minute. The per-crate default-feature checks
+step runs `--no-run` first because rustc reads `RUST_MIN_STACK` too. It runs
+about 2,570 tests and added 72 seconds on macOS and 89 on Windows in October
+2026. The per-crate default-feature checks
 (`scripts/ci/check-default-features.sh`) run on Linux only.
 
 **Toolchain and tools.** Both runner images ship rustup, and
