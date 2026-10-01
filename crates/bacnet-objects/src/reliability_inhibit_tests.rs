@@ -134,7 +134,7 @@ fn all_nine_expose_default_false_boolean_writable_property_and_pics_truth() {
 fn true_normalizes_existing_fault_and_false_does_not_restore_it_on_all_nine() {
     for (name, mut object) in nine_objects() {
         object
-            .set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+            .set_reliability_internal(Reliability::NO_SENSOR)
             .unwrap();
         write_bool(&mut *object, INHIBIT, true);
         assert_eq!(
@@ -143,7 +143,7 @@ fn true_normalizes_existing_fault_and_false_does_not_restore_it_on_all_nine() {
             "{name} froze the prior fault"
         );
         assert!(object
-            .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+            .set_reliability_internal(Reliability::OVER_RANGE)
             .is_err());
         assert_eq!(
             read_reliability(&*object),
@@ -167,7 +167,7 @@ fn inhibited_ai_and_av_range_faults_skip_and_reenable_current_evaluation() {
     assert!(matches!(
         ai.evaluate_reliability_internal().unwrap(),
         ReliabilityEvaluation::Changed { new_reliability, .. }
-            if new_reliability == Reliability::OVER_RANGE.to_raw()
+            if new_reliability == Reliability::OVER_RANGE
     ));
     write_bool(&mut ai, INHIBIT, true);
     assert_eq!(
@@ -182,8 +182,8 @@ fn inhibited_ai_and_av_range_faults_skip_and_reenable_current_evaluation() {
     assert_eq!(
         ai.evaluate_reliability_internal().unwrap(),
         ReliabilityEvaluation::Changed {
-            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-            new_reliability: Reliability::OVER_RANGE.to_raw(),
+            old_reliability: Reliability::NO_FAULT_DETECTED,
+            new_reliability: Reliability::OVER_RANGE,
         },
         "inhibit must not clear the range detector's ownership"
     );
@@ -204,8 +204,8 @@ fn inhibited_ai_and_av_range_faults_skip_and_reenable_current_evaluation() {
     assert_eq!(
         av.evaluate_reliability_internal().unwrap(),
         ReliabilityEvaluation::Changed {
-            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+            old_reliability: Reliability::NO_FAULT_DETECTED,
+            new_reliability: Reliability::UNDER_RANGE,
         }
     );
 }
@@ -215,7 +215,7 @@ fn out_of_service_ordering_without_client_override_always_exposes_zero() {
     for inhibit_first in [false, true] {
         let mut object = BinaryInputObject::new(1, "BI-order").unwrap();
         object
-            .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+            .set_reliability_internal(Reliability::OVER_RANGE)
             .unwrap();
         if inhibit_first {
             write_bool(&mut object, INHIBIT, true);
@@ -245,7 +245,7 @@ fn out_of_service_ordering_without_client_override_always_exposes_zero() {
 fn accepted_oos_alternate_is_owned_even_when_same_value_and_restores_by_exit_mode() {
     let mut same_value = BinaryInputObject::new(1, "BI-same").unwrap();
     same_value
-        .set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+        .set_reliability_internal(Reliability::NO_SENSOR)
         .unwrap();
     write_bool(&mut same_value, PropertyIdentifier::OUT_OF_SERVICE, true);
     write_client_reliability(&mut same_value, Reliability::NO_SENSOR.to_raw());
@@ -265,7 +265,7 @@ fn accepted_oos_alternate_is_owned_even_when_same_value_and_restores_by_exit_mod
 
     let mut inhibited_exit = BinaryInputObject::new(2, "BI-inhibited-exit").unwrap();
     inhibited_exit
-        .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+        .set_reliability_internal(Reliability::OVER_RANGE)
         .unwrap();
     write_bool(
         &mut inhibited_exit,
@@ -299,7 +299,7 @@ fn rejected_oos_reliability_writes_do_not_create_an_override() {
     for rejected in [PropertyValue::Boolean(true), PropertyValue::Enumerated(11)] {
         let mut object = BinaryInputObject::new(1, "BI-invalid").unwrap();
         object
-            .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+            .set_reliability_internal(Reliability::OVER_RANGE)
             .unwrap();
         write_bool(&mut object, PropertyIdentifier::OUT_OF_SERVICE, true);
         assert!(object
@@ -319,7 +319,7 @@ fn rejected_oos_reliability_writes_do_not_create_an_override() {
 fn repeated_oos_cycles_clear_old_client_ownership() {
     let mut object = BinaryInputObject::new(1, "BI-cycles").unwrap();
     object
-        .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+        .set_reliability_internal(Reliability::OVER_RANGE)
         .unwrap();
     write_bool(&mut object, PropertyIdentifier::OUT_OF_SERVICE, true);
     write_client_reliability(&mut object, Reliability::NO_SENSOR.to_raw());
@@ -345,7 +345,7 @@ fn repeated_oos_cycles_clear_old_client_ownership() {
 fn inhibit_does_not_change_detection_enable_and_recovery_is_reportable() {
     let mut object = AnalogInputObject::new(1, "AI-report", 62).unwrap();
     object
-        .set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+        .set_reliability_internal(Reliability::NO_SENSOR)
         .unwrap();
     let fault = object
         .evaluate_intrinsic_reporting()

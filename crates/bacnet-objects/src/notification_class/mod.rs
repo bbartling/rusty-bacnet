@@ -17,7 +17,7 @@
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use bacnet_types::MacAddr;
@@ -47,7 +47,7 @@ pub struct NotificationClass {
     description: String,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// The notification class number.
     pub notification_class: u32,
     /// Priority: [TO_OFFNORMAL, TO_FAULT, TO_NORMAL]. Default [255, 255, 255].
@@ -70,7 +70,7 @@ impl NotificationClass {
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             notification_class: instance,
             priority: [255, 255, 255],
             ack_required: EventTransitionBits::empty(),

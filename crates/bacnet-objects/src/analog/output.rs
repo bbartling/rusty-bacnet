@@ -30,8 +30,8 @@ pub struct AnalogOutputObject {
     /// Event_Detection_Enable (Clause 12.3). A FALSE value suspends
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     min_pres_value: Option<f32>,
     max_pres_value: Option<f32>,
@@ -57,7 +57,7 @@ impl AnalogOutputObject {
             cov_increment: 0.0,
             event_detector: OutOfRangeDetector::default(),
             event_detection_enable: true,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             min_pres_value: None,
@@ -357,7 +357,7 @@ impl BACnetObject for AnalogOutputObject {
         )
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }

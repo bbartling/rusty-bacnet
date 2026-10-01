@@ -3,7 +3,7 @@
 //! The Program object represents an application program running within
 //! a BACnet device. It exposes the program's lifecycle state.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -26,7 +26,7 @@ pub struct ProgramObject {
     reason_for_halt: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl ProgramObject {
@@ -42,7 +42,7 @@ impl ProgramObject {
             reason_for_halt: 0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 

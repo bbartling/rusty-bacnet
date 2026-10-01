@@ -95,7 +95,7 @@ fn scalar_null_wp_preserves_property_state_and_error_precedence() {
             .unwrap();
         if object.object_identifier().object_type() != ObjectType::NETWORK_PORT {
             object
-                .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+                .set_reliability_internal(Reliability::OVER_RANGE)
                 .unwrap();
         }
         object

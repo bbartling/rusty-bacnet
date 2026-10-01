@@ -54,8 +54,8 @@ fn point_reset_variants_receive_exact_context_and_commit_atomically() {
     ] {
         let mut point = LifeSafetyPointObject::new(operation.to_raw(), "point").unwrap();
         let oid = point.object_identifier();
-        point.set_present_value(LifeSafetyState::ALARM.to_raw());
-        point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+        point.set_present_value(LifeSafetyState::ALARM);
+        point.set_tracking_value(LifeSafetyState::FAULT);
         point.set_silenced(SilencedState::ALL_SILENCED);
         point.set_operation_expected(operation);
         point.set_reset_executor(Arc::new(move |context| {
@@ -96,8 +96,8 @@ fn point_reset_variants_receive_exact_context_and_commit_atomically() {
 #[test]
 fn point_reset_outcome_reports_exact_committed_deltas() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
-    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
+    point.set_tracking_value(LifeSafetyState::FAULT);
     point.set_silenced(SilencedState::ALL_SILENCED);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(|_| {
@@ -133,7 +133,7 @@ fn zone_reset_variants_receive_exact_context_and_commit_atomically() {
     ] {
         let mut zone = LifeSafetyZoneObject::new(operation.to_raw(), "zone").unwrap();
         let oid = zone.object_identifier();
-        zone.set_present_value(LifeSafetyState::FAULT_ALARM.to_raw());
+        zone.set_present_value(LifeSafetyState::FAULT_ALARM);
         zone.set_silenced(SilencedState::VISIBLE_SILENCED);
         zone.set_operation_expected(operation);
         zone.set_reset_executor(Arc::new(move |context| {
@@ -171,8 +171,8 @@ fn zone_reset_variants_receive_exact_context_and_commit_atomically() {
 #[test]
 fn no_delta_reset_success_preserves_values_and_clears_expected_operation() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
-    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
+    point.set_tracking_value(LifeSafetyState::FAULT);
     point.set_silenced(SilencedState::ALL_SILENCED);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(|_| Ok(LifeSafetyPointResetCommit::default())));
@@ -193,8 +193,8 @@ fn no_delta_reset_success_preserves_values_and_clears_expected_operation() {
 #[test]
 fn same_value_reset_commit_reports_only_expected_operation() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
-    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
+    point.set_tracking_value(LifeSafetyState::FAULT);
     point.set_silenced(SilencedState::ALL_SILENCED);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(|_| {
@@ -218,7 +218,7 @@ fn same_value_reset_commit_reports_only_expected_operation() {
 #[test]
 fn zone_reset_outcome_never_invents_tracking_value() {
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-    zone.set_present_value(LifeSafetyState::ALARM.to_raw());
+    zone.set_present_value(LifeSafetyState::ALARM);
     zone.set_silenced(SilencedState::ALL_SILENCED);
     zone.set_operation_expected(LifeSafetyOperation::RESET);
     zone.set_reset_executor(Arc::new(|_| {
@@ -250,8 +250,8 @@ fn wrong_expected_reset_never_calls_executor_or_changes_state() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
-    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
+    point.set_tracking_value(LifeSafetyState::FAULT);
     point.set_silenced(SilencedState::ALL_SILENCED);
     point.set_operation_expected(LifeSafetyOperation::RESET_FAULT);
     point.set_reset_executor(Arc::new(move |_| {
@@ -276,7 +276,7 @@ fn wrong_expected_reset_never_calls_executor_or_changes_state() {
 #[test]
 fn missing_point_and_zone_executors_fail_without_mutation() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     let point_before = point_state(&point);
     assert_error(
@@ -289,7 +289,7 @@ fn missing_point_and_zone_executors_fail_without_mutation() {
     assert_eq!(point_state(&point), point_before);
 
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-    zone.set_present_value(LifeSafetyState::FAULT.to_raw());
+    zone.set_present_value(LifeSafetyState::FAULT);
     zone.set_operation_expected(LifeSafetyOperation::RESET_FAULT);
     let zone_before = zone_state(&zone);
     assert_error(
@@ -322,8 +322,8 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
     ];
     for (executor_error, class, code) in cases {
         let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-        point.set_present_value(LifeSafetyState::ALARM.to_raw());
-        point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+        point.set_present_value(LifeSafetyState::ALARM);
+        point.set_tracking_value(LifeSafetyState::FAULT);
         point.set_silenced(SilencedState::ALL_SILENCED);
         point.set_operation_expected(LifeSafetyOperation::RESET);
         point.set_reset_executor(Arc::new(move |_| Err(executor_error)));
@@ -340,7 +340,7 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
     }
 
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-    zone.set_present_value(LifeSafetyState::ALARM.to_raw());
+    zone.set_present_value(LifeSafetyState::ALARM);
     zone.set_operation_expected(LifeSafetyOperation::RESET);
     zone.set_reset_executor(Arc::new(|_| panic!("executor bug")));
     let before = zone_state(&zone);
@@ -356,8 +356,8 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
 #[test]
 fn invalid_commits_cannot_partially_mutate_point_or_zone() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
-    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
+    point.set_tracking_value(LifeSafetyState::FAULT);
     point.set_silenced(SilencedState::ALL_SILENCED);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(|_| {
@@ -378,7 +378,7 @@ fn invalid_commits_cannot_partially_mutate_point_or_zone() {
     assert_eq!(point_state(&point), before);
 
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-    zone.set_present_value(LifeSafetyState::FAULT.to_raw());
+    zone.set_present_value(LifeSafetyState::FAULT);
     zone.set_silenced(SilencedState::ALL_SILENCED);
     zone.set_operation_expected(LifeSafetyOperation::RESET);
     zone.set_reset_executor(Arc::new(|_| {

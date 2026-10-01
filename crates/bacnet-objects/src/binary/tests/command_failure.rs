@@ -320,7 +320,7 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
     assert_eq!(bo.evaluate_intrinsic_reporting(), None);
     assert_eq!(bo.tick_intrinsic_reporting(), None);
 
-    bo.reliability = 1;
+    bo.reliability = Reliability::NO_SENSOR;
     assert_eq!(
         bo.read_property(PropertyIdentifier::STATUS_FLAGS, None)
             .unwrap(),

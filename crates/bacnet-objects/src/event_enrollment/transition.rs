@@ -41,7 +41,7 @@ pub(super) fn commit_event_transition(
 }
 
 pub(super) fn commit_reliability(
-    reliability: &mut u32,
+    reliability: &mut Reliability,
     event_state: &mut EventState,
     acked_transitions: &mut EventTransitionBits,
     event_history: &mut EventHistory,
@@ -49,7 +49,7 @@ pub(super) fn commit_reliability(
 ) -> Result<(), EventTransitionCommitError> {
     // Reliability is staged alongside the three event-transition stores. A
     // rejected transition therefore leaves all four properties unchanged.
-    let staged_reliability = commit.reliability.to_raw();
+    let staged_reliability = commit.reliability;
     let mut staged_event_state = *event_state;
     let mut staged_acknowledgments = *acked_transitions;
     let mut staged_history = event_history.clone();

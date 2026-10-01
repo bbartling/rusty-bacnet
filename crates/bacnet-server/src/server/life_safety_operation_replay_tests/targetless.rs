@@ -56,7 +56,7 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
     let observed_zone = Arc::clone(&zone_executions);
 
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(move |_| {
         observed_point.fetch_add(1, Ordering::AcqRel);
@@ -66,7 +66,7 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
         })
     }));
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-    zone.set_present_value(LifeSafetyState::FAULT.to_raw());
+    zone.set_present_value(LifeSafetyState::FAULT);
     zone.set_operation_expected(LifeSafetyOperation::RESET);
     zone.set_reset_executor(Arc::new(move |_| {
         observed_zone.fetch_add(1, Ordering::AcqRel);

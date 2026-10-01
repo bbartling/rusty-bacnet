@@ -5,7 +5,8 @@
 //! - LiftObject (type 59) — Clause 12.59
 
 use bacnet_types::enums::{
-    EscalatorFault, EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
+    EscalatorFault, EscalatorMode, EscalatorOperationDirection, LiftGroupMode, ObjectType,
+    PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -29,15 +30,15 @@ pub struct ElevatorGroupObject {
     group_id: u64,
     /// List of lift ObjectIdentifiers in this group.
     group_members: Vec<ObjectIdentifier>,
-    /// Group mode (LiftGroupMode enumerated value).
-    group_mode: u32,
+    /// Group mode.
+    group_mode: LiftGroupMode,
     /// Number of landing calls (stored as count).
     landing_calls: u64,
     /// Landing call control (Enumerated).
     landing_call_control: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl ElevatorGroupObject {
@@ -50,12 +51,12 @@ impl ElevatorGroupObject {
             description: String::new(),
             group_id: 0,
             group_members: Vec::new(),
-            group_mode: 0, // Unknown
+            group_mode: LiftGroupMode::UNKNOWN,
             landing_calls: 0,
             landing_call_control: 0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 
@@ -96,7 +97,7 @@ impl BACnetObject for ElevatorGroupObject {
                 Ok(PropertyValue::List(items))
             }
             p if p == PropertyIdentifier::GROUP_MODE => {
-                Ok(PropertyValue::Enumerated(self.group_mode))
+                Ok(PropertyValue::Enumerated(self.group_mode.to_raw()))
             }
             p if p == PropertyIdentifier::LANDING_CALLS => {
                 Ok(PropertyValue::Unsigned(self.landing_calls))
@@ -134,7 +135,7 @@ impl BACnetObject for ElevatorGroupObject {
             }
             p if p == PropertyIdentifier::GROUP_MODE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.group_mode = v;
+                    self.group_mode = LiftGroupMode::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -192,7 +193,7 @@ pub struct EscalatorObject {
     passenger_alarm: bool,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl EscalatorObject {
@@ -212,7 +213,7 @@ impl EscalatorObject {
             passenger_alarm: false,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 }
@@ -414,7 +415,7 @@ pub struct LiftObject {
     energy_meter: f32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl LiftObject {
@@ -438,7 +439,7 @@ impl LiftObject {
             energy_meter: 0.0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 }

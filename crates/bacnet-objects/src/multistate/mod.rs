@@ -90,10 +90,10 @@ pub(crate) enum OwnedMultiStateFault {
 }
 
 impl OwnedMultiStateFault {
-    fn reliability(self) -> u32 {
+    fn reliability(self) -> Reliability {
         match self {
-            Self::ConfigurationError => Reliability::CONFIGURATION_ERROR.to_raw(),
-            Self::MultiStateOutOfRange => Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw(),
+            Self::ConfigurationError => Reliability::CONFIGURATION_ERROR,
+            Self::MultiStateOutOfRange => Reliability::MULTI_STATE_OUT_OF_RANGE,
         }
     }
 }
@@ -114,7 +114,7 @@ impl MultiStateReliabilityState {
         configuration_invalid: bool,
         present_value: u32,
         number_of_states: u32,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
     ) -> ReliabilityEvaluation {
         let observed_fault = if configuration_invalid {
             Some(OwnedMultiStateFault::ConfigurationError)
@@ -128,10 +128,10 @@ impl MultiStateReliabilityState {
             (
                 observed_fault
                     .map(OwnedMultiStateFault::reliability)
-                    .unwrap_or_else(|| Reliability::NO_FAULT_DETECTED.to_raw()),
+                    .unwrap_or(Reliability::NO_FAULT_DETECTED),
                 observed_fault,
             )
-        } else if *reliability == Reliability::NO_FAULT_DETECTED.to_raw() {
+        } else if *reliability == Reliability::NO_FAULT_DETECTED {
             let Some(fault) = observed_fault else {
                 return ReliabilityEvaluation::Unchanged;
             };

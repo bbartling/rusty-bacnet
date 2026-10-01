@@ -1,7 +1,7 @@
 //! Lighting Output (type 54) and Binary Lighting Output (type 55) objects per
 //! ASHRAE 135-2020 Clauses 12.54 and 12.55.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -33,8 +33,8 @@ pub struct LightingOutputObject {
     egress_active: bool,
     out_of_service: bool,
     status_flags: StatusFlags,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
 }
@@ -57,7 +57,7 @@ impl LightingOutputObject {
             egress_active: false,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: 0.0,
         })

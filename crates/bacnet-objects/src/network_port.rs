@@ -8,7 +8,7 @@
 //! Non-B/IP snapshots expose only the common application rows;
 //! they do not claim a complete transport-specific SC, Ethernet or MS/TP profile.
 
-use bacnet_types::enums::{NetworkType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{NetworkType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bacnet_types::MacAddr;
@@ -30,7 +30,7 @@ pub struct NetworkPortObject {
     description: String,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     network_type: NetworkType,
     network_number: NetworkNumber,
     mac_address: MacAddr,
@@ -56,7 +56,7 @@ impl NetworkPortObject {
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             network_type: NetworkType::IPV4,
             network_number: NetworkNumber::configured(config.network_number)
                 .expect("validated Network Number"),
@@ -90,7 +90,7 @@ impl NetworkPortObject {
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             network_type,
             network_number: NetworkNumber::configured(network_number)
                 .expect("validated Network Number"),

@@ -28,9 +28,9 @@ pub struct AnalogInputObject {
     /// Event_Detection_Enable (Clause 12.2). A FALSE value suspends
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     fault_out_of_range: FaultOutOfRangeState,
     /// Optional minimum engineering bound metadata for Present_Value.
@@ -55,7 +55,7 @@ impl AnalogInputObject {
             cov_increment: 0.0,
             event_detector: OutOfRangeDetector::default(),
             event_detection_enable: true,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             fault_out_of_range: FaultOutOfRangeState::default(),
@@ -314,7 +314,7 @@ impl BACnetObject for AnalogInputObject {
         )
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -450,10 +450,10 @@ mod detection_enable_reset_tests {
         assert_eq!(delayed.tick_intrinsic_reporting(), Some(proposal));
 
         let mut faulted = AnalogInputObject::new(2, "AI-fault", 62).unwrap();
-        faulted.reliability = Reliability::OVER_RANGE.to_raw();
+        faulted.reliability = Reliability::OVER_RANGE;
         let entry = faulted.evaluate_intrinsic_reporting().unwrap();
         crate::event::commit_test_proposal(&mut faulted, entry);
-        faulted.reliability = Reliability::NO_SENSOR.to_raw();
+        faulted.reliability = Reliability::NO_SENSOR;
         let reindication = faulted.evaluate_intrinsic_reporting().unwrap();
         assert_eq!(
             reindication.change,
@@ -633,7 +633,7 @@ mod fault_out_of_range_non_finite_tests {
 
             assert_value_out_of_range(normal.evaluate_reliability_internal());
             assert_eq!(normal.present_value.to_bits(), non_finite.to_bits());
-            assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED.to_raw());
+            assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED);
             assert_eq!(
                 normal
                     .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -646,8 +646,8 @@ mod fault_out_of_range_non_finite_tests {
             assert_eq!(
                 normal.evaluate_reliability_internal().unwrap(),
                 ReliabilityEvaluation::Changed {
-                    old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-                    new_reliability: Reliability::UNDER_RANGE.to_raw(),
+                    old_reliability: Reliability::NO_FAULT_DETECTED,
+                    new_reliability: Reliability::UNDER_RANGE,
                 }
             );
 
@@ -662,7 +662,7 @@ mod fault_out_of_range_non_finite_tests {
 
             assert_value_out_of_range(owned.evaluate_reliability_internal());
             assert_eq!(owned.present_value.to_bits(), non_finite.to_bits());
-            assert_eq!(owned.reliability, Reliability::UNDER_RANGE.to_raw());
+            assert_eq!(owned.reliability, Reliability::UNDER_RANGE);
             assert_eq!(
                 owned
                     .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -678,8 +678,8 @@ mod fault_out_of_range_non_finite_tests {
             assert_eq!(
                 owned.evaluate_reliability_internal().unwrap(),
                 ReliabilityEvaluation::Changed {
-                    old_reliability: Reliability::UNDER_RANGE.to_raw(),
-                    new_reliability: Reliability::OVER_RANGE.to_raw(),
+                    old_reliability: Reliability::UNDER_RANGE,
+                    new_reliability: Reliability::OVER_RANGE,
                 }
             );
         }
