@@ -239,9 +239,9 @@ and `NATIVE_FEATURES`. Only `dev` saves it, and only from a successful job, so
 a failed or cancelled run never leaves a partial cache that later runs would
 restore by exact key. GitHub lets a branch's run restore the default branch's
 (`dev`) cache, so every branch starts from the last good `dev` build. The cache
-holds dependencies only, so most of a run is compiling the workspace and its
-tests: in October 2026 a run took about 13 minutes on macOS and 20 on Windows
-cold, and 10 and 17 with a warm cache.
+holds dependencies only, so most of a run is compiling the workspace, its
+tests, clippy and rustdoc: in October 2026 a run took about 16 minutes on
+macOS and 21 on Windows cold, and 13 and 16 with a warm cache.
 
 **Portable tests.** What the first Windows and macOS runs showed (#950):
 
@@ -256,6 +256,11 @@ cold, and 10 and 17 with a warm cache.
   with `EHOSTUNREACH`.
 - Compare `io::ErrorKind`, or the error the OS gives for the same call, not
   Unix error text.
+- Stacks are smaller on Windows: the main thread gets 1 MiB (8 MiB on Linux
+  and macOS), so `#[tokio::main]` binaries box their large futures, as
+  `bacnet` does. Test threads get 2 MiB everywhere, and debug-build async
+  fixtures can fill that; box big fixture futures (`Box::pin`). Running a test
+  with `RUST_MIN_STACK=1048576` on macOS shows how close it is.
 - Another socket may bind `127.0.0.1:P` beside a wildcard `0.0.0.0:P` on
   Windows unless the first socket set `SO_EXCLUSIVEADDRUSE`, which an
   ephemeral B/IP or B/IPv6 socket now does. Linux refuses that bind. macOS

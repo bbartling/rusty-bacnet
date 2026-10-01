@@ -220,6 +220,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses it too unless the other socket sets SO_REUSEADDR, and has no option
   to close that case. Explicitly configured ports keep SO_REUSEADDR.
 
+- `bacnet` (the CLI) no longer overflows the main thread's stack on Windows
+  (#950). `#[tokio::main]` polled its large command futures on the main
+  thread, whose stack is 1 MiB on Windows, and a debug build aborted on its
+  first BACnet/SC command. The command futures now live on the heap.
+
 - A BACnet/SC dial to a host name with several addresses no longer waits for
   each address in turn (#950). It races them, RFC 8305 style: address
   families alternate, starting with the first result's, and each attempt runs
