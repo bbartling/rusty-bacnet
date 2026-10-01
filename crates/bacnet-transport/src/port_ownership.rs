@@ -1,15 +1,24 @@
-//! Exclusive ownership of an unshared UDP port, the same on every OS.
+//! Keeping an unshared UDP port to its socket, as far as each OS allows.
+//!
+//! A B/IP or B/IPv6 socket on an ephemeral port binds the wildcard address
+//! without SO_REUSEADDR (#892). How private that leaves the port depends on
+//! the OS:
+//!
+//! - Linux refuses any other bind to the port, whatever options it sets.
+//! - Windows lets another socket bind a more specific address on the same port
+//!   (127.0.0.1:P beside a wildcard 0.0.0.0:P) and take the unicast sent
+//!   there, unless the first socket set SO_EXCLUSIVEADDRUSE, which this module
+//!   does (#950).
+//! - macOS and the other BSDs refuse a plain bind there, but a socket that sets
+//!   SO_REUSEADDR itself may still bind the more specific address. They have
+//!   no option to stop it, so that case remains.
 
 use std::io;
 
 /// Keep an unshared socket's port to itself. Call it before `bind`.
 ///
-/// On Unix a socket without SO_REUSEADDR already owns its port: nothing else
-/// can bind that port, on any address, while it is open. Windows lets another
-/// socket bind a more specific address on the same port (127.0.0.1:P beside a
-/// wildcard 0.0.0.0:P), and that socket then receives the unicast sent to it,
-/// so an ephemeral B/IP or B/IPv6 port was neither private nor reliably ours.
-/// SO_EXCLUSIVEADDRUSE refuses every other bind to the port, as Unix does.
+/// Sets SO_EXCLUSIVEADDRUSE, which refuses every other bind to the port while
+/// this socket is open.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub(crate) fn claim_exclusive(socket: &socket2::Socket) -> io::Result<()> {
@@ -40,7 +49,8 @@ pub(crate) fn claim_exclusive(socket: &socket2::Socket) -> io::Result<()> {
 
 /// Keep an unshared socket's port to itself. Call it before `bind`.
 ///
-/// Unix already gives a socket without SO_REUSEADDR sole use of its port.
+/// Nothing to set: Linux already refuses other binds, and macOS and the BSDs
+/// have no option for the SO_REUSEADDR case the module docs describe.
 #[cfg(not(windows))]
 pub(crate) fn claim_exclusive(_socket: &socket2::Socket) -> io::Result<()> {
     Ok(())
@@ -50,6 +60,8 @@ pub(crate) fn claim_exclusive(_socket: &socket2::Socket) -> io::Result<()> {
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 
+    /// A plain bind of 127.0.0.1:P beside the claimed 0.0.0.0:P fails on
+    /// every OS; on Windows only because of the claim.
     #[test]
     fn a_claimed_wildcard_port_refuses_a_specific_address_bind() {
         let socket =

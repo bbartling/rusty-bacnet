@@ -22,7 +22,7 @@ pub(super) struct Bip6Socket {
 /// The unbound B/IPv6 socket. Only an explicit port sets SO_REUSEADDR: Linux
 /// would otherwise hand an ephemeral bind a port another SO_REUSEADDR socket
 /// owns, and unicast to it would reach only one of them (#892). An ephemeral
-/// port is this socket's alone, on Windows too (#950).
+/// port claims exclusive use where the OS has a way to (`port_ownership`, #950).
 fn udp_socket(port: u16) -> io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV6,

@@ -255,9 +255,11 @@ warm cache.
   with `EHOSTUNREACH`.
 - Compare `io::ErrorKind`, or the error the OS gives for the same call, not
   Unix error text.
-- An ephemeral B/IP or B/IPv6 port is exclusive on every OS. On Windows that
-  takes `SO_EXCLUSIVEADDRUSE`: by default another socket may bind
-  `127.0.0.1:P` beside a wildcard `0.0.0.0:P`.
+- Another socket may bind `127.0.0.1:P` beside a wildcard `0.0.0.0:P` on
+  Windows unless the first socket set `SO_EXCLUSIVEADDRUSE`, which an
+  ephemeral B/IP or B/IPv6 socket now does. Linux refuses that bind. macOS
+  refuses a plain one, but not one from a socket that sets `SO_REUSEADDR`, and
+  has no option to prevent it.
 - `localhost` resolves to `::1` first on Windows, and a refused loopback
   connect takes about 2 seconds there. The SC dialer races a host's
   addresses (RFC 8305 style), so a dial to `localhost` against an IPv4-only

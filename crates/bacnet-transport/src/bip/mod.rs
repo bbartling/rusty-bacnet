@@ -65,7 +65,8 @@ pub struct ForeignDeviceConfig {
 /// socket even while another SO_REUSEADDR socket owns it, and unicast to that
 /// port then reaches only one of them (#892). So only an explicitly requested
 /// port sets it, keeping the long-standing behavior for configured ports. Any
-/// other port is this socket's alone, on Windows too (#950).
+/// other port claims exclusive use where the OS has a way to (`port_ownership`,
+/// #950).
 fn udp_socket(share_port: bool) -> std::io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV4,
