@@ -5,7 +5,9 @@ use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
     BACnetTimeValue,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
@@ -180,10 +182,10 @@ pub struct ScheduleObject {
     present_value: PropertyValue,
     schedule_default: PropertyValue,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// Evaluated Reliability saved while a client simulation owns the property
     /// (Out_Of_Service TRUE); restored on the return to service.
-    reliability_before_out_of_service: Option<u32>,
+    reliability_before_out_of_service: Option<Reliability>,
     status_flags: StatusFlags,
     /// 7-day weekly schedule: index 0 = Monday, index 6 = Sunday.
     weekly_schedule: [Vec<BACnetTimeValue>; 7],
@@ -210,7 +212,7 @@ impl ScheduleObject {
             present_value: schedule_default.clone(),
             schedule_default,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             status_flags: StatusFlags::empty(),
             weekly_schedule: [vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
@@ -349,7 +351,7 @@ impl BACnetObject for ScheduleObject {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
             p if p == PropertyIdentifier::RELIABILITY => {
-                Ok(PropertyValue::Enumerated(self.reliability))
+                Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
@@ -492,7 +494,8 @@ impl BACnetObject for ScheduleObject {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());
             }
-            if let PropertyValue::Enumerated(v) = value {
+            if let PropertyValue::Enumerated(raw) = value {
+                let v = Reliability::from_raw(raw);
                 if !common::is_reliability_value_valid(v) {
                     return Err(common::value_out_of_range_error());
                 }
@@ -531,7 +534,7 @@ impl BACnetObject for ScheduleObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         // While Out_Of_Service is TRUE the client owns the simulated value;
         // refusing here keeps the internal consistency evaluation from
         // clobbering the simulation.

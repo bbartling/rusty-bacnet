@@ -577,7 +577,7 @@ async fn network_write_property_and_multiple_use_exact_status_deltas() {
 #[tokio::test]
 async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_second_cov() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(bacnet_types::enums::LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(bacnet_types::enums::LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(|_| {
         Ok(LifeSafetyPointResetCommit {

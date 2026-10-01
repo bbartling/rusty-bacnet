@@ -5,7 +5,7 @@
 //!
 //! A `define_value_object!` macro generates the struct + BACnetObject impl for each type.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -55,7 +55,7 @@ macro_rules! define_value_object_commandable {
             present_value: $val_type,
             out_of_service: bool,
             status_flags: StatusFlags,
-            reliability: u32,
+            reliability: Reliability,
             /// 16-level priority array. `None` = no command at that level.
             priority_array: [Option<$val_type>; 16],
             relinquish_default: $val_type,
@@ -72,7 +72,7 @@ macro_rules! define_value_object_commandable {
                     present_value: $default,
                     out_of_service: false,
                     status_flags: StatusFlags::empty(),
-                    reliability: 0,
+                    reliability: Reliability::NO_FAULT_DETECTED,
                     priority_array: Default::default(),
                     relinquish_default: $default,
                 })

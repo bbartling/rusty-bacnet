@@ -3,7 +3,7 @@
 //! Per ASHRAE 135-2020 §12.61 Table 12-79 (Accumulator) and §12.23 Table 12-27 (PulseConverter).
 
 use bacnet_types::constructed::{BACnetObjectPropertyReference, BACnetPrescale, BACnetScale};
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -32,7 +32,7 @@ pub struct AccumulatorObject {
     status_flags: StatusFlags,
     event_state: EventState,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     value_before_change: u64,
     value_set: u64,
 }
@@ -55,7 +55,7 @@ impl AccumulatorObject {
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             value_before_change: 0,
             value_set: 0,
         })
@@ -224,7 +224,7 @@ pub struct PulseConverterObject {
     status_flags: StatusFlags,
     event_state: EventState,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl PulseConverterObject {
@@ -244,7 +244,7 @@ impl PulseConverterObject {
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 

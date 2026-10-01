@@ -114,7 +114,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             }
             self.$detector_field.propose(
                 $(self.$input_field,)+
-                bacnet_types::enums::Reliability::from_raw(self.$reliability_field),
+                self.$reliability_field,
             )
         }
 
@@ -124,7 +124,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             }
             self.$detector_field.tick_proposal(
                 $(self.$input_field,)+
-                bacnet_types::enums::Reliability::from_raw(self.$reliability_field),
+                self.$reliability_field,
             )
         }
 
@@ -141,7 +141,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             .commit(commit)?;
             self.$detector_field.confirm_transition(
                 &change,
-                bacnet_types::enums::Reliability::from_raw(self.$reliability_field),
+                self.$reliability_field,
             );
             Ok(())
         }

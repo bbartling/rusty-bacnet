@@ -199,7 +199,7 @@ async fn reset_dispatch_fans_out_exact_pv_delta_without_event_state_blast() {
         LifeSafetyOperation::RESET_FAULT,
     ] {
         let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-        point.set_present_value(LifeSafetyState::ALARM.to_raw());
+        point.set_present_value(LifeSafetyState::ALARM);
         point.set_operation_expected(operation);
         point.set_reset_executor(Arc::new(|_| {
             Ok(LifeSafetyPointResetCommit {

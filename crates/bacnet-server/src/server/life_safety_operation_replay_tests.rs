@@ -199,7 +199,7 @@ async fn pending_in_flight_duplicate_discards_without_replay() {
     let executions = Arc::new(AtomicUsize::new(0));
     let observed_executions = Arc::clone(&executions);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(move |_| {
         observed_executions.fetch_add(1, Ordering::AcqRel);

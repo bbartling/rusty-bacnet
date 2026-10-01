@@ -19,9 +19,9 @@ pub struct MultiStateInputObject {
     number_of_states: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     reliability_evaluator: MultiStateReliabilityState,
     state_text: Vec<String>,
@@ -50,7 +50,7 @@ impl MultiStateInputObject {
             number_of_states,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             reliability_evaluator: MultiStateReliabilityState::default(),
@@ -338,7 +338,7 @@ impl BACnetObject for MultiStateInputObject {
     fn is_createable(&self) -> bool {
         true
     }
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -444,8 +444,8 @@ mod reliability_safety_net_tests {
         assert_eq!(
             msi.evaluate_reliability_internal().unwrap(),
             ReliabilityEvaluation::Changed {
-                old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-                new_reliability: Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw(),
+                old_reliability: Reliability::NO_FAULT_DETECTED,
+                new_reliability: Reliability::MULTI_STATE_OUT_OF_RANGE,
             }
         );
         assert_eq!(

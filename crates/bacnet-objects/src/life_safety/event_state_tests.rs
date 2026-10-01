@@ -208,8 +208,8 @@ fn point_resets_leave_event_state_and_in_alarm_untouched() {
         LifeSafetyOperation::RESET_FAULT,
     ] {
         let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-        point.set_present_value(LifeSafetyState::ALARM.to_raw());
-        point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+        point.set_present_value(LifeSafetyState::ALARM);
+        point.set_tracking_value(LifeSafetyState::FAULT);
         point.set_silenced(SilencedState::ALL_SILENCED);
         point.set_operation_expected(operation);
         point.set_reset_executor(Arc::new(|_| {
@@ -247,7 +247,7 @@ fn zone_resets_leave_event_state_and_in_alarm_untouched() {
         LifeSafetyOperation::RESET_FAULT,
     ] {
         let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-        zone.set_present_value(LifeSafetyState::ALARM.to_raw());
+        zone.set_present_value(LifeSafetyState::ALARM);
         zone.set_silenced(SilencedState::ALL_SILENCED);
         zone.set_operation_expected(operation);
         zone.set_reset_executor(Arc::new(|_| {

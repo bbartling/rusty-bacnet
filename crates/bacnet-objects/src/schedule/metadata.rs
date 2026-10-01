@@ -258,7 +258,7 @@ mod tests {
 
         let mut object = ScheduleObject::new(1, "SCH-1", PropertyValue::Null).unwrap();
         let original = object.property_metadata().into_owned();
-        let evaluated = Reliability::CONFIGURATION_ERROR.to_raw();
+        let evaluated = Reliability::CONFIGURATION_ERROR;
         let simulated = Reliability::NO_FAULT_DETECTED.to_raw();
         object.set_reliability_internal(evaluated).unwrap();
         object
@@ -301,7 +301,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             object.read_property(P::RELIABILITY, None).unwrap(),
-            PropertyValue::Enumerated(evaluated)
+            PropertyValue::Enumerated(evaluated.to_raw())
         );
         assert_error(
             object

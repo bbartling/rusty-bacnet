@@ -54,13 +54,14 @@ pub(super) fn original_destination_matches(
     wildcard_bind: bool,
     os_group_delivery: Option<bool>,
 ) -> bool {
+    // A wildcard bind accepts unicast only to one of the host's listed
+    // addresses, on every OS (#952).
     let local_unicast = match destination {
         IpAddr::V4(ip) if wildcard_bind => {
             ip != configured_broadcast
                 && ip != Ipv4Addr::BROADCAST
                 && !ip.is_multicast()
-                && (local_unicast_ips.contains(&ip)
-                    || (cfg!(windows) && os_group_delivery == Some(false)))
+                && local_unicast_ips.contains(&ip)
         }
         IpAddr::V4(ip) => ip == local_ip,
         IpAddr::V6(_) => false,
@@ -744,17 +745,4 @@ async fn forward_npdu(
         }
     }
     all_sent
-}
-
-/// Resolve the local IPv4 address by connecting a UDP socket to a remote
-/// address and reading back the local address. This doesn't actually send
-/// any packets.
-pub(super) fn resolve_local_ip() -> Option<Ipv4Addr> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    // Connect to a public IP — doesn't actually send anything
-    socket.connect("8.8.8.8:80").ok()?;
-    match socket.local_addr().ok()? {
-        std::net::SocketAddr::V4(v4) => Some(*v4.ip()),
-        _ => None,
-    }
 }

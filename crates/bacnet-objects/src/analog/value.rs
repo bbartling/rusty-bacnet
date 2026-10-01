@@ -36,9 +36,9 @@ pub struct AnalogValueObject {
     /// Event_Detection_Enable (Clause 12.4). A FALSE value suspends
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     fault_out_of_range: FaultOutOfRangeState,
     min_pres_value: Option<f32>,
@@ -84,7 +84,7 @@ impl AnalogValueObject {
             cov_increment: 0.0,
             event_detector: OutOfRangeDetector::default(),
             event_detection_enable: true,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             fault_out_of_range: FaultOutOfRangeState::default(),
@@ -452,7 +452,7 @@ impl BACnetObject for AnalogValueObject {
         )
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -588,7 +588,7 @@ mod fault_out_of_range_non_finite_tests {
 
             assert_value_out_of_range(normal.evaluate_reliability_internal());
             assert_eq!(normal.present_value.to_bits(), non_finite.to_bits());
-            assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED.to_raw());
+            assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED);
             assert_eq!(
                 normal
                     .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -601,8 +601,8 @@ mod fault_out_of_range_non_finite_tests {
             assert_eq!(
                 normal.evaluate_reliability_internal().unwrap(),
                 ReliabilityEvaluation::Changed {
-                    old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-                    new_reliability: Reliability::UNDER_RANGE.to_raw(),
+                    old_reliability: Reliability::NO_FAULT_DETECTED,
+                    new_reliability: Reliability::UNDER_RANGE,
                 }
             );
 
@@ -617,7 +617,7 @@ mod fault_out_of_range_non_finite_tests {
 
             assert_value_out_of_range(owned.evaluate_reliability_internal());
             assert_eq!(owned.present_value.to_bits(), non_finite.to_bits());
-            assert_eq!(owned.reliability, Reliability::UNDER_RANGE.to_raw());
+            assert_eq!(owned.reliability, Reliability::UNDER_RANGE);
             assert_eq!(
                 owned
                     .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -633,8 +633,8 @@ mod fault_out_of_range_non_finite_tests {
             assert_eq!(
                 owned.evaluate_reliability_internal().unwrap(),
                 ReliabilityEvaluation::Changed {
-                    old_reliability: Reliability::UNDER_RANGE.to_raw(),
-                    new_reliability: Reliability::OVER_RANGE.to_raw(),
+                    old_reliability: Reliability::UNDER_RANGE,
+                    new_reliability: Reliability::OVER_RANGE,
                 }
             );
         }

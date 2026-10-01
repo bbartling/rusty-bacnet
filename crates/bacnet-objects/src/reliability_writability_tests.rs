@@ -83,7 +83,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     );
 
     let internal_denied = object
-        .set_reliability_internal(Reliability::NO_FAULT_DETECTED.to_raw())
+        .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .expect_err("internal Reliability write must not overwrite client simulation");
     match internal_denied {
         Error::Protocol { class, code } => {
@@ -110,7 +110,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     );
 
     let invalid_internal = object
-        .set_reliability_internal(65_536)
+        .set_reliability_internal(Reliability::from_raw(65_536))
         .expect_err("internal route must enforce the Reliability datatype");
     match invalid_internal {
         Error::Protocol { class, code } => {
@@ -120,7 +120,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
     }
     object
-        .set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+        .set_reliability_internal(Reliability::NO_SENSOR)
         .expect("internal Reliability write must succeed in service");
     assert_eq!(
         object
@@ -145,7 +145,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     );
 
     object
-        .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+        .set_reliability_internal(Reliability::OVER_RANGE)
         .expect("internal evaluator must establish a non-default saved value");
     object
         .write_property(
@@ -185,7 +185,7 @@ fn reliability_value_boundaries_match_asn1() {
     let boundaries = [11, 25, 26, 63, 64, 65_535, 65_536];
     let actual: Vec<bool> = boundaries
         .into_iter()
-        .map(crate::common::is_reliability_value_valid)
+        .map(|raw| crate::common::is_reliability_value_valid(Reliability::from_raw(raw)))
         .collect();
     assert_eq!(
         actual,
@@ -206,12 +206,14 @@ fn reliability_predicate_tracks_all_named_plus_vendor_range() {
         .collect();
     for value in 0..=65_536u32 {
         assert_eq!(
-            crate::common::is_reliability_value_valid(value),
+            crate::common::is_reliability_value_valid(Reliability::from_raw(value)),
             named.contains(&value) || (64..=65_535).contains(&value),
             "predicate must equal ALL_NAMED-membership ∪ vendor range at {value}"
         );
     }
-    assert!(!crate::common::is_reliability_value_valid(u32::MAX));
+    assert!(!crate::common::is_reliability_value_valid(
+        Reliability::from_raw(u32::MAX)
+    ));
 
     // The next-unnamed value above the enum ceiling flips from rejected to
     // accepted exactly when its addendum constant lands in `Reliability`, so
@@ -226,18 +228,20 @@ fn reliability_predicate_tracks_all_named_plus_vendor_range() {
         "test premise: {enum_ceiling} + 1 is not yet named"
     );
     assert!(
-        !crate::common::is_reliability_value_valid(enum_ceiling + 1),
+        !crate::common::is_reliability_value_valid(Reliability::from_raw(enum_ceiling + 1)),
         "the value past the enum ceiling must stay rejected until its constant lands"
     );
     // 11 is reserved for a future addendum inside the named span (Clause 21).
     assert!(!named.contains(&11));
-    assert!(!crate::common::is_reliability_value_valid(11));
+    assert!(!crate::common::is_reliability_value_valid(
+        Reliability::from_raw(11)
+    ));
 }
 
 #[test]
 fn entering_out_of_service_saves_evaluated_reliability() {
     let mut out_of_service = false;
-    let mut reliability = Reliability::OVER_RANGE.to_raw();
+    let mut reliability = Reliability::OVER_RANGE;
     let mut saved = None;
 
     crate::common::write_out_of_service_with_reliability_restore(
@@ -251,15 +255,15 @@ fn entering_out_of_service_saves_evaluated_reliability() {
     .expect("entry must succeed");
 
     assert!(out_of_service);
-    assert_eq!(saved, Some(Reliability::OVER_RANGE.to_raw()));
-    assert_eq!(reliability, Reliability::OVER_RANGE.to_raw());
+    assert_eq!(saved, Some(Reliability::OVER_RANGE));
+    assert_eq!(reliability, Reliability::OVER_RANGE);
 }
 
 #[test]
 fn leaving_out_of_service_restores_saved_reliability() {
     let mut out_of_service = true;
-    let mut reliability = Reliability::NO_SENSOR.to_raw();
-    let mut saved = Some(Reliability::OVER_RANGE.to_raw());
+    let mut reliability = Reliability::NO_SENSOR;
+    let mut saved = Some(Reliability::OVER_RANGE);
 
     crate::common::write_out_of_service_with_reliability_restore(
         &mut out_of_service,
@@ -273,13 +277,13 @@ fn leaving_out_of_service_restores_saved_reliability() {
 
     assert!(!out_of_service);
     assert_eq!(saved, None);
-    assert_eq!(reliability, Reliability::OVER_RANGE.to_raw());
+    assert_eq!(reliability, Reliability::OVER_RANGE);
 }
 
 #[test]
 fn leaving_out_of_service_without_saved_value_falls_back_to_no_fault() {
     let mut out_of_service = true;
-    let mut reliability = Reliability::NO_SENSOR.to_raw();
+    let mut reliability = Reliability::NO_SENSOR;
     let mut saved = None;
 
     crate::common::write_out_of_service_with_reliability_restore(
@@ -294,7 +298,7 @@ fn leaving_out_of_service_without_saved_value_falls_back_to_no_fault() {
 
     assert!(!out_of_service);
     assert_eq!(saved, None);
-    assert_eq!(reliability, Reliability::NO_FAULT_DETECTED.to_raw());
+    assert_eq!(reliability, Reliability::NO_FAULT_DETECTED);
 }
 
 macro_rules! reliability_gate_test {
