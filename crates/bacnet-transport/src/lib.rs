@@ -26,6 +26,7 @@ pub mod mstp_frame;
 #[cfg(feature = "serial")]
 pub mod mstp_serial;
 pub mod port;
+mod port_ownership;
 pub mod sc;
 pub mod sc_frame;
 #[cfg(feature = "sc-tls")]
