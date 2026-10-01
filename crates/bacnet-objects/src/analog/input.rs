@@ -239,7 +239,8 @@ impl BACnetObject for AnalogInputObject {
                 self.event_detection_enable = v;
                 if !v {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.acked_transitions =
+                        bacnet_types::bitstring::EventTransitionBits::all();
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
                     self.event_history.reset();
@@ -286,8 +287,12 @@ impl BACnetObject for AnalogInputObject {
         OutOfRangeDetector::ALGORITHM
     );
 
-    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |= transition_bit & 0x07;
+    fn acknowledge_alarm(
+        &mut self,
+        transition_bit: bacnet_types::bitstring::EventTransitionBits,
+    ) -> Result<(), bacnet_types::error::Error> {
+        self.event_detector.acked_transitions |=
+            transition_bit & bacnet_types::bitstring::EventTransitionBits::all();
         Ok(())
     }
 
@@ -356,8 +361,8 @@ mod detection_enable_reset_tests {
 
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
         ai.event_detector.high_limit = 80.0;
-        ai.event_detector.limit_enable = crate::event::LimitEnable::BOTH;
-        ai.event_detector.event_enable = 0x07;
+        ai.event_detector.limit_enable = bacnet_types::bitstring::LimitEnable::all();
+        ai.event_detector.event_enable = bacnet_types::bitstring::EventTransitionBits::all();
         ai.set_present_value(81.0);
 
         let outcome = ai
@@ -372,7 +377,10 @@ mod detection_enable_reset_tests {
             bacnet_types::enums::EventState::NORMAL,
             "built-in evaluation must not confirm its own proposal"
         );
-        assert_eq!(ai.event_detector.acked_transitions, 0b111);
+        assert_eq!(
+            ai.event_detector.acked_transitions,
+            bacnet_types::bitstring::EventTransitionBits::all()
+        );
         assert!(ai.event_detector.pending.is_none());
 
         ai.commit_event_transition_internal(EventTransitionCommit {
@@ -388,7 +396,11 @@ mod detection_enable_reset_tests {
             ai.event_detector.event_state,
             bacnet_types::enums::EventState::HIGH_LIMIT
         );
-        assert_eq!(ai.event_detector.acked_transitions, 0b110);
+        assert_eq!(
+            ai.event_detector.acked_transitions,
+            bacnet_types::bitstring::EventTransitionBits::TO_FAULT
+                | bacnet_types::bitstring::EventTransitionBits::TO_NORMAL
+        );
         assert_eq!(
             ai.event_history.time_stamps[0],
             BACnetTimeStamp::SequenceNumber(41)
@@ -404,7 +416,7 @@ mod detection_enable_reset_tests {
 
         let mut delayed = AnalogInputObject::new(1, "AI-delayed", 62).unwrap();
         delayed.event_detector.high_limit = 80.0;
-        delayed.event_detector.limit_enable = crate::event::LimitEnable::BOTH;
+        delayed.event_detector.limit_enable = bacnet_types::bitstring::LimitEnable::all();
         delayed.event_detector.time_delay = 1;
         delayed.set_present_value(81.0);
         assert_eq!(delayed.evaluate_intrinsic_reporting(), None);
@@ -465,7 +477,7 @@ mod detection_enable_reset_tests {
         );
         assert_eq!(
             faulted.event_detector.fault_reliability,
-            Some(Reliability::OVER_RANGE.to_raw())
+            Some(Reliability::OVER_RANGE)
         );
         assert_eq!(faulted.evaluate_intrinsic_reporting(), Some(reindication));
     }
@@ -481,12 +493,12 @@ mod detection_enable_reset_tests {
             PropertyValue::Boolean(true)
         );
         ai.event_detector.event_state = bacnet_types::enums::EventState::HIGH_LIMIT;
-        ai.event_detector.acked_transitions = 0;
+        ai.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
         ai.event_detector.pending = Some(crate::event::PendingTransition {
             state: bacnet_types::enums::EventState::HIGH_LIMIT,
             remaining: 2,
         });
-        ai.event_detector.fault_reliability = Some(1);
+        ai.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         ai.event_history.time_stamps = [
             BACnetTimeStamp::SequenceNumber(1),
             BACnetTimeStamp::SequenceNumber(2),
@@ -511,7 +523,10 @@ mod detection_enable_reset_tests {
             ai.event_detector.event_state,
             bacnet_types::enums::EventState::NORMAL
         );
-        assert_eq!(ai.event_detector.acked_transitions, 0b111);
+        assert_eq!(
+            ai.event_detector.acked_transitions,
+            bacnet_types::bitstring::EventTransitionBits::all()
+        );
         assert!(ai.event_detector.pending.is_none());
         assert!(ai.event_detector.fault_reliability.is_none());
         assert_eq!(
@@ -534,12 +549,13 @@ mod detection_enable_reset_tests {
     fn ai_rejected_detection_write_preserves_hidden_state() {
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
         ai.event_detector.event_state = bacnet_types::enums::EventState::HIGH_LIMIT;
-        ai.event_detector.acked_transitions = 0b010;
+        ai.event_detector.acked_transitions =
+            bacnet_types::bitstring::EventTransitionBits::TO_FAULT;
         ai.event_detector.pending = Some(crate::event::PendingTransition {
             state: bacnet_types::enums::EventState::NORMAL,
             remaining: 2,
         });
-        ai.event_detector.fault_reliability = Some(1);
+        ai.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
         ai.event_history.original_from_states[0] = Some(EventState::NORMAL);
         ai.event_history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
@@ -563,9 +579,15 @@ mod detection_enable_reset_tests {
             ai.event_detector.event_state,
             bacnet_types::enums::EventState::HIGH_LIMIT
         );
-        assert_eq!(ai.event_detector.acked_transitions, 0b010);
+        assert_eq!(
+            ai.event_detector.acked_transitions,
+            bacnet_types::bitstring::EventTransitionBits::TO_FAULT
+        );
         assert_eq!(ai.event_detector.pending.unwrap().remaining, 2);
-        assert_eq!(ai.event_detector.fault_reliability, Some(1));
+        assert_eq!(
+            ai.event_detector.fault_reliability,
+            Some(bacnet_types::enums::Reliability::NO_SENSOR)
+        );
         assert_eq!(
             ai.event_history.time_stamps[0],
             BACnetTimeStamp::SequenceNumber(7)

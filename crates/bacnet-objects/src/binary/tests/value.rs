@@ -95,8 +95,8 @@ fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
     assert!(bv.event_detector.pending.is_some());
 
     bv.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
-    bv.event_detector.acked_transitions = 0;
-    bv.event_detector.fault_reliability = Some(1);
+    bv.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
+    bv.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
     bv.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,

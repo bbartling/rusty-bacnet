@@ -84,7 +84,9 @@ fn seed_unacknowledged(object: &mut dyn BACnetObject) {
         object
             .set_event_state_internal(EventState::OFFNORMAL)
             .unwrap();
-        object.set_acked_transitions_internal(1, false).unwrap();
+        object
+            .set_acked_transitions_internal(EventTransition::ToOffnormal.bit_mask(), false)
+            .unwrap();
     } else {
         object
             .commit_event_transition_internal(EventTransitionCommit {
@@ -160,9 +162,13 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
         seed_unacknowledged(&mut *object);
         assert_denied(&mut *object, bits(0xe0), None);
         if object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT {
-            object.set_acked_transitions_internal(1, true).unwrap();
+            object
+                .set_acked_transitions_internal(EventTransition::ToOffnormal.bit_mask(), true)
+                .unwrap();
             // TO_NORMAL stays acknowledged even if generic local logic clears it.
-            object.set_acked_transitions_internal(4, false).unwrap();
+            object
+                .set_acked_transitions_internal(EventTransition::ToNormal.bit_mask(), false)
+                .unwrap();
         } else {
             let mut acknowledged = snapshot(&*object);
             acknowledged[1] = bits(0xe0);

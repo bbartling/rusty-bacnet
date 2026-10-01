@@ -200,7 +200,7 @@ pub(super) fn enrollment(
         )
     }));
     enrollment.set_event_parameters(parameters);
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     enrollment
 }
 

@@ -41,7 +41,7 @@ fn setup(detection_enabled: bool) -> (ObjectDatabase, ObjectIdentifier) {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     if !detection_enabled {
         ee.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,

@@ -4,6 +4,11 @@ use bacnet_types::primitives::{Date, Time};
 
 use crate::event::{EventStateChange, EventTransitionCommit};
 
+const OFFNORMAL: EventTransitionBits = EventTransitionBits::TO_OFFNORMAL;
+const FAULT: EventTransitionBits = EventTransitionBits::TO_FAULT;
+const NORMAL: EventTransitionBits = EventTransitionBits::TO_NORMAL;
+const ALL: EventTransitionBits = EventTransitionBits::all();
+
 fn sequence(value: u16) -> BACnetTimeStamp {
     BACnetTimeStamp::SequenceNumber(value)
 }
@@ -36,7 +41,7 @@ fn date_time(day: u8) -> BACnetTimeStamp {
 
 fn commit(
     state: &mut EventState,
-    acked: &mut u8,
+    acked: &mut EventTransitionBits,
     history: &mut EventHistory,
     to: EventState,
     timestamp: BACnetTimeStamp,
@@ -65,7 +70,7 @@ fn assert_service_error(result: Result<(), Error>, expected: ErrorCode) {
 #[test]
 fn exact_timestamp_choices_acknowledge_prior_coordinates_one_bit_at_a_time() {
     let mut state = EventState::NORMAL;
-    let mut acked = 0b111;
+    let mut acked = ALL;
     let mut history = EventHistory::default();
     let stamps = [time(1), sequence(22), date_time(2)];
 
@@ -91,13 +96,13 @@ fn exact_timestamp_choices_acknowledge_prior_coordinates_one_bit_at_a_time() {
         stamps[2].clone(),
     );
     assert_eq!(state, EventState::NORMAL);
-    assert_eq!(acked, 0);
+    assert_eq!(acked, EventTransitionBits::empty());
 
     let history_before = history.clone();
     for (requested_state, stamp, expected) in [
-        (EventState::HIGH_LIMIT, &stamps[0], 0b001),
-        (EventState::FAULT, &stamps[1], 0b011),
-        (EventState::NORMAL, &stamps[2], 0b111),
+        (EventState::HIGH_LIMIT, &stamps[0], OFFNORMAL),
+        (EventState::FAULT, &stamps[1], OFFNORMAL | FAULT),
+        (EventState::NORMAL, &stamps[2], ALL),
     ] {
         history
             .acknowledge_correlated(&mut acked, requested_state, stamp)
@@ -110,7 +115,7 @@ fn exact_timestamp_choices_acknowledge_prior_coordinates_one_bit_at_a_time() {
 #[test]
 fn latest_same_coordinate_timestamp_replaces_the_older_timestamp() {
     let mut state = EventState::NORMAL;
-    let mut acked = 0b111;
+    let mut acked = ALL;
     let mut history = EventHistory::default();
     commit(
         &mut state,
@@ -141,7 +146,7 @@ fn latest_same_coordinate_timestamp_replaces_the_older_timestamp() {
     history
         .acknowledge_correlated(&mut acked, EventState::LOW_LIMIT, &sequence(2))
         .unwrap();
-    assert_eq!(acked, before.0 | 0b001);
+    assert_eq!(acked, before.0 | OFFNORMAL);
 }
 
 #[test]
@@ -153,7 +158,7 @@ fn request_side_offnormal_wildcard_matches_every_residual_offnormal_state() {
         EventState::from_raw(65_535),
     ] {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b110;
+        let mut acked = FAULT | NORMAL;
         let mut history = EventHistory::default();
         commit(&mut state, &mut acked, &mut history, stored, sequence(9));
 
@@ -161,7 +166,7 @@ fn request_side_offnormal_wildcard_matches_every_residual_offnormal_state() {
             .acknowledge_correlated_detailed(&mut acked, EventState::OFFNORMAL, &sequence(9))
             .unwrap()
             .expect("committed transitions retain their exact From State");
-        assert_eq!(acked, 0b111, "stored state {stored:?}");
+        assert_eq!(acked, ALL, "stored state {stored:?}");
         assert_eq!(
             detailed,
             EventStateChange {
@@ -178,14 +183,14 @@ fn missing_optional_from_state_preserves_a_correlated_acknowledgment() {
     let mut history = EventHistory::default();
     history.time_stamps[0] = sequence(9);
     history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
-    let mut acked = 0b110;
+    let mut acked = FAULT | NORMAL;
 
     let detailed = history
         .acknowledge_correlated_detailed(&mut acked, EventState::OFFNORMAL, &sequence(9))
         .unwrap();
 
     assert_eq!(detailed, None);
-    assert_eq!(acked, 0b111);
+    assert_eq!(acked, ALL);
 }
 
 #[test]
@@ -196,7 +201,7 @@ fn concrete_state_matching_is_exact_and_precedes_timestamp_validation() {
         (EventState::from_raw(60_001), EventState::from_raw(60_002)),
     ] {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b101;
+        let mut acked = OFFNORMAL | NORMAL;
         let mut history = EventHistory::default();
         commit(&mut state, &mut acked, &mut history, stored, sequence(12));
         let before = (acked, history.clone());
@@ -213,21 +218,21 @@ fn concrete_state_matching_is_exact_and_precedes_timestamp_validation() {
 fn exact_generic_and_proprietary_states_match_their_committed_identity() {
     for stored in [EventState::OFFNORMAL, EventState::from_raw(60_001)] {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b110;
+        let mut acked = FAULT | NORMAL;
         let mut history = EventHistory::default();
         commit(&mut state, &mut acked, &mut history, stored, sequence(14));
 
         history
             .acknowledge_correlated(&mut acked, stored, &sequence(14))
             .unwrap();
-        assert_eq!(acked, 0b111);
+        assert_eq!(acked, ALL);
     }
 }
 
 #[test]
 fn uninitialized_sequence_zero_slot_is_not_a_committed_transition() {
     let history = EventHistory::default();
-    let mut acked = 0b010;
+    let mut acked = FAULT;
     let before = (acked, history.clone());
 
     assert_service_error(
@@ -240,7 +245,7 @@ fn uninitialized_sequence_zero_slot_is_not_a_committed_transition() {
 #[test]
 fn already_set_bit_is_idempotent_and_preserves_all_history() {
     let mut state = EventState::NORMAL;
-    let mut acked = 0b111;
+    let mut acked = ALL;
     let mut history = EventHistory::default();
     commit(
         &mut state,
@@ -249,7 +254,7 @@ fn already_set_bit_is_idempotent_and_preserves_all_history() {
         EventState::HIGH_LIMIT,
         sequence(7),
     );
-    acked |= 0b001;
+    acked |= OFFNORMAL;
     let before = (state, acked, history.clone());
 
     history

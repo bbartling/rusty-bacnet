@@ -55,7 +55,7 @@ fn setup_cos(
             .map(|v| BACnetPropertyStates::BinaryValue(*v))
             .collect(),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -343,7 +343,8 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
         )
         .unwrap();
         // Internal channel, staging an already-owed TO_NORMAL ack.
-        obj.set_acked_transitions_internal(0x04, false).unwrap();
+        obj.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+            .unwrap();
     }
     assert_eq!(acked_transitions(&db, &ee_oid), 0b011);
     set_monitored(&mut db, &_bi_oid, 0);

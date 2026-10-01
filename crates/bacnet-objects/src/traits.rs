@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
@@ -530,9 +531,12 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Acknowledge an alarm transition. Sets the corresponding bit in acked_transitions.
+    /// Acknowledge an alarm transition. Sets the `transition_bit` flags in acked_transitions.
     /// Returns Ok(()) if the object supports event detection, Err otherwise.
-    fn acknowledge_alarm(&mut self, _transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
+    fn acknowledge_alarm(
+        &mut self,
+        _transition_bit: EventTransitionBits,
+    ) -> Result<(), bacnet_types::error::Error> {
         Err(bacnet_types::error::Error::Protocol {
             class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
             code: bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw()
@@ -707,9 +711,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Notification Class object and passes the outcome as `acknowledged`;
     /// this method performs only the bit maintenance.
     ///
-    /// `transition_bit` is the transition direction's bit mask in
-    /// `Acked_Transitions`' internal bit0-first form (`0x01` TO_OFFNORMAL,
-    /// `0x02` TO_FAULT, `0x04` TO_NORMAL). The set half overlaps the
+    /// `transition_bit` is the transition direction's flag, as returned by
+    /// [`EventTransition::bit_mask`](crate::event::EventTransition::bit_mask). The set half overlaps the
     /// network-reachable [`acknowledge_alarm`](Self::acknowledge_alarm), which
     /// also ORs the bit in per Clause 13.2.3's acknowledgment-indication
     /// paragraph; the clear half has no network route by design (a property
@@ -720,7 +723,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// `Acked_Transitions` opt out.
     fn set_acked_transitions_internal(
         &mut self,
-        _transition_bit: u8,
+        _transition_bit: EventTransitionBits,
         _acknowledged: bool,
     ) -> Result<(), Error> {
         Err(Error::Protocol {

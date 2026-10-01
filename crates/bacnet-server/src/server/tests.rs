@@ -265,7 +265,7 @@ async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval(
         high_limit: 100.0,
         deadband: 1.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

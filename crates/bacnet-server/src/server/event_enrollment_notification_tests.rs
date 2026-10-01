@@ -618,7 +618,7 @@ async fn local_suppression_paths_commit_only_the_applicable_transitions() {
         Some(suppressed_target_oid),
         out_of_range_parameters(0),
     );
-    event_enable_suppressed.set_event_enable(0);
+    event_enable_suppressed.set_event_enable(bacnet_types::bitstring::EventTransitionBits::empty());
     let event_enable_oid = event_enable_suppressed.object_identifier();
     db.add(Box::new(event_enable_suppressed)).unwrap();
 

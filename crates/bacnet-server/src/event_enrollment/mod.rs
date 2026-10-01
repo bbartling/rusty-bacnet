@@ -100,6 +100,7 @@ use bacnet_objects::event::EventTransition;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
 #[cfg(test)]
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -179,10 +180,8 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         };
 
         let event_enable = match enrollment.read_property(PropertyIdentifier::EVENT_ENABLE, None) {
-            Ok(PropertyValue::BitString { data, .. }) => {
-                bacnet_types::bitstring::unpack_octet(&data, 3)
-            }
-            _ => 0,
+            Ok(PropertyValue::BitString { data, .. }) => EventTransitionBits::from_bacnet(&data),
+            _ => EventTransitionBits::empty(),
         };
 
         let current_reliability =
@@ -778,7 +777,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // transition is recorded either way; the flag rides along so the
         // notification pipeline can suppress the send (#127).
         let transition_bit = EventTransition::for_target_state(fired.target).bit_mask();
-        let distribute = event_enable & transition_bit != 0;
+        let distribute = event_enable.contains(transition_bit);
         let ack_required = ack_required_for_transition(db, enrollment, transition_bit);
 
         let update = updates.entry(*oid).or_default();

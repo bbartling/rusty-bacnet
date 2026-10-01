@@ -6,7 +6,8 @@
 
 use core::ops::ControlFlow;
 
-use bacnet_types::enums::{EventState, EventType, Reliability};
+use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
+use bacnet_types::enums::{EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 pub(crate) mod history;
@@ -116,14 +117,14 @@ impl EventTransition {
         }
     }
 
-    /// Bit mask for this transition in the `BACnetDestination.transitions` field.
-    ///
-    /// bit 0 = TO_OFFNORMAL, bit 1 = TO_FAULT, bit 2 = TO_NORMAL.
-    pub fn bit_mask(self) -> u8 {
+    /// This transition's flag in a `BACnetEventTransitionBits` value, such as
+    /// `Event_Enable`, `Acked_Transitions`, `Ack_Required` or a
+    /// `BACnetDestination`'s transitions.
+    pub fn bit_mask(self) -> EventTransitionBits {
         match self {
-            EventTransition::ToOffnormal => 0x01,
-            EventTransition::ToFault => 0x02,
-            EventTransition::ToNormal => 0x04,
+            EventTransition::ToOffnormal => EventTransitionBits::TO_OFFNORMAL,
+            EventTransition::ToFault => EventTransitionBits::TO_FAULT,
+            EventTransition::ToNormal => EventTransitionBits::TO_NORMAL,
         }
     }
 
@@ -177,51 +178,6 @@ pub enum EventTransitionCommitError {
         /// The object's current state when the commit was attempted.
         actual: EventState,
     },
-}
-
-/// Which limits are enabled.
-///
-/// Encoded as a BACnet BIT STRING: bit 0 = low_limit_enable, bit 1 = high_limit_enable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LimitEnable {
-    /// Low-limit detection is enabled.
-    pub low_limit_enable: bool,
-    /// High-limit detection is enabled.
-    pub high_limit_enable: bool,
-}
-
-impl LimitEnable {
-    /// Neither limit enabled.
-    pub const NONE: Self = Self {
-        low_limit_enable: false,
-        high_limit_enable: false,
-    };
-
-    /// Both limits enabled.
-    pub const BOTH: Self = Self {
-        low_limit_enable: true,
-        high_limit_enable: true,
-    };
-
-    /// Encode as a BACnet bitstring byte (2 bits used, 6 unused).
-    pub fn to_bits(self) -> u8 {
-        let mut bits = 0u8;
-        if self.low_limit_enable {
-            bits |= 0x80; // bit 0 (MSB first)
-        }
-        if self.high_limit_enable {
-            bits |= 0x40; // bit 1
-        }
-        bits
-    }
-
-    /// Decode from a BACnet bitstring byte.
-    pub fn from_bits(byte: u8) -> Self {
-        Self {
-            low_limit_enable: byte & 0x80 != 0,
-            high_limit_enable: byte & 0x40 != 0,
-        }
-    }
 }
 
 /// Pending (delayed) intrinsic-reporting transition state, shared by every
@@ -348,11 +304,11 @@ pub(crate) enum FaultPrecedence {
 /// added later that forgets to consult it is a visible omission rather than a
 /// silently missing clause.
 pub(crate) fn fault_precedence(
-    reliability: u32,
-    fault_reliability: Option<u32>,
+    reliability: Reliability,
+    fault_reliability: Option<Reliability>,
     current: EventState,
 ) -> FaultPrecedence {
-    let faulted = reliability != Reliability::NO_FAULT_DETECTED.to_raw();
+    let faulted = reliability != Reliability::NO_FAULT_DETECTED;
     match (faulted, current == EventState::FAULT, fault_reliability) {
         (true, false, _) => FaultPrecedence::EnterFault,
         (true, true, Some(previous)) if previous == reliability => FaultPrecedence::HoldFault,
@@ -403,11 +359,10 @@ pub struct OutOfRangeDetector {
     pub limit_enable: LimitEnable,
     /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
-    /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
-    pub notify_type: u32,
-    /// Event_Enable, one bit per transition in LSB-first order: 0x01 TO_OFFNORMAL, 0x02 TO_FAULT,
-    /// 0x04 TO_NORMAL. This is not the wire bitstring octet.
-    pub event_enable: u8,
+    /// Notify_Type: whether the transitions are reported as alarms or as events.
+    pub notify_type: NotifyType,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
     /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
     /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
     /// never delayed.
@@ -419,13 +374,12 @@ pub struct OutOfRangeDetector {
     pub time_delay_normal: Option<u32>,
     /// Current event state.
     pub event_state: EventState,
-    /// Acked_Transitions, in the same LSB-first layout as `event_enable`; a set bit means that
-    /// transition was acknowledged.
-    pub acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub acked_transitions: EventTransitionBits,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
     /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
-    pub fault_reliability: Option<u32>,
+    pub fault_reliability: Option<Reliability>,
 }
 
 impl Default for OutOfRangeDetector {
@@ -434,14 +388,14 @@ impl Default for OutOfRangeDetector {
             high_limit: 100.0,
             low_limit: 0.0,
             deadband: 1.0,
-            limit_enable: LimitEnable::NONE,
+            limit_enable: LimitEnable::empty(),
             notification_class: 0,
-            notify_type: 0, // ALARM
-            event_enable: 0,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::empty(),
             time_delay: 0,
             time_delay_normal: None,
             event_state: EventState::NORMAL,
-            acked_transitions: 0b111, // all acknowledged by default
+            acked_transitions: EventTransitionBits::all(), // all acknowledged by default
             pending: None,
             fault_reliability: None,
         }
@@ -460,7 +414,11 @@ impl OutOfRangeDetector {
     /// same value do not shorten the delay. Returns `Some(TransitionOutcome)`
     /// whenever a transition fires; the outcome's `distribute` flag carries
     /// the `event_enable` bit rather than withholding the transition.
-    pub fn evaluate(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn evaluate(
+        &mut self,
+        present_value: f32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
     }
 
@@ -473,7 +431,7 @@ impl OutOfRangeDetector {
     /// Each detector carries its own copy because each reaches its own
     /// `event_state`, `pending`, and confirmation; the clause interpretation
     /// they share lives once, in [`fault_precedence`].
-    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    fn fault_proposal(&self, reliability: Reliability) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
                 ControlFlow::Break(self.proposal(EventState::FAULT))
@@ -494,7 +452,11 @@ impl OutOfRangeDetector {
     /// [`PendingTransition`] is seeded (or cleared if the condition
     /// reverted) and `None` is returned; the periodic [`Self::tick`]
     /// advances and eventually confirms it.
-    pub fn probe(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn probe(
+        &mut self,
+        present_value: f32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         let outcome = self.propose(present_value, reliability);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
@@ -506,7 +468,7 @@ impl OutOfRangeDetector {
     pub(crate) fn propose(
         &mut self,
         present_value: f32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -538,7 +500,11 @@ impl OutOfRangeDetector {
     /// Returns `Some(TransitionOutcome)` when the pending transition's delay
     /// elapses this tick, or `None` if still counting down / no pending
     /// transition / the condition reverted (which cancels the pending).
-    pub fn tick(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn tick(
+        &mut self,
+        present_value: f32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         let outcome = self.tick_proposal(present_value, reliability);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
@@ -550,7 +516,7 @@ impl OutOfRangeDetector {
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: f32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -593,7 +559,7 @@ impl OutOfRangeDetector {
             to: new_state,
         };
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
-        let distribute = self.event_enable & transition_bit != 0;
+        let distribute = self.event_enable.contains(transition_bit);
         let event_type = change.event_type(Self::ALGORITHM);
         Some(TransitionOutcome {
             change,
@@ -603,7 +569,11 @@ impl OutOfRangeDetector {
     }
 
     /// Finalize detector-local state only after the object commit kernel succeeds.
-    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+    pub(crate) fn confirm_transition(
+        &mut self,
+        change: &EventStateChange,
+        reliability: Reliability,
+    ) {
         self.event_state = change.to;
         self.pending = None;
         self.fault_reliability = if change.to == EventState::FAULT {
@@ -614,8 +584,8 @@ impl OutOfRangeDetector {
     }
 
     fn compute_new_state(&self, pv: f32) -> EventState {
-        let high_enabled = self.limit_enable.high_limit_enable;
-        let low_enabled = self.limit_enable.low_limit_enable;
+        let high_enabled = self.limit_enable.contains(LimitEnable::HIGH_LIMIT_ENABLE);
+        let low_enabled = self.limit_enable.contains(LimitEnable::LOW_LIMIT_ENABLE);
 
         match self.event_state {
             s if s == EventState::NORMAL => {
@@ -673,11 +643,10 @@ pub struct ChangeOfStateDetector {
     pub alarm_values: Vec<u32>,
     /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
-    /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
-    pub notify_type: u32,
-    /// Event_Enable, one bit per transition in LSB-first order: 0x01 TO_OFFNORMAL, 0x02 TO_FAULT,
-    /// 0x04 TO_NORMAL. This is not the wire bitstring octet.
-    pub event_enable: u8,
+    /// Notify_Type: whether the transitions are reported as alarms or as events.
+    pub notify_type: NotifyType,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
     /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
     /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
     /// never delayed.
@@ -689,13 +658,12 @@ pub struct ChangeOfStateDetector {
     pub time_delay_normal: Option<u32>,
     /// Current event state.
     pub event_state: EventState,
-    /// Acked_Transitions, in the same LSB-first layout as `event_enable`; a set bit means that
-    /// transition was acknowledged.
-    pub acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub acked_transitions: EventTransitionBits,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
     /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
-    pub fault_reliability: Option<u32>,
+    pub fault_reliability: Option<Reliability>,
 }
 
 impl Default for ChangeOfStateDetector {
@@ -703,12 +671,12 @@ impl Default for ChangeOfStateDetector {
         Self {
             alarm_values: Vec::new(),
             notification_class: 0,
-            notify_type: 0,
-            event_enable: 0,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::empty(),
             time_delay: 0,
             time_delay_normal: None,
             event_state: EventState::NORMAL,
-            acked_transitions: 0b111,
+            acked_transitions: EventTransitionBits::all(),
             pending: None,
             fault_reliability: None,
         }
@@ -720,12 +688,16 @@ impl ChangeOfStateDetector {
     pub const ALGORITHM: EventType = EventType::CHANGE_OF_STATE;
 
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
-    pub fn evaluate(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn evaluate(
+        &mut self,
+        present_value: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
     }
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
-    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    fn fault_proposal(&self, reliability: Reliability) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
                 ControlFlow::Break(self.proposal(EventState::FAULT))
@@ -739,7 +711,11 @@ impl ChangeOfStateDetector {
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
-    pub fn probe(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn probe(
+        &mut self,
+        present_value: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         let outcome = self.propose(present_value, reliability);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
@@ -751,7 +727,7 @@ impl ChangeOfStateDetector {
     pub(crate) fn propose(
         &mut self,
         present_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -774,7 +750,11 @@ impl ChangeOfStateDetector {
     }
 
     /// Periodic tick: advance the countdown and fire on expiry.
-    pub fn tick(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn tick(
+        &mut self,
+        present_value: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         let outcome = self.tick_proposal(present_value, reliability);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
@@ -786,7 +766,7 @@ impl ChangeOfStateDetector {
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -822,7 +802,7 @@ impl ChangeOfStateDetector {
             to: new_state,
         };
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
-        let distribute = self.event_enable & transition_bit != 0;
+        let distribute = self.event_enable.contains(transition_bit);
         let event_type = change.event_type(Self::ALGORITHM);
         Some(TransitionOutcome {
             change,
@@ -832,7 +812,11 @@ impl ChangeOfStateDetector {
     }
 
     /// Finalize detector-local state only after the object commit kernel succeeds.
-    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+    pub(crate) fn confirm_transition(
+        &mut self,
+        change: &EventStateChange,
+        reliability: Reliability,
+    ) {
         self.event_state = change.to;
         self.pending = None;
         self.fault_reliability = if change.to == EventState::FAULT {
@@ -862,11 +846,10 @@ impl ChangeOfStateDetector {
 pub struct CommandFailureDetector {
     /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
-    /// Raw BACnetNotifyType value (0 = ALARM, 1 = EVENT).
-    pub notify_type: u32,
-    /// Event_Enable, one bit per transition in LSB-first order: 0x01 TO_OFFNORMAL, 0x02 TO_FAULT,
-    /// 0x04 TO_NORMAL. This is not the wire bitstring octet.
-    pub event_enable: u8,
+    /// Notify_Type: whether the transitions are reported as alarms or as events.
+    pub notify_type: NotifyType,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
     /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
     /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
     /// never delayed.
@@ -878,25 +861,24 @@ pub struct CommandFailureDetector {
     pub time_delay_normal: Option<u32>,
     /// Current event state.
     pub event_state: EventState,
-    /// Acked_Transitions, in the same LSB-first layout as `event_enable`; a set bit means that
-    /// transition was acknowledged.
-    pub acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub acked_transitions: EventTransitionBits,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
     /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
-    pub fault_reliability: Option<u32>,
+    pub fault_reliability: Option<Reliability>,
 }
 
 impl Default for CommandFailureDetector {
     fn default() -> Self {
         Self {
             notification_class: 0,
-            notify_type: 0,
-            event_enable: 0,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::empty(),
             time_delay: 0,
             time_delay_normal: None,
             event_state: EventState::NORMAL,
-            acked_transitions: 0b111,
+            acked_transitions: EventTransitionBits::all(),
             pending: None,
             fault_reliability: None,
         }
@@ -912,13 +894,13 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         self.probe(present_value, feedback_value, reliability)
     }
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
-    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    fn fault_proposal(&self, reliability: Reliability) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
                 ControlFlow::Break(self.proposal(EventState::FAULT))
@@ -936,7 +918,7 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         let outcome = self.propose(present_value, feedback_value, reliability);
         if let Some(ref outcome) = outcome {
@@ -950,7 +932,7 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -977,7 +959,7 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         let outcome = self.tick_proposal(present_value, feedback_value, reliability);
         if let Some(ref outcome) = outcome {
@@ -991,7 +973,7 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -1032,7 +1014,7 @@ impl CommandFailureDetector {
         // distribution uniformly across all three transition directions, so
         // there is no basis for treating TO_FAULT differently.
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
-        let distribute = self.event_enable & transition_bit != 0;
+        let distribute = self.event_enable.contains(transition_bit);
         let event_type = change.event_type(Self::ALGORITHM);
         Some(TransitionOutcome {
             change,
@@ -1042,7 +1024,11 @@ impl CommandFailureDetector {
     }
 
     /// Finalize detector-local state only after the object commit kernel succeeds.
-    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+    pub(crate) fn confirm_transition(
+        &mut self,
+        change: &EventStateChange,
+        reliability: Reliability,
+    ) {
         self.event_state = change.to;
         self.pending = None;
         self.fault_reliability = if change.to == EventState::FAULT {

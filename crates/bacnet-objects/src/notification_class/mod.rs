@@ -646,7 +646,7 @@ fn filter_destinations(
     today_bit: u8,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    let transition_mask = transition.bit_mask();
+    let transition_mask = transition.bit_mask().bits();
     destinations
         .into_iter()
         .filter(|dest| dest.valid_days & today_bit != 0)

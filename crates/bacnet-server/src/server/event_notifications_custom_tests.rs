@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
 use bacnet_services::alarm_event::NotificationParameters;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::primitives::StatusFlags;
 use std::borrow::Cow;
 use std::sync::Mutex as StdMutex;
@@ -11,7 +12,7 @@ struct CustomProposal {
     state: EventState,
     delay: u32,
     remaining: Option<u32>,
-    acknowledged: u8,
+    acknowledged: EventTransitionBits,
     timestamps: [BACnetTimeStamp; 3],
     messages: [String; 3],
     mode: Arc<AtomicU8>,
@@ -77,7 +78,7 @@ impl BACnetObject for CustomProposal {
             },
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![self.acknowledged.reverse_bits()],
+                data: vec![self.acknowledged.to_bacnet()],
             },
             p if p == PropertyIdentifier::EVENT_TIME_STAMPS
                 || p == PropertyIdentifier::EVENT_MESSAGE_TEXTS =>
@@ -164,11 +165,8 @@ impl BACnetObject for CustomProposal {
         }
         let index = commit.coordinate.index();
         self.state = commit.change.to;
-        if commit.ack_required {
-            self.acknowledged &= !commit.coordinate.bit_mask();
-        } else {
-            self.acknowledged |= commit.coordinate.bit_mask();
-        }
+        self.acknowledged
+            .set(commit.coordinate.bit_mask(), !commit.ack_required);
         self.timestamps[index] = commit.timestamp.clone();
         if let Some(message) = &commit.message_text {
             self.messages[index] = message.clone();
@@ -223,7 +221,7 @@ fn database(
         state: EventState::NORMAL,
         delay,
         remaining: None,
-        acknowledged: 7,
+        acknowledged: EventTransitionBits::all(),
         timestamps: std::array::from_fn(|_| BACnetTimeStamp::SequenceNumber(99)),
         messages: std::array::from_fn(|_| "initial".into()),
         mode,

@@ -234,7 +234,7 @@ fn get_event_information_empty() {
 
 #[test]
 fn get_event_information_reports_non_normal_objects() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
 
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
@@ -265,7 +265,7 @@ fn get_event_information_reports_non_normal_objects() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -301,7 +301,7 @@ fn get_event_information_reports_non_normal_objects() {
 
 #[test]
 fn get_event_information_reads_event_enable_notify_type_and_priorities() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     ai.write_property(
@@ -330,7 +330,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )

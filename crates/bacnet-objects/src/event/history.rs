@@ -1,6 +1,7 @@
 //! Shared storage for intrinsic-reporting event history properties.
 
 use bacnet_encoding::primitives::encode_timestamp_choice;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
@@ -29,14 +30,14 @@ pub(crate) struct EventHistory {
 /// lending its own three property stores through its trait hook.
 pub(crate) struct EventTransitionState<'a> {
     event_state: &'a mut EventState,
-    acked_transitions: &'a mut u8,
+    acked_transitions: &'a mut EventTransitionBits,
     history: &'a mut EventHistory,
 }
 
 impl<'a> EventTransitionState<'a> {
     pub(crate) fn new(
         event_state: &'a mut EventState,
-        acked_transitions: &'a mut u8,
+        acked_transitions: &'a mut EventTransitionBits,
         history: &'a mut EventHistory,
     ) -> Self {
         Self {
@@ -67,15 +68,10 @@ impl<'a> EventTransitionState<'a> {
         }
 
         let index = commit.coordinate.index();
-        let bit = commit.coordinate.bit_mask();
-        let acknowledged = !commit.ack_required;
 
         *self.event_state = commit.change.to;
-        if acknowledged {
-            *self.acked_transitions |= bit;
-        } else {
-            *self.acked_transitions &= !bit;
-        }
+        self.acked_transitions
+            .set(commit.coordinate.bit_mask(), !commit.ack_required);
         self.history.time_stamps[index] = commit.timestamp;
         self.history.original_from_states[index] = Some(commit.change.from);
         self.history.original_to_states[index] = Some(commit.change.to);
@@ -118,7 +114,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             }
             self.$detector_field.propose(
                 $(self.$input_field,)+
-                self.$reliability_field,
+                bacnet_types::enums::Reliability::from_raw(self.$reliability_field),
             )
         }
 
@@ -128,7 +124,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             }
             self.$detector_field.tick_proposal(
                 $(self.$input_field,)+
-                self.$reliability_field,
+                bacnet_types::enums::Reliability::from_raw(self.$reliability_field),
             )
         }
 
@@ -143,8 +139,10 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 &mut self.$history_field,
             )
             .commit(commit)?;
-            self.$detector_field
-                .confirm_transition(&change, self.$reliability_field);
+            self.$detector_field.confirm_transition(
+                &change,
+                bacnet_types::enums::Reliability::from_raw(self.$reliability_field),
+            );
             Ok(())
         }
 
@@ -224,7 +222,7 @@ impl EventHistory {
     /// Validate an acknowledgment against the latest committed transition slot.
     pub(crate) fn acknowledge_correlated(
         &self,
-        acked_transitions: &mut u8,
+        acked_transitions: &mut EventTransitionBits,
         requested_state: EventState,
         timestamp: &BACnetTimeStamp,
     ) -> Result<(), Error> {
@@ -236,7 +234,7 @@ impl EventHistory {
     /// its optional From State is available.
     pub(crate) fn acknowledge_correlated_detailed(
         &self,
-        acked_transitions: &mut u8,
+        acked_transitions: &mut EventTransitionBits,
         requested_state: EventState,
         timestamp: &BACnetTimeStamp,
     ) -> Result<Option<super::EventStateChange>, Error> {
@@ -330,6 +328,10 @@ mod tests {
     };
     use crate::traits::BACnetObject;
 
+    const OFFNORMAL: EventTransitionBits = EventTransitionBits::TO_OFFNORMAL;
+    const FAULT: EventTransitionBits = EventTransitionBits::TO_FAULT;
+    const NORMAL: EventTransitionBits = EventTransitionBits::TO_NORMAL;
+
     fn time(hour: u8) -> BACnetTimeStamp {
         BACnetTimeStamp::Time(Time {
             hour,
@@ -358,7 +360,7 @@ mod tests {
 
     fn commit(
         state: &mut EventState,
-        acked: &mut u8,
+        acked: &mut EventTransitionBits,
         history: &mut EventHistory,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
@@ -382,7 +384,7 @@ mod tests {
     #[test]
     fn commit_updates_each_coordinate_and_preserves_exact_timestamp_choices() {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b101;
+        let mut acked = OFFNORMAL | NORMAL;
         let mut history = EventHistory {
             time_stamps: [
                 BACnetTimeStamp::SequenceNumber(10),
@@ -416,7 +418,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state, EventState::HIGH_LIMIT);
-        assert_eq!(acked, 0b100, "only TO_OFFNORMAL is cleared");
+        assert_eq!(acked, NORMAL, "only TO_OFFNORMAL is cleared");
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.original_from_states[0], Some(EventState::NORMAL));
         assert_eq!(history.original_to_states[0], Some(EventState::HIGH_LIMIT));
@@ -448,7 +450,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state, EventState::FAULT);
-        assert_eq!(acked, 0b110, "TO_FAULT is set and other bits are untouched");
+        assert_eq!(
+            acked,
+            FAULT | NORMAL,
+            "TO_FAULT is set and other bits are untouched"
+        );
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(0));
         assert_eq!(
@@ -477,7 +483,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state, EventState::NORMAL);
-        assert_eq!(acked, 0b010, "only TO_NORMAL is cleared");
+        assert_eq!(acked, FAULT, "only TO_NORMAL is cleared");
         assert_eq!(
             history.time_stamps,
             [time(1), BACnetTimeStamp::SequenceNumber(0), date_time(27)]
@@ -509,7 +515,7 @@ mod tests {
     #[test]
     fn same_state_reindication_commits_and_none_preserves_every_message() {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b001;
+        let mut acked = OFFNORMAL;
         let mut history = EventHistory {
             time_stamps: [
                 BACnetTimeStamp::SequenceNumber(1),
@@ -542,7 +548,8 @@ mod tests {
 
         assert_eq!(state, EventState::NORMAL);
         assert_eq!(
-            acked, 0b101,
+            acked,
+            OFFNORMAL | NORMAL,
             "TO_NORMAL is set and other bits are untouched"
         );
         assert_eq!(
@@ -564,7 +571,7 @@ mod tests {
     #[test]
     fn coordinate_mismatch_rejects_without_mutating_any_state() {
         let mut state = EventState::HIGH_LIMIT;
-        let mut acked = 0b101;
+        let mut acked = OFFNORMAL | NORMAL;
         let mut history = EventHistory {
             time_stamps: [time(9), BACnetTimeStamp::SequenceNumber(44), date_time(26)],
             original_from_states: [
@@ -616,7 +623,7 @@ mod tests {
     #[test]
     fn stale_state_changing_replay_rejects_without_mutating_first_commit() {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b111;
+        let mut acked = EventTransitionBits::all();
         let mut history = EventHistory::default();
         let first = EventTransitionCommit {
             change: EventStateChange {

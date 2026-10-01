@@ -249,8 +249,8 @@ fn bi_detection_enable_resets_and_gates_intrinsic_reporting() {
     assert!(bi.event_detector.pending.is_some());
 
     bi.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
-    bi.event_detector.acked_transitions = 0;
-    bi.event_detector.fault_reliability = Some(1);
+    bi.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
+    bi.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
     bi.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,

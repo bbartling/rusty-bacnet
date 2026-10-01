@@ -100,7 +100,7 @@ fn setup(
         deadband: 2.0,
     });
     enrollment.set_fault_parameters(Some(fault_parameters));
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     (db, enrollment_oid, target_oid)

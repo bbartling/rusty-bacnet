@@ -1,5 +1,6 @@
 use crate::event::history::{EventHistory, EventTransitionState};
 use crate::event::{EventTransitionCommit, EventTransitionCommitError};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, Reliability};
 
 /// All object-owned values needed to commit Event Enrollment Reliability.
@@ -17,7 +18,7 @@ pub struct EventEnrollmentReliabilityCommit {
 
 pub(super) fn commit_event_transition(
     event_state: &mut u32,
-    acked_transitions: &mut u8,
+    acked_transitions: &mut EventTransitionBits,
     event_history: &mut EventHistory,
     commit: EventTransitionCommit,
 ) -> Result<(), EventTransitionCommitError> {
@@ -43,7 +44,7 @@ pub(super) fn commit_event_transition(
 pub(super) fn commit_reliability(
     reliability: &mut u32,
     event_state: &mut u32,
-    acked_transitions: &mut u8,
+    acked_transitions: &mut EventTransitionBits,
     event_history: &mut EventHistory,
     commit: EventEnrollmentReliabilityCommit,
 ) -> Result<(), EventTransitionCommitError> {

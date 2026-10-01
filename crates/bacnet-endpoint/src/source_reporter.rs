@@ -23,7 +23,7 @@ use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
     BACnetObject, LifeSafetyOperationOutcome, MonotonicClock, ReliabilityEvaluation,
 };
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::constructed::{
     BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectPropertyReference,
     BACnetObjectSelector,
@@ -293,7 +293,7 @@ impl BACnetObject for SourceReporter {
         self.wrapped.tick_schedule(day_of_week, hour, minute)
     }
 
-    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), Error> {
+    fn acknowledge_alarm(&mut self, transition_bit: EventTransitionBits) -> Result<(), Error> {
         self.wrapped.acknowledge_alarm(transition_bit)
     }
 
@@ -358,7 +358,7 @@ impl BACnetObject for SourceReporter {
 
     fn set_acked_transitions_internal(
         &mut self,
-        transition_bit: u8,
+        transition_bit: EventTransitionBits,
         acknowledged: bool,
     ) -> Result<(), Error> {
         self.wrapped

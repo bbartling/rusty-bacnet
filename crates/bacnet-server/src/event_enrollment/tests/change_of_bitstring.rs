@@ -17,7 +17,7 @@ fn change_of_bitstring_normal() {
     // For testing, we'll use an EventEnrollment monitoring another enrollment's EVENT_ENABLE
     let mut target = EventEnrollmentObject::new(50, "Target", EventType::NONE.to_raw()).unwrap();
     // EVENT_ENABLE is a 3-bit bitstring
-    target.set_event_enable(0x05); // bits: TO_OFFNORMAL | TO_NORMAL
+    target.set_event_enable(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL);
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
@@ -33,7 +33,7 @@ fn change_of_bitstring_normal() {
         bitmask: (0, vec![0xFF]),
         list_of_values: vec![(0, vec![0xE0])],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -46,7 +46,7 @@ fn change_of_bitstring_offnormal() {
     let mut db = ObjectDatabase::new();
 
     let mut target = EventEnrollmentObject::new(60, "Target2", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x07); // all 3 bits set
+    target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
@@ -63,11 +63,11 @@ fn change_of_bitstring_offnormal() {
         bitmask: (0, vec![0xE0]),
         list_of_values: vec![(0, vec![0xE0])],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
-    // internal 0x07 -> wire 0xE0 (MSB-first), mask 0xE0 → 0xE0, alarm 0xE0 → match → OFFNORMAL
+    // all three transitions -> wire 0xE0 (MSB-first), mask 0xE0 → 0xE0, alarm 0xE0 → match → OFFNORMAL
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }

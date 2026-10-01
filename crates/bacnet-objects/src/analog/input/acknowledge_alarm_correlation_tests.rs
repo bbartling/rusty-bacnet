@@ -20,7 +20,7 @@ fn committed_input() -> AnalogInputObject {
         state: EventState::NORMAL,
         remaining: 3,
     });
-    object.event_detector.fault_reliability = Some(Reliability::OVER_RANGE.to_raw());
+    object.event_detector.fault_reliability = Some(Reliability::OVER_RANGE);
     object
 }
 

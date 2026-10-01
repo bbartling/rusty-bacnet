@@ -53,7 +53,7 @@ fn setup_on_notification_class(
         PropertyIdentifier::NOTIFICATION_CLASS.to_raw(),
     )));
     ee.set_event_parameters(params);
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
     (db, ee_oid)
@@ -248,10 +248,10 @@ fn foreign_offnormal_under_cov_recovers_and_establishes_baseline() {
 fn foreign_high_limit_recovers_under_cobs_params() {
     let mut db = ObjectDatabase::new();
 
-    // Target exposing a bitstring property: EVENT_ENABLE = internal 0x07 →
-    // wire 0xE0.
+    // Target exposing a bitstring property: EVENT_ENABLE = all three
+    // transitions → wire 0xE0.
     let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x07);
+    target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
@@ -266,7 +266,7 @@ fn foreign_high_limit_recovers_under_cobs_params() {
         bitmask: (5, vec![0x80]), // significant: TO_OFFNORMAL bit
         list_of_values: vec![(5, vec![0x00])], // alarm when that bit CLEAR
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     // Internal channel: simulate the state an OOR predecessor would have left.
     ee.set_event_state_internal(EventState::HIGH_LIMIT).unwrap();
     let ee_oid = ee.object_identifier();
@@ -297,7 +297,7 @@ fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
     // Monitor a 1-byte bitstring (EVENT_ENABLE of a target with internal
     // 0x00 → wire 0x00).
     let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x00);
+    target.set_event_enable(EventTransitionBits::empty());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
@@ -309,7 +309,7 @@ fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
         bitmask: (0, vec![0xFF, 0xFF]), // two significant BYTES
         list_of_values: vec![(0, vec![0x00, 0x01])], // alarm: second byte's low bit set
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

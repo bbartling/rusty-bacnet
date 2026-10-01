@@ -9,8 +9,8 @@
 
 use super::*;
 
-const NO_FAULT: u32 = bacnet_types::enums::Reliability::NO_FAULT_DETECTED.to_raw();
-const FAULTED: u32 = bacnet_types::enums::Reliability::OVER_RANGE.to_raw();
+const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
+const FAULTED: Reliability = Reliability::OVER_RANGE;
 
 /// High limit 80, low limit 20, deadband 2, all transitions enabled, and a
 /// configurable `Time_Delay` — mirroring `tests.rs`'s delayed fixture.
@@ -19,8 +19,8 @@ fn make_delayed_detector(time_delay: u32) -> OutOfRangeDetector {
         high_limit: 80.0,
         low_limit: 20.0,
         deadband: 2.0,
-        limit_enable: LimitEnable::BOTH,
-        event_enable: 0x07,
+        limit_enable: LimitEnable::all(),
+        event_enable: EventTransitionBits::all(),
         time_delay,
         ..Default::default()
     }
@@ -202,7 +202,7 @@ fn time_delay_normal_change_of_state_asymmetric_round_trip() {
     // (b) is pTimeDelayNormal.
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 2,
         time_delay_normal: Some(4),
         ..Default::default()
@@ -232,7 +232,7 @@ fn time_delay_normal_command_failure_asymmetric_round_trip() {
     // Command failure has no offnormal→offnormal condition; its (a) is
     // pTimeDelay and (b) is pTimeDelayNormal (Clause 13.3.4).
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 1,
         time_delay_normal: Some(3),
         ..Default::default()

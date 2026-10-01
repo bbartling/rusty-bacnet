@@ -37,7 +37,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     ee.set_notification_class(7);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();

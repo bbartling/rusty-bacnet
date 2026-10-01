@@ -58,7 +58,7 @@ fn setup_oor(
         high_limit,
         deadband,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     ee.set_time_delay_normal(tdn);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -386,7 +386,7 @@ fn change_of_state_delays_both_directions() {
         time_delay: 2,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -676,7 +676,7 @@ fn retarget_mid_pending_cancels_and_regates() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
     // Inject the transplanted countdown as-is (fingerprint still names the
     // OLD monitored reference — the mismatch the evaluator must cancel).

@@ -35,7 +35,7 @@ fn add_out_of_range_enrollment(
         high_limit: 80.0,
         deadband: 1.0,
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     oid
@@ -64,7 +64,7 @@ fn add_cov_enrollment(
         time_delay: 0,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     oid
@@ -534,7 +534,7 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
         high_diff_limit: 10.0,
         deadband: 1.0,
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 

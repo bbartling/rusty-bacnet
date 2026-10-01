@@ -282,7 +282,8 @@ impl BACnetObject for AnalogOutputObject {
                 self.event_detection_enable = v;
                 if !v {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.acked_transitions =
+                        bacnet_types::bitstring::EventTransitionBits::all();
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
                     self.event_history.reset();
@@ -329,8 +330,12 @@ impl BACnetObject for AnalogOutputObject {
         OutOfRangeDetector::ALGORITHM
     );
 
-    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |= transition_bit & 0x07;
+    fn acknowledge_alarm(
+        &mut self,
+        transition_bit: bacnet_types::bitstring::EventTransitionBits,
+    ) -> Result<(), bacnet_types::error::Error> {
+        self.event_detector.acked_transitions |=
+            transition_bit & bacnet_types::bitstring::EventTransitionBits::all();
         Ok(())
     }
 
@@ -387,12 +392,12 @@ mod detection_enable_reset_tests {
             PropertyValue::Boolean(true)
         );
         ao.event_detector.event_state = bacnet_types::enums::EventState::HIGH_LIMIT;
-        ao.event_detector.acked_transitions = 0;
+        ao.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
         ao.event_detector.pending = Some(crate::event::PendingTransition {
             state: bacnet_types::enums::EventState::HIGH_LIMIT,
             remaining: 2,
         });
-        ao.event_detector.fault_reliability = Some(1);
+        ao.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         ao.event_history.time_stamps = [
             BACnetTimeStamp::SequenceNumber(1),
             BACnetTimeStamp::SequenceNumber(2),
@@ -417,7 +422,10 @@ mod detection_enable_reset_tests {
             ao.event_detector.event_state,
             bacnet_types::enums::EventState::NORMAL
         );
-        assert_eq!(ao.event_detector.acked_transitions, 0b111);
+        assert_eq!(
+            ao.event_detector.acked_transitions,
+            bacnet_types::bitstring::EventTransitionBits::all()
+        );
         assert!(ao.event_detector.pending.is_none());
         assert!(ao.event_detector.fault_reliability.is_none());
         assert_eq!(

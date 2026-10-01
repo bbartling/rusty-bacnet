@@ -42,7 +42,7 @@ fn evaluates_multiple_enrollments() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee1.set_event_enable(0x07);
+    ee1.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee1)).unwrap();
 
     let mut ee2 =
@@ -57,7 +57,7 @@ fn evaluates_multiple_enrollments() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee2.set_event_enable(0x07);
+    ee2.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee2)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -83,7 +83,7 @@ fn missing_monitored_object_is_skipped() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     // Should not panic or return transitions
@@ -125,7 +125,7 @@ pub(super) fn setup_qualified_reference(
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -216,7 +216,7 @@ impl ReferenceValueObject {
             high_limit: 80.0,
             deadband: 2.0,
         });
-        inner.set_event_enable(0x07);
+        inner.set_event_enable(EventTransitionBits::all());
         Self {
             inner,
             reference,
@@ -355,7 +355,7 @@ impl BACnetObject for ReferenceValueObject {
 
     fn set_acked_transitions_internal(
         &mut self,
-        transition_bit: u8,
+        transition_bit: EventTransitionBits,
         acknowledged: bool,
     ) -> Result<(), bacnet_types::error::Error> {
         self.inner

@@ -300,7 +300,9 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
     assert!(ee
         .set_enrollment_eval_source_internal(Some(source))
         .is_err());
-    assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(ee
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .is_err());
 
     // Re-enabling both reopens the channel and evaluates afresh (the first
     // COV sample after re-enable seeds a new baseline, not a transition).
@@ -338,11 +340,14 @@ fn acked_transitions_internal_set_and_clear() {
     };
 
     assert_eq!(read(&ee), 0b111);
-    ee.set_acked_transitions_internal(0x01, false).unwrap();
+    ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .unwrap();
     assert_eq!(read(&ee), 0b110, "TO_OFFNORMAL cleared (ack owed)");
-    ee.set_acked_transitions_internal(0x04, false).unwrap();
+    ee.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+        .unwrap();
     assert_eq!(read(&ee), 0b010, "TO_NORMAL cleared");
-    ee.set_acked_transitions_internal(0x01, true).unwrap();
+    ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, true)
+        .unwrap();
     assert_eq!(read(&ee), 0b011, "TO_OFFNORMAL re-set (acknowledged)");
 }
 
@@ -357,5 +362,7 @@ fn eval_state_trait_defaults_reject() {
     assert!(object
         .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
         .is_err());
-    assert!(object.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(object
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .is_err());
 }

@@ -1,6 +1,6 @@
 use super::super::*;
-use crate::event::LimitEnable;
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
 use bytes::BytesMut;
 
@@ -154,7 +154,7 @@ fn ao_intrinsic_reporting_after_priority_write() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
