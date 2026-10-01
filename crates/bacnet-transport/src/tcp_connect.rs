@@ -60,13 +60,16 @@ fn interleave(addrs: impl IntoIterator<Item = SocketAddr>) -> Vec<SocketAddr> {
     }
 }
 
-/// Try `addrs` in order. The next attempt starts as soon as the latest one
-/// fails, or `delay` after it started, whichever comes first. The first
+/// Try `addrs` in order. The next attempt starts whenever an attempt fails,
+/// or `delay` after the latest one started, whichever comes first. The first
 /// connection wins, and dropping the rest aborts them.
 ///
-/// When every attempt fails, a single attempt's error is returned unchanged;
-/// otherwise the error has the kind of the first failure and names every
-/// address with its error.
+/// When every attempt fails, a single attempt's error is returned unchanged.
+/// Otherwise the error names every address with its error, and its kind is
+/// the most telling one any attempt got: `ConnectionRefused` (a host
+/// answered), then `TimedOut` (the path was live but nothing answered in time),
+/// then the first failure's kind. So a quick "network unreachable" on one
+/// family doesn't hide a refusal on the other.
 async fn race<T, F, Fut>(addrs: &[SocketAddr], delay: Duration, connect: F) -> io::Result<T>
 where
     F: Fn(SocketAddr) -> Fut,
@@ -118,9 +121,12 @@ fn all_failed(mut failures: Vec<(SocketAddr, io::Error)>) -> io::Error {
     if failures.len() == 1 {
         return failures.remove(0).1;
     }
-    let kind = failures
-        .first()
-        .map_or(io::ErrorKind::InvalidInput, |(_, error)| error.kind());
+    let kinds = || failures.iter().map(|(_, error)| error.kind());
+    let kind = [io::ErrorKind::ConnectionRefused, io::ErrorKind::TimedOut]
+        .into_iter()
+        .find(|telling| kinds().any(|kind| kind == *telling))
+        .or_else(|| kinds().next())
+        .unwrap_or(io::ErrorKind::InvalidInput);
     let detail = failures
         .iter()
         .map(|(addr, error)| format!("{addr}: {error}"))

@@ -178,23 +178,65 @@ async fn a_slow_first_answer_still_wins_over_a_later_start() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn every_failure_is_named_with_the_first_kind() {
+async fn a_failure_of_an_earlier_attempt_also_starts_the_next() {
     let script = Script::new(&[
-        (V6_A, Plan::Fail(ms(400), io::ErrorKind::ConnectionRefused)),
+        (V6_A, Plan::Fail(ms(300), io::ErrorKind::ConnectionRefused)),
+        (V4_A, Plan::Hang),
+        (V6_B, Plan::Connect(ms(1))),
+    ]);
+    assert_eq!(script.run(&[V6_A, V4_A, V6_B]).await.unwrap(), addr(V6_B));
+    // B started at the delay; A's failure at 300 ms starts C at once, not at
+    // 500 ms.
+    assert_eq!(
+        script.started(),
+        vec![
+            (addr(V6_A), ms(0)),
+            (addr(V4_A), ms(250)),
+            (addr(V6_B), ms(300)),
+        ]
+    );
+    assert_eq!(*script.dropped.borrow(), vec![addr(V4_A)]);
+}
+
+fn assert_names_both(error: &io::Error) {
+    let message = error.to_string();
+    for a in [V6_A, V4_A] {
+        assert!(message.contains(&format!("{a}: scripted {a}")), "{message}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_gives_the_kind_even_after_a_quicker_unreachable() {
+    let script = Script::new(&[
+        (V6_A, Plan::Fail(ms(5), io::ErrorKind::NetworkUnreachable)),
+        (V4_A, Plan::Fail(ms(10), io::ErrorKind::ConnectionRefused)),
+    ]);
+    let error = script.run(&[V6_A, V4_A]).await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+    assert_names_both(&error);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timeout_gives_the_kind_when_nothing_refused() {
+    let script = Script::new(&[
+        (V6_A, Plan::Fail(ms(5), io::ErrorKind::HostUnreachable)),
         (V4_A, Plan::Fail(ms(10), io::ErrorKind::TimedOut)),
     ]);
     let error = script.run(&[V6_A, V4_A]).await.unwrap_err();
-    // V4_A fails first (at 260 ms), V6_A at 400 ms.
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    let message = error.to_string();
-    assert!(
-        message.contains(&format!("{V4_A}: scripted {V4_A}")),
-        "{message}"
-    );
-    assert!(
-        message.contains(&format!("{V6_A}: scripted {V6_A}")),
-        "{message}"
-    );
+    assert_names_both(&error);
+}
+
+#[tokio::test(start_paused = true)]
+async fn otherwise_the_first_failure_gives_the_kind() {
+    let script = Script::new(&[
+        (V6_A, Plan::Fail(ms(5), io::ErrorKind::NetworkUnreachable)),
+        (V4_A, Plan::Fail(ms(1), io::ErrorKind::AddrNotAvailable)),
+    ]);
+    let error = script.run(&[V6_A, V4_A]).await.unwrap_err();
+    // V6_A fails at 5 ms and starts V4_A, which fails at 6 ms.
+    assert_eq!(error.kind(), io::ErrorKind::NetworkUnreachable);
+    assert_names_both(&error);
 }
 
 #[tokio::test(start_paused = true)]
