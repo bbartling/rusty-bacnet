@@ -241,7 +241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which resets the connection, and a Windows client then discarded the alert
   and saw only "connection reset". The listener now sends FIN after the alert
   and drains what the peer still sends until it closes, for at most 500 ms
-  and within the handshake deadline.
+  and 64 KiB, and within the handshake deadline.
 
 - A B/IP BBMD now forwards its own broadcasts (#937). Before, `send_broadcast`
   in BBMD mode sent only the local Original-Broadcast-NPDU, so the BBMD's own
