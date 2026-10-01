@@ -8,6 +8,7 @@ faulthandler dump when the loop stalls.
 import asyncio
 import base64
 import faulthandler
+import gc
 import hashlib
 import logging
 import os
@@ -48,14 +49,34 @@ while True:
 """
 
 
-def gil_monitor():
+def gil_monitor(dump):
+    # Needs the GIL after every sleep. With dump set, faulthandler's watchdog
+    # (which needs no GIL) prints every thread's stack once this thread has
+    # gone 0.6 s without re-arming it.
     last = time.perf_counter()
+    tick = 0
     while True:
+        if dump and tick % 20 == 0:
+            faulthandler.dump_traceback_later(0.6, repeat=False)
+        tick += 1
         time.sleep(0.005)
         n = time.perf_counter()
         if n - last > 0.15:
             log(f"GIL-STALL {n - last:.3f}s")
         last = n
+
+
+GC_START = {}
+
+
+def gc_timer(phase, info):
+    if phase == "start":
+        GC_START[threading.get_ident()] = time.perf_counter()
+    else:
+        took = time.perf_counter() - GC_START.pop(threading.get_ident(), time.perf_counter())
+        if took > 0.05:
+            log(f"GC gen={info['generation']} took={took:.3f}s collected={info['collected']} "
+                f"thread={threading.current_thread().name} objects={len(gc.get_objects())}")
 
 
 async def loop_monitor():
@@ -211,8 +232,9 @@ def main():
     logging.basicConfig(level=logging.WARNING, handlers=[handler])
     faulthandler.enable()
     proc = subprocess.Popen([sys.executable, "-c", MONITOR, str(T0)])
-    threading.Thread(target=gil_monitor, daemon=True).start()
     real = mode.startswith("realsuite")
+    threading.Thread(target=gil_monitor, args=(real,), daemon=True).start()
+    gc.callbacks.append(gc_timer)
     if not real:
         accept.AcceptUuidTests.check_accept = check_accept
     mtls.MtlsFixture.setUpClass = timed_setup_class(mtls.MtlsFixture.setUpClass)
