@@ -176,6 +176,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure, and gives CI a no-fail-fast `ci` profile. Older nextest on macOS
   flagged unrelated passing tests as leaky (#751).
 
+- Releases are built, tested and published from Forgejo
+  (`.forgejo/workflows/release.yml`) while GitHub Actions is disabled on the
+  mirror, and each one is copied to GitHub Releases. A manual dispatch is a dry
+  run that publishes nothing. The workflow builds the Linux artifacts, and no
+  release is tagged until it also builds macOS and Windows (#944). Starting
+  with the next release, `bacnet-cli` and `bacnet-endpoint` are published on
+  crates.io; the Linux CLI binaries need glibc 2.17 instead of 2.39, so they
+  run on RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later, and link libpcap
+  statically; and each release has a `SHA256SUMS` file and a
+  `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
+  CPython 3.14 wheels ship once the release pipeline publishes (#943).
+
 - `bacnet_server::schedule::tick_schedules` drops its unused UTC-offset argument;
   evaluation already used the database clock frame. It only evaluates schedules.
   A running server evaluates them itself and fans COV out for the objects they

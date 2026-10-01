@@ -4,8 +4,18 @@ The `bacnet` command-line tool provides interactive and scripted access to BACne
 
 ## Installation
 
-`bacnet-cli` is not published on crates.io. Download a release binary (see
-[Pre-built Binaries](#pre-built-binaries)) or install from a checkout:
+Download a release binary (see [Pre-built Binaries](#pre-built-binaries)), or
+build it with Cargo.
+
+From 0.12.0, `bacnet-cli` is published on crates.io with each release. Once
+0.12.0 is out, install it with:
+
+```bash
+cargo install bacnet-cli --locked --features sc-tls
+```
+
+0.11.0 and earlier aren't on crates.io; for those, and for unreleased changes,
+install from a checkout:
 
 ```bash
 # From a checkout of this repository
@@ -17,6 +27,9 @@ cargo install --path crates/bacnet-cli --locked --features pcap
 # With BACnet/SC support
 cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
+
+The features combine (`--features sc-tls,pcap`). Packet capture needs libpcap
+and its headers (`libpcap-dev` on Debian and Ubuntu).
 
 ## Global Options
 
@@ -451,7 +464,7 @@ policy construction to `ScNodeTlsConfig`; CLI flags and error phases stay compat
 despite the [Rust source break](rust-api.md#strict-local-node-tls-configuration).
 Credentials are offered when requested and compatible, not proof of remote hub
 verification. A trusted server without CertificateRequest can complete, and normal
-TLS resumption may not retransmit certificates. Issue #513 remains open/partial.
+TLS resumption may not retransmit certificates. That work is still incomplete.
 
 ## Object Type Shorthand
 
@@ -511,4 +524,16 @@ Available from [GitHub Releases](https://github.com/jscott3201/rusty-bacnet/rele
 | `bacnet-macos-arm64` | macOS Apple Silicon | sc-tls |
 | `bacnet-windows-amd64.exe` | Windows x86_64 | sc-tls |
 
-Linux binaries include packet capture support out of the box. macOS/Windows users who need capture can build from source with `--features pcap`. The Linux binaries need glibc 2.39 or newer (for example Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu). Rename the downloaded file to `bacnet` (`bacnet.exe` on Windows) and put it on your `PATH`.
+Rename the downloaded file to `bacnet` (`bacnet.exe` on Windows), make it
+executable and put it on your `PATH`. Linux binaries include packet capture
+support out of the box. macOS/Windows users who need capture can build from
+source with `--features pcap`.
+
+- **0.11.0**: its Linux binaries need glibc 2.39 or newer (for example
+  Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu).
+- **From 0.12.0**, the Linux binaries need glibc 2.17 or newer, so they run on
+  RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later. They link libpcap
+  statically, so no libpcap package is needed (live capture still needs root,
+  as [Packet Capture](#packet-capture) says). Each release also has a
+  `SHA256SUMS` file and a `THIRD-PARTY-NOTICES` file listing the third-party
+  code in the binaries.

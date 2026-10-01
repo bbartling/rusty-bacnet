@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "BACnet endpoint that owns one transport and runs client and server roles through it"
+keywords = ["bacnet", "building-automation", "client", "server", "async"]
+categories = ["network-programming"]
 
 [dependencies]
 bacnet-types.workspace = true
