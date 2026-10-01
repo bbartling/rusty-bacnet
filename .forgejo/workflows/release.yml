@@ -316,6 +316,17 @@ jobs:
         with:
           name: notices
           path: crates/rusty-bacnet
+      # The Windows builds take xwin's CRT and SDK from the image (/opt/xwin/xwin),
+      # pinned there. cargo-xwin would quietly download the latest ones into that
+      # directory if it found them missing, so the build must leave it
+      # untouched. (cargo-xwin rewrites its tool links and CMake files next to
+      # it, in /opt/xwin, on every build.)
+      - name: Mark the image's CRT and SDK
+        if: endsWith(matrix.target, '-windows-msvc')
+        run: |
+          [ "$XWIN_CACHE_DIR" = /opt/xwin ] && [ -f /opt/xwin/xwin/DONE ] \
+            || { echo "::error::the image's xwin CRT and SDK aren't in /opt/xwin (XWIN_CACHE_DIR=$XWIN_CACHE_DIR)"; exit 1; }
+          touch /tmp/xwin-before
       # The image has only Python 3.12; for the other versions, and for macOS
       # and Windows, maturin uses its bundled sysconfig. SOURCE_DATE_EPOCH pins
       # the wheels' timestamps, so a rebuild matches.
@@ -343,6 +354,14 @@ jobs:
           # shellcheck disable=SC2086 # MATURIN_ARGS and PYTHONS are lists.
           maturin build --release --locked $MATURIN_ARGS --target "$TARGET" -i $PYTHONS \
             -m crates/rusty-bacnet/Cargo.toml --out dist
+      - name: No CRT or SDK download
+        if: endsWith(matrix.target, '-windows-msvc')
+        run: |
+          changed=$(find /opt/xwin/xwin -newer /tmp/xwin-before | head -20 || true)
+          [ -z "$changed" ] || { echo "::error::the build changed the image's CRT and SDK:"; echo "$changed"; exit 1; }
+          default_cache=${XDG_CACHE_HOME:-$HOME/.cache}/cargo-xwin
+          [ ! -e "$default_cache" ] || { echo "::error::cargo-xwin used $default_cache, not /opt/xwin"; exit 1; }
+          echo "the build used the image's CRT and SDK and downloaded nothing"
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
         with:
           name: wheels-${{ matrix.name }}
@@ -378,6 +397,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # See the wheels job.
+      - name: Mark the image's CRT and SDK
+        if: endsWith(matrix.target, '-windows-msvc')
+        run: |
+          [ "$XWIN_CACHE_DIR" = /opt/xwin ] && [ -f /opt/xwin/xwin/DONE ] \
+            || { echo "::error::the image's xwin CRT and SDK aren't in /opt/xwin (XWIN_CACHE_DIR=$XWIN_CACHE_DIR)"; exit 1; }
+          touch /tmp/xwin-before
       - name: Build
         env:
           NAME: ${{ matrix.name }}
@@ -417,6 +443,14 @@ jobs:
           esac
           mkdir out
           cp "target/$TARGET/release/$bin" "out/$asset"
+      - name: No CRT or SDK download
+        if: endsWith(matrix.target, '-windows-msvc')
+        run: |
+          changed=$(find /opt/xwin/xwin -newer /tmp/xwin-before | head -20 || true)
+          [ -z "$changed" ] || { echo "::error::the build changed the image's CRT and SDK:"; echo "$changed"; exit 1; }
+          default_cache=${XDG_CACHE_HOME:-$HOME/.cache}/cargo-xwin
+          [ ! -e "$default_cache" ] || { echo "::error::cargo-xwin used $default_cache, not /opt/xwin"; exit 1; }
+          echo "the build used the image's CRT and SDK and downloaded nothing"
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
         with:
           name: cli-${{ matrix.name }}

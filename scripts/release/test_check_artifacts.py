@@ -139,7 +139,11 @@ def load_dylib(n, name):
             "      current version 1.0.0\ncompatibility version 1.0.0\n")
 
 
-def macho_text(cpu="ARM64", version_cmd=None, dylibs=checks.MACOS_SYSTEM, extra=""):
+SIGNATURE = "Load command 30\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 123\n datasize 456\n"
+FRAMEWORKS = {checks.IOKIT, checks.COREFOUNDATION}
+
+
+def macho_text(cpu="ARM64", version_cmd=None, dylibs=checks.MACOS_SYSTEM, extra=SIGNATURE):
     version_cmd = version_cmd or ("Load command 1\n       cmd LC_BUILD_VERSION\n   cmdsize 32\n  platform macos\n"
                                   "       sdk 26.4\n     minos 11.0\n    ntools 1\n      tool 0x000005\n"
                                   "   version 0.0\n")
@@ -149,25 +153,31 @@ def macho_text(cpu="ARM64", version_cmd=None, dylibs=checks.MACOS_SYSTEM, extra=
             + version_cmd + "".join(load_dylib(n, d) for n, d in enumerate(sorted(dylibs), 2)) + extra)
 
 
-BIND = (
-    "x.so:\n\nBind table:\n"
-    "segment  section            address    type       addend dylib            symbol\n"
-    "__DATA_CONST __got              0x01314000 pointer         0 flat-namespace   _PyExc_BaseException\n"
-    "__DATA_CONST __got              0x01314020 pointer         0 flat-namespace   __Py_NoneStruct\n"
-    "__DATA_CONST __got              0x01314040 pointer         0 flat-namespace   _kCFBooleanTrue\n"
-    "__DATA_CONST __got              0x01314048 pointer         0 libSystem        _free\n"
-    "\nLazy bind table:\nsegment  section            address     dylib            symbol\n"
-    "__DATA   __la_symbol_ptr    0x01334000 flat-namespace   _IOServiceMatching\n"
-    "__DATA   __la_symbol_ptr    0x01334008 libSystem        _malloc\n"
-)
+BIND_HEAD = ("x.so:\n\nBind table:\n"
+             "segment  section            address    type       addend dylib            symbol\n")
+LAZY_HEAD = "\nLazy bind table:\nsegment  section            address     dylib            symbol\n"
+
+
+def got(symbol, dylib="flat-namespace"):
+    return f"__DATA_CONST __got              0x01314000 pointer         0 {dylib:<16} {symbol}\n"
+
+
+def lazy(symbol, dylib="flat-namespace"):
+    return f"__DATA   __la_symbol_ptr    0x01334000 {dylib:<16} {symbol}\n"
+
+
+BIND = (BIND_HEAD + got("_PyExc_BaseException") + got("__Py_NoneStruct") + got("_kCFBooleanTrue")
+        + got("_free", "libSystem") + LAZY_HEAD + lazy("_IOServiceMatching") + lazy("_malloc", "libSystem"))
+CLI_BIND = BIND_HEAD + got("_free", "libSystem") + LAZY_HEAD + lazy("_malloc", "libSystem")
 
 
 class MachoTests(unittest.TestCase):
-    def test_build_version_and_dylibs(self):
+    def test_build_version_dylibs_and_signature(self):
         info = checks.macho_headers(macho_text())
-        self.assertEqual((info["cpu"], info["platform"], info["minos"], info["chained"]),
-                         ("ARM64", "macos", "11.0", False))
+        self.assertEqual((info["cpu"], info["platform"], info["minos"], info["chained"], info["signed"]),
+                         ("ARM64", "macos", "11.0", False, True))
         self.assertEqual(info["dylibs"], sorted(checks.MACOS_SYSTEM))
+        self.assertFalse(checks.macho_headers(macho_text(extra=""))["signed"])
 
     def test_version_min_macosx(self):
         cmd = "Load command 1\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version 10.12\n      sdk 26.4\n"
@@ -178,6 +188,11 @@ class MachoTests(unittest.TestCase):
         self.assertEqual(checks.flat_lookups(BIND),
                          ["_IOServiceMatching", "_PyExc_BaseException", "__Py_NoneStruct", "_kCFBooleanTrue"])
 
+    def test_symbol_lists(self):
+        self.assertEqual((len(checks.IOKIT_SYMBOLS), len(checks.COREFOUNDATION_SYMBOLS)), (10, 72))
+        self.assertTrue(all(s.startswith(("_IO", "_kIO")) for s in checks.IOKIT_SYMBOLS))
+        self.assertTrue(all(s.startswith(("_CF", "_kCF")) for s in checks.COREFOUNDATION_SYMBOLS))
+
     def check(self, headers, bind, arch="aarch64", minos=(11, 0), extension=True):
         outputs = {"--private-headers": headers, "--bind": bind}
         with mock.patch.object(checks, "run", lambda _tool, _path, *flags: outputs[flags[1]]), \
@@ -185,30 +200,72 @@ class MachoTests(unittest.TestCase):
             return checks.check_macho(Path("x.so"), "x.so", arch, minos, extension)
 
     def test_extension_passes(self):
-        headers = macho_text(dylibs=checks.MACOS_SYSTEM | checks.MACOS_FRAMEWORKS)
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
         self.assertEqual(self.check(headers, BIND), [])
 
+    def test_cli_passes(self):
+        self.assertEqual(self.check(macho_text(), CLI_BIND, extension=False), [])
+
     def test_wrong_arch_minimum_and_extra_dylib(self):
-        headers = macho_text(dylibs=checks.MACOS_SYSTEM | {"/usr/lib/libz.1.dylib"})
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS | {"/usr/lib/libz.1.dylib"})
         errors = self.check(headers, BIND, arch="x86_64", minos=(10, 12))
         self.assertEqual(len(errors), 3, errors)
         self.assertTrue(any("ARM64 Mach-O, not x86_64" in e for e in errors))
         self.assertTrue(any("needs macOS 11.0, its platform tag says 10.12" in e for e in errors))
         self.assertTrue(any("libz.1.dylib" in e for e in errors))
 
+    def test_arm64_needs_a_code_signature(self):
+        unsigned = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS, extra="")
+        self.assertEqual(self.check(unsigned, BIND),
+                         ["x.so has no code signature, which macOS requires on arm64"])
+        self.assertEqual(self.check(macho_text(extra=""), CLI_BIND, extension=False),
+                         ["x.so has no code signature, which macOS requires on arm64"])
+        x86 = macho_text("X86_64", dylibs=checks.MACOS_SYSTEM | FRAMEWORKS, extra="")
+        self.assertEqual(self.check(x86, BIND, arch="x86_64"), [])
+
+    def test_extension_needs_the_frameworks_it_looks_up(self):
+        errors = self.check(macho_text(), BIND)
+        self.assertEqual(errors, [
+            f"x.so leaves _IOServiceMatching to a flat lookup but doesn't load {checks.IOKIT}",
+            f"x.so leaves _kCFBooleanTrue to a flat lookup but doesn't load {checks.COREFOUNDATION}"])
+        only_cf = BIND_HEAD + got("_PyType_Ready") + got("_CFRelease") + got("_free", "libSystem")
+        self.assertEqual(self.check(macho_text(dylibs=checks.MACOS_SYSTEM | {checks.COREFOUNDATION}), only_cf), [])
+
     def test_cli_loads_no_framework_and_leaves_no_flat_lookup(self):
-        headers = macho_text(dylibs=checks.MACOS_SYSTEM | checks.MACOS_FRAMEWORKS)
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
         errors = self.check(headers, BIND, extension=False)
         self.assertEqual(len(errors), 3, errors)
-        self.assertTrue(any("flat lookup" in e and "(4)" in e for e in errors))
+        self.assertTrue(any("leaves 4 symbols to a flat lookup" in e for e in errors))
 
-    def test_unexpected_flat_lookup_and_chained_fixups(self):
-        bind = BIND + "__DATA   __la_symbol_ptr    0x01334010 flat-namespace   _SSLRead\n"
-        headers = macho_text(dylibs=checks.MACOS_SYSTEM | checks.MACOS_FRAMEWORKS)
-        self.assertEqual(self.check(headers, bind), [
-            "x.so leaves symbols to a flat lookup that neither Python nor the expected frameworks provide (1): _SSLRead"])
-        chained = headers + "Load command 9\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n"
+    def test_only_the_listed_framework_symbols(self):
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
+        for symbol in ("_SSLRead", "_CFNetworkCopySystemProxySettings", "_IOSurfaceCreate", "_kCFNull", "_Pz"):
+            with self.subTest(symbol=symbol):
+                self.assertEqual(self.check(headers, BIND + lazy(symbol)), [
+                    "x.so leaves symbols to a flat lookup that neither Python nor the listed framework"
+                    f" symbols cover (1): {symbol}"])
+        every = BIND_HEAD + got("_Py_IsInitialized") + got("_free", "libSystem") + "".join(
+            got(s) for s in sorted(checks.IOKIT_SYMBOLS | checks.COREFOUNDATION_SYMBOLS))
+        self.assertEqual(self.check(headers, every), [])
+
+    def test_chained_fixups(self):
+        chained = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS) + (
+            "Load command 9\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n")
         self.assertTrue(any("chained fixups" in e for e in self.check(chained, BIND)))
+
+    def test_unparsed_bind_output_fails(self):
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
+        for bind in ("", "x.so:\n", BIND.replace("Bind table:", "Binds:"), BIND.replace("libSystem", "libc")):
+            with self.subTest(bind=bind[:20]):
+                errors = self.check(headers, bind)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("no bind table or libSystem bind", errors[0])
+        self.assertIn("no bind table", self.check(macho_text(), "", extension=False)[0])
+
+    def test_extension_without_python_lookups_fails(self):
+        no_python = BIND_HEAD + got("_CFRelease") + got("_free", "libSystem")
+        self.assertEqual(self.check(macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS), no_python),
+                         ["x.so leaves no Python symbol to a flat lookup; the bind output didn't parse"])
 
 
 def pe_text(machine="IMAGE_FILE_MACHINE_AMD64", dll=False, subsystem="IMAGE_SUBSYSTEM_WINDOWS_CUI", imports=()):
@@ -250,6 +307,13 @@ class PeTests(unittest.TestCase):
         self.assertEqual(self.check(good, "python312.dll"), [])
         errors = self.check(good, "python313.dll")
         self.assertEqual(errors, ["x imports ['python312.dll'], expected python313.dll"])
+
+    def test_unparsed_imports_fail(self):
+        for imports in ((), ["ntdll.dll", "ws2_32.dll"]):
+            with self.subTest(imports=imports):
+                errors = self.check(pe_text(imports=imports))
+                self.assertIn("x doesn't import kernel32.dll; llvm-readobj's import list didn't parse", errors)
+        self.assertEqual(checks.pe_headers("")["imports"], [])
 
     def test_wrong_machine_kind_and_unexpected_dll(self):
         errors = self.check(pe_text(machine="IMAGE_FILE_MACHINE_ARM64", dll=True, imports=SYSTEM + ["libssl-3.dll"]))
