@@ -1,3 +1,7 @@
+// `#[tokio::test]` polls on the test thread, whose stack is 2 MiB. Each
+// fixture step boxes the futures it awaits, so a test body's debug-build poll
+// frame holds pointers rather than every step's whole future: unboxed, these
+// tests needed 1 to 1.2 MiB of stack in a macOS debug build (#953).
 use crate::server::heap_futures::boxed;
 use crate::server::*;
 use bacnet_encoding::apdu::decode_apdu;
@@ -22,10 +26,6 @@ pub(super) const PASSWORD: &str = "test-only-dcc";
 type Transport = ScTransport<TlsWebSocket>;
 type Server = BACnetServer<Transport>;
 
-// `#[tokio::test]` polls on the test thread, whose stack is 2 MiB. Each
-// fixture step boxes the futures it awaits, so a test body's debug-build poll
-// frame holds pointers rather than every step's whole future: unboxed, these
-// tests needed 1 to 1.2 MiB of stack in a macOS debug build (#953).
 pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), future)
         .await
