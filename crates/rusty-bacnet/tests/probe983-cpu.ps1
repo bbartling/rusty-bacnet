@@ -6,7 +6,7 @@ $counters = @(
     '\PhysicalDisk(_Total)\Current Disk Queue Length',
     '\Process(*)\% Processor Time'
 )
-Get-Counter -Counter $counters -SampleInterval 1 -MaxSamples 150 -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Counter -Counter $counters -SampleInterval 1 -MaxSamples 650 -ErrorAction SilentlyContinue | ForEach-Object {
     $t = $_.Timestamp.ToUniversalTime().ToString('HH:mm:ss.fff')
     $total = ($_.CounterSamples | Where-Object { $_.Path -like '*processor(_total)*' }).CookedValue
     $disk = ($_.CounterSamples | Where-Object { $_.Path -like '*physicaldisk*' }).CookedValue

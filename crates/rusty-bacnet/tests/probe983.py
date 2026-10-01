@@ -212,11 +212,24 @@ def main():
     faulthandler.enable()
     proc = subprocess.Popen([sys.executable, "-c", MONITOR, str(T0)])
     threading.Thread(target=gil_monitor, daemon=True).start()
-    accept.AcceptUuidTests.check_accept = check_accept
+    real = mode.startswith("realsuite")
+    if not real:
+        accept.AcceptUuidTests.check_accept = check_accept
     mtls.MtlsFixture.setUpClass = timed_setup_class(mtls.MtlsFixture.setUpClass)
     log(f"start mode={mode} python={sys.version.split()[0]} platform={sys.platform} cpus={os.cpu_count()}")
     try:
-        if mode == "suite":
+        if real:
+            here = os.path.dirname(os.path.abspath(__file__))
+            failures = 0
+            for run in range(int(mode.split(":")[1])):
+                log(f"SUITE RUN {run} begin")
+                suite = unittest.defaultTestLoader.discover(here)
+                result = unittest.TextTestRunner(verbosity=1, resultclass=StampedResult).run(suite)
+                bad = [t.id() for t, _ in result.failures + result.errors]
+                failures += bool(bad)
+                log(f"SUITE RUN {run} end ran={result.testsRun} bad={bad}")
+            log(f"SUITE RUNS failed={failures}")
+        elif mode == "suite":
             here = os.path.dirname(os.path.abspath(__file__))
             suite = unittest.defaultTestLoader.discover(here)
             unittest.TextTestRunner(verbosity=1, resultclass=StampedResult).run(suite)
