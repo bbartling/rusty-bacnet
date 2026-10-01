@@ -31,7 +31,10 @@ impl CovSubscriptionTable {
     /// including empty renewals. A changed route fences old snapshots while
     /// preserving unreplaced observations; same-route refresh retains authority,
     /// unless it lists references while the context's confirmed report is
-    /// outstanding or holding off, which fences it the same way (#896).
+    /// outstanding or holding off, which fences it the same way (#896). A fence
+    /// while that report is outstanding, holding off or owed also clears the
+    /// observations of the kept untimestamped references, since the fenced
+    /// report may have reached the subscriber (#923).
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
@@ -104,7 +107,7 @@ impl CovSubscriptionTable {
             })
             .collect();
         if let Some(replaced) = replaced {
-            self.fence_context_flight(context, &replaced);
+            self.fence_context_flight(context, &replaced, &keys);
         }
         Ok(accepted)
     }

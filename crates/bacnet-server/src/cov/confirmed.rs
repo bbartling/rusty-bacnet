@@ -34,6 +34,16 @@
 //! behind the old one (Clauses 13.14.2 and 13.16.2). The old marker is fenced:
 //! its outstanding report stops retrying, and can neither complete nor unmark
 //! the coordinate.
+//!
+//! A fenced report may still have reached the subscriber, whose Ack then counts
+//! for nothing. So when the old marker owed a follow-up (its report was
+//! outstanding, or had failed and was holding off or owed), every reference of
+//! the context is evaluated again, and the untimestamped references the
+//! re-subscription kept first forget their baselines (#923). The follow-up then
+//! reports their current value even if it went back to the baseline after the
+//! fenced report, which the subscriber would otherwise keep showing. Timestamped
+//! references need no reset: the fenced report's history returns to their queue,
+//! and a change back is captured as a change of its own.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -297,18 +307,33 @@ impl CovSubscriptionTable {
         }
     }
 
-    /// Fence a marker a fresh one replaced. If its report was outstanding, or
+    /// Fence a marker a fresh one replaced, once the references `listed` by the
+    /// replacing request are published. If its report was outstanding, or
     /// failed and still owed a follow-up, nothing on the old marker can finish
-    /// the job: every reference, kept or relisted, is evaluated again. Listed
-    /// references have no baseline, so whichever of this follow-up and the
-    /// initial report goes first carries them as first reports, and the other
-    /// finds the context busy.
+    /// the job, yet the report may have reached the subscriber: every
+    /// reference, kept or relisted, is evaluated again, and each kept
+    /// untimestamped one forgets its baseline first, so the follow-up reports
+    /// its current value (#923). Listed references have no baseline either, so
+    /// whichever of this follow-up and the initial report goes first carries
+    /// them as first reports, and the other finds the context busy.
     pub(super) fn fence_context_flight(
-        &self,
+        &mut self,
         context: &MultipleContextKey,
         replaced: &FlightMarker,
+        listed: &HashSet<CovSubscriptionKey>,
     ) {
         if replaced.owes_follow_up() {
+            // Measured against a baseline the subscriber may have left behind,
+            // a value that went back to it would never be reported again.
+            for entry in self.subs.values_mut() {
+                if entry.key.multiple_context() == Some(context)
+                    && entry.issue_confirmed_notifications
+                    && !entry.timestamped
+                    && !listed.contains(&entry.key)
+                {
+                    entry.subscription.last_notified_observation = None;
+                }
+            }
             self.revisits.request(
                 self.multiple_context_references(context)
                     .map(|entry| entry.key().clone()),

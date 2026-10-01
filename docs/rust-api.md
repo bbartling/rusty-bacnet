@@ -1902,6 +1902,9 @@ removes canonical targets without retargeting survivors. Rejected admission pres
 the live target context; unrelated expired-entry purging and counters may still run.
 Changing route preserves unreplaced selected-value/flags observations and reference
 generations, while a private route ownership token fences every old-route snapshot.
+The exception is a confirmed context whose report is outstanding, or failed and
+still owed, at the move: its kept untimestamped references forget their
+observations, as described for fenced reports below (#923).
 The routed address is a claimed protocol identity, not authentication; existing
 mutation authorization still precedes subscription handling.
 
@@ -2014,10 +2017,18 @@ initial report goes first carries them as first reports, and the other finds the
 context busy. The fenced report may already have reached the subscriber, so the
 follow-up can repeat changes of the kept references.
 
-Known limitation (#923): if that fenced report did reach the subscriber, and an
-untimestamped kept reference then returns to its old baseline value before the
-follow-up runs, the follow-up sees no change and the subscriber keeps the value
-the fenced report carried until the reference changes again.
+Because no Ack of the fenced report counts, its delivery cannot be ruled out, and
+the subscriber may hold values newer than the baselines. So the same fence first
+clears the baseline of every kept untimestamped reference (#923), and the
+follow-up reports the current value of each one. This covers a fence during the
+hold-off after a failed report too, since that report may have arrived even though
+its Ack did not. Without the reset, a kept reference that went back to its old
+baseline value before the follow-up would look unchanged, and the subscriber would
+keep the value the fenced report carried until the reference changed again.
+Timestamped references keep their baselines: the fenced report's history returns
+to their queue and a change back is captured as one more change, so the follow-up
+carries both. A fence while the context is idle clears nothing, since the last Ack
+settled every baseline.
 
 The follow-up task handles each batch of references on its own. If evaluating a
 batch panics, the panic is caught (in unwind builds) and logged with the number of

@@ -148,9 +148,9 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
         .unwrap();
     let current = migrate(&fixture, &old).await;
     assert_eq!(
-        current.last_notified_observation,
-        Some(observation(1.0)),
-        "an unacknowledged confirmed report leaves the baseline alone (#896)"
+        current.last_notified_observation, None,
+        "the move fenced an outstanding report that may have been delivered, so \
+         the kept reference reports afresh (#923)"
     );
     assert!(fixture
         .table
