@@ -338,7 +338,7 @@ cargo test --doc --workspace --exclude rusty-bacnet --locked
 ```
 
 nextest skips doctests, which is why `cargo test --doc` is a separate step. The
-repository pins Rust 1.97.1 in `rust-toolchain.toml`. For Python binding
+repository pins Rust 1.99.0 in `rust-toolchain.toml`. For Python binding
 development (on Windows, activate with `.venv\Scripts\activate`; the BACnet/SC
 tests also need the `openssl` command):
 

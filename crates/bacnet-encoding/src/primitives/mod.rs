@@ -247,8 +247,8 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
                 });
             }
             let mut s = String::new();
-            for (i, chunk) in payload.chunks_exact(2).enumerate() {
-                let code_point = u16::from_be_bytes([chunk[0], chunk[1]]);
+            for (i, chunk) in payload.as_chunks::<2>().0.iter().enumerate() {
+                let code_point = u16::from_be_bytes(*chunk);
                 if let Some(c) = char::from_u32(code_point as u32) {
                     s.push(c);
                 } else {
@@ -642,8 +642,8 @@ pub fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, E
                     "UCS-4 CharacterString length must be a multiple of four",
                 ));
             }
-            for (index, encoded) in payload.chunks_exact(4).enumerate() {
-                let code_point = u32::from_be_bytes(encoded.try_into().unwrap());
+            for (index, encoded) in payload.as_chunks::<4>().0.iter().enumerate() {
+                let code_point = u32::from_be_bytes(*encoded);
                 if char::from_u32(code_point).is_none() {
                     return Err(Error::decoding(
                         content_start + 1 + index * 4,

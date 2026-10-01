@@ -114,7 +114,7 @@ contains:
 
 - the runner's default `ghcr.io/catthehacker/ubuntu:act-24.04`, pinned by
   digest;
-- Rust 1.97.1 with rustfmt and clippy, and the 1.93 MSRV toolchain;
+- Rust 1.99.0 with rustfmt and clippy, and the 1.93 MSRV toolchain;
 - cargo-nextest, cargo-audit, cargo-deny and maturin at pinned versions, each
   download checked against its SHA-256;
 - the apt packages the jobs need;
@@ -289,7 +289,7 @@ gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # re
 
 ## Local checks
 
-Use Rust 1.97.1 from `rust-toolchain.toml`. The [native tests](#native-tests-github)
+Use Rust 1.99.0 from `rust-toolchain.toml`. The [native tests](#native-tests-github)
 now run the macOS tests, clippy and rustdoc on every push, so a local macOS run
 is optional: a quicker check before pushing changes that can affect macOS
 (transports, sockets, TLS, platform `cfg`, build scripts, dependencies). It

@@ -50,7 +50,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   # The same tag as ci.yml; its "CI image" job fails if they differ.
-  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:11520c0607e5
+  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:45c95fae1133
   # The newest glibc any artifact may need: manylinux2014 for the wheels, and
   # RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later for the CLI. The image's
   # static libpcap targets the same version.
