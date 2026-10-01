@@ -1139,7 +1139,7 @@
     "crates/bacnet-objects/src/computed_status_flags_tests.rs::loop_status_flags_follow_reliability_and_out_of_service",
     "crates/bacnet-objects/src/computed_status_flags_tests.rs::schedule_status_flags_follow_reliability_and_out_of_service",
     "crates/bacnet-objects/src/computed_status_flags_tests.rs::trend_log_status_flags_ignore_its_out_of_service_property",
-    "crates/bacnet-objects/src/computed_status_flags_tests.rs::calendar_and_trend_log_multiple_flags_match_their_fixed_state",
+    "crates/bacnet-objects/src/computed_status_flags_tests.rs::trend_log_multiple_flags_match_its_fixed_state",
     "crates/bacnet-server/src/server/loop_status_flags_cov_tests.rs::loop_fault_and_out_of_service_notify_cov_subscribers"
    ],
    "negative_tests": [
@@ -1150,7 +1150,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write (allowing a client-supplied replacement Reliability value while Out_Of_Service is TRUE) so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, elevator/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate. #978: Loop, Schedule, Calendar, Trend Log and Trend Log Multiple now compute Status_Flags instead of returning flags fixed at construction. Loop and Schedule derive FAULT from an evaluated or simulated Reliability, OUT_OF_SERVICE from Out_Of_Service and IN_ALARM from their fixed NORMAL Event_State, and a Loop COV subscriber is notified when either write changes Status_Flags. Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's non-standard compatibility Out_Of_Service never reaches its flags. Calendar's Status_Flags, absent from Table 12-11, always reads all FALSE (#984 tracks whether to expose it)."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write (allowing a client-supplied replacement Reliability value while Out_Of_Service is TRUE) so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, elevator/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate. #978: Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags instead of returning flags fixed at construction. Loop and Schedule derive FAULT from an evaluated or simulated Reliability, OUT_OF_SERVICE from Out_Of_Service and IN_ALARM from their fixed NORMAL Event_State, and a Loop COV subscriber is notified when either write changes Status_Flags. Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's non-standard compatibility Out_Of_Service never reaches its flags. #978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET)."
   },
   {
    "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",
@@ -1339,6 +1339,33 @@
     "CHANGELOG.md Unreleased Alert Enrollment migration note"
    ],
    "notes": "PR-0808 / #291 is a bounded served-object-model correction. The explicit initial-source constructor is intentionally breaking in Rust and Python, with no sentinel overload. record_alert_source owns only Present_Value; it is not alert source discovery or an evaluator. The existing Event_Detection_Enable reset/history, Event_State, Acked_Transitions (including TO_NORMAL always acknowledged), Event_Enable, Notification_Class, Event_Time_Stamps, object-name/database behavior, and generic event-information consumers remain in place. WPM follows Clause 15.10 ordered prefix commit. Optional message/inhibit/audit/tag/profile rows remain unimplemented. This row does not claim an Alert evaluator, transition generation, notification sending, or complete optional-property support."
+  },
+  {
+   "id": "BACNET-12-CALENDAR-PROPERTY-SET",
+   "standard_anchor": "Clause 12.9 and Table 12-11; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "Calendar serves only rows that Table 12-11 defines: the required Object_Identifier, Object_Name, Object_Type, Present_Value, Date_List and Property_List, plus Description, the one implemented optional row. Status_Flags, Event_State, Out_Of_Service and Reliability are not Table 12-11 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on any of them fail with PROPERTY / UNKNOWN_PROPERTY. Description is network-writable; Present_Value and Date_List are read-only over the network and stay application-managed.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/schedule/mod.rs::CalendarObject",
+    "crates/bacnet-objects/src/schedule/calendar_metadata.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/schedule/calendar_metadata.rs::tests::property_metadata_calendar_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/schedule/calendar_metadata.rs::tests::property_metadata_calendar_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/calendar.rs::rpm_calendar_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/calendar.rs::pics::calendar_property_metadata_rows_and_createability_are_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/computed_status_flags_tests.rs::calendar_has_no_status_flags_to_compute",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/calendar.rs::rpm_calendar_indexed_reads_and_date_list_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/calendar.rs::wp_calendar_properties_outside_table_12_11_are_unknown"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #984"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#984). Breaking pre-1.0 removal: Calendar used to list Status_Flags, Event_State and Out_Of_Service as optional read-only rows returning fixed values (all-FALSE flags, NORMAL, FALSE), so their writes failed WRITE_ACCESS_DENIED; now they are unknown properties. The server's COV flag capture, event-notification payloads, GetAlarmSummary, GetEventInformation and GetEnrollmentSummary already treat an object without these properties as absent or not event-initiating, so they need no Calendar case. This row covers the served property set only. It makes no claim for the Date_List wire form, which still projects each BACnetCalendarEntry as an application-tagged Date or OctetString rather than the context-tagged CHOICE of Clause 21, nor for date-list evaluation of Present_Value, Date_List writes, or the audit, tag and profile optional rows."
   },
   {
    "id": "BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS",
