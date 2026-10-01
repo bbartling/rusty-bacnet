@@ -14,7 +14,9 @@ bacnet-client = { path = "../crates/bacnet-client", features = ["sc-tls", "ipv6"
 bacnet-objects = { path = "../crates/bacnet-objects" }
 bacnet-server = { path = "../crates/bacnet-server", features = ["sc-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "signal"] }
-tokio-tungstenite = { workspace = true }
+# The SC tests dial through tungstenite's rustls connector (Connector::Rustls),
+# which needs one of its TLS features; the workspace dependency has none (#944).
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 futures-util = { workspace = true }
 criterion = { version = "0.8", features = ["async_tokio"] }
 bytes = "1"
