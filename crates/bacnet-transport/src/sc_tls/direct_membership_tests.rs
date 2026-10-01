@@ -127,6 +127,9 @@ async fn third_peer_collision_preserves_both_incumbents() {
     listener.stop().await;
 }
 
+#[path = "direct_reject_tests.rs"]
+mod direct_reject_tests;
+
 async fn wait_counts(listener: &DirectListener, active: usize, pending: usize) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {

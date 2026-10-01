@@ -238,3 +238,25 @@ async fn hub_phase_error_upgrade_timeout_and_connect_timeout_release_slots() {
         }
     );
 }
+
+/// A peer that sends a bad record and then streams junk is cut off by the
+/// post-alert drain's byte cap, and its admission slot comes back (#950).
+#[tokio::test]
+async fn hub_tls_rejection_drain_cuts_off_a_writing_peer_and_releases_the_slot() {
+    let tls = TestTls::new();
+    let hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
+    let mut peer = TcpStream::connect(hub.address).await.unwrap();
+    until(|| hub.active.load(Ordering::Acquire) == 1).await;
+    let writer = tokio::spawn(async move {
+        peer.write_all(b"not a TLS record").await.unwrap();
+        let junk = [0x17u8; 4096];
+        while peer.write_all(&junk).await.is_ok() {}
+    });
+    until(|| hub.active.load(Ordering::Acquire) == 0).await;
+    // The hub dropped the socket, so the writer's sends start failing.
+    tokio::time::timeout(Duration::from_secs(5), writer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(hub.clients.lock().await.is_empty());
+}
