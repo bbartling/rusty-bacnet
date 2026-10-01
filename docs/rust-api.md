@@ -1304,11 +1304,13 @@ transport.enable_bbmd(vec![BdtEntry {
     broadcast_mask: [255, 255, 255, 255],
 }]);
 
-// Optional: persist successful legacy Write-BDT updates and reload them on restart.
+// Optional: load a BDT saved in this file at startup, falling back to the
+// configured table if the file is missing or invalid. Write-BDT from the
+// network is always refused and never changes the table or the file.
 transport.set_bdt_persist_path(PathBuf::from("/var/lib/rusty-bacnet/bdt.bin"));
 
-// Optional: restrict Write-BDT and Delete-FDT management operations.
-// An empty ACL allows all sources.
+// Optional: sources allowed to send Delete-Foreign-Device-Table-Entry.
+// An empty ACL denies every source.
 transport.set_bbmd_management_acl(vec![[192, 168, 1, 100]]);
 ```
 
