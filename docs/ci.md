@@ -231,16 +231,17 @@ the NASM and CMake already on `PATH`. The SC tests make certificates with the
 runner image's `openssl`.
 
 **Efficiency.** The workflow can only read the repository
-(`permissions: contents: read`), and each job stops after 60 minutes.
-`Swatinem/rust-cache` keeps dependency builds, keyed per OS on the toolchain,
-`Cargo.lock`, the manifests and `NATIVE_FEATURES`, and saves even when a job
-fails. GitHub scopes caches to a branch, and a branch's run falls back to the
-default branch's (`dev`). A branch with `dev`'s `Cargo.lock` restores `dev`'s
-cache by its exact key and saves nothing, so only merges to `dev` and branches
-that change dependencies write caches. The cache holds dependencies only, so
-most of a run is compiling the workspace and its tests: in October 2026 a run
-took about 13 minutes on macOS and 20 on Windows cold, and 10 and 17 with a
-warm cache.
+(`permissions: contents: read`), and each job stops after 60 minutes. A newer
+push to a branch cancels that branch's running run, except on `dev`, where
+runs queue so every merge gets its own result. `Swatinem/rust-cache` keeps
+dependency builds, keyed per OS on the toolchain, `Cargo.lock`, the manifests
+and `NATIVE_FEATURES`. Only `dev` saves it, and only from a successful job, so
+a failed or cancelled run never leaves a partial cache that later runs would
+restore by exact key. GitHub lets a branch's run restore the default branch's
+(`dev`) cache, so every branch starts from the last good `dev` build. The cache
+holds dependencies only, so most of a run is compiling the workspace and its
+tests: in October 2026 a run took about 13 minutes on macOS and 20 on Windows
+cold, and 10 and 17 with a warm cache.
 
 **Portable tests.** What the first Windows and macOS runs showed (#950):
 

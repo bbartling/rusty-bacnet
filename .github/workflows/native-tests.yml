@@ -20,9 +20,10 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer push to a branch cancels that branch's superseded run.
+  # A newer push to a branch cancels that branch's superseded run. Runs on dev
+  # queue instead, so every merge gets its own native result.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -76,11 +77,14 @@ jobs:
         run: |
           rustup toolchain install
           rustc -vV
+      # Only dev saves the cache, and only from a successful job, so a failed or
+      # cancelled first run can't leave a partial cache that later runs restore
+      # by exact key. Other branches restore dev's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          cache-on-failure: true
           env-vars: NATIVE_FEATURES
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
