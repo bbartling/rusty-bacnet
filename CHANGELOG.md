@@ -255,6 +255,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Loop, Schedule, Calendar, Trend Log and Trend Log Multiple now compute
+  Status_Flags from Reliability, Out_Of_Service and Event_State, as the other
+  objects do (#978). They used to return the flags they were built with, so
+  Status_Flags read all FALSE forever: a Loop or Schedule whose Reliability was
+  evaluated or simulated as a fault still reported FAULT FALSE, and none of
+  them set OUT_OF_SERVICE when Out_Of_Service was TRUE. A Loop's COV
+  subscribers now get a notification when a write to Reliability or
+  Out_Of_Service changes its Status_Flags, carrying the new flags; before, they
+  never heard of either change.
+
 - On Windows, a B/IP or B/IPv6 transport on an ephemeral port now owns the
   port (#950). It binds the wildcard address without SO_REUSEADDR, and
   Windows still let another socket bind a more specific address on the same
