@@ -19,7 +19,7 @@ pub struct ClockFrame {
 impl ClockFrame {
     /// Return this frame's day of the week as a single [`DaysOfWeek`] flag,
     /// or `None` for an unavailable/invalid day-of-week value.
-    pub fn day_of_week_bit(self) -> Option<DaysOfWeek> {
+    pub fn day_of_week(self) -> Option<DaysOfWeek> {
         (1..=7)
             .contains(&self.local_date.day_of_week)
             .then(|| DaysOfWeek::from_bits_truncate(1 << (self.local_date.day_of_week - 1)))

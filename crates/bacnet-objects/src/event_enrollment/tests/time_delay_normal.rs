@@ -3,6 +3,7 @@
 //! evaluator drives (#163/#137/#166; ASHRAE 135-2020 Clauses 12.12, 13.3).
 
 use super::super::*;
+use bacnet_types::bitstring::EventTransitionBits;
 
 /// Absent a write, the property reads back the `Event_Parameters`
 /// `Time_Delay` — the Clause 13.3 fallback to pTimeDelay,
@@ -335,20 +336,32 @@ fn acked_transitions_internal_set_and_clear() {
         .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
         .unwrap()
     {
-        PropertyValue::BitString { data, .. } => bacnet_types::bitstring::unpack_octet(&data, 3),
+        PropertyValue::BitString { data, .. } => EventTransitionBits::from_bacnet(&data),
         other => panic!("BitString expected, got {other:?}"),
     };
 
-    assert_eq!(read(&ee), 0b111);
+    assert_eq!(read(&ee), EventTransitionBits::all());
     ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
         .unwrap();
-    assert_eq!(read(&ee), 0b110, "TO_OFFNORMAL cleared (ack owed)");
+    assert_eq!(
+        read(&ee),
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
+        "TO_OFFNORMAL cleared (ack owed)"
+    );
     ee.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
         .unwrap();
-    assert_eq!(read(&ee), 0b010, "TO_NORMAL cleared");
+    assert_eq!(
+        read(&ee),
+        EventTransitionBits::TO_FAULT,
+        "TO_NORMAL cleared"
+    );
     ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, true)
         .unwrap();
-    assert_eq!(read(&ee), 0b011, "TO_OFFNORMAL re-set (acknowledged)");
+    assert_eq!(
+        read(&ee),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT,
+        "TO_OFFNORMAL re-set (acknowledged)"
+    );
 }
 
 /// The trait defaults keep custom downstream objects out of the channel:

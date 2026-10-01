@@ -1,5 +1,6 @@
 use bacnet_objects::event::EventTransition;
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryRequest, RecipientProcess};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::EventType;
 use bacnet_types::MacAddr;
@@ -12,7 +13,7 @@ fn candidate() -> SummaryFixture {
         1,
         EventType::OUT_OF_RANGE,
         EventState::OFFNORMAL,
-        0b111,
+        EventTransitionBits::all(),
         7,
         Some(EventTransition::ToOffnormal),
     )

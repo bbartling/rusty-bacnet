@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::bitstring::EventTransitionBits;
 
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
@@ -74,7 +75,7 @@ async fn dispatch(
     })
 }
 
-fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
+fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = db
         .get(&oid)
         .unwrap()
@@ -83,7 +84,7 @@ fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
     else {
         panic!("Acked_Transitions must be a bit string");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
 fn assert_simple_ack(apdu: Apdu, invoke_id: u8) {
@@ -156,7 +157,7 @@ async fn binary_and_multistate_families_return_simple_ack() {
         .await
         .unwrap();
         assert_simple_ack(response, invoke_id);
-        assert_eq!(acked(&*db.read().await, oid), 0b111);
+        assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
     }
     assert_eq!(notification_transactions.active_count(), 0);
 }
@@ -195,7 +196,7 @@ async fn post_issuance_reused_and_new_invoke_ids_are_idempotent_success() {
     .await
     .unwrap();
     assert_simple_ack(first, 0x51);
-    assert_eq!(acked(&*db.read().await, oid), 0b111);
+    assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
     assert_eq!(notification_transactions.active_count(), 0);
 
     let reused = dispatch(
@@ -209,7 +210,7 @@ async fn post_issuance_reused_and_new_invoke_ids_are_idempotent_success() {
     .await
     .unwrap();
     assert_simple_ack(reused, 0x51);
-    assert_eq!(acked(&*db.read().await, oid), 0b111);
+    assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
 
     let new_transaction = dispatch(
         &db,
@@ -222,7 +223,7 @@ async fn post_issuance_reused_and_new_invoke_ids_are_idempotent_success() {
     .await
     .unwrap();
     assert_simple_ack(new_transaction, 0x52);
-    assert_eq!(acked(&*db.read().await, oid), 0b111);
+    assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
     assert_eq!(notification_transactions.active_count(), 0);
 }
 

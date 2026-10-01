@@ -1,5 +1,6 @@
 use bacnet_objects::event::EventTransition;
 use bacnet_services::enrollment_summary::{PriorityFilter, RecipientProcess};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::{AcknowledgmentFilter, EnrollmentSummaryEventStateFilter, EventType};
 
@@ -14,7 +15,7 @@ fn database(candidate: SummaryFixture) -> ObjectDatabase {
     db
 }
 
-fn candidate(state: EventState, acknowledged: u8) -> SummaryFixture {
+fn candidate(state: EventState, acknowledged: EventTransitionBits) -> SummaryFixture {
     SummaryFixture::candidate(
         1,
         EventType::OUT_OF_RANGE,
@@ -34,8 +35,11 @@ fn count(
 
 #[test]
 fn acknowledgment_filter_has_independent_positive_and_negative_cases() {
-    let all_acked = database(candidate(EventState::OFFNORMAL, 0b111));
-    let one_unacked = database(candidate(EventState::OFFNORMAL, 0b110));
+    let all_acked = database(candidate(EventState::OFFNORMAL, EventTransitionBits::all()));
+    let one_unacked = database(candidate(
+        EventState::OFFNORMAL,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
+    ));
 
     for (filter, acked_count, unacked_count) in [
         (AcknowledgmentFilter::ALL, 1, 1),
@@ -55,7 +59,7 @@ fn acknowledgment_filter_has_independent_positive_and_negative_cases() {
 fn enrollment_filter_has_independent_positive_and_negative_cases() {
     let device = ObjectIdentifier::new(ObjectType::DEVICE, 44).unwrap();
     let recipient = BACnetRecipient::Device(device);
-    let mut db = database(candidate(EventState::OFFNORMAL, 0b111));
+    let mut db = database(candidate(EventState::OFFNORMAL, EventTransitionBits::all()));
     db.add(Box::new(class(
         7,
         7,
@@ -116,20 +120,35 @@ fn all_event_state_filters_and_omitted_default_have_exact_meanings() {
             event_state_filter: Some(filter),
             ..request()
         };
-        assert_eq!(count(&database(candidate(positive, 0b111)), &request), 1);
+        assert_eq!(
+            count(
+                &database(candidate(positive, EventTransitionBits::all())),
+                &request
+            ),
+            1
+        );
         let expected_negative = usize::from(filter == EnrollmentSummaryEventStateFilter::ALL);
         assert_eq!(
-            count(&database(candidate(negative, 0b111)), &request),
+            count(
+                &database(candidate(negative, EventTransitionBits::all())),
+                &request
+            ),
             expected_negative
         );
     }
     assert_eq!(
-        count(&database(candidate(EventState::NORMAL, 0b111)), &request()),
+        count(
+            &database(candidate(EventState::NORMAL, EventTransitionBits::all())),
+            &request()
+        ),
         1
     );
     assert_eq!(
         count(
-            &database(candidate(EventState::HIGH_LIMIT, 0b111)),
+            &database(candidate(
+                EventState::HIGH_LIMIT,
+                EventTransitionBits::all()
+            )),
             &request()
         ),
         1
@@ -138,7 +157,7 @@ fn all_event_state_filters_and_omitted_default_have_exact_meanings() {
 
 #[test]
 fn event_type_filter_is_capability_based() {
-    let db = database(candidate(EventState::OFFNORMAL, 0b111));
+    let db = database(candidate(EventState::OFFNORMAL, EventTransitionBits::all()));
     let matching = bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest {
         event_type_filter: Some(EventType::OUT_OF_RANGE),
         ..request()
@@ -153,7 +172,7 @@ fn event_type_filter_is_capability_based() {
 
 #[test]
 fn priority_filter_is_inclusive_and_independent() {
-    let db = database(candidate(EventState::OFFNORMAL, 0b111));
+    let db = database(candidate(EventState::OFFNORMAL, EventTransitionBits::all()));
     for range in [(10, 10), (9, 10), (10, 11)] {
         let request = bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest {
             priority_filter: Some(PriorityFilter {
@@ -176,7 +195,7 @@ fn priority_filter_is_inclusive_and_independent() {
 
 #[test]
 fn notification_class_filter_has_independent_positive_and_negative_cases() {
-    let db = database(candidate(EventState::OFFNORMAL, 0b111));
+    let db = database(candidate(EventState::OFFNORMAL, EventTransitionBits::all()));
     for (class_number, expected) in [(7, 1), (8, 0)] {
         let request = bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest {
             notification_class_filter: Some(class_number),
@@ -189,7 +208,10 @@ fn notification_class_filter_has_independent_positive_and_negative_cases() {
 #[test]
 fn all_explicit_filters_are_conjunctive() {
     let recipient = BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 44).unwrap());
-    let mut db = database(candidate(EventState::OFFNORMAL, 0b110));
+    let mut db = database(candidate(
+        EventState::OFFNORMAL,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
+    ));
     db.add(Box::new(class(
         7,
         7,

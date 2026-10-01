@@ -46,7 +46,7 @@ fn wire_bit(data: &[u8], n: usize) -> bool {
 /// …), while the wire wants the first defined bit in the most significant bit
 /// of the octet. Reversing the byte is that whole conversion: bit 0 lands at
 /// `0x80`, bit 1 at `0x40`, and the result is left-aligned for any width.
-pub fn pack_octet(bits_lsb0: u8) -> u8 {
+fn pack_octet(bits_lsb0: u8) -> u8 {
     bits_lsb0.reverse_bits()
 }
 
@@ -55,7 +55,7 @@ pub fn pack_octet(bits_lsb0: u8) -> u8 {
 ///
 /// Masking (rather than trusting the peer's declared unused-bit count) keeps
 /// nonconformant padding out of the value; an empty payload reads as zero.
-pub fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
+fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
     let mask = if defined_bits >= 8 {
         u8::MAX
     } else {

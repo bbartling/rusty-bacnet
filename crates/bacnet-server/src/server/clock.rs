@@ -423,7 +423,7 @@ mod tests {
             Some((3, 9, 15))
         );
         assert_eq!(
-            frame.day_of_week_bit(),
+            frame.day_of_week(),
             Some(bacnet_types::bitstring::DaysOfWeek::THURSDAY)
         );
         assert_eq!(

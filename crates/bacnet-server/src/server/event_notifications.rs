@@ -293,7 +293,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let (today, current_time) = match recipient_clock {
                 SampledEventClock::Valid(clock_frame) => (
                     clock_frame
-                        .day_of_week_bit()
+                        .day_of_week()
                         .expect("validated ClockFrame has a day of week"),
                     clock_frame.local_time,
                 ),

@@ -182,7 +182,10 @@ fn ee_acknowledge_to_normal_bit() {
         .unwrap()
     {
         PropertyValue::BitString { data, .. } => {
-            assert_eq!(bacnet_types::bitstring::unpack_octet(&data, 3), 0b111)
+            assert_eq!(
+                EventTransitionBits::from_bacnet(&data),
+                EventTransitionBits::all()
+            )
         }
         other => panic!("expected BitString, got {other:?}"),
     }
@@ -228,8 +231,8 @@ fn ee_acknowledge_alarm_detection_disabled_refused() {
         .unwrap()
     {
         PropertyValue::BitString { data, .. } => assert_eq!(
-            bacnet_types::bitstring::unpack_octet(&data, 3),
-            0b111,
+            EventTransitionBits::from_bacnet(&data),
+            EventTransitionBits::all(),
             "the refused ack must not disturb the initial condition"
         ),
         other => panic!("expected BitString, got {other:?}"),

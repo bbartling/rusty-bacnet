@@ -39,7 +39,7 @@ impl ProjectionFixture {
                 ),
                 (
                     PropertyIdentifier::ACKED_TRANSITIONS,
-                    transition_bits(0b111),
+                    transition_bits(EventTransitionBits::all()),
                 ),
                 (
                     PropertyIdentifier::EVENT_TIME_STAMPS,
@@ -53,7 +53,10 @@ impl ProjectionFixture {
                     PropertyIdentifier::NOTIFY_TYPE,
                     PropertyValue::Enumerated(0),
                 ),
-                (PropertyIdentifier::EVENT_ENABLE, transition_bits(0b111)),
+                (
+                    PropertyIdentifier::EVENT_ENABLE,
+                    transition_bits(EventTransitionBits::all()),
+                ),
                 (
                     PropertyIdentifier::NOTIFICATION_CLASS,
                     PropertyValue::Unsigned(42),
@@ -143,10 +146,10 @@ impl BACnetObject for ProjectionFixture {
     }
 }
 
-fn transition_bits(bits: u8) -> PropertyValue {
+fn transition_bits(bits: EventTransitionBits) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 5,
-        data: vec![bacnet_types::bitstring::pack_octet(bits)],
+        data: vec![bits.to_bacnet()],
     }
 }
 
@@ -234,9 +237,12 @@ fn selection_uses_state_acknowledgments_and_detection_not_event_enable() {
     );
     normal_unacked.set(
         PropertyIdentifier::ACKED_TRANSITIONS,
-        transition_bits(0b110),
+        transition_bits(EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL),
     );
-    normal_unacked.set(PropertyIdentifier::EVENT_ENABLE, transition_bits(0));
+    normal_unacked.set(
+        PropertyIdentifier::EVENT_ENABLE,
+        transition_bits(EventTransitionBits::empty()),
+    );
     db.add(Box::new(normal_unacked)).unwrap();
 
     let mut normal_acked = ProjectionFixture::summary(2);

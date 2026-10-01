@@ -123,7 +123,11 @@ struct Harness {
 }
 
 impl Harness {
-    fn new(destinations: Vec<BACnetDestination>, event_enable: u8, retry_ms: u64) -> Self {
+    fn new(
+        destinations: Vec<BACnetDestination>,
+        event_enable: EventTransitionBits,
+        retry_ms: u64,
+    ) -> Self {
         let failures = FailedPeers::default();
         let transport = recording_transport(&failures);
         let sent = transport.sent();
@@ -169,7 +173,7 @@ impl Harness {
                 None,
                 PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![bacnet_types::bitstring::pack_octet(event_enable)],
+                    data: vec![event_enable.to_bacnet()],
                 },
                 None,
             )
@@ -281,7 +285,7 @@ impl Harness {
         else {
             panic!("Acked_Transitions must be a bit string");
         };
-        bacnet_types::bitstring::unpack_octet(&data, 3) & 0x01 != 0
+        EventTransitionBits::from_bacnet(&data).contains(EventTransitionBits::TO_OFFNORMAL)
     }
 }
 
@@ -317,7 +321,7 @@ fn decode_notification(frame: &Bytes) -> (bool, Option<u8>, EventNotificationReq
 async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
     let harness = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 101, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
 
@@ -369,7 +373,7 @@ async fn recipient_policy_selects_confirmed_and_unconfirmed_services_with_proces
             local_recipient(UNCONFIRMED_RECIPIENT, 101, false),
             local_recipient(CONFIRMED_RECIPIENT, 202, true),
         ],
-        0x07,
+        EventTransitionBits::all(),
         60_000,
     );
 
@@ -414,17 +418,17 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
     let cases = [
         Harness::new(
             vec![local_recipient(UNCONFIRMED_RECIPIENT, 1, false)],
-            0x06,
+            EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
             1_000,
         ),
-        Harness::new(Vec::new(), 0x07, 1_000),
+        Harness::new(Vec::new(), EventTransitionBits::all(), 1_000),
         Harness::new(
             vec![destination(
                 BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 999).unwrap()),
                 2,
                 false,
             )],
-            0x07,
+            EventTransitionBits::all(),
             1_000,
         ),
     ];
@@ -446,7 +450,7 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
 
     let disable_initiation = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 3, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     disable_initiation.comm_state.store(2, Ordering::Release);
@@ -462,7 +466,7 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
 async fn full_dcc_disable_drops_acknowledgment_before_response_or_mutation() {
     let full_disable = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 3, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     full_disable.comm_state.store(1, Ordering::Release);
@@ -479,7 +483,7 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
             local_recipient(UNCONFIRMED_RECIPIENT, 1, false),
             local_recipient(CONFIRMED_RECIPIENT, 2, false),
         ],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     send_failure
@@ -497,7 +501,7 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
 
     let reservation_failure = Harness::new(
         vec![local_recipient(CONFIRMED_RECIPIENT, 9, true)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     let mut leases = Vec::new();
@@ -526,7 +530,7 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
 async fn pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_immutable() {
     let duplicate = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 17, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     // Poll the real handler into its database wait. Before response issuance,
@@ -556,7 +560,7 @@ async fn pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_i
 
     let retry = Harness::new(
         vec![local_recipient(CONFIRMED_RECIPIENT, 18, true)],
-        0x07,
+        EventTransitionBits::all(),
         20,
     );
     assert_ack(retry.dispatch_with_reply(0x62).await.unwrap(), 0x62);

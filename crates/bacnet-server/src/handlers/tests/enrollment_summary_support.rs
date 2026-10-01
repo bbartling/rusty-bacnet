@@ -24,7 +24,7 @@ impl SummaryFixture {
         instance: u32,
         event_type: EventType,
         event_state: EventState,
-        acknowledged_transitions: u8,
+        acknowledged_transitions: EventTransitionBits,
         notification_class: u32,
         last_transition: Option<EventTransition>,
     ) -> Self {
@@ -145,10 +145,10 @@ impl BACnetObject for SummaryFixture {
     }
 }
 
-pub(super) fn transition_bits(bits: u8) -> PropertyValue {
+pub(super) fn transition_bits(bits: EventTransitionBits) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 5,
-        data: vec![bacnet_types::bitstring::pack_octet(bits)],
+        data: vec![bits.to_bacnet()],
     }
 }
 

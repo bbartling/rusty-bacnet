@@ -74,12 +74,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unused right-aligned copy of the same bit string with Monday at `0x40`, is
   removed in favour of the new type. The recipient filters take the current day
   as a `DaysOfWeek`: `local_day_and_time` returns one,
-  `ClockFrame::day_of_week_bit` returns `Option<DaysOfWeek>`, and
+  `ClockFrame::day_of_week` returns `Option<DaysOfWeek>`, and
   `lookup_notification_recipients`, `get_notification_recipients`,
   `get_notification_recipients_strict` and `filter_recipient_list` take
   `today: DaysOfWeek` instead of `today_bit: u8`. `NotificationClass.ack_required`
   is an `EventTransitionBits` instead of `[bool; 3]`, and Ack_Required reads
-  return the same octet as before (#930).
+  return the same octet as before. `bitstring::pack_octet` and `unpack_octet`
+  are no longer public; use the typed `to_bacnet`/`from_bacnet` methods (#930).
 
 - GetEnrollmentSummary and the stored Event_State are typed as well.
   `GetEnrollmentSummaryRequest.acknowledgment_filter` is an

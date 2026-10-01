@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::GetEventInformationBudget;
+use bacnet_types::bitstring::EventTransitionBits;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -321,7 +322,7 @@ fn get_event_information_configured_mixed_types_missing_cursor_and_class_errors(
     );
     unacked.set(
         PropertyIdentifier::ACKED_TRANSITIONS,
-        transition_bits(0b110),
+        transition_bits(EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL),
     );
     db.add(Box::new(unacked)).unwrap();
     for cursor in [

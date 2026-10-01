@@ -3,6 +3,7 @@ use super::*;
 use crate::server::GetEnrollmentSummaryBudget;
 use bacnet_objects::event::EnrollmentSummaryCapability;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::EventType;
 use std::borrow::Cow;
 use std::sync::{
@@ -48,7 +49,7 @@ fn candidate(instance: u32) -> SummaryFixture {
         instance,
         EventType::OUT_OF_RANGE,
         EventState::NORMAL,
-        7,
+        EventTransitionBits::all(),
         7,
         None,
     )
@@ -217,7 +218,7 @@ fn enrollment_summary_variable_enum_and_class_widths() {
                 1,
                 EventType::from_raw(value),
                 EventState::from_raw(value),
-                7,
+                EventTransitionBits::all(),
                 class_id,
                 Some(bacnet_objects::event::EventTransition::ToNormal),
             )))
