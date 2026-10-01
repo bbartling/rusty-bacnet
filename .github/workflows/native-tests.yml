@@ -38,6 +38,12 @@ env:
   NEXTEST_VERSION: 0.9.146
   MATURIN_VERSION: 1.15.0
   PYTHON_VERSION: "3.12"
+  # The tests the stack guard step reruns with smaller stacks (#953): the ones
+  # that start servers, endpoints, SC hubs and TLS sessions, and the CLI's.
+  STACK_GUARD_TESTS: >-
+    package(bacnet-server) | package(bacnet-endpoint) | package(bacnet-integration-tests)
+    | package(bacnet-cli) | binary_id(bacnet-benchmarks::sc_mtls)
+    | (package(bacnet-transport) & (test(/^sc_hub::/) | binary_id(/^bacnet-transport::sc_hub/)))
 
 jobs:
   test:
@@ -108,6 +114,21 @@ jobs:
       # step runs even when an earlier one failed, to report each failure.
       - name: Tests
         run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+      # Stack guard (#953). Debug-build futures and test fixtures can grow
+      # toward a thread's stack limit, and only Windows, whose main thread gets
+      # 1 MiB, used to show it. This reruns STACK_GUARD_TESTS with 1 MiB thread
+      # stacks rather than 2 MiB (RUST_MIN_STACK sizes the test threads and
+      # tokio's workers), and on macOS gives the `bacnet` processes the CLI
+      # tests start a 1 MiB main thread too, as Windows does (ulimit -s). rustc
+      # also reads RUST_MIN_STACK, so the --no-run first makes sure the guarded
+      # run has nothing left to build.
+      - name: Tests with 1 MiB stacks
+        if: ${{ !cancelled() }}
+        run: |
+          args=(--workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci)
+          cargo nextest run "${args[@]}" --no-run
+          if [ "$RUNNER_OS" != Windows ]; then ulimit -s 1024; fi
+          RUST_MIN_STACK=1048576 cargo nextest run "${args[@]}" -E "$STACK_GUARD_TESTS"
       - name: Doctests
         if: ${{ !cancelled() }}
         run: cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
