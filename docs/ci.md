@@ -232,8 +232,9 @@ runner image's `openssl`.
 
 **Efficiency.** The workflow can only read the repository
 (`permissions: contents: read`), and each job stops after 60 minutes. A newer
-push to a branch cancels that branch's running run, except on `dev`, where
-runs queue so every merge gets its own result. `Swatinem/rust-cache` keeps
+push to a branch cancels that branch's running run. On `dev` each commit gets
+its own concurrency group, keyed by its SHA, so no run is cancelled or
+replaced while pending and every merge gets its own result. `Swatinem/rust-cache` keeps
 dependency builds, keyed per OS on the toolchain, `Cargo.lock`, the manifests
 and `NATIVE_FEATURES`. Only `dev` saves it, and only from a successful job, so
 a failed or cancelled run never leaves a partial cache that later runs would

@@ -20,9 +20,11 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer push to a branch cancels that branch's superseded run. Runs on dev
-  # queue instead, so every merge gets its own native result.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A newer push to a branch cancels that branch's superseded run. On dev each
+  # commit gets a group of its own, so no run is cancelled or replaced while
+  # pending, and every merge gets its own native result. (A shared group without
+  # cancel-in-progress would still let a newer pending run replace an older one.)
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/dev' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
 
 env:
@@ -68,6 +70,8 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             features=$(tr , '\n' <<<"$features" | grep -vx bacnet-cli/pcap | paste -sd , -)
           fi
+          # Only feature names reach GITHUB_ENV.
+          [[ $features =~ ^[A-Za-z0-9_/,-]+$ ]] || { echo "::error::unexpected characters in the feature list"; exit 1; }
           echo "NATIVE_FEATURES=$features" | tee -a "$GITHUB_ENV"
       # The runner images ship rustup. With no arguments it installs the
       # toolchain rust-toolchain.toml pins, so there is no version to keep in
