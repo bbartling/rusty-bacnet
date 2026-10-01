@@ -1,0 +1,395 @@
+name: Release
+
+# Releases from Forgejo (#943) while GitHub Actions is disabled on the mirror
+# (#905). The jobs run on the Linux amd64 runner in the CI image, which ci.yml
+# builds, so a release carries Linux artifacts only; macOS and Windows follow in
+# #944. See docs/ci.md, "Release".
+#
+#   v* tag pushed     validate, build, test the artifacts, then publish in order:
+#                     crates.io, PyPI, the Forgejo release, the GitHub release copy
+#   manual dispatch   dry_run (default true) builds and tests everything and
+#                     publishes nothing. dry_run=false is accepted only on a v*
+#                     tag, and runs that tag's release again.
+#
+# Every publish job is safe to re-run: it skips what is already published.
+# Forgejo deletes a run's artifacts when any of its jobs is re-run, so resume a
+# partial release with "Re-run all jobs", which rebuilds and tests everything
+# before the publish jobs pick up where they stopped.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and test only; publish nothing
+        type: boolean
+        default: true
+
+concurrency:
+  # One run per ref, and never cancel a run that may be publishing.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # The same tag as ci.yml; its "CI image" job fails if they differ.
+  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:6b69ab1b2282
+  # The newest glibc any artifact may need: manylinux2014 for the wheels, and
+  # Ubuntu 22.04, Debian 12 and RHEL 9 for the CLI. The image's static libpcap
+  # targets the same version.
+  GLIBC: "2.17"
+  PYTHONS: "3.11 3.12 3.13 3.14"
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing command in a pipeline fails the step.
+    shell: bash
+
+jobs:
+  image:
+    name: CI image
+    runs-on: linux-host
+    timeout-minutes: 10
+    steps:
+      # As in ci.yml: the registry needs sign-in to pull and job containers never
+      # pull, so the image is pulled into the VM's Docker here. Only ci.yml builds it.
+      - name: Pull the job image
+        env:
+          REGISTRY_TOKEN: ${{ secrets.CI_IMAGE_TOKEN }}
+          REGISTRY_USER: ${{ github.repository_owner }}
+        run: |
+          registry=${CI_IMAGE%%/*}
+          # Under RUNNER_TEMP, which the runner deletes even if the job is killed.
+          DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX")
+          export DOCKER_CONFIG
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          echo "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+          docker pull -q "$CI_IMAGE" \
+            || { echo "::error::cannot pull $CI_IMAGE; ci.yml's image job builds it, so run CI on this commit first"; exit 1; }
+
+  validate:
+    name: Validate
+    needs: image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every branch, for the ancestry check.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Release script tests
+        run: python3 -m unittest discover -s scripts/release
+      - name: Version, tag and mode
+        id: release
+        env:
+          EVENT: ${{ github.event_name }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          # Every publishable crate carries the workspace version, and the Python
+          # package takes it from crates/rusty-bacnet.
+          version=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '
+            [.packages[] | select(.publish != []) | .version] | unique
+            | if length == 1 then .[0] else error("publishable crates disagree: \(.)") end')
+          tag=
+          case "$GITHUB_REF" in refs/tags/v*) tag=${GITHUB_REF#refs/tags/} ;; esac
+          commit=$(git rev-parse HEAD)
+          publish=true
+          if [ "$EVENT" = workflow_dispatch ] && [ "$DRY_RUN_INPUT" != false ]; then publish=false; fi
+          if [ "$publish" = true ] && [ -z "$tag" ]; then
+            echo "::error::only a v* tag publishes, and $GITHUB_REF is not one; dispatch with dry_run=true"
+            exit 1
+          fi
+          if [ -n "$tag" ]; then
+            [ "$tag" = "v$version" ] || { echo "::error::tag $tag does not match the workspace version $version"; exit 1; }
+            git merge-base --is-ancestor HEAD origin/dev || git merge-base --is-ancestor HEAD origin/main \
+              || { echo "::error::$tag ($commit) is on neither dev nor main"; exit 1; }
+          fi
+          echo "version $version, tag ${tag:-none}, commit $commit, publish $publish"
+          { echo "version=$version"; echo "tag=$tag"; echo "commit=$commit"; echo "publish=$publish"; } >>"$GITHUB_OUTPUT"
+      - name: CI passed on this commit
+        env:
+          TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          PUBLISH: ${{ steps.release.outputs.publish }}
+        run: |
+          # Any successful "CI / CI OK (<event>)" counts: a tag push starts another
+          # CI run on the same commit, which may still be going.
+          url="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/commits/$COMMIT/statuses?state=success&limit=50"
+          passed=$(curl -sSf --retry 3 -H "Authorization: token $TOKEN" "$url" \
+            | jq -r '[.[] | select(.context | startswith("CI / CI OK"))] | length')
+          if [ "$passed" -gt 0 ]; then
+            echo "CI OK passed on $COMMIT"
+          elif [ "$PUBLISH" = true ]; then
+            echo "::error::CI OK never passed on $COMMIT; tag a commit whose CI passed"
+            exit 1
+          else
+            echo "::warning::CI OK has not passed on $COMMIT (not required for a dry run)"
+          fi
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          mkdir notes
+          if [ -n "$TAG" ]; then section=(--version "$VERSION"); else section=(--unreleased); fi
+          python3 scripts/release/changelog_notes.py "${section[@]}" >notes/notes.md
+          # GitHub refuses release bodies over 125,000 characters.
+          python3 scripts/release/changelog_notes.py "${section[@]}" --max-chars 120000 \
+            --full-url "https://github.com/jscott3201/rusty-bacnet/blob/${TAG:-dev}/CHANGELOG.md" >notes/notes-github.md
+          wc -c notes/*
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: release-notes
+          path: notes/
+          if-no-files-found: error
+
+  source:
+    name: Crates and sdist
+    needs: validate
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Packages every publishable crate and builds each against the others as
+      # they would be published (multi-package publish, Cargo 1.90 and later).
+      - name: cargo publish --workspace --dry-run
+        run: cargo publish --workspace --dry-run --locked
+      - name: What the crates.io job would publish (read only)
+        run: bash scripts/release/publish_crates.sh --dry-run
+      # The dry run keeps its .crate files in Cargo's scratch directories;
+      # `cargo package` writes the same packages to target/package/. Unlike
+      # publish, `package --workspace` would include the publish = false crates.
+      # SOURCE_DATE_EPOCH pins the sdist's timestamps, so a rebuild matches.
+      - name: .crate files and sdist
+        run: |
+          packages=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.publish != []) | "--package=\(.name)"')
+          # shellcheck disable=SC2086 # One flag per word.
+          cargo package --locked --no-verify $packages
+          mkdir crates
+          cp target/package/*.crate crates/
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) maturin sdist -m crates/rusty-bacnet/Cargo.toml --out dist
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: crates
+          path: crates/
+          if-no-files-found: error
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: sdist
+          path: dist/
+          if-no-files-found: error
+
+  wheels:
+    name: Wheels (${{ matrix.arch }})
+    needs: validate
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # zig links against glibc 2.17. The image has only Python 3.12; for the
+      # other versions maturin uses its bundled sysconfig. SOURCE_DATE_EPOCH
+      # pins the wheels' timestamps, so a rebuild matches.
+      - name: maturin build
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          # shellcheck disable=SC2086 # PYTHONS is a list.
+          maturin build --release --locked --zig --compatibility manylinux2014 \
+            --target "${{ matrix.arch }}-unknown-linux-gnu" -i $PYTHONS \
+            -m crates/rusty-bacnet/Cargo.toml --out dist
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  cli:
+    name: CLI (${{ matrix.arch }})
+    needs: validate
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            libpcap: x86_64
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            libpcap: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: cargo zigbuild
+        env:
+          # The image's static libpcap (.forgejo/ci-image/Dockerfile).
+          LIBPCAP_LIBDIR: /opt/libpcap/${{ matrix.libpcap }}/lib
+        run: |
+          cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap \
+            --target "${{ matrix.target }}.$GLIBC"
+          mkdir out
+          cp "target/${{ matrix.target }}/release/bacnet" "out/bacnet-linux-${{ matrix.arch }}"
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: cli-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error
+
+  verify:
+    name: Test the artifacts
+    needs: [source, wheels, cli]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          path: artifacts
+      # Exactly what the publish jobs upload; artifacts drop the executable bit.
+      - name: Collect the release assets
+        run: |
+          mkdir release
+          cp artifacts/cli-*/* artifacts/wheels-*/* artifacts/sdist/* release/
+          chmod +x release/bacnet-linux-*
+          ls -l release
+      - name: Wheel tags, glibc and CLI linkage
+        run: |
+          # shellcheck disable=SC2086 # PYTHONS is a list.
+          python3 scripts/release/check_artifacts.py release --glibc "$GLIBC" --python $PYTHONS \
+            --wheel-arch x86_64 aarch64 --cli bacnet-linux-amd64=x86_64 bacnet-linux-arm64=aarch64
+      - name: Python suite against the installed x86_64 cp312 wheel
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/python -m pip install --no-index release/rusty_bacnet-*-cp312-cp312-manylinux_2_17_x86_64.*.whl
+          /tmp/venv/bin/python -c 'import rusty_bacnet; print(rusty_bacnet.__file__)'
+          /tmp/venv/bin/python -m unittest discover -s crates/rusty-bacnet/tests
+      - name: CLI smoke test (amd64)
+        run: bash scripts/release/cli_smoke.sh release/bacnet-linux-amd64 /tmp/venv/bin/python
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+
+  # Publishing: tag runs only, after every build and test passed, one step at a
+  # time so a failure stops everything after it.
+  crates-io:
+    name: Publish to crates.io
+    needs: [validate, verify]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: cargo publish (the crates not on crates.io yet)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: bash scripts/release/publish_crates.sh
+
+  pypi:
+    name: Publish to PyPI
+    needs: [validate, crates-io]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 20
+    steps:
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-assets
+          path: release
+      - name: maturin upload --skip-existing
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_PUBLISH }}
+        run: maturin upload --non-interactive --skip-existing release/*.whl release/*.tar.gz
+
+  forgejo-release:
+    name: Forgejo release
+    needs: [validate, pypi]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-assets
+          path: release
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-notes
+          path: notes
+      - name: Create the release and upload missing assets
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: python3 scripts/release/release_api.py forgejo --tag "$TAG" --notes notes/notes.md --assets release
+
+  github-release:
+    name: GitHub release copy
+    needs: [validate, forgejo-release]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-assets
+          path: release
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-notes
+          path: notes
+      # Waits up to 15 minutes for the push mirror to bring the tag over, then
+      # copies the release. Fails with instructions if the secret is missing.
+      - name: Create the release and upload missing assets
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          python3 scripts/release/release_api.py github --tag "$TAG" --notes notes/notes-github.md \
+            --assets release --commit "$COMMIT" --wait-tag 900

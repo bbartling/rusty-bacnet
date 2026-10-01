@@ -1,7 +1,8 @@
 # Prebuilt image for the Forgejo CI jobs (#904): the runner's act image plus
 # everything the jobs used to install on every run. ci.yml tags it with a hash of
 # this file and builds it only when that tag is missing, so any change here, even
-# a comment, produces a new tag. Never re-push an existing tag.
+# a comment, produces a new tag; release.yml uses the same tag. Never re-push an
+# existing tag.
 #
 # Bumping a pin: the Rust toolchain also lives in rust-toolchain.toml and
 # .github/workflows/release.yml; the MSRV in Cargo.toml's rust-version,
@@ -73,3 +74,54 @@ RUN cd /tmp \
  && tar xzf maturin.tgz -C /usr/local/bin maturin \
  && rm ./*.tgz \
  && cargo nextest --version && cargo deny --version && cargo audit --version && maturin --version
+
+# Release builds (#943, .forgejo/workflows/release.yml): zig links the Linux CLI
+# binaries and the manylinux wheels against an old glibc for both architectures,
+# through cargo-zigbuild and `maturin build --zig`. No extra Pythons: maturin
+# uses its bundled sysconfig for the interpreters it can't find.
+ARG ZIG_VERSION=0.16.0
+ARG ZIG_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+ARG CARGO_ZIGBUILD_VERSION=0.23.4
+ARG CARGO_ZIGBUILD_SHA256=9e3cf73485edbd45905c8aadbc0fdf869c7ddc3848f0c898229f2680db52e44b
+RUN cd /tmp \
+ && fetch "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" "$ZIG_SHA256" zig.txz \
+ && mkdir /opt/zig \
+ && tar xJf zig.txz -C /opt/zig --strip-components=1 \
+ && ln -s /opt/zig/zig /usr/local/bin/zig \
+ && zigbuild="cargo-zigbuild-x86_64-unknown-linux-musl" \
+ && fetch "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/$zigbuild.tar.xz" \
+      "$CARGO_ZIGBUILD_SHA256" zigbuild.txz \
+ && tar xJf zigbuild.txz -C "$CARGO_HOME/bin" --strip-components=1 "$zigbuild/cargo-zigbuild" \
+ && rm ./*.txz \
+ && rustup target add --toolchain "$RUST_TOOLCHAIN" aarch64-unknown-linux-gnu \
+ && zig version && cargo zigbuild --help >/dev/null
+
+# A static libpcap for each release target, built for glibc 2.17 like release.yml's
+# GLIBC, so the CLI's packet capture needs no libpcap on the user's system: Debian and Ubuntu name its shared library
+# libpcap.so.0.8, RHEL libpcap.so.1, so one dynamically linked binary can't run
+# on both. release.yml points LIBPCAP_LIBDIR at /opt/libpcap/<arch>/lib. The
+# pcap crate links -lpcap as a shared library and zig won't fall back to an
+# archive, so a one-line linker script named libpcap.so points at libpcap.a.
+# flex and bison only generate libpcap's filter parser and are removed again.
+ARG LIBPCAP_VERSION=1.10.7
+ARG LIBPCAP_SHA256=68fa62cffb974f4275641ce14c2e2d75739251f30e00e6a0900903b247d76a03
+RUN dpkg-query -W -f '${Package}\n' | sort >/tmp/packages-before \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends flex bison \
+ && cd /tmp \
+ && fetch "https://www.tcpdump.org/release/libpcap-$LIBPCAP_VERSION.tar.xz" "$LIBPCAP_SHA256" libpcap.txz \
+ && for arch in x86_64 aarch64; do \
+      mkdir "libpcap-$arch" \
+      && tar xJf libpcap.txz -C "libpcap-$arch" --strip-components=1 \
+      && (cd "libpcap-$arch" \
+          && CC="zig cc -target $arch-linux-gnu.2.17" AR="zig ar" RANLIB="zig ranlib" \
+             ./configure --quiet --host="$arch-linux-gnu" --disable-shared --with-pcap=linux \
+               --without-libnl --disable-dbus --disable-rdma --disable-bluetooth --disable-usb \
+               --disable-netmap \
+          && make -s -j"$(nproc)" libpcap.a \
+          && install -D -m 644 libpcap.a "/opt/libpcap/$arch/lib/libpcap.a" \
+          && echo "INPUT(/opt/libpcap/$arch/lib/libpcap.a)" >"/opt/libpcap/$arch/lib/libpcap.so") \
+      || exit 1; \
+    done \
+ && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/packages-before - | xargs apt-get purge -y \
+ && rm -rf /tmp/libpcap* /tmp/packages-before "${XDG_CACHE_HOME:-$HOME/.cache}/zig" /var/lib/apt/lists/*

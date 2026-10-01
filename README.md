@@ -95,14 +95,18 @@ Download the `bacnet-<os>-<arch>` file for your platform from the
 [latest release](https://github.com/jscott3201/rusty-bacnet/releases/latest),
 rename it to `bacnet` (`bacnet.exe` on Windows), make it executable and put it
 on your `PATH`.
-- Builds exist for Linux (amd64, arm64), macOS (amd64, arm64) and Windows
-  (amd64).
-- All of them include BACnet/SC.
-- The Linux builds also include packet capture. They need glibc 2.39 or newer
-  (for example Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu).
+- 0.11.0 has builds for Linux (amd64, arm64), macOS (amd64, arm64) and Windows
+  (amd64), all with BACnet/SC. The Linux builds also include packet capture.
+  They need glibc 2.39 or newer (for example Ubuntu 24.04) and libpcap
+  (`libpcap0.8` on Debian and Ubuntu).
+- From 0.12.0, releases carry only the Linux builds until macOS and Windows
+  return (#944). Those need glibc 2.17 or newer (Ubuntu 22.04, Debian 12,
+  RHEL 9 and later) and no libpcap package.
 
-On other systems, build it from a checkout. Add `,pcap` to the features for
-capture, which needs the libpcap headers:
+From 0.12.0, `bacnet-cli` is also published on crates.io, so once that release
+is out, `cargo install bacnet-cli --locked --features sc-tls` builds it on any
+platform with Rust 1.93 or later. Until then, build it from a checkout. Add
+`,pcap` to the features for capture, which needs the libpcap headers:
 
 ```bash
 cargo install --path crates/bacnet-cli --locked --features sc-tls

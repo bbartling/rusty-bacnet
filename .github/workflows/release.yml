@@ -1,14 +1,17 @@
 name: Release
 
-# Tag-driven publication only. CI runs on Forgejo (.forgejo/workflows/ci.yml),
-# which must be green on the tagged commit before the tag is pushed; the
-# Forgejo push mirror then carries the tag here. These jobs stay on GitHub
-# because they need GitHub-hosted macOS/Windows/arm64 runners, the `release`
-# environment secrets and PyPI trusted publishing (GitHub OIDC).
+# Releases run from .forgejo/workflows/release.yml while GitHub Actions is
+# disabled on this mirror (#905), so this workflow no longer runs on tags: the
+# push mirror brings every v* tag here, and a tag trigger would publish the same
+# release twice if Actions were re-enabled. It is kept, manual only, until the
+# Forgejo workflow also builds macOS and Windows (#944).
+#
+# The jobs below need GitHub-hosted macOS/Windows/arm64 runners, the `release`
+# environment secrets and PyPI trusted publishing (GitHub OIDC). Their
+# `startsWith(github.ref, 'refs/tags/v')` guards still require a dispatch on a tag.
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,7 +22,7 @@ env:
 
 jobs:
   # ===========================================================================
-  # Release (v* tags pushed to GitHub by the Forgejo push mirror)
+  # Release (manual dispatch on a v* tag; see the note at the top)
   # ===========================================================================
 
   # Backstop: CI runs on Forgejo before tagging, but publication is irreversible
