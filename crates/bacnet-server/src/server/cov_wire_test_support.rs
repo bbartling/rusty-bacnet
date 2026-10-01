@@ -69,7 +69,7 @@ pub(super) type Frames = Arc<StdMutex<Vec<Apdu>>>;
 struct ClockLink {
     frames: Frames,
     clock: SharedClock,
-    /// Device time once a SimpleACK has been sent.
+    /// Device time once a SimpleACK or Error response has been sent.
     after_ack: Arc<StdMutex<Option<ClockFrame>>>,
     /// Device time once a broadcast (an event notification) has been sent.
     after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
@@ -86,7 +86,7 @@ impl ClockLink {
         }
         let apdu = frame.apdu();
         match &apdu {
-            Apdu::SimpleAck(_) => {
+            Apdu::SimpleAck(_) | Apdu::Error(_) => {
                 if let Some(next) = self.after_ack.lock().unwrap().take() {
                     *self.clock.0.lock().unwrap() = next;
                 }
@@ -241,12 +241,22 @@ impl Harness {
         confirmed: bool,
         specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
     ) {
+        self.subscribe_with_delay(confirmed, specs, 10).await;
+    }
+
+    /// [`Self::subscribe_specs`] with a chosen Max_Notification_Delay.
+    pub(super) async fn subscribe_with_delay(
+        &mut self,
+        confirmed: bool,
+        specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
+        max_notification_delay: u32,
+    ) {
         let mut body = BytesMut::new();
         SubscribeCOVPropertyMultipleRequest {
             subscriber_process_identifier: 856,
             issue_confirmed_notifications: confirmed,
             lifetime: Some(300),
-            max_notification_delay: Some(10),
+            max_notification_delay: Some(max_notification_delay),
             list_of_cov_subscription_specifications: specs
                 .into_iter()
                 .map(|(object, references)| COVSubscriptionSpecification {
