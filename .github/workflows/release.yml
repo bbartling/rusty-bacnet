@@ -9,6 +9,11 @@ name: Release
 # The jobs below need GitHub-hosted macOS/Windows/arm64 runners, the `release`
 # environment secrets and PyPI trusted publishing (GitHub OIDC). Their
 # `startsWith(github.ref, 'refs/tags/v')` guards still require a dispatch on a tag.
+#
+# Don't dispatch it to add macOS or Windows assets to a tag that the Forgejo
+# workflow already released. It has no skip logic, so it would try to publish
+# the crates and wheels again, and GitHub releases in this repository are
+# immutable once published, so no asset can be added to that release anyway.
 
 on:
   workflow_dispatch:

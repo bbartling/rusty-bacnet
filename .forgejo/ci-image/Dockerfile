@@ -96,13 +96,15 @@ RUN cd /tmp \
  && rustup target add --toolchain "$RUST_TOOLCHAIN" aarch64-unknown-linux-gnu \
  && zig version && cargo zigbuild --help >/dev/null
 
-# A static libpcap for each release target, built for glibc 2.17 like release.yml's
-# GLIBC, so the CLI's packet capture needs no libpcap on the user's system: Debian and Ubuntu name its shared library
-# libpcap.so.0.8, RHEL libpcap.so.1, so one dynamically linked binary can't run
-# on both. release.yml points LIBPCAP_LIBDIR at /opt/libpcap/<arch>/lib. The
-# pcap crate links -lpcap as a shared library and zig won't fall back to an
-# archive, so a one-line linker script named libpcap.so points at libpcap.a.
-# flex and bison only generate libpcap's filter parser and are removed again.
+# A static libpcap for each release target, built for glibc 2.17 like
+# release.yml's GLIBC, so the CLI's packet capture needs no libpcap on the
+# user's system: Debian and Ubuntu name its shared library libpcap.so.0.8, RHEL
+# libpcap.so.1, so one dynamically linked binary can't run on both. release.yml
+# points LIBPCAP_LIBDIR at /opt/libpcap/<arch>/lib. The pcap crate links -lpcap
+# as a shared library and zig won't fall back to an archive, so a one-line
+# linker script named libpcap.so points at libpcap.a. /opt/libpcap/LICENSE and
+# VERSION go into the release's THIRD-PARTY-NOTICES. flex and bison only
+# generate libpcap's filter parser and are removed again.
 ARG LIBPCAP_VERSION=1.10.7
 ARG LIBPCAP_SHA256=68fa62cffb974f4275641ce14c2e2d75739251f30e00e6a0900903b247d76a03
 RUN dpkg-query -W -f '${Package}\n' | sort >/tmp/packages-before \
@@ -123,5 +125,28 @@ RUN dpkg-query -W -f '${Package}\n' | sort >/tmp/packages-before \
           && echo "INPUT(/opt/libpcap/$arch/lib/libpcap.a)" >"/opt/libpcap/$arch/lib/libpcap.so") \
       || exit 1; \
     done \
+ && install -m 644 libpcap-x86_64/LICENSE /opt/libpcap/LICENSE \
+ && echo "$LIBPCAP_VERSION" >/opt/libpcap/VERSION \
  && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/packages-before - | xargs apt-get purge -y \
  && rm -rf /tmp/libpcap* /tmp/packages-before "${XDG_CACHE_HOME:-$HOME/.cache}/zig" /var/lib/apt/lists/*
+
+# The artifact test in release.yml: uv installs the other CPython versions the
+# wheels are built for (uv pins each download's SHA-256), and qemu's user-mode
+# aarch64 emulator runs the arm64 CLI against the aarch64 glibc of
+# libc6-arm64-cross. Only qemu-aarch64-static is taken from Ubuntu's
+# qemu-user-static, which installs 130 MB of emulators.
+ARG UV_VERSION=0.12.21
+ARG UV_SHA256=d69d543a55ec9cdf9d3d9f2648b0a161847e3dbddc477e3be6b5813a6d46f639
+RUN cd /tmp \
+ && fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-musl.tar.gz" \
+      "$UV_SHA256" uv.tgz \
+ && tar xzf uv.tgz -C /usr/local/bin --strip-components=1 uv-x86_64-unknown-linux-musl/uv \
+ && rm uv.tgz \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends libc6-arm64-cross \
+ && apt-get download qemu-user-static \
+ && dpkg-deb --fsys-tarfile qemu-user-static_*.deb \
+      | tar -x -C /usr/local/bin --strip-components=3 ./usr/bin/qemu-aarch64-static \
+ && rm qemu-user-static_*.deb \
+ && rm -rf /var/lib/apt/lists/* \
+ && uv --version && qemu-aarch64-static --version >/dev/null
