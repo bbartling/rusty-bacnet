@@ -5,7 +5,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
@@ -32,7 +34,7 @@ pub struct TrendLogObject {
     buffer_size: u32,
     log_buffer: LogRecordBuffer,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     status_flags: StatusFlags,
     log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
@@ -53,7 +55,7 @@ impl TrendLogObject {
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             status_flags: StatusFlags::empty(),
             log_device_object_property: None,
             logging_type: 0,
@@ -160,7 +162,7 @@ impl BACnetObject for TrendLogObject {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
             p if p == PropertyIdentifier::RELIABILITY => {
-                Ok(PropertyValue::Enumerated(self.reliability))
+                Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
@@ -314,7 +316,7 @@ pub struct TrendLogMultipleObject {
     log_device_object_property: Vec<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -336,7 +338,7 @@ impl TrendLogMultipleObject {
             log_device_object_property: Vec::new(),
             logging_type: 0,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
         })
     }
@@ -440,7 +442,7 @@ impl BACnetObject for TrendLogMultipleObject {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
             p if p == PropertyIdentifier::RELIABILITY => {
-                Ok(PropertyValue::Enumerated(self.reliability))
+                Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
             p if p == PropertyIdentifier::LOG_BUFFER => {
                 Ok(self.log_buffer.project(LogRecordProfile::TrendMultiple))

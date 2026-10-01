@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::ReliabilityEvaluation;
+use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// A reliability change detected by the fault detector.
@@ -15,10 +16,10 @@ use bacnet_types::primitives::ObjectIdentifier;
 pub struct ReliabilityChange {
     /// The object whose reliability changed.
     pub object_id: ObjectIdentifier,
-    /// Previous reliability value (raw u32).
-    pub old_reliability: u32,
-    /// New reliability value (raw u32).
-    pub new_reliability: u32,
+    /// Previous reliability value.
+    pub old_reliability: Reliability,
+    /// New reliability value.
+    pub new_reliability: Reliability,
 }
 
 /// Fault detection engine.
@@ -136,7 +137,7 @@ mod tests {
 
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
     use bacnet_objects::traits::BACnetObject;
-    use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+    use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
     use tracing::span::{Attributes, Id, Record};
@@ -197,17 +198,22 @@ mod tests {
     struct OptInReliabilityObject {
         oid: ObjectIdentifier,
         name: String,
-        reliability: u32,
-        target_reliability: u32,
+        reliability: Reliability,
+        target_reliability: Reliability,
         fail: Arc<AtomicBool>,
     }
 
     impl OptInReliabilityObject {
-        fn new(instance: u32, name: &str, target_reliability: u32, fail: Arc<AtomicBool>) -> Self {
+        fn new(
+            instance: u32,
+            name: &str,
+            target_reliability: Reliability,
+            fail: Arc<AtomicBool>,
+        ) -> Self {
             Self {
                 oid: ObjectIdentifier::new(ObjectType::BINARY_INPUT, instance).unwrap(),
                 name: name.to_owned(),
-                reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                reliability: Reliability::NO_FAULT_DETECTED,
                 target_reliability,
                 fail,
             }
@@ -229,7 +235,7 @@ mod tests {
             _array_index: Option<u32>,
         ) -> Result<PropertyValue, Error> {
             if property == PropertyIdentifier::RELIABILITY {
-                Ok(PropertyValue::Enumerated(self.reliability))
+                Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             } else {
                 Err(Error::Encoding("test property is unsupported".into()))
             }
@@ -429,13 +435,13 @@ mod tests {
         assert_eq!(changes.len(), 2);
         assert!(changes.contains(&ReliabilityChange {
             object_id: ai_oid,
-            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-            new_reliability: Reliability::OVER_RANGE.to_raw(),
+            old_reliability: Reliability::NO_FAULT_DETECTED,
+            new_reliability: Reliability::OVER_RANGE,
         }));
         assert!(changes.contains(&ReliabilityChange {
             object_id: av_oid,
-            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+            old_reliability: Reliability::NO_FAULT_DETECTED,
+            new_reliability: Reliability::UNDER_RANGE,
         }));
         assert!(detector.evaluate(&mut db).is_empty());
 
@@ -501,8 +507,8 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert!(changes.contains(&ReliabilityChange {
             object_id: ai_oid,
-            old_reliability: Reliability::OVER_RANGE.to_raw(),
-            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+            old_reliability: Reliability::OVER_RANGE,
+            new_reliability: Reliability::UNDER_RANGE,
         }));
     }
 
@@ -512,8 +518,7 @@ mod tests {
         ai.set_min_pres_value(0.0);
         ai.set_max_pres_value(100.0);
         ai.set_present_value(50.0);
-        ai.set_reliability_internal(Reliability::NO_SENSOR.to_raw())
-            .unwrap();
+        ai.set_reliability_internal(Reliability::NO_SENSOR).unwrap();
         let oid = ai.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(ai)).unwrap();
@@ -525,7 +530,7 @@ mod tests {
     #[test]
     fn out_of_service_client_write_and_restore_remain_object_owned() {
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        ai.set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+        ai.set_reliability_internal(Reliability::OVER_RANGE)
             .unwrap();
         let oid = ai.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -567,8 +572,7 @@ mod tests {
     #[test]
     fn only_hook_returned_changed_creates_a_change_record() {
         let fail = Arc::new(AtomicBool::new(false));
-        let object =
-            OptInReliabilityObject::new(1, "custom-hook", Reliability::NO_SENSOR.to_raw(), fail);
+        let object = OptInReliabilityObject::new(1, "custom-hook", Reliability::NO_SENSOR, fail);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
@@ -579,8 +583,8 @@ mod tests {
             detector.evaluate(&mut db),
             vec![ReliabilityChange {
                 object_id: oid,
-                old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-                new_reliability: Reliability::NO_SENSOR.to_raw(),
+                old_reliability: Reliability::NO_FAULT_DETECTED,
+                new_reliability: Reliability::NO_SENSOR,
             }]
         );
         assert_eq!(read_reliability(&db, oid), Reliability::NO_SENSOR.to_raw());
@@ -595,7 +599,7 @@ mod tests {
         let object = OptInReliabilityObject::new(
             1,
             "failing-hook",
-            Reliability::NO_SENSOR.to_raw(),
+            Reliability::NO_SENSOR,
             Arc::clone(&fail),
         );
         let oid = object.object_identifier();
@@ -619,8 +623,8 @@ mod tests {
                 detector.evaluate(&mut db),
                 vec![ReliabilityChange {
                     object_id: oid,
-                    old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
-                    new_reliability: Reliability::NO_SENSOR.to_raw(),
+                    old_reliability: Reliability::NO_FAULT_DETECTED,
+                    new_reliability: Reliability::NO_SENSOR,
                 }]
             );
             assert_eq!(warnings.load(Ordering::SeqCst), 1);
@@ -645,7 +649,7 @@ mod tests {
         let object = OptInReliabilityObject::new(
             1,
             "removed-failing-hook",
-            Reliability::NO_FAULT_DETECTED.to_raw(),
+            Reliability::NO_FAULT_DETECTED,
             Arc::clone(&fail),
         );
         let oid = object.object_identifier();
@@ -667,7 +671,7 @@ mod tests {
             db.add(Box::new(OptInReliabilityObject::new(
                 1,
                 "replacement-failing-hook",
-                Reliability::NO_FAULT_DETECTED.to_raw(),
+                Reliability::NO_FAULT_DETECTED,
                 fail,
             )))
             .unwrap();

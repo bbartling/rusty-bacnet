@@ -44,8 +44,8 @@
 //! reset or COV path fabricates one.
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
-    SilencedState,
+    ErrorClass, ErrorCode, EventState, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
+    ObjectType, PropertyIdentifier, Reliability, SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -71,11 +71,14 @@ fn life_safety_error(code: ErrorCode) -> Error {
 }
 
 fn apply_silenced_operation(
-    silenced: &mut u32,
-    operation_expected: &mut u32,
+    silenced: &mut SilencedState,
+    operation_expected: &mut LifeSafetyOperation,
     operation: LifeSafetyOperation,
 ) -> Result<LifeSafetyOperationEffect, Error> {
-    let current = *silenced;
+    // The four standard SilencedState values form a two-bit audible/visible
+    // set, so the partial operations are bit operations on the wire value. A
+    // proprietary state has no such decomposition and is refused.
+    let current = silenced.to_raw();
     if current > SilencedState::ALL_SILENCED.to_raw() {
         return Err(life_safety_error(
             ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
@@ -83,29 +86,29 @@ fn apply_silenced_operation(
     }
 
     let desired = if operation == LifeSafetyOperation::SILENCE {
-        SilencedState::ALL_SILENCED.to_raw()
+        SilencedState::ALL_SILENCED
     } else if operation == LifeSafetyOperation::SILENCE_AUDIBLE {
-        current | SilencedState::AUDIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current | SilencedState::AUDIBLE_SILENCED.to_raw())
     } else if operation == LifeSafetyOperation::SILENCE_VISUAL {
-        current | SilencedState::VISIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current | SilencedState::VISIBLE_SILENCED.to_raw())
     } else if operation == LifeSafetyOperation::UNSILENCE {
-        SilencedState::UNSILENCED.to_raw()
+        SilencedState::UNSILENCED
     } else if operation == LifeSafetyOperation::UNSILENCE_AUDIBLE {
-        current & !SilencedState::AUDIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current & !SilencedState::AUDIBLE_SILENCED.to_raw())
     } else if operation == LifeSafetyOperation::UNSILENCE_VISUAL {
-        current & !SilencedState::VISIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current & !SilencedState::VISIBLE_SILENCED.to_raw())
     } else {
         return Err(life_safety_error(ErrorCode::VALUE_OUT_OF_RANGE));
     };
 
-    if *operation_expected != operation.to_raw() {
+    if *operation_expected != operation {
         return Err(life_safety_error(
             ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
         ));
     }
 
     *silenced = desired;
-    *operation_expected = LifeSafetyOperation::NONE.to_raw();
+    *operation_expected = LifeSafetyOperation::NONE;
     Ok(LifeSafetyOperationEffect::Applied)
 }
 
@@ -157,16 +160,16 @@ pub struct LifeSafetyPointObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Present value — LifeSafetyState enumeration (read-only via protocol).
-    present_value: u32,
-    /// Operating mode — LifeSafetyMode enumeration.
-    mode: u32,
-    /// Silenced state — SilencedState enumeration.
-    silenced: u32,
-    /// Expected operation — LifeSafetyOperation enumeration.
-    operation_expected: u32,
-    /// Tracking value — LifeSafetyState enumeration.
-    tracking_value: u32,
+    /// Present value (read-only via protocol).
+    present_value: LifeSafetyState,
+    /// Operating mode.
+    mode: LifeSafetyMode,
+    /// Silenced state.
+    silenced: SilencedState,
+    /// Expected operation.
+    operation_expected: LifeSafetyOperation,
+    /// Tracking value.
+    tracking_value: LifeSafetyState,
     /// Zones this point belongs to.
     member_of: Vec<ObjectIdentifier>,
     /// Raw sensor reading.
@@ -178,7 +181,7 @@ pub struct LifeSafetyPointObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     /// Reliability (0 = NO_FAULT_DETECTED).
-    reliability: u32,
+    reliability: Reliability,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyPointResetExecutor>,
 }
@@ -186,53 +189,53 @@ pub struct LifeSafetyPointObject {
 impl LifeSafetyPointObject {
     /// Create a new Life Safety Point object.
     ///
-    /// Defaults: present_value = QUIET (0), mode = OFF (0), silenced = UNSILENCED (0),
-    /// operation_expected = NONE (0), tracking_value = QUIET (0).
+    /// Defaults: present_value = QUIET, mode = OFF, silenced = UNSILENCED,
+    /// operation_expected = NONE, tracking_value = QUIET.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,      // QUIET
-            mode: 0,               // OFF
-            silenced: 0,           // UNSILENCED
-            operation_expected: 0, // NONE
-            tracking_value: 0,     // QUIET
+            present_value: LifeSafetyState::QUIET,
+            mode: LifeSafetyMode::OFF,
+            silenced: SilencedState::UNSILENCED,
+            operation_expected: LifeSafetyOperation::NONE,
+            tracking_value: LifeSafetyState::QUIET,
             member_of: Vec::new(),
             direct_reading: 0.0,
             maintenance_required: false,
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reset_executor: None,
         })
     }
 
-    /// Set the present value (LifeSafetyState enumeration).
-    pub fn set_present_value(&mut self, state: u32) {
+    /// Set the present value.
+    pub fn set_present_value(&mut self, state: LifeSafetyState) {
         self.present_value = state;
     }
 
-    /// Set the operating mode (LifeSafetyMode enumeration).
-    pub fn set_mode(&mut self, mode: u32) {
+    /// Set the operating mode.
+    pub fn set_mode(&mut self, mode: LifeSafetyMode) {
         self.mode = mode;
     }
 
-    /// Set the tracking value (LifeSafetyState enumeration).
-    pub fn set_tracking_value(&mut self, state: u32) {
+    /// Set the tracking value.
+    pub fn set_tracking_value(&mut self, state: LifeSafetyState) {
         self.tracking_value = state;
     }
 
     /// Set the locally determined silenced state.
     pub fn set_silenced(&mut self, state: SilencedState) {
-        self.silenced = state.to_raw();
+        self.silenced = state;
     }
 
     /// Set the next LifeSafetyOperation expected by local device logic.
     pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
-        self.operation_expected = operation.to_raw();
+        self.operation_expected = operation;
     }
 
     /// Configure the application-owned reset executor before database insertion.
@@ -287,15 +290,17 @@ impl BACnetObject for LifeSafetyPointObject {
                 ObjectType::LIFE_SAFETY_POINT.to_raw(),
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode)),
-            p if p == PropertyIdentifier::SILENCED => Ok(PropertyValue::Enumerated(self.silenced)),
+            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode.to_raw())),
+            p if p == PropertyIdentifier::SILENCED => {
+                Ok(PropertyValue::Enumerated(self.silenced.to_raw()))
+            }
             p if p == PropertyIdentifier::OPERATION_EXPECTED => {
-                Ok(PropertyValue::Enumerated(self.operation_expected))
+                Ok(PropertyValue::Enumerated(self.operation_expected.to_raw()))
             }
             p if p == PropertyIdentifier::TRACKING_VALUE => {
-                Ok(PropertyValue::Enumerated(self.tracking_value))
+                Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
             p if p == PropertyIdentifier::MEMBER_OF => Ok(PropertyValue::List(
                 self.member_of
@@ -329,7 +334,7 @@ impl BACnetObject for LifeSafetyPointObject {
         }
         if property == PropertyIdentifier::MODE {
             if let PropertyValue::Enumerated(v) = value {
-                self.mode = v;
+                self.mode = LifeSafetyMode::from_raw(v);
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -427,14 +432,14 @@ pub struct LifeSafetyZoneObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Present value — LifeSafetyState enumeration (read-only via protocol).
-    present_value: u32,
-    /// Operating mode — LifeSafetyMode enumeration.
-    mode: u32,
-    /// Silenced state — SilencedState enumeration.
-    silenced: u32,
-    /// Expected operation — LifeSafetyOperation enumeration.
-    operation_expected: u32,
+    /// Present value (read-only via protocol).
+    present_value: LifeSafetyState,
+    /// Operating mode.
+    mode: LifeSafetyMode,
+    /// Silenced state.
+    silenced: SilencedState,
+    /// Expected operation.
+    operation_expected: LifeSafetyOperation,
     /// Points belonging to this zone.
     zone_members: Vec<ObjectIdentifier>,
     /// Event_State.
@@ -442,7 +447,7 @@ pub struct LifeSafetyZoneObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     /// Reliability (0 = NO_FAULT_DETECTED).
-    reliability: u32,
+    reliability: Reliability,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyZoneResetExecutor>,
 }
@@ -450,45 +455,45 @@ pub struct LifeSafetyZoneObject {
 impl LifeSafetyZoneObject {
     /// Create a new Life Safety Zone object.
     ///
-    /// Defaults: present_value = QUIET (0), mode = OFF (0), silenced = UNSILENCED (0),
-    /// operation_expected = NONE (0).
+    /// Defaults: present_value = QUIET, mode = OFF, silenced = UNSILENCED,
+    /// operation_expected = NONE.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,      // QUIET
-            mode: 0,               // OFF
-            silenced: 0,           // UNSILENCED
-            operation_expected: 0, // NONE
+            present_value: LifeSafetyState::QUIET,
+            mode: LifeSafetyMode::OFF,
+            silenced: SilencedState::UNSILENCED,
+            operation_expected: LifeSafetyOperation::NONE,
             zone_members: Vec::new(),
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reset_executor: None,
         })
     }
 
-    /// Set the present value (LifeSafetyState enumeration).
-    pub fn set_present_value(&mut self, state: u32) {
+    /// Set the present value.
+    pub fn set_present_value(&mut self, state: LifeSafetyState) {
         self.present_value = state;
     }
 
-    /// Set the operating mode (LifeSafetyMode enumeration).
-    pub fn set_mode(&mut self, mode: u32) {
+    /// Set the operating mode.
+    pub fn set_mode(&mut self, mode: LifeSafetyMode) {
         self.mode = mode;
     }
 
     /// Set the locally determined silenced state.
     pub fn set_silenced(&mut self, state: SilencedState) {
-        self.silenced = state.to_raw();
+        self.silenced = state;
     }
 
     /// Set the next LifeSafetyOperation expected by local device logic.
     pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
-        self.operation_expected = operation.to_raw();
+        self.operation_expected = operation;
     }
 
     /// Configure the application-owned reset executor before database insertion.
@@ -538,12 +543,14 @@ impl BACnetObject for LifeSafetyZoneObject {
                 ObjectType::LIFE_SAFETY_ZONE.to_raw(),
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode)),
-            p if p == PropertyIdentifier::SILENCED => Ok(PropertyValue::Enumerated(self.silenced)),
+            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode.to_raw())),
+            p if p == PropertyIdentifier::SILENCED => {
+                Ok(PropertyValue::Enumerated(self.silenced.to_raw()))
+            }
             p if p == PropertyIdentifier::OPERATION_EXPECTED => {
-                Ok(PropertyValue::Enumerated(self.operation_expected))
+                Ok(PropertyValue::Enumerated(self.operation_expected.to_raw()))
             }
             p if p == PropertyIdentifier::ZONE_MEMBERS => Ok(PropertyValue::List(
                 self.zone_members
@@ -571,7 +578,7 @@ impl BACnetObject for LifeSafetyZoneObject {
         }
         if property == PropertyIdentifier::MODE {
             if let PropertyValue::Enumerated(v) = value {
-                self.mode = v;
+                self.mode = LifeSafetyMode::from_raw(v);
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());

@@ -255,7 +255,7 @@ async fn life_safety_operation_default_policy_denies_without_mutation() {
     let executions = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&executions);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(move |_| {
         observed.fetch_add(1, Ordering::AcqRel);
@@ -533,7 +533,7 @@ async fn exact_success_duplicate_replays_identical_simple_ack_single_execution()
     let executions = Arc::new(AtomicUsize::new(0));
     let observed_executions = Arc::clone(&executions);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(move |context| {
         observed_executions.fetch_add(1, Ordering::AcqRel);

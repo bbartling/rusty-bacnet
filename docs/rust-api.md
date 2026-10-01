@@ -2861,7 +2861,11 @@ only when either changes. Property reports are the subscribed property plus one
 `Present_Value`, `Status_Flags`, `Tracking_Value`, `Silenced`, and
 `Operation_Expected`; Zone supports the same set without its unmodeled
 `Tracking_Value`, which is rejected with `PROPERTY / NOT_COV_PROPERTY`.
-Low-level object setters still bypass server notification ownership.
+Low-level object setters still bypass server notification ownership. They take
+the typed enums: `set_present_value` and `set_tracking_value` a
+`LifeSafetyState`, `set_mode` a `LifeSafetyMode`, `set_silenced` a
+`SilencedState` and `set_operation_expected` a `LifeSafetyOperation`. Each stores
+the value as given, so a proprietary value reads back unchanged.
 
 This is a bounded operational-state slice with pinned partial metadata (Point
 `POINT_BASE` 17 rows, Zone `ZONE_BASE` 14 rows; exact PICS projection tests) and

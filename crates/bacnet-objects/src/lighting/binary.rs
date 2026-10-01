@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
@@ -53,7 +53,7 @@ pub struct BinaryLightingOutputObject {
     out_of_service: bool,
     status_flags: StatusFlags,
     /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
+    reliability: Reliability,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
 }
@@ -74,7 +74,7 @@ impl BinaryLightingOutputObject {
             logical_now: Duration::ZERO,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: OFF,
         })

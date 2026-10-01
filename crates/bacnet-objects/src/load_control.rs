@@ -4,7 +4,7 @@
 //! load shedding. It tracks requested, expected, and actual shed levels.
 
 use bacnet_types::constructed::BACnetShedLevel;
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -31,7 +31,7 @@ pub struct LoadControlObject {
     /// Event_State.
     event_state: EventState,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl LoadControlObject {
@@ -64,7 +64,7 @@ impl LoadControlObject {
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 

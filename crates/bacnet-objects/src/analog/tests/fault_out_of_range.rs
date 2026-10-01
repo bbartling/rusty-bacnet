@@ -21,8 +21,8 @@ fn assert_changed(
     assert_eq!(
         result.unwrap(),
         ReliabilityEvaluation::Changed {
-            old_reliability: old_reliability.to_raw(),
-            new_reliability: new_reliability.to_raw(),
+            old_reliability,
+            new_reliability,
         }
     );
 }
@@ -315,26 +315,26 @@ macro_rules! assert_first_stage_precedence {
 
         object.set_test_value(21.0);
         object
-            .set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+            .set_reliability_internal(Reliability::NO_SENSOR)
             .unwrap();
         assert_unchanged(object.evaluate_reliability_internal());
         assert_eq!(reliability(&object), Reliability::NO_SENSOR.to_raw());
 
         object
-            .set_reliability_internal(Reliability::UNDER_RANGE.to_raw())
+            .set_reliability_internal(Reliability::UNDER_RANGE)
             .unwrap();
         assert_unchanged(object.evaluate_reliability_internal());
         assert_eq!(reliability(&object), Reliability::UNDER_RANGE.to_raw());
 
         object.set_test_value(9.0);
         object
-            .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+            .set_reliability_internal(Reliability::OVER_RANGE)
             .unwrap();
         assert_unchanged(object.evaluate_reliability_internal());
         assert_eq!(reliability(&object), Reliability::OVER_RANGE.to_raw());
 
         object
-            .set_reliability_internal(Reliability::NO_FAULT_DETECTED.to_raw())
+            .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
             .unwrap();
         assert_changed(
             object.evaluate_reliability_internal(),
@@ -342,7 +342,9 @@ macro_rules! assert_first_stage_precedence {
             Reliability::UNDER_RANGE,
         );
 
-        assert!(object.set_reliability_internal(11).is_err());
+        assert!(object
+            .set_reliability_internal(Reliability::from_raw(11))
+            .is_err());
         object.set_test_value(10.0);
         assert_changed(
             object.evaluate_reliability_internal(),
@@ -357,14 +359,14 @@ macro_rules! assert_first_stage_precedence {
             Reliability::OVER_RANGE,
         );
         object
-            .set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+            .set_reliability_internal(Reliability::OVER_RANGE)
             .unwrap();
         object.set_test_value(20.0);
         assert_unchanged(object.evaluate_reliability_internal());
         assert_eq!(reliability(&object), Reliability::OVER_RANGE.to_raw());
 
         object
-            .set_reliability_internal(Reliability::NO_FAULT_DETECTED.to_raw())
+            .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
             .unwrap();
         object.set_test_value(9.0);
         assert_changed(

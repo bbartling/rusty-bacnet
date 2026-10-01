@@ -612,8 +612,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         for change in detector.evaluate(&mut db_guard) {
                             debug!(
                                 object = %change.object_id,
-                                old = change.old_reliability,
-                                new = change.new_reliability,
+                                old = ?change.old_reliability,
+                                new = ?change.new_reliability,
                                 "Fault detection: reliability changed"
                             );
                             commit.changed(change.object_id);

@@ -24,8 +24,8 @@ pub struct MultiStateOutputObject {
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     reliability_evaluator: MultiStateReliabilityState,
     event_detection_enable: bool,
@@ -57,7 +57,7 @@ impl MultiStateOutputObject {
             status_flags: StatusFlags::empty(),
             priority_array: [None; 16],
             relinquish_default: 1,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             reliability_evaluator: MultiStateReliabilityState::default(),
@@ -435,7 +435,7 @@ impl BACnetObject for MultiStateOutputObject {
     fn is_createable(&self) -> bool {
         true
     }
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -753,7 +753,7 @@ mod command_failure_tests {
         assert_eq!(mso.evaluate_intrinsic_reporting(), None);
         assert_eq!(mso.tick_intrinsic_reporting(), None);
 
-        mso.reliability = 1;
+        mso.reliability = Reliability::NO_SENSOR;
         assert_eq!(
             mso.read_property(PropertyIdentifier::STATUS_FLAGS, None)
                 .unwrap(),
@@ -788,15 +788,12 @@ mod reliability_evaluator_tests {
         mso.evaluate_reliability_internal().unwrap();
         assert_eq!(
             mso.reliability,
-            Reliability::CONFIGURATION_ERROR.to_raw(),
+            Reliability::CONFIGURATION_ERROR,
             "invalid configuration must dominate invalid Present_Value"
         );
         mso.feedback_value = 1;
         mso.evaluate_reliability_internal().unwrap();
-        assert_eq!(
-            mso.reliability,
-            Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw()
-        );
+        assert_eq!(mso.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
         mso.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -807,7 +804,7 @@ mod reliability_evaluator_tests {
         .unwrap();
         assert_eq!(
             mso.reliability,
-            Reliability::NO_FAULT_DETECTED.to_raw(),
+            Reliability::NO_FAULT_DETECTED,
             "the central priority recalculation must recover synchronously"
         );
     }

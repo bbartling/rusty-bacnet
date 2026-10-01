@@ -10,7 +10,7 @@ use bacnet_types::constructed::{
     BACnetAuditLogQueryParameters, BACnetAuditNotification, BACnetLogRecord, BACnetObjectSelector,
     LogDatum,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
 
 #[test]
 fn typed_device_authority_is_forwarded_without_copying() {
@@ -378,8 +378,8 @@ impl BACnetObject for ExtendedReporter {
     }
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
         Ok(ReliabilityEvaluation::Changed {
-            old_reliability: 1,
-            new_reliability: 2,
+            old_reliability: Reliability::NO_SENSOR,
+            new_reliability: Reliability::OVER_RANGE,
         })
     }
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
@@ -625,8 +625,8 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert_eq!(
             object.evaluate_reliability_internal().unwrap(),
             ReliabilityEvaluation::Changed {
-                old_reliability: 1,
-                new_reliability: 2
+                old_reliability: Reliability::NO_SENSOR,
+                new_reliability: Reliability::OVER_RANGE
             }
         );
         assert!(object.reliability_evaluation_inhibited_internal());

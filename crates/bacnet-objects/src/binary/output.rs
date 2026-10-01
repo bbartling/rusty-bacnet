@@ -25,8 +25,8 @@ pub struct BinaryOutputObject {
     /// Polarity: 0 = normal, 1 = reverse.
     polarity: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     event_detection_enable: bool,
     active_text: String,
@@ -53,7 +53,7 @@ impl BinaryOutputObject {
             priority_array: [None; 16],
             relinquish_default: 0,
             polarity: 0,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             event_detection_enable: false,
@@ -350,7 +350,7 @@ impl BACnetObject for BinaryOutputObject {
         true
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }

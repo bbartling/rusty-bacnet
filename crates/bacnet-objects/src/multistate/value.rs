@@ -23,8 +23,8 @@ pub struct MultiStateValueObject {
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     reliability_evaluator: MultiStateReliabilityState,
     state_text: Vec<String>,
@@ -73,7 +73,7 @@ impl MultiStateValueObject {
             access,
             priority_array: [None; 16],
             relinquish_default: 1,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             reliability_evaluator: MultiStateReliabilityState::default(),
@@ -483,7 +483,7 @@ impl BACnetObject for MultiStateValueObject {
     fn is_createable(&self) -> bool {
         true
     }
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -600,19 +600,16 @@ mod reliability_evaluator_tests {
         msv.evaluate_reliability_internal().unwrap();
         assert_eq!(
             msv.reliability,
-            Reliability::CONFIGURATION_ERROR.to_raw(),
+            Reliability::CONFIGURATION_ERROR,
             "invalid configuration must dominate invalid Present_Value"
         );
         msv.event_detector.alarm_values = vec![1];
         msv.evaluate_reliability_internal().unwrap();
-        assert_eq!(
-            msv.reliability,
-            Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw()
-        );
+        assert_eq!(msv.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
         msv.set_number_of_states(3).unwrap();
         assert_eq!(
             msv.reliability,
-            Reliability::NO_FAULT_DETECTED.to_raw(),
+            Reliability::NO_FAULT_DETECTED,
             "count growth must synchronously recover the retained Present_Value"
         );
     }

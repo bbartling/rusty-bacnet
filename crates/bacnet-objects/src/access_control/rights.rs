@@ -16,7 +16,7 @@ pub struct AccessRightsObject {
     negative_access_rules_count: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl AccessRightsObject {
@@ -32,7 +32,7 @@ impl AccessRightsObject {
             negative_access_rules_count: 0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 }

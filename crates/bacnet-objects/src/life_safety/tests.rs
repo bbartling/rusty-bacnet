@@ -54,7 +54,7 @@ fn point_read_present_value_default() {
 #[test]
 fn point_set_and_read_present_value() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    pt.set_present_value(LifeSafetyState::ALARM.to_raw());
+    pt.set_present_value(LifeSafetyState::ALARM);
     let val = pt
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
@@ -86,7 +86,7 @@ fn point_read_mode_default() {
 #[test]
 fn point_set_mode() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    pt.set_mode(LifeSafetyMode::ON.to_raw());
+    pt.set_mode(LifeSafetyMode::ON);
     let val = pt.read_property(PropertyIdentifier::MODE, None).unwrap();
     assert_eq!(val, PropertyValue::Enumerated(LifeSafetyMode::ON.to_raw()));
 }
@@ -352,7 +352,7 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
 #[test]
 fn point_read_tracking_value() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    pt.set_tracking_value(LifeSafetyState::PRE_ALARM.to_raw());
+    pt.set_tracking_value(LifeSafetyState::PRE_ALARM);
     let val = pt
         .read_property(PropertyIdentifier::TRACKING_VALUE, None)
         .unwrap();
@@ -518,7 +518,7 @@ fn zone_read_present_value_default() {
 #[test]
 fn zone_set_and_read_present_value() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    z.set_present_value(LifeSafetyState::ALARM.to_raw());
+    z.set_present_value(LifeSafetyState::ALARM);
     let val = z
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
@@ -550,7 +550,7 @@ fn zone_read_mode_default() {
 #[test]
 fn zone_set_mode() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    z.set_mode(LifeSafetyMode::ARMED.to_raw());
+    z.set_mode(LifeSafetyMode::ARMED);
     let val = z.read_property(PropertyIdentifier::MODE, None).unwrap();
     assert_eq!(
         val,

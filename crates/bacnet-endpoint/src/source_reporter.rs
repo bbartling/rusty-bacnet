@@ -30,6 +30,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
+    Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
@@ -373,7 +374,7 @@ impl BACnetObject for SourceReporter {
         self.wrapped.reliability_evaluation_inhibited_internal()
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         self.wrapped.set_reliability_internal(reliability)
     }
 

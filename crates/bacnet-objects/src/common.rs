@@ -7,12 +7,12 @@
 /// Compute StatusFlags with all four bits dynamically set.
 ///
 /// IN_ALARM: TRUE when event_state is not NORMAL.
-/// FAULT: TRUE when reliability != NO_FAULT_DETECTED (0).
+/// FAULT: TRUE when reliability != NO_FAULT_DETECTED.
 /// OUT_OF_SERVICE: from the object's out_of_service flag.
 /// OVERRIDDEN: always FALSE for software-only (callers can set in base_flags).
 pub fn compute_status_flags(
     base_flags: bacnet_types::primitives::StatusFlags,
-    reliability: u32,
+    reliability: bacnet_types::enums::Reliability,
     out_of_service: bool,
     event_state: bacnet_types::enums::EventState,
 ) -> bacnet_types::primitives::PropertyValue {
@@ -22,7 +22,7 @@ pub fn compute_status_flags(
     } else {
         flags -= bacnet_types::primitives::StatusFlags::IN_ALARM;
     }
-    if reliability != 0 {
+    if reliability != bacnet_types::enums::Reliability::NO_FAULT_DETECTED {
         flags |= bacnet_types::primitives::StatusFlags::FAULT;
     } else {
         flags -= bacnet_types::primitives::StatusFlags::FAULT;
@@ -150,7 +150,7 @@ macro_rules! read_common_properties {
                 bacnet_types::primitives::PropertyValue::Boolean($self.out_of_service),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::RELIABILITY => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Enumerated($self.reliability),
+                bacnet_types::primitives::PropertyValue::Enumerated($self.reliability.to_raw()),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::PROPERTY_LIST => {
                 let props = $self.property_list();
@@ -210,8 +210,8 @@ pub(crate) fn write_out_of_service(
 #[inline]
 pub(crate) fn write_out_of_service_with_reliability_restore(
     out_of_service: &mut bool,
-    reliability: &mut u32,
-    saved_reliability: &mut Option<u32>,
+    reliability: &mut bacnet_types::enums::Reliability,
+    saved_reliability: &mut Option<bacnet_types::enums::Reliability>,
     property: bacnet_types::enums::PropertyIdentifier,
     value: &bacnet_types::primitives::PropertyValue,
 ) -> Option<Result<(), bacnet_types::error::Error>> {
@@ -222,7 +222,7 @@ pub(crate) fn write_out_of_service_with_reliability_restore(
             } else if *out_of_service && !*v {
                 *reliability = saved_reliability
                     .take()
-                    .unwrap_or(bacnet_types::enums::Reliability::NO_FAULT_DETECTED.to_raw());
+                    .unwrap_or(bacnet_types::enums::Reliability::NO_FAULT_DETECTED);
             }
             *out_of_service = *v;
             Some(Ok(()))
@@ -364,8 +364,8 @@ pub(crate) fn check_fixed_width_bit_string(
     }
 }
 
-/// Return whether a raw BACnetReliability value is defined by ASHRAE or lies
-/// in the vendor-proprietary range.
+/// Return whether a BACnetReliability value is defined by ASHRAE or lies in
+/// the vendor-proprietary range.
 ///
 /// The named set is derived from `Reliability::ALL_NAMED` so the predicate
 /// tracks the enum: when an addendum value lands as a constant in
@@ -374,11 +374,11 @@ pub(crate) fn check_fixed_width_bit_string(
 /// a future addendum, 26..=63 are reserved for ASHRAE, and 64..=65535 is the
 /// vendor-proprietary range (Clause 21 BACnetReliability).
 #[inline]
-pub(crate) fn is_reliability_value_valid(value: u32) -> bool {
+pub(crate) fn is_reliability_value_valid(value: bacnet_types::enums::Reliability) -> bool {
     bacnet_types::enums::Reliability::ALL_NAMED
         .iter()
-        .any(|&(_, named)| named.to_raw() == value)
-        || (64..=65_535).contains(&value)
+        .any(|&(_, named)| named == value)
+        || (64..=65_535).contains(&value.to_raw())
 }
 
 /// Return the invalid-array-index protocol error.

@@ -11,13 +11,13 @@ pub struct AccessUserObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // AccessUserType enumeration
-    user_type: u32,
+    present_value: AccessUserType,
+    user_type: AccessUserType,
     credentials: Vec<ObjectIdentifier>,
     assigned_access_rights_count: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl AccessUserObject {
@@ -28,13 +28,13 @@ impl AccessUserObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,
-            user_type: 0,
+            present_value: AccessUserType::ASSET,
+            user_type: AccessUserType::ASSET,
             credentials: Vec::new(),
             assigned_access_rights_count: 0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 }
@@ -61,10 +61,10 @@ impl BACnetObject for AccessUserObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_USER.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::USER_TYPE => {
-                Ok(PropertyValue::Enumerated(self.user_type))
+                Ok(PropertyValue::Enumerated(self.user_type.to_raw()))
             }
             p if p == PropertyIdentifier::CREDENTIALS => Ok(PropertyValue::List(
                 self.credentials
@@ -97,7 +97,7 @@ impl BACnetObject for AccessUserObject {
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = v;
+                    self.present_value = AccessUserType::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -105,7 +105,7 @@ impl BACnetObject for AccessUserObject {
             }
             p if p == PropertyIdentifier::USER_TYPE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.user_type = v;
+                    self.user_type = AccessUserType::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())

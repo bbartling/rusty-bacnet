@@ -11,7 +11,7 @@ pub struct AccessZoneObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // AccessZoneOccupancyState enumeration
+    present_value: AccessZoneOccupancyState,
     global_identifier: u64,
     occupancy_count: u64,
     access_doors: Vec<ObjectIdentifier>,
@@ -19,7 +19,7 @@ pub struct AccessZoneObject {
     exit_points: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl AccessZoneObject {
@@ -30,7 +30,7 @@ impl AccessZoneObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,
+            present_value: AccessZoneOccupancyState::NORMAL,
             global_identifier: 0,
             occupancy_count: 0,
             access_doors: Vec::new(),
@@ -38,7 +38,7 @@ impl AccessZoneObject {
             exit_points: Vec::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 }
@@ -65,7 +65,7 @@ impl BACnetObject for AccessZoneObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_ZONE.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
                 Ok(PropertyValue::Unsigned(self.global_identifier))
@@ -113,7 +113,7 @@ impl BACnetObject for AccessZoneObject {
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = v;
+                    self.present_value = AccessZoneOccupancyState::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())

@@ -4,7 +4,7 @@
 //! stream-access and record-access modes.
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier,
+    ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
@@ -234,7 +234,7 @@ pub struct FileObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
+    reliability: Reliability,
     /// Growth cap in octets for network writes; not a BACnet property.
     max_file_size: u64,
     /// Growth cap in records for network writes; not a BACnet property.
@@ -282,7 +282,7 @@ impl FileObject {
             records: Vec::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             max_record_count: DEFAULT_MAX_RECORD_COUNT,
             clock: None,

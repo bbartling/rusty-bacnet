@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
@@ -34,7 +34,7 @@ pub struct EventLogObject {
     status_flags: StatusFlags,
     event_state: EventState,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -54,7 +54,7 @@ impl EventLogObject {
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
         })
     }
