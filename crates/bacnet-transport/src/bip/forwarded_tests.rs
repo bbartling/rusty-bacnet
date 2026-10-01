@@ -76,7 +76,7 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
         originating_port: Some(origin.1),
     };
 
-    handle_bvll_message(&msg, peer, &ctx).await;
+    handle_bvll_message(&msg, peer, Delivery::Unicast, &ctx).await;
 
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await
@@ -165,7 +165,7 @@ async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
         originating_port: Some(origin.1),
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     assert!(
         timeout(Duration::from_millis(100), npdu_rx.recv())
@@ -243,7 +243,7 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
         originating_port: Some(origin.1),
     };
 
-    handle_bvll_message(&msg, peer, &ctx).await;
+    handle_bvll_message(&msg, peer, Delivery::Unicast, &ctx).await;
 
     let fdt_frame = recv_bvll(&fdt_socket).await;
     assert_eq!(fdt_frame.function, BvlcFunction::FORWARDED_NPDU);
@@ -342,7 +342,7 @@ async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
         originating_port: Some(origin.1),
     };
 
-    handle_bvll_message(&msg, peer, &ctx).await;
+    handle_bvll_message(&msg, peer, Delivery::Unicast, &ctx).await;
 
     // First two foreign devices received the frame
     let frame1 = recv_bvll(&fd_sockets[0]).await;
@@ -421,11 +421,11 @@ async fn forwarded_npdu_bbmd_self_sender_is_ignored_before_delivery_and_fanout()
         originating_port: Some(47808),
     };
     // Remote embedded origin does not make our looped-back UDP send a peer.
-    handle_bvll_message(&msg, self_sender, &ctx).await;
+    handle_bvll_message(&msg, self_sender, Delivery::Unicast, &ctx).await;
     msg.payload = Bytes::from_static(&[1, 0x80, 0x13, 0, 77, 1]);
     // Same IP, different port is an admitted peer: this fences every output
     // without a timeout-only silence assertion and rejects an IP-only filter.
-    handle_bvll_message(&msg, peer_sender, &ctx).await;
+    handle_bvll_message(&msg, peer_sender, Delivery::Unicast, &ctx).await;
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await
         .unwrap()
@@ -443,4 +443,107 @@ async fn forwarded_npdu_bbmd_self_sender_is_ignored_before_delivery_and_fanout()
         assert_eq!(received.originating_ip, msg.originating_ip);
         assert_eq!(received.originating_port, msg.originating_port);
     }
+}
+
+#[test]
+fn delivery_is_broadcast_only_for_the_configured_or_limited_broadcast_address() {
+    use std::net::{IpAddr, Ipv6Addr};
+    let configured = Ipv4Addr::new(192, 0, 2, 255);
+    for (destination, os, expected) in [
+        (IpAddr::V4(configured), None, Delivery::Broadcast),
+        (IpAddr::V4(Ipv4Addr::BROADCAST), None, Delivery::Broadcast),
+        (IpAddr::V4(configured), Some(true), Delivery::Broadcast),
+        // An OS that reports unicast delivery overrides the destination.
+        (IpAddr::V4(configured), Some(false), Delivery::Unicast),
+        (
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+            None,
+            Delivery::Unicast,
+        ),
+        (
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 255)),
+            None,
+            Delivery::Unicast,
+        ),
+        (IpAddr::V6(Ipv6Addr::LOCALHOST), None, Delivery::Unicast),
+    ] {
+        assert_eq!(
+            Delivery::of(destination, configured, os),
+            expected,
+            "{destination} {os:?}"
+        );
+    }
+}
+
+/// A Forwarded-NPDU from a one-hop (/32) BDT peer is rebroadcast locally only
+/// when it came by unicast: one that came by broadcast already reached the
+/// subnet, and rebroadcasting it could loop (#937).
+#[tokio::test]
+async fn forwarded_npdu_arriving_by_broadcast_is_not_rebroadcast_locally() {
+    let socket = Arc::new(super::BipSocket::new(
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap(),
+        None,
+    ));
+    let local_port = socket.local_addr().unwrap().port();
+    let local_sink = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let foreign = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let peer = ([192, 0, 2, 10], 0xBAC0);
+    let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state
+        .set_bdt(vec![BdtEntry {
+            ip: peer.0,
+            port: peer.1,
+            broadcast_mask: [255; 4],
+        }])
+        .unwrap();
+    assert!(state.forwarded_npdu_needs_local_broadcast(peer.0, peer.1));
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
+    assert_eq!(
+        state.register_foreign_device(
+            Ipv4Addr::LOCALHOST.octets(),
+            foreign.local_addr().unwrap().port(),
+            60
+        ),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+    let (npdu_tx, mut npdu_rx) = mpsc::channel(2);
+    let ctx = RecvContext {
+        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
+        socket,
+        npdu_tx,
+        bbmd: Some(Arc::new(Mutex::new(state))),
+        broadcast_addr: Ipv4Addr::LOCALHOST,
+        broadcast_port: local_sink.local_addr().unwrap().port(),
+        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
+        force_dbtn_forward_failure: false,
+    };
+    let msg = BvllMessage {
+        function: BvlcFunction::FORWARDED_NPDU,
+        payload: Bytes::from_static(&[0x01, 0x00, 0xAA, 0xBB]),
+        originating_ip: Some([192, 0, 2, 20]),
+        originating_port: Some(0xBAC1),
+    };
+    let assert_forwarded = |frame: &BvllMessage, label: &str| {
+        assert_eq!(frame.function, BvlcFunction::FORWARDED_NPDU, "{label}");
+        assert_eq!(frame.originating_ip, msg.originating_ip, "{label}");
+        assert_eq!(frame.originating_port, msg.originating_port, "{label}");
+        assert_eq!(frame.payload, msg.payload, "{label}");
+    };
+
+    handle_bvll_message(&msg, peer, Delivery::Broadcast, &ctx).await;
+    // Still delivered to this device and sent on to the foreign device, which
+    // is sent after any local rebroadcast.
+    let received = timeout(Duration::from_secs(2), npdu_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.npdu, msg.payload);
+    assert_forwarded(&recv_bvll(&foreign).await, "foreign device");
+    assert_no_bvll(&local_sink, "local broadcast after a broadcast arrival").await;
+
+    handle_bvll_message(&msg, peer, Delivery::Unicast, &ctx).await;
+    assert_forwarded(&recv_bvll(&local_sink).await, "local broadcast");
+    assert_forwarded(&recv_bvll(&foreign).await, "foreign device");
 }

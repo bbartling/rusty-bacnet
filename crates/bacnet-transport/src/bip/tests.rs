@@ -125,17 +125,23 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
     };
 
     let result = test_bvll_message(BvlcFunction::BVLC_RESULT, &[0x00, 0x00]);
-    handle_bvll_message(&result, ([127, 0, 0, 2], 47808), &ctx).await;
+    handle_bvll_message(&result, ([127, 0, 0, 2], 47808), Delivery::Unicast, &ctx).await;
     assert!(pending_bvlc_response.lock().await.is_some());
     assert!(rx.try_recv().is_err());
 
     let wrong_ack = test_bvll_message(BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK, &[]);
-    handle_bvll_message(&wrong_ack, ([127, 0, 0, 1], 47808), &ctx).await;
+    handle_bvll_message(&wrong_ack, ([127, 0, 0, 1], 47808), Delivery::Unicast, &ctx).await;
     assert!(pending_bvlc_response.lock().await.is_some());
     assert!(rx.try_recv().is_err());
 
     let expected_ack = test_bvll_message(BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK, &[]);
-    handle_bvll_message(&expected_ack, ([127, 0, 0, 1], 47808), &ctx).await;
+    handle_bvll_message(
+        &expected_ack,
+        ([127, 0, 0, 1], 47808),
+        Delivery::Unicast,
+        &ctx,
+    )
+    .await;
     assert!(pending_bvlc_response.lock().await.is_none());
     assert_eq!(
         rx.await.unwrap().function,

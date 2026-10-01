@@ -17,6 +17,34 @@ use super::fanout::FanoutDispatcher;
 use super::rate_limit::{is_covered_management_request, ManagementRateLimiter};
 use super::{decode_bvlc_result_code, PendingBvlcResponse};
 
+/// How a datagram reached the B/IP socket, from its destination address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Delivery {
+    /// Sent to the configured broadcast address or 255.255.255.255, so every
+    /// B/IP device on the subnet received it too.
+    Broadcast,
+    /// Any other destination.
+    Unicast,
+}
+
+impl Delivery {
+    /// Classify a datagram by its destination. An OS that flags the datagram
+    /// as unicast delivery overrides a broadcast destination.
+    pub(super) fn of(
+        destination: IpAddr,
+        configured_broadcast: Ipv4Addr,
+        os_group_delivery: Option<bool>,
+    ) -> Self {
+        let broadcast = matches!(destination, IpAddr::V4(ip) if ip == configured_broadcast || ip == Ipv4Addr::BROADCAST)
+            && os_group_delivery != Some(false);
+        if broadcast {
+            Self::Broadcast
+        } else {
+            Self::Unicast
+        }
+    }
+}
+
 pub(super) fn original_destination_matches(
     function: BvlcFunction,
     destination: IpAddr,
@@ -37,8 +65,8 @@ pub(super) fn original_destination_matches(
         IpAddr::V4(ip) => ip == local_ip,
         IpAddr::V6(_) => false,
     } && os_group_delivery != Some(true);
-    let broadcast = matches!(destination, IpAddr::V4(ip) if ip == configured_broadcast || ip == Ipv4Addr::BROADCAST)
-        && os_group_delivery != Some(false);
+    let broadcast =
+        Delivery::of(destination, configured_broadcast, os_group_delivery) == Delivery::Broadcast;
 
     match function {
         f if f == BvlcFunction::ORIGINAL_UNICAST_NPDU => local_unicast,
@@ -104,10 +132,12 @@ async fn complete_pending_bvlc_response(
     }
 }
 
-/// Handle a decoded BVLL message in the recv loop.
+/// Handle a decoded BVLL message in the recv loop. `delivery` says how its
+/// datagram arrived.
 pub(super) async fn handle_bvll_message(
     msg: &bvll::BvllMessage,
     sender: ([u8; 4], u16),
+    delivery: Delivery,
     ctx: &RecvContext,
 ) {
     // Bounded inbound management quota. Excess covered requests are
@@ -264,7 +294,13 @@ pub(super) async fn handle_bvll_message(
                     let after = state.fdt_counters().destinations_deduplicated;
                     (targets, after.saturating_sub(before))
                 };
-                if needs_local_broadcast {
+                // Annex J.4.5: one that came by broadcast already reached the
+                // local subnet, whatever the sender's BDT mask says. Never
+                // rebroadcasting it also ends any loop through a BDT row that
+                // is this BBMD under another address.
+                if needs_local_broadcast && delivery == Delivery::Broadcast {
+                    debug!("Forwarded-NPDU arrived by broadcast; skipping local rebroadcast");
+                } else if needs_local_broadcast {
                     let local_dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
                     let _ = send_forwarded_npdu(
                         &ctx.socket,

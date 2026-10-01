@@ -38,7 +38,7 @@ mod rate_limit;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 use io::{
     handle_bvll_message, original_destination_matches, resolve_local_ip,
-    send_register_foreign_device, RecvContext,
+    send_register_foreign_device, Delivery, RecvContext,
 };
 use own_broadcast::OwnBroadcastForwarder;
 pub use rate_limit::ManagementCounters;
@@ -678,8 +678,13 @@ impl TransportPort for BipTransport {
                                     } else {
                                         continue;
                                     };
+                                let delivery = Delivery::of(
+                                    received.destination,
+                                    recv_ctx.broadcast_addr,
+                                    received.os_group_delivery,
+                                );
 
-                                handle_bvll_message(&msg, sender_addr, &recv_ctx).await;
+                                handle_bvll_message(&msg, sender_addr, delivery, &recv_ctx).await;
                             }
                             Err(e) => {
                                 warn!(error = %e, "Failed to decode BVLL frame");
