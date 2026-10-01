@@ -38,12 +38,15 @@ env:
   NEXTEST_VERSION: 0.9.146
   MATURIN_VERSION: 1.15.0
   PYTHON_VERSION: "3.12"
-  # The tests the stack guard step reruns with smaller stacks (#953): the ones
-  # that start servers, endpoints, SC hubs and TLS sessions, and the CLI's.
+  # The tests the stack guard step reruns with smaller stacks (#953): every
+  # server, client, endpoint, integration and CLI test, the benchmark SC mTLS
+  # tests, and bacnet-transport's BACnet/SC tests (node, TLS dial, direct
+  # connection and hub, unit and integration).
   STACK_GUARD_TESTS: >-
-    package(bacnet-server) | package(bacnet-endpoint) | package(bacnet-integration-tests)
-    | package(bacnet-cli) | binary_id(bacnet-benchmarks::sc_mtls)
-    | (package(bacnet-transport) & (test(/^sc_hub::/) | binary_id(/^bacnet-transport::sc_hub/)))
+    package(bacnet-server) | package(bacnet-client) | package(bacnet-endpoint)
+    | package(bacnet-integration-tests) | package(bacnet-cli)
+    | binary_id(bacnet-benchmarks::sc_mtls)
+    | (package(bacnet-transport) & (test(/^(sc_hub|sc_tls|sc)::/) | binary_id(/^bacnet-transport::sc_hub/)))
 
 jobs:
   test:
