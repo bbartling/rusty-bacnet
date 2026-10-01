@@ -464,7 +464,7 @@ policy construction to `ScNodeTlsConfig`; CLI flags and error phases stay compat
 despite the [Rust source break](rust-api.md#strict-local-node-tls-configuration).
 Credentials are offered when requested and compatible, not proof of remote hub
 verification. A trusted server without CertificateRequest can complete, and normal
-TLS resumption may not retransmit certificates. Issue #513 remains open/partial.
+TLS resumption may not retransmit certificates. That work is still incomplete.
 
 ## Object Type Shorthand
 
@@ -529,12 +529,11 @@ executable and put it on your `PATH`. Linux binaries include packet capture
 support out of the box. macOS/Windows users who need capture can build from
 source with `--features pcap`.
 
-- **0.11.0** has all five binaries. Its Linux binaries need glibc 2.39 or newer
-  (for example Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu).
-- **From 0.12.0**, releases are built on Forgejo and carry only the two Linux
-  binaries until macOS and Windows builds return (#944); on those systems,
-  install with `cargo install`. The Linux binaries need glibc 2.17 or newer,
-  so they run on Ubuntu 22.04, Debian 12, RHEL 9 and later, and link libpcap
+- **0.11.0**: its Linux binaries need glibc 2.39 or newer (for example
+  Ubuntu 24.04) and libpcap (`libpcap0.8` on Debian and Ubuntu).
+- **From 0.12.0**, the Linux binaries need glibc 2.17 or newer, so they run on
+  RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later. They link libpcap
   statically, so no libpcap package is needed (live capture still needs root,
   as [Packet Capture](#packet-capture) says). Each release also has a
-  `SHA256SUMS` file.
+  `SHA256SUMS` file and a `THIRD-PARTY-NOTICES` file listing the third-party
+  code in the binaries.

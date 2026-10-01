@@ -103,8 +103,9 @@ contains:
   download checked against its SHA-256;
 - the apt packages the jobs need;
 - for the [release](#release): zig and cargo-zigbuild, the
-  `aarch64-unknown-linux-gnu` Rust target, and a static libpcap for each
-  release target.
+  `aarch64-unknown-linux-gnu` Rust target, a static libpcap for each release
+  target with its licence, uv for the artifact test's extra Pythons, and
+  `qemu-aarch64-static` with the aarch64 glibc to run the arm64 CLI.
 
 The jobs no longer spend time on apt, rustup or tool downloads.
 
@@ -246,18 +247,26 @@ merge comes from that PR's run, not an older one.
 
 [`.forgejo/workflows/release.yml`](../.forgejo/workflows/release.yml) builds,
 tests and publishes a release from Forgejo (#943). It took over while GitHub
-Actions is disabled on the mirror (#905).
+Actions is disabled on the mirror (#905). It builds the Linux artifacts only,
+and no release is tagged until it also builds macOS and Windows (#944).
+
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) now runs
 only when dispatched by hand, so re-enabling Actions can't publish a tag twice.
-GitHub Pages publication remains the manual
-[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch on GitHub.
+It is not a way to add macOS or Windows assets to a tag Forgejo already
+released: it has no skip logic, and GitHub releases here are immutable once
+published. GitHub Pages publication remains the manual
+[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch, which needs
+GitHub Actions, and Actions is disabled on the mirror.
 
 ### Trigger and dry run
 
 - **Tag.** Pushing a `v*` tag to Forgejo runs the whole release.
 - **Dry run.** A manual dispatch is a dry run by default (`dry_run` is true). It
-  builds and tests every artifact, keeps them as workflow artifacts and
-  publishes nothing. On a branch the notes come from `[Unreleased]`:
+  builds and tests every artifact, keeps them as workflow artifacts, makes the
+  release API calls read only (see [Release API](#release-api-dry-run)) and
+  publishes nothing. The notes come from the workspace version's
+  `CHANGELOG.md` section if it has one, otherwise from `[Unreleased]`, which
+  may be empty:
 
   ```bash
   tea api -X POST repos/jscott3201/rusty-bacnet/actions/workflows/release.yml/dispatches \
@@ -268,31 +277,100 @@ GitHub Pages publication remains the manual
   release again.
 
 To release, set the workspace version, add its `CHANGELOG.md` section, merge,
-and tag a commit on `main` or `dev` whose `CI OK` passed:
+and tag a commit on `main` or `dev`:
 
 ```bash
 git tag -a v0.12.0 -m "Rusty BACnet 0.12.0"
 git push origin v0.12.0
 ```
 
+The tag push also starts CI on the tagged commit, with the heavy jobs, and the
+release waits for it (see [CI gate](#ci-gate)).
+
 ### Jobs
 
 | Job | What it does |
 | --- | --- |
 | CI image | Pulls `CI_IMAGE` into the VM's Docker. Only `ci.yml` builds the image, and its image job fails if `release.yml` carries another tag. |
-| Validate | Runs the release script tests (`scripts/release/test_*.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>`, the commit is on `dev` or `main`, and a `CI / CI OK` status passed on it (only a warning on a dry run). Extracts the notes with `scripts/release/changelog_notes.py`. |
+| Validate | Runs the release script tests (`scripts/release/test_*.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a release, checks that the publish secrets are set, before anything is built. Extracts the notes with `changelog_notes.py`, writes `THIRD-PARTY-NOTICES`, then runs the [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then the crates.io job's plan (read only), `cargo package` for the `crates` artifact, and `maturin sdist`. |
 | Wheels (x86_64, aarch64) | `maturin build --release --locked --zig --compatibility manylinux2014` for CPython 3.11 to 3.14. The image has only Python 3.12; maturin uses its bundled sysconfig for the others. |
-| CLI (amd64, arm64) | `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. |
-| Test the artifacts | `check_artifacts.py`: one wheel per Python and architecture with the right tags and extension module, the right ELF architecture, nothing above glibc 2.17 (`objdump -T`), no dynamic libpcap. The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. |
+| CLI (amd64, arm64) | `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. |
+| Test the artifacts | `check_artifacts.py`: one wheel per Python and architecture with the right tags, version (the workspace version in PEP 440 form) and extension module, `THIRD-PARTY-NOTICES` in each wheel and the sdist, the right ELF architecture, nothing above glibc 2.17 (`objdump -T`), no dynamic libpcap. The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. The quickstart read again with the server on each other x86_64 wheel, in CPython 3.11, 3.13 and 3.14 from `uv python install`. The arm64 CLI's `--version`, `--help` and offline capture under `qemu-aarch64-static`. |
+| Release API (dry run) | Dry runs only. `release_api.py forgejo --dry-run` against Forgejo with the job token, and `release_api.py github --dry-run` if `GH_RELEASE_TOKEN` is set (otherwise a notice says it was skipped). Both read only, for the tag `v<version>`. |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `maturin upload --skip-existing` of the wheels and the sdist. |
-| Forgejo release | `release_api.py forgejo`: creates the release with the notes if it's missing, then uploads the assets it doesn't have yet. |
-| GitHub release copy | `release_api.py github`: waits up to 15 minutes for the push mirror to bring the tag, checks that it points at the same commit, then does the same as the Forgejo job through the GitHub REST API. |
+| Forgejo release | `release_api.py forgejo`: [draft, upload, publish](#draft-then-publish). |
+| GitHub release copy | `release_api.py github`: waits up to 15 minutes for the push mirror to bring the tag, checks that it points at the release commit, then drafts, uploads and publishes through the GitHub REST API. |
 
 The publish jobs run only for a tag, after every build and test passed, one at
 a time in the order above. A failure stops the jobs after it. Release builds
 use no Rust cache.
+
+Not tested at run time: the aarch64 wheels (only their tags, module names, ELF
+machine and glibc symbols are checked) and the arm64 CLI's network commands.
+
+### CI gate
+
+`scripts/release/ci_gate.py` reads Forgejo's combined status for the commit
+(`/repos/{owner}/{repo}/commits/{sha}/status`), which holds the latest status of
+each context, so an older success can't hide a newer failure. A release needs
+all three of these to be `success`:
+
+- `CI / CI OK (push)`
+- `CI / MSRV (Linux native) (push)`
+- `CI / Cargo Audit + Deny (push)`
+
+MSRV and audit/deny are heavy jobs, which a dev push skips and a tag push
+runs. On a tag, the gate polls every 30 seconds for up to 60 minutes while the
+tag's CI run is pending, and fails at once on `failure`, `error` or `skipped`.
+A dry run checks once and only warns. A dispatched CI run posts no commit
+statuses, so only push runs count.
+
+### Draft, then publish
+
+GitHub releases in this repository are immutable once published: assets can't
+be added, replaced or deleted, and the tag can't be reused. `release_api.py`
+therefore builds each release as a draft and publishes it last. For GitHub:
+
+1. `GET /repos/{o}/{r}/releases` (all pages), matching `tag_name`, because
+   `/releases/tags/{tag}` doesn't return drafts. A published release is only
+   checked, read only. Otherwise:
+2. `POST /repos/{o}/{r}/releases` with `draft: true` and
+   `target_commitish: <commit>`, unless a draft exists.
+3. `POST uploads.github.com/.../releases/{id}/assets?name=...` for each asset
+   the draft lacks.
+4. `SHA256SUMS`, computed over the draft's final asset set, uploaded the same
+   way (an outdated one is deleted first).
+5. `PATCH /repos/{o}/{r}/releases/{id}` with `draft: false`, the last call.
+
+The Forgejo release follows the same order through Forgejo's API, so
+`releases/latest` never shows a half-uploaded release.
+
+- **Resuming.** A draft left by an earlier run keeps its notes. On GitHub, its
+  assets are kept, with the checksums GitHub reports for them, and
+  `SHA256SUMS` lists what the draft holds. Forgejo's web routes, the only way to
+  download an attachment, don't accept the job token for a private repository,
+  so on a resumed Forgejo draft this run's files replace the existing ones.
+- **Published.** The script never uploads to or deletes from a published
+  release. It checks that every asset and `SHA256SUMS` are there and, on
+  GitHub, that each asset matches `SHA256SUMS`, and fails with an explanation
+  otherwise.
+- **Retries.** Reads, the final `PATCH` and deletes retry on 5xx and network
+  errors. A `POST` doesn't: after a failed upload the script lists the draft's
+  assets again and sends the file again only if it's absent (or, on GitHub,
+  differs). A failed create looks for the draft before trying again.
+- **Downloads.** GitHub serves a draft's assets only through the API asset URL
+  with `Accept: application/octet-stream`. The token goes in an unredirected
+  header, so the redirect to storage never carries it.
+
+#### Release API (dry run)
+
+The dry run calls the same code with `--dry-run`, which makes no write: it
+finds the release, checks a published one, prints the uploads a real run would
+make and, on GitHub, downloads the smallest existing asset. While the
+workspace version is already released, the check reports what the published
+release lacks as a warning.
 
 ### Artifacts
 
@@ -302,39 +380,69 @@ use no Rust cache.
     capture;
   - `rusty_bacnet-<version>.tar.gz`, the sdist;
   - eight wheels, `rusty_bacnet-<version>-cp3XY-cp3XY-manylinux_2_17_<arch>.manylinux2014_<arch>.whl`
-    for CPython 3.11 to 3.14 on x86_64 and aarch64.
+    for CPython 3.11 to 3.14 on x86_64 and aarch64;
+  - `THIRD-PARTY-NOTICES`.
 - `release-notes`: `notes.md` for Forgejo, and `notes-github.md` for GitHub.
   GitHub refuses bodies over 125,000 characters, so a longer section is cut at
-  120,000 with a link to the full `CHANGELOG.md`. The 0.11.0 section is about
-  171,000.
+  120,000 with a link to the full `CHANGELOG.md`, closing any code block the
+  cut leaves open. The 0.11.0 section is about 171,000.
+- `notices`: `THIRD-PARTY-NOTICES`, which the sdist and wheel jobs build in.
 - `crates`, `sdist`, `wheels-<arch>` and `cli-<arch>`: each build job's output.
 
-The Linux binaries and wheels need glibc 2.17 or newer, which covers Ubuntu
-22.04, Debian 12 and RHEL 9. zig links them against that glibc, so no manylinux
-container is involved. The CLI links libpcap 1.10.7 statically, built for each
-target in the CI image: Debian and Ubuntu name the shared library
-`libpcap.so.0.8` and RHEL `libpcap.so.1`, so one dynamically linked binary
-couldn't run on both. The pcap crate links `-lpcap` as a shared library and
-zig won't fall back to an archive, so the image puts a one-line linker script
-named `libpcap.so` next to `libpcap.a`.
+The Linux binaries and wheels need glibc 2.17 or newer, which covers
+RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later. zig links them against that
+glibc, so no manylinux container is involved. The CLI links libpcap 1.10.7
+statically, built for each target in the CI image: Debian and Ubuntu name the
+shared library `libpcap.so.0.8` and RHEL `libpcap.so.1`, so one dynamically
+linked binary couldn't run on both. The pcap crate links `-lpcap` as a shared
+library and zig won't fall back to an archive, so the image puts a one-line
+linker script named `libpcap.so` next to `libpcap.a`.
+
+### Third-party notices
+
+`scripts/release/third_party_notices.py` writes `THIRD-PARTY-NOTICES`: Rusty
+BACnet's own licence, then every third-party component in the release
+binaries with the licence files it ships, identical texts printed once.
+
+- The crates come from `cargo tree --locked --offline -e normal,no-proc-macro`
+  for the CLI (`-p bacnet-cli --features sc-tls,pcap`) and the Python extension
+  (`-p rusty-bacnet`) on both Linux targets, so build scripts, proc-macros and
+  dev-dependencies, which neither binary contains, are left out. The licence
+  files are the ones at each crate's root, plus `aws-lc/LICENSE` for the C
+  library that `aws-lc-sys` bundles.
+- libpcap's licence and version come from `/opt/libpcap` in the CI image.
+- The file depends only on `Cargo.lock`, the crate sources and libpcap, so a
+  rebuild writes the same file.
+
+It's attached to each release, and `pyproject.toml`'s `license-files` puts it
+in each wheel's `.dist-info/licenses/` and in the sdist; the artifact test
+checks both. Local builds have no such file, and maturin skips it.
+
+cargo-audit and cargo-deny don't cover libpcap, so its advisories need
+tracking by hand: watch the [tcpdump/libpcap
+releases](https://www.tcpdump.org/) and their security fixes, and bump
+`LIBPCAP_VERSION` in the Dockerfile and `LIBPCAP_VER` in `release.yml`
+together.
 
 ### Re-running a partial release
 
 Every publish job skips what's already there: crate versions on crates.io,
-files on PyPI, an existing release and the assets it holds. An existing
-release keeps its notes.
+files on PyPI, and a release that is already published. A draft is resumed as
+[above](#draft-then-publish).
 
 Forgejo deletes all of a run's artifacts whenever any of its jobs is re-run, so
 re-running only a failed publish job would find nothing to upload. To finish a
-release, for example after adding a missing secret, use **"Re-run all jobs"** on
-the tag's run, or dispatch the workflow on the tag with `dry_run=false`. Both
+release, for example after a network failure, use **"Re-run all jobs"** on the
+tag's run, or dispatch the workflow on the tag with `dry_run=false`. Both
 rebuild and test everything before the publish jobs pick up where they stopped.
 
-Rebuilds are byte-identical: the same image, paths and toolchain, with
-`SOURCE_DATE_EPOCH` set to the commit time for the sdist and wheels. If one
-ever weren't, PyPI would keep the files it already has, and each release would
-keep the assets it already has: the release jobs upload `SHA256SUMS` last, from
-the checksums of the files the release actually holds.
+Rebuilding a commit has given identical files: two dry runs of `685e23ed`
+(runs 79 and 80, 2026-10-01) produced the same SHA-256 for all 12
+`release-assets` files. The jobs use the same image, paths and toolchain, with
+`SOURCE_DATE_EPOCH` set to the commit time for the sdist and wheels, but
+nothing enforces it. If a rebuild ever differed, PyPI would keep the files it
+already has, a published release wouldn't change, and `SHA256SUMS` would
+still list exactly what each release holds.
 
 ### Secrets
 
@@ -346,17 +454,19 @@ Repository secrets, each passed only to the step that needs it:
   `bacnet-cli`.
 - `PYPI_PUBLISH`: a PyPI API token for `rusty-bacnet`, used as `__token__`.
 - `GH_RELEASE_TOKEN`: a fine-grained GitHub token for `jscott3201/rusty-bacnet`
-  with Contents read and write. Without it the GitHub job fails, after the other
-  publishes, with that instruction. Add it, then use "Re-run all jobs".
+  with Contents read and write.
 - The job's automatic token creates the Forgejo release and reads commit
   statuses.
 
+For a release, Validate fails before any build if `CARGO_REGISTRY_TOKEN`,
+`PYPI_PUBLISH` or `GH_RELEASE_TOKEN` is empty; a dry run only warns. The step
+sees only whether each is set, never its value.
+
 ### macOS and Windows
 
-The runner is one Linux x86_64 VM, so a release carries only Linux binaries and
-wheels. Cross-compiled macOS and Windows builds are #944. Until then, users on
-those systems install the CLI with `cargo install bacnet-cli` and build the
-Python package from the sdist, which needs a Rust toolchain.
+The runner is one Linux x86_64 VM, so the workflow builds only Linux binaries
+and wheels. Cross-compiled macOS and Windows builds are #944, and releases
+wait for them.
 
 These checks do not establish Windows support, hardware qualification or
 release readiness.

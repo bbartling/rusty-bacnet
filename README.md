@@ -99,9 +99,9 @@ on your `PATH`.
   (amd64), all with BACnet/SC. The Linux builds also include packet capture.
   They need glibc 2.39 or newer (for example Ubuntu 24.04) and libpcap
   (`libpcap0.8` on Debian and Ubuntu).
-- From 0.12.0, releases carry only the Linux builds until macOS and Windows
-  return (#944). Those need glibc 2.17 or newer (Ubuntu 22.04, Debian 12,
-  RHEL 9 and later) and no libpcap package.
+- From 0.12.0, the Linux builds need only glibc 2.17 or newer (RHEL/CentOS 7,
+  Debian 8, Ubuntu 14.04 and later) and no libpcap package, because they link
+  it statically.
 
 From 0.12.0, `bacnet-cli` is also published on crates.io, so once that release
 is out, `cargo install bacnet-cli --locked --features sc-tls` builds it on any

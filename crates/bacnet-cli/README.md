@@ -17,7 +17,7 @@ The binary is called `bacnet`. Optional features:
 - `pcap`: `bacnet capture`, live or from a pcap file. It needs libpcap and its
   headers (`libpcap-dev` on Debian and Ubuntu).
 
-Prebuilt binaries for Linux are attached to each
+Prebuilt binaries are attached to each
 [release](https://github.com/jscott3201/rusty-bacnet/releases).
 
 ## Example

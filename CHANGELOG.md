@@ -179,12 +179,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Releases are built, tested and published from Forgejo
   (`.forgejo/workflows/release.yml`) while GitHub Actions is disabled on the
   mirror, and each one is copied to GitHub Releases. A manual dispatch is a dry
-  run that publishes nothing. Until macOS and Windows builds return (#944), a
-  release carries only Linux artifacts. `bacnet-cli` and `bacnet-endpoint` are
-  now published on crates.io. The Linux CLI binaries need glibc 2.17 instead of
-  2.39, so they run on Ubuntu 22.04, Debian 12 and RHEL 9, and they link libpcap
-  statically. Wheels now cover CPython 3.14 as well, and each release has a
-  `SHA256SUMS` file (#943).
+  run that publishes nothing. The workflow builds the Linux artifacts, and no
+  release is tagged until it also builds macOS and Windows (#944). Starting
+  with the next release, `bacnet-cli` and `bacnet-endpoint` are published on
+  crates.io; the Linux CLI binaries need glibc 2.17 instead of 2.39, so they
+  run on RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later, and link libpcap
+  statically; and each release has a `SHA256SUMS` file and a
+  `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
+  CPython 3.14 wheels ship once the release pipeline publishes (#943).
 
 - `bacnet_server::schedule::tick_schedules` drops its unused UTC-offset argument;
   evaluation already used the database clock frame. It only evaluates schedules.
