@@ -9,7 +9,7 @@ use bacnet_objects::{
     value_types::TimeValueObject,
 };
 use bacnet_types::constructed::BACnetStageLimitValue;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
@@ -77,8 +77,10 @@ fn pics_projects_migrated_property_metadata() {
         .unwrap();
     db.add(Box::new(BinaryInputObject::new(1, "bi-1").unwrap()))
         .unwrap();
-    db.add(Box::new(EventEnrollmentObject::new(1, "ee-1", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        EventEnrollmentObject::new(1, "ee-1", EventType::CHANGE_OF_BITSTRING).unwrap(),
+    ))
+    .unwrap();
     let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     db.add(Box::new(
         AlertEnrollmentObject::new(1, "ae-1", alert_source).unwrap(),

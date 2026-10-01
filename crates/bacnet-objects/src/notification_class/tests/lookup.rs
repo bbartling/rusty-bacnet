@@ -74,7 +74,13 @@ impl BACnetObject for LookupTestNotificationClass {
 }
 
 fn lookup(db: &ObjectDatabase) -> RecipientLookupOutcome {
-    lookup_notification_recipients(db, 1, EventTransition::ToOffnormal, 0x01, &make_time(12, 0))
+    lookup_notification_recipients(
+        db,
+        1,
+        EventTransition::ToOffnormal,
+        DaysOfWeek::MONDAY,
+        &make_time(12, 0),
+    )
 }
 
 #[test]
@@ -89,7 +95,7 @@ fn lookup_distinguishes_missing_notification_class_and_wrappers_remain_empty() {
         &db,
         1,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     )
     .is_empty());
@@ -98,7 +104,7 @@ fn lookup_distinguishes_missing_notification_class_and_wrappers_remain_empty() {
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         Some(Vec::new())
@@ -121,7 +127,7 @@ fn lookup_distinguishes_unavailable_recipient_list_and_preserves_strict_mapping(
         &db,
         1,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     )
     .is_empty());
@@ -130,7 +136,7 @@ fn lookup_distinguishes_unavailable_recipient_list_and_preserves_strict_mapping(
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         Some(Vec::new())
@@ -153,7 +159,7 @@ fn lookup_distinguishes_invalid_full_list_without_delivering_a_prefix() {
         &db,
         1,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     )
     .is_empty());
@@ -162,7 +168,7 @@ fn lookup_distinguishes_invalid_full_list_without_delivering_a_prefix() {
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         None
@@ -183,7 +189,7 @@ fn lookup_distinguishes_zero_configured_destinations_and_wrappers_remain_empty()
         &db,
         1,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     )
     .is_empty());
@@ -192,7 +198,7 @@ fn lookup_distinguishes_zero_configured_destinations_and_wrappers_remain_empty()
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         Some(Vec::new())
@@ -203,7 +209,7 @@ fn lookup_distinguishes_zero_configured_destinations_and_wrappers_remain_empty()
 fn lookup_distinguishes_configured_but_ineligible_destinations() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let mut destination = make_dest_device(10);
-    destination.valid_days = 0x02;
+    destination.valid_days = DaysOfWeek::TUESDAY;
     nc.add_destination(destination);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(nc)).unwrap();
@@ -216,7 +222,7 @@ fn lookup_distinguishes_configured_but_ineligible_destinations() {
         &db,
         1,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     )
     .is_empty());
@@ -225,7 +231,7 @@ fn lookup_distinguishes_configured_but_ineligible_destinations() {
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         Some(Vec::new())
@@ -254,7 +260,7 @@ fn lookup_returns_selected_device_recipient_as_a_match_for_both_wrappers() {
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         vec![expected.clone()]
@@ -264,7 +270,7 @@ fn lookup_returns_selected_device_recipient_as_a_match_for_both_wrappers() {
             &db,
             1,
             EventTransition::ToOffnormal,
-            0x01,
+            DaysOfWeek::MONDAY,
             &make_time(12, 0),
         ),
         Some(vec![expected])

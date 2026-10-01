@@ -1,6 +1,6 @@
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{EventType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::support::classify_required_property_read_error;
@@ -84,7 +84,7 @@ pub(super) fn read_object_property_ref(
 pub(super) fn params_fingerprint(
     params: &BACnetEventParameter,
     normal_delay: u64,
-    event_type_raw: u32,
+    event_type: EventType,
     monitored: &MonitoredReference,
 ) -> Result<u64, bacnet_types::error::Error> {
     let mut buf = bytes::BytesMut::new();
@@ -94,7 +94,7 @@ pub(super) fn params_fingerprint(
         .iter()
         .copied()
         .chain(normal_delay.to_le_bytes())
-        .chain(event_type_raw.to_le_bytes())
+        .chain(event_type.to_raw().to_le_bytes())
         .chain(monitored.object_identifier.encode())
         .chain(monitored.property_identifier.to_raw().to_le_bytes())
         // BACnet assigns different meanings to an omitted index and index 0.

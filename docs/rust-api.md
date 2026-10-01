@@ -2255,7 +2255,7 @@ Send them with `confirmed_request` and decode the ACK with `bacnet_services`:
 ```rust
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
-use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::enums::{AcknowledgmentFilter, ConfirmedServiceChoice};
 use bytes::BytesMut;
 
 // GetAlarmSummary takes no parameters.
@@ -2263,7 +2263,7 @@ let raw = client.confirmed_request(&mac, ConfirmedServiceChoice::GET_ALARM_SUMMA
 let alarms = GetAlarmSummaryAck::decode(&raw)?;
 
 let request = GetEnrollmentSummaryRequest {
-    acknowledgment_filter: 0, // all
+    acknowledgment_filter: AcknowledgmentFilter::ALL,
     enrollment_filter: None,
     event_state_filter: None,
     event_type_filter: None,

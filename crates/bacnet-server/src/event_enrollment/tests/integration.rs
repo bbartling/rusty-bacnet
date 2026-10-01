@@ -30,8 +30,7 @@ fn evaluates_multiple_enrollments() {
     db.add(Box::new(ai2)).unwrap();
 
     // Two enrollments
-    let mut ee1 =
-        EventEnrollmentObject::new(80, "EE-80", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee1 = EventEnrollmentObject::new(80, "EE-80", EventType::OUT_OF_RANGE).unwrap();
     ee1.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai1_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -45,8 +44,7 @@ fn evaluates_multiple_enrollments() {
     ee1.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee1)).unwrap();
 
-    let mut ee2 =
-        EventEnrollmentObject::new(81, "EE-81", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee2 = EventEnrollmentObject::new(81, "EE-81", EventType::OUT_OF_RANGE).unwrap();
     ee2.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -71,8 +69,7 @@ fn missing_monitored_object_is_skipped() {
     let mut db = ObjectDatabase::new();
 
     let fake_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
-    let mut ee =
-        EventEnrollmentObject::new(90, "EE-miss", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(90, "EE-miss", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         fake_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -113,7 +110,7 @@ pub(super) fn setup_qualified_reference(
 
     let reference_device_oid =
         ObjectIdentifier::new(ObjectType::DEVICE, reference_device_instance).unwrap();
-    let mut ee = EventEnrollmentObject::new(3, "EE-3", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-3", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_remote(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -208,8 +205,7 @@ impl ReferenceValueObject {
         reference: Option<PropertyValue>,
         event_type: EventType,
     ) -> Self {
-        let mut inner =
-            EventEnrollmentObject::new(999, "reference-value", event_type.to_raw()).unwrap();
+        let mut inner = EventEnrollmentObject::new(999, "reference-value", event_type).unwrap();
         inner.set_event_parameters(BACnetEventParameter::OutOfRange {
             time_delay: 2,
             low_limit: 20.0,

@@ -22,7 +22,7 @@ fn add_out_of_range_enrollment(
     let mut enrollment = EventEnrollmentObject::new(
         instance,
         format!("EE-index-{instance}"),
-        EventType::OUT_OF_RANGE.to_raw(),
+        EventType::OUT_OF_RANGE,
     )
     .unwrap();
     enrollment.set_object_property_reference(Some(
@@ -50,7 +50,7 @@ fn add_cov_enrollment(
     let mut enrollment = EventEnrollmentObject::new(
         instance,
         format!("EE-COV-index-{instance}"),
-        EventType::CHANGE_OF_VALUE.to_raw(),
+        EventType::CHANGE_OF_VALUE,
     )
     .unwrap();
     enrollment.set_object_property_reference(Some(
@@ -517,8 +517,7 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
     db.add(Box::new(setpoint)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(9, "EE-indexed-setpoint", EventType::FLOATING_LIMIT.to_raw())
-            .unwrap();
+        EventEnrollmentObject::new(9, "EE-indexed-setpoint", EventType::FLOATING_LIMIT).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         monitored_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),

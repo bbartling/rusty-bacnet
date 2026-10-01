@@ -1031,16 +1031,16 @@ Get a summary of all active alarms on a device.
 raw = await client.get_alarm_summary("192.168.1.100:47808")
 ```
 
-#### `get_enrollment_summary(address, acknowledgment_filter, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None) -> list[dict]`
+#### `get_enrollment_summary(address, acknowledgment_filter=AcknowledgmentFilter.ALL, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None) -> list[dict]`
 
 Get enrollment summary with filters.
 
 ```python
-from rusty_bacnet import EnrollmentSummaryEventStateFilter
+from rusty_bacnet import AcknowledgmentFilter, EnrollmentSummaryEventStateFilter
 
 summaries = await client.get_enrollment_summary(
     "192.168.1.100:47808",
-    acknowledgment_filter=0,                        # 0=all, 1=acked, 2=not-acked
+    acknowledgment_filter=AcknowledgmentFilter.NOT_ACKED,
     event_state_filter=EnrollmentSummaryEventStateFilter.OFFNORMAL,
     min_priority=0,
     max_priority=255,
@@ -1449,6 +1449,8 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 #### Schedule & Notification
 
 ```python
+from rusty_bacnet import EventType
+
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
@@ -1457,7 +1459,11 @@ server.add_alert_enrollment(
     name="Alert",
     initial_source=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
 )
-server.add_event_enrollment(instance=1, name="Event", event_type=0)
+server.add_event_enrollment(
+    instance=1,
+    name="Event",
+    event_type=EventType.OUT_OF_RANGE,  # default: EventType.CHANGE_OF_BITSTRING
+)
 ```
 
 `initial_source` is required and becomes the Alert Enrollment object's

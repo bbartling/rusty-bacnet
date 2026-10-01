@@ -290,10 +290,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let device_oid = crate::local_device::selected_device(&db)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
 
-            let (today_bit, current_time) = match recipient_clock {
+            let (today, current_time) = match recipient_clock {
                 SampledEventClock::Valid(clock_frame) => (
                     clock_frame
-                        .day_of_week_bit()
+                        .day_of_week()
                         .expect("validated ClockFrame has a day of week"),
                     clock_frame.local_time,
                 ),
@@ -350,7 +350,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &db,
                     notification_class,
                     transition,
-                    today_bit,
+                    today,
                     &current_time,
                 ),
                 notification_class,

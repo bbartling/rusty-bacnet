@@ -47,7 +47,7 @@ fn setup_oor(
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -298,7 +298,8 @@ fn parameter_change_mid_pending_cancels_and_regates() {
     // Rewrite Event_Parameters with a longer delay, as a config client's
     // framed wire write would deliver it (the write arm also accepts the
     // structured value directly; the framed path is the network-faithful one).
-    let mut scratch = EventEnrollmentObject::new(1, "scratch", 0).unwrap();
+    let mut scratch =
+        EventEnrollmentObject::new(1, "scratch", EventType::CHANGE_OF_BITSTRING).unwrap();
     scratch.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 5,
         low_limit: 20.0,
@@ -376,8 +377,7 @@ fn change_of_state_delays_both_directions() {
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -536,7 +536,8 @@ fn set_oor_params(
     low: f32,
     high: f32,
 ) {
-    let mut scratch = EventEnrollmentObject::new(1, "scratch", 0).unwrap();
+    let mut scratch =
+        EventEnrollmentObject::new(1, "scratch", EventType::CHANGE_OF_BITSTRING).unwrap();
     scratch.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: td,
         low_limit: low,
@@ -571,7 +572,7 @@ fn fingerprint_covers_monitored_reference() {
     let base = super::super::params_fingerprint(
         &params,
         2,
-        EventType::OUT_OF_RANGE.to_raw(),
+        EventType::OUT_OF_RANGE,
         &monitored(ai1, pv, None),
     )
     .unwrap();
@@ -580,7 +581,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai2, pv, None),
         )
         .unwrap(),
@@ -591,7 +592,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, cf, None),
         )
         .unwrap(),
@@ -602,7 +603,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, Some(0)),
         )
         .unwrap(),
@@ -612,14 +613,14 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, Some(0)),
         )
         .unwrap(),
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, Some(1)),
         )
         .unwrap(),
@@ -630,7 +631,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, None),
         )
         .unwrap(),
@@ -665,7 +666,7 @@ fn retarget_mid_pending_cancels_and_regates() {
     let ai2_oid = ai2.object_identifier();
     db.add(Box::new(ai2)).unwrap();
     db.remove(&ee_oid).unwrap();
-    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),

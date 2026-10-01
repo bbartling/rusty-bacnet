@@ -4,7 +4,9 @@ use bacnet_encoding::constructed::{decode_recipient, encode_recipient};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::enums::{EnrollmentSummaryEventStateFilter, EventState, EventType};
+use bacnet_types::enums::{
+    AcknowledgmentFilter, EnrollmentSummaryEventStateFilter, EventState, EventType,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -41,8 +43,9 @@ pub struct RecipientProcess {
 /// GetEnrollmentSummary-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetEnrollmentSummaryRequest {
-    /// \[0\] acknowledgmentFilter: 0 selects all enrollments, 1 acknowledged, 2 unacknowledged.
-    pub acknowledgment_filter: u32,
+    /// \[0\] acknowledgmentFilter: all enrollments, only acknowledged ones, or
+    /// only those with an unacknowledged transition.
+    pub acknowledgment_filter: AcknowledgmentFilter,
     /// \[1\] enrollmentFilter (optional) — BACnetRecipientProcess.
     pub enrollment_filter: Option<RecipientProcess>,
     /// \[2\] eventStateFilter (optional).
@@ -68,7 +71,7 @@ impl GetEnrollmentSummaryRequest {
 
     /// Encode this request after validating representable filter invariants.
     pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
-        if self.acknowledgment_filter > 2 {
+        if self.acknowledgment_filter.to_raw() > AcknowledgmentFilter::NOT_ACKED.to_raw() {
             return Err(Error::Encoding(
                 "EnrollmentSummary acknowledgmentFilter is an undefined enumeration".into(),
             ));
@@ -89,7 +92,7 @@ impl GetEnrollmentSummaryRequest {
             ));
         }
         // [0] acknowledgmentFilter
-        primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
+        primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter.to_raw());
         // [1] enrollmentFilter (optional, constructed)
         if let Some(ref ef) = self.enrollment_filter {
             tags::encode_opening_tag(buf, 1);
@@ -140,7 +143,10 @@ impl GetEnrollmentSummaryRequest {
                 "EnrollmentSummary truncated at acknowledgmentFilter",
             ));
         }
-        let acknowledgment_filter = decode_closed_enumeration(&data[pos..end], 2)?;
+        let acknowledgment_filter = AcknowledgmentFilter::from_raw(decode_closed_enumeration(
+            &data[pos..end],
+            AcknowledgmentFilter::NOT_ACKED.to_raw(),
+        )?);
         offset = end;
 
         // [1] enrollmentFilter (optional, constructed)
@@ -542,7 +548,7 @@ mod tests {
     #[test]
     fn request_round_trip() {
         let req = GetEnrollmentSummaryRequest {
-            acknowledgment_filter: 0, // all
+            acknowledgment_filter: AcknowledgmentFilter::ALL,
             enrollment_filter: None,
             event_state_filter: Some(EnrollmentSummaryEventStateFilter::OFFNORMAL),
             event_type_filter: None,
@@ -561,7 +567,7 @@ mod tests {
     #[test]
     fn request_minimal_round_trip() {
         let req = GetEnrollmentSummaryRequest {
-            acknowledgment_filter: 2, // not-acked
+            acknowledgment_filter: AcknowledgmentFilter::NOT_ACKED,
             enrollment_filter: None,
             event_state_filter: None,
             event_type_filter: None,
@@ -621,7 +627,7 @@ mod tests {
     #[test]
     fn test_decode_request_truncated_1_byte() {
         let req = GetEnrollmentSummaryRequest {
-            acknowledgment_filter: 0,
+            acknowledgment_filter: AcknowledgmentFilter::ALL,
             enrollment_filter: None,
             event_state_filter: Some(EnrollmentSummaryEventStateFilter::FAULT),
             event_type_filter: None,

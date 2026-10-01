@@ -1,7 +1,8 @@
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
-use bacnet_types::enums::EventType;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::{AcknowledgmentFilter, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 use super::enrollment_summary_support::*;
@@ -9,7 +10,7 @@ use super::*;
 
 fn candidate(
     state: EventState,
-    acknowledged: u8,
+    acknowledged: EventTransitionBits,
     transition: Option<EventTransition>,
 ) -> SummaryFixture {
     SummaryFixture::candidate(
@@ -70,7 +71,10 @@ fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() 
         expected_event_state,
         PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
     );
-    assert_eq!(expected_acked_transitions, transition_bits(0b110));
+    assert_eq!(
+        expected_acked_transitions,
+        transition_bits(EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL)
+    );
     assert_eq!(
         object
             .enrollment_summary_capability_internal()
@@ -137,7 +141,11 @@ fn most_recent_coordinate_selects_offnormal_fault_and_normal_priority() {
         (EventState::FAULT, EventTransition::ToFault, 22),
         (EventState::NORMAL, EventTransition::ToNormal, 33),
     ] {
-        let db = database(candidate(state, 0b111, Some(transition)));
+        let db = database(candidate(
+            state,
+            EventTransitionBits::all(),
+            Some(transition),
+        ));
         let ack = response(&db, &request()).unwrap();
         assert_eq!(ack.entries.len(), 1);
         let entry = &ack.entries[0];
@@ -151,10 +159,20 @@ fn most_recent_coordinate_selects_offnormal_fault_and_normal_priority() {
 
 #[test]
 fn no_history_uses_normal_priority_only_for_canonical_initial_state() {
-    let db = database(candidate(EventState::NORMAL, 0b111, None));
+    let db = database(candidate(
+        EventState::NORMAL,
+        EventTransitionBits::all(),
+        None,
+    ));
     assert_eq!(response(&db, &request()).unwrap().entries[0].priority, 33);
 
-    for (state, acknowledged) in [(EventState::OFFNORMAL, 0b111), (EventState::NORMAL, 0b110)] {
+    for (state, acknowledged) in [
+        (EventState::OFFNORMAL, EventTransitionBits::all()),
+        (
+            EventState::NORMAL,
+            EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
+        ),
+    ] {
         let db = database(candidate(state, acknowledged, None));
         assert_operational_problem(response(&db, &request()).unwrap_err());
     }
@@ -179,7 +197,7 @@ fn acknowledged_transitions_requires_one_canonical_three_bit_octet() {
     ] {
         let mut object = candidate(
             EventState::OFFNORMAL,
-            0b111,
+            EventTransitionBits::all(),
             Some(EventTransition::ToOffnormal),
         );
         object.set(PropertyIdentifier::ACKED_TRANSITIONS, malformed);
@@ -192,7 +210,7 @@ fn acknowledged_transitions_requires_one_canonical_three_bit_octet() {
 fn detection_false_excludes_before_other_malformed_fields() {
     let mut object = candidate(
         EventState::OFFNORMAL,
-        0b111,
+        EventTransitionBits::all(),
         Some(EventTransition::ToOffnormal),
     );
     object.advertise(PropertyIdentifier::EVENT_DETECTION_ENABLE);
@@ -223,7 +241,7 @@ fn detection_field_is_strict_when_advertised() {
     for value in [None, Some(PropertyValue::Unsigned(1))] {
         let mut object = candidate(
             EventState::OFFNORMAL,
-            0b111,
+            EventTransitionBits::all(),
             Some(EventTransition::ToOffnormal),
         );
         object.advertise(PropertyIdentifier::EVENT_DETECTION_ENABLE);
@@ -237,7 +255,8 @@ fn detection_field_is_strict_when_advertised() {
 
 #[test]
 fn objects_without_explicit_capability_are_excluded_without_property_reads() {
-    let object = candidate(EventState::OFFNORMAL, 0b111, None).without_capability();
+    let object =
+        candidate(EventState::OFFNORMAL, EventTransitionBits::all(), None).without_capability();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(object)).unwrap();
 
@@ -248,7 +267,7 @@ fn objects_without_explicit_capability_are_excluded_without_property_reads() {
 fn class_resolution_uses_direct_instance_and_ignores_other_own_property_values() {
     let db = database(candidate(
         EventState::OFFNORMAL,
-        0b111,
+        EventTransitionBits::all(),
         Some(EventTransition::ToOffnormal),
     ));
     assert_eq!(response(&db, &request()).unwrap().entries[0].priority, 11);
@@ -268,7 +287,7 @@ fn missing_direct_class_instance_fails_even_when_another_class_uses_number() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(candidate(
         EventState::OFFNORMAL,
-        0b111,
+        EventTransitionBits::all(),
         Some(EventTransition::ToOffnormal),
     )))
     .unwrap();
@@ -288,7 +307,7 @@ fn direct_class_own_notification_class_is_not_required_or_validated() {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(candidate(
             EventState::OFFNORMAL,
-            0b111,
+            EventTransitionBits::all(),
             Some(EventTransition::ToOffnormal),
         )))
         .unwrap();
@@ -326,7 +345,7 @@ fn unreadable_and_malformed_priority_fail_strictly() {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(candidate(
             EventState::OFFNORMAL,
-            0b111,
+            EventTransitionBits::all(),
             Some(EventTransition::ToOffnormal),
         )))
         .unwrap();
@@ -346,7 +365,7 @@ fn malformed_required_candidate_fields_are_operational_problems() {
     ] {
         let mut object = candidate(
             EventState::OFFNORMAL,
-            0b111,
+            EventTransitionBits::all(),
             Some(EventTransition::ToOffnormal),
         );
         object.set(property, PropertyValue::Boolean(false));
@@ -355,7 +374,7 @@ fn malformed_required_candidate_fields_are_operational_problems() {
 
     let mut object = candidate(
         EventState::OFFNORMAL,
-        0b111,
+        EventTransitionBits::all(),
         Some(EventTransition::ToOffnormal),
     );
     object.set(
@@ -387,7 +406,7 @@ fn empty_candidate_set_returns_positive_zero_length_ack() {
 #[test]
 fn malformed_request_is_rejected_before_response_bytes_are_written() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         ..request()
     };
     let mut encoded = BytesMut::new();

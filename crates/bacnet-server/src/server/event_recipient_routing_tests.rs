@@ -269,7 +269,7 @@ async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFram
         "no-eligible-destination" => {
             let mut nc = NotificationClass::new(0, "NC-0").unwrap();
             let mut destination = destination_for(address_recipient(0, &[]), false);
-            destination.transitions = EventTransition::ToNormal.bit_mask().bits();
+            destination.transitions = EventTransition::ToNormal.bit_mask();
             nc.add_destination(destination);
             db.add(Box::new(nc)).unwrap();
         }

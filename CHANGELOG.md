@@ -65,6 +65,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EventTransitionBits`. Property reads and writes put the same bytes on the wire
   (#914).
 
+- Notification Class recipients use typed bit strings. `BACnetDestination.valid_days`
+  is a new `bacnet_types::bitstring::DaysOfWeek`, which keeps Monday in bit 0
+  like the other `bitstring` types, and `BACnetDestination.transitions` is an
+  `EventTransitionBits`; both were raw `u8` masks. The Recipient_List codec
+  converts with `to_bacnet`/`from_bacnet`, so the wire bytes are unchanged and
+  a nonzero pad bit from a peer is still dropped. `primitives::DaysOfWeek`, an
+  unused right-aligned copy of the same bit string with Monday at `0x40`, is
+  removed in favour of the new type. The recipient filters take the current day
+  as a `DaysOfWeek`: `local_day_and_time` returns one,
+  `ClockFrame::day_of_week` returns `Option<DaysOfWeek>`, and
+  `lookup_notification_recipients`, `get_notification_recipients`,
+  `get_notification_recipients_strict` and `filter_recipient_list` take
+  `today: DaysOfWeek` instead of `today_bit: u8`. `NotificationClass.ack_required`
+  is an `EventTransitionBits` instead of `[bool; 3]`, and Ack_Required reads
+  return the same octet as before. `bitstring::pack_octet` and `unpack_octet`
+  are no longer public; use the typed `to_bacnet`/`from_bacnet` methods (#930).
+
+- GetEnrollmentSummary and the stored Event_State are typed as well.
+  `GetEnrollmentSummaryRequest.acknowledgment_filter` is an
+  `enums::AcknowledgmentFilter` (`ALL`, `ACKED`, `NOT_ACKED`) instead of a `u32`.
+  `try_encode` still refuses an undefined value and decode still rejects one. The
+  `bacnet-server` GetEnrollmentSummary handler reads Acked_Transitions into an
+  `EventTransitionBits`, and its Event Enrollment evaluator carries the
+  Event_Type it reads as an `EventType`. In `bacnet-objects`, every object that
+  stores Event_State holds an `EventState` rather than a `u32`: Event and Alert
+  Enrollment, Access Door, Access Point, Accumulator, Pulse Converter, Color,
+  Color Temperature, Event Log, Life Safety Point and Zone, Load Control and
+  Timer. Event Enrollment stores Event_Type as an `EventType`, so
+  `EventEnrollmentObject::new` takes an `EventType` and `set_event_state` an
+  `EventState`. The Python `BACnetServer.add_event_enrollment` takes an
+  `EventType`, defaulting to `EventType.CHANGE_OF_BITSTRING`, instead of an int,
+  and the Python `get_enrollment_summary` takes the new `AcknowledgmentFilter`
+  class, defaulting to `AcknowledgmentFilter.ALL`, instead of an int.
+  Property reads return the same enumerated values (#930).
+
 - Optional dependencies are no longer published as features. Feature lists now
   enable them with `dep:`, so Cargo stops creating an implicit feature for each
   one, such as `bacnet-transport/rustls` or `bacnet-cli/tokio-rustls`, none of

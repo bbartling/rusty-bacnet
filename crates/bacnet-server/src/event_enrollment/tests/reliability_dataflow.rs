@@ -3,6 +3,7 @@ use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::FaultParameters;
 use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -34,7 +35,7 @@ fn timestamp_at(db: &ObjectDatabase, oid: ObjectIdentifier, index: u32) -> BACne
     timestamp
 }
 
-fn acked_transitions(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
+fn acked_transitions(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = db
         .get(&oid)
         .unwrap()
@@ -43,14 +44,14 @@ fn acked_transitions(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
     else {
         panic!("Acked_Transitions must be BitString");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
 #[test]
 fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     let mut db = ObjectDatabase::new();
     let mut notification_class = NotificationClass::new(32, "NC-reliability-source").unwrap();
-    notification_class.ack_required = [false, true, false];
+    notification_class.ack_required = EventTransitionBits::TO_FAULT;
     db.add(Box::new(notification_class)).unwrap();
 
     let mut target = AnalogValueObject::new(307, "AV-reliability-source", 62).unwrap();
@@ -103,7 +104,10 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
         timestamp_at(&db, enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(0)
     );
-    assert_eq!(acked_transitions(&db, enrollment_oid), 0b101);
+    assert_eq!(
+        acked_transitions(&db, enrollment_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
 
     db.get_mut(&enrollment_oid)
         .unwrap()
@@ -149,6 +153,9 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
         timestamp_at(&db, enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(1)
     );
-    assert_eq!(acked_transitions(&db, enrollment_oid), 0b101);
+    assert_eq!(
+        acked_transitions(&db, enrollment_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
     assert_eq!(db.reserve_event_sequence_number().number(), 2);
 }

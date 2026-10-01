@@ -21,8 +21,8 @@ pub struct AlertEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Event_State: 0 = NORMAL.
-    pub(super) event_state: u32,
+    /// Event_State; NORMAL while event detection is disabled.
+    pub(super) event_state: EventState,
     /// Object that last provided an alert.
     pub present_value: ObjectIdentifier,
     /// Whether event detection is enabled.
@@ -59,7 +59,7 @@ impl AlertEnrollmentObject {
             oid,
             name: name.into(),
             description: String::new(),
-            event_state: 0,
+            event_state: EventState::NORMAL,
             present_value: initial_source,
             event_detection_enable: true,
             acked_transitions: EventTransitionBits::all(),
@@ -84,7 +84,7 @@ impl AlertEnrollmentObject {
     /// Disabling applies the Clause 13.2.2.1 initial conditions immediately.
     pub fn set_event_detection_enable(&mut self, enabled: bool) {
         if !enabled || !self.event_detection_enable {
-            self.event_state = EventState::NORMAL.to_raw();
+            self.event_state = EventState::NORMAL;
             self.acked_transitions = EventTransitionBits::all();
             self.event_history.reset();
         }
@@ -170,13 +170,14 @@ impl BACnetObject for AlertEnrollmentObject {
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
                 Ok(PropertyValue::Enumerated(self.notify_type.to_raw()))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(if self.event_detection_enable {
+            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
+                if self.event_detection_enable {
                     self.event_state
                 } else {
-                    EventState::NORMAL.to_raw()
-                }))
-            }
+                    EventState::NORMAL
+                }
+                .to_raw(),
+            )),
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
                 data: vec![if self.event_detection_enable {
@@ -246,7 +247,7 @@ impl BACnetObject for AlertEnrollmentObject {
         if !self.event_detection_enable && state != EventState::NORMAL {
             return Err(common::write_access_denied_error());
         }
-        self.event_state = state.to_raw();
+        self.event_state = state;
         Ok(())
     }
 

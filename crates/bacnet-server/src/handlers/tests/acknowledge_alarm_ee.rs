@@ -27,8 +27,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(7, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(7, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -43,7 +42,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     db.add(Box::new(ee)).unwrap();
 
     let mut nc = NotificationClass::new(7, "NC-7").unwrap();
-    nc.ack_required = [true, false, false]; // TO_OFFNORMAL requires ack
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL; // TO_OFFNORMAL requires ack
     db.add(Box::new(nc)).unwrap();
     db.add(Box::new(NotificationClass::new(0, "NC-0").unwrap()))
         .unwrap();
@@ -183,7 +182,10 @@ fn ee_acknowledge_to_normal_bit() {
         .unwrap()
     {
         PropertyValue::BitString { data, .. } => {
-            assert_eq!(bacnet_types::bitstring::unpack_octet(&data, 3), 0b111)
+            assert_eq!(
+                EventTransitionBits::from_bacnet(&data),
+                EventTransitionBits::all()
+            )
         }
         other => panic!("expected BitString, got {other:?}"),
     }
@@ -229,8 +231,8 @@ fn ee_acknowledge_alarm_detection_disabled_refused() {
         .unwrap()
     {
         PropertyValue::BitString { data, .. } => assert_eq!(
-            bacnet_types::bitstring::unpack_octet(&data, 3),
-            0b111,
+            EventTransitionBits::from_bacnet(&data),
+            EventTransitionBits::all(),
             "the refused ack must not disturb the initial condition"
         ),
         other => panic!("expected BitString, got {other:?}"),

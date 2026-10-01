@@ -190,7 +190,7 @@ pub(super) struct EnrollmentUpdate {
 
 pub(super) struct FiredTransition {
     pub(super) monitored_oid: ObjectIdentifier,
-    pub(super) event_type_raw: u32,
+    pub(super) event_type: EventType,
     pub(super) from: EventState,
     pub(super) to: EventState,
     pub(super) distribute: bool,
@@ -564,7 +564,7 @@ pub(super) fn apply_updates_for_delivery(
         }
 
         let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
-        let event_type = change.event_type(EventType::from_raw(fired.event_type_raw));
+        let event_type = change.event_type(fired.event_type);
         let result = EventEnrollmentTransition {
             enrollment_oid: oid,
             monitored_oid: fired.monitored_oid,

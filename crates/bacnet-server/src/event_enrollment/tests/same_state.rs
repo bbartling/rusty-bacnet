@@ -24,6 +24,7 @@ use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
 };
@@ -42,8 +43,7 @@ fn setup_cos(
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -94,14 +94,14 @@ fn event_state(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventState {
     }
 }
 
-fn acked_transitions(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> u8 {
+fn acked_transitions(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventTransitionBits {
     match db
         .get(ee_oid)
         .unwrap()
         .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
         .unwrap()
     {
-        PropertyValue::BitString { data, .. } => bacnet_types::bitstring::unpack_octet(&data, 3),
+        PropertyValue::BitString { data, .. } => EventTransitionBits::from_bacnet(&data),
         other => panic!("ACKED_TRANSITIONS must read BitString, got {other:?}"),
     }
 }
@@ -277,7 +277,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
 
     // Reference a Notification Class (instance 7) requiring TO_OFFNORMAL ack.
     let mut nc = NotificationClass::new(7, "NC-7").unwrap();
-    nc.ack_required = [true, false, false];
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(nc)).unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
@@ -291,7 +291,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
 
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b111,
+        EventTransitionBits::all(),
         "initial condition: no event of any type has ever occurred (Clause 12.12)"
     );
 
@@ -299,7 +299,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b110,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
         "TO_OFFNORMAL ack owed -> Acked_Transitions bit 0 cleared (13.2.3)"
     );
 
@@ -308,7 +308,10 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     // is it does not SET).
     set_monitored(&mut db, &bi_oid, 0);
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
-    assert_eq!(acked_transitions(&db, &ee_oid), 0b110);
+    assert_eq!(
+        acked_transitions(&db, &ee_oid),
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
+    );
 }
 
 /// Clause 13.2.3 sets the bit when acknowledgment is not required. With no
@@ -322,7 +325,7 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b111,
+        EventTransitionBits::all(),
         "no Ack_Required available -> the bit is set (13.2.3)"
     );
 
@@ -346,14 +349,17 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
         obj.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
             .unwrap();
     }
-    assert_eq!(acked_transitions(&db, &ee_oid), 0b011);
+    assert_eq!(
+        acked_transitions(&db, &ee_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT
+    );
     set_monitored(&mut db, &_bi_oid, 0);
     // Value 0 is not in the alarm list [1]: OFFNORMAL -> NORMAL, TO_NORMAL
     // is not ack-required, so its bit is SET by the transition.
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b111,
+        EventTransitionBits::all(),
         "TO_NORMAL with ack not required -> bit 2 set by the transition action"
     );
 }
@@ -406,7 +412,7 @@ fn acked_transitions_to_normal_clear_with_ack_required() {
     let (mut db, ee_oid, bi_oid) = setup_cos(1, &[1], 0);
 
     let mut nc = NotificationClass::new(9, "NC-9").unwrap();
-    nc.ack_required = [false, false, true]; // TO_NORMAL
+    nc.ack_required = EventTransitionBits::TO_NORMAL;
     db.add(Box::new(nc)).unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
@@ -420,14 +426,14 @@ fn acked_transitions_to_normal_clear_with_ack_required() {
 
     // NORMAL -> OFFNORMAL (not ack-required): TO_OFFNORMAL bit stays set.
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
-    assert_eq!(acked_transitions(&db, &ee_oid), 0b111);
+    assert_eq!(acked_transitions(&db, &ee_oid), EventTransitionBits::all());
 
     // OFFNORMAL -> NORMAL with TO_NORMAL ack required: bit 2 clears.
     set_monitored(&mut db, &bi_oid, 0);
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b011,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT,
         "TO_NORMAL ack owed -> bit 2 cleared (13.2.3 is direction-complete)"
     );
 }
@@ -440,7 +446,7 @@ fn ack_bit_maintenance_is_independent_of_event_enable() {
     let (mut db, ee_oid, _bi_oid) = setup_cos(1, &[1], 0);
 
     let mut nc = NotificationClass::new(11, "NC-11").unwrap();
-    nc.ack_required = [true, false, false];
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(nc)).unwrap();
     {
         let obj = db.get_mut(&ee_oid).unwrap();
@@ -471,7 +477,7 @@ fn ack_bit_maintenance_is_independent_of_event_enable() {
     );
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b110,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
         "...while the ack-owed bit STILL clears — Event_Enable never scopes it"
     );
 }

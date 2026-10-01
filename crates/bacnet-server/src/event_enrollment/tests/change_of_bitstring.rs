@@ -15,14 +15,13 @@ fn change_of_bitstring_normal() {
 
     // Create an object with a bitstring property (using a multistate or similar)
     // For testing, we'll use an EventEnrollment monitoring another enrollment's EVENT_ENABLE
-    let mut target = EventEnrollmentObject::new(50, "Target", EventType::NONE.to_raw()).unwrap();
+    let mut target = EventEnrollmentObject::new(50, "Target", EventType::NONE).unwrap();
     // EVENT_ENABLE is a 3-bit bitstring
     target.set_event_enable(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL);
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(51, "EE-COBS", EventType::CHANGE_OF_BITSTRING.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(51, "EE-COBS", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
@@ -45,14 +44,13 @@ fn change_of_bitstring_normal() {
 fn change_of_bitstring_offnormal() {
     let mut db = ObjectDatabase::new();
 
-    let mut target = EventEnrollmentObject::new(60, "Target2", EventType::NONE.to_raw()).unwrap();
+    let mut target = EventEnrollmentObject::new(60, "Target2", EventType::NONE).unwrap();
     target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
     let mut ee =
-        EventEnrollmentObject::new(61, "EE-COBS2", EventType::CHANGE_OF_BITSTRING.to_raw())
-            .unwrap();
+        EventEnrollmentObject::new(61, "EE-COBS2", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),

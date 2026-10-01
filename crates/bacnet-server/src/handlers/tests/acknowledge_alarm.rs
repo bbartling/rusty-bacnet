@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::bitstring::EventTransitionBits;
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags::{encode_tag, TagClass};
@@ -78,7 +79,7 @@ fn encode_request_with_raw_source(oid: ObjectIdentifier, source: &[u8]) -> Bytes
     encoded
 }
 
-fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
+fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = db
         .get(&oid)
         .unwrap()
@@ -87,10 +88,13 @@ fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
     else {
         panic!("Acked_Transitions must be a bit string");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
-fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> (PropertyValue, PropertyValue, u8) {
+fn snapshot(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+) -> (PropertyValue, PropertyValue, EventTransitionBits) {
     let object = db.get(&oid).unwrap();
     (
         object
@@ -112,8 +116,7 @@ fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
 }
 
 fn configured_event_enrollment() -> EventEnrollmentObject {
-    let mut object =
-        EventEnrollmentObject::new(1, "EE-ack", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut object = EventEnrollmentObject::new(1, "EE-ack", EventType::OUT_OF_RANGE).unwrap();
     object.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap(),
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -373,14 +376,17 @@ fn supported_families_acknowledge_only_the_correlated_transition() {
     ];
 
     for (oid, state) in cases {
-        assert_eq!(acked(&db, oid), 0b110);
+        assert_eq!(
+            acked(&db, oid),
+            EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
+        );
         let accepted =
             handle_acknowledge_alarm(&mut db, &encode_request(oid, state, stamp.clone())).unwrap();
         let notification = accepted
             .notification
             .expect("built-in objects return exact acknowledgment history");
         assert_eq!(notification.change.to, state);
-        assert_eq!(acked(&db, oid), 0b111);
+        assert_eq!(acked(&db, oid), EventTransitionBits::all());
     }
 }
 
@@ -533,7 +539,8 @@ fn unknown_uninitialized_and_unsupported_objects_fail_closed() {
     assert_protocol(error, ErrorClass::SERVICES, ErrorCode::INVALID_TIME_STAMP);
     assert_eq!(snapshot(&db, oid), before);
 
-    let unconfigured = EventEnrollmentObject::new(8, "EE-unconfigured", 0).unwrap();
+    let unconfigured =
+        EventEnrollmentObject::new(8, "EE-unconfigured", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = unconfigured.object_identifier();
     db.add(Box::new(unconfigured)).unwrap();
     let before = acked(&db, oid);
@@ -600,7 +607,7 @@ fn invalid_source_text_is_sanitized_but_malformed_source_framing_is_rejected() {
         &[4, 0xd8, 0x00][..],
     ] {
         handle_acknowledge_alarm(&mut db, &encode_request_with_raw_source(oid, source)).unwrap();
-        assert_eq!(acked(&db, oid), 0b111);
+        assert_eq!(acked(&db, oid), EventTransitionBits::all());
     }
 
     let before = snapshot(&db, oid);

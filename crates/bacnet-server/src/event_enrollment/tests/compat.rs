@@ -22,8 +22,7 @@ fn extended_algorithm_produces_no_transition() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(93, "EE-ext", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(93, "EE-ext", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -56,8 +55,7 @@ fn legacy_le_out_of_range_fallback_round_trip() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(94, "EE-leg", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(94, "EE-leg", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -89,8 +87,7 @@ fn legacy_le_change_of_state_fallback() {
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(95, "EE-legcos", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(95, "EE-legcos", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -121,8 +118,7 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(96, "EE-unmodeled", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(96, "EE-unmodeled", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -181,7 +177,7 @@ fn change_of_value_bitmask_criteria() {
     let mut db = ObjectDatabase::new();
 
     // Target object exposing a bitstring property (EVENT_ENABLE, 3 bits).
-    let mut target = EventEnrollmentObject::new(96, "Tgt", EventType::NONE.to_raw()).unwrap();
+    let mut target = EventEnrollmentObject::new(96, "Tgt", EventType::NONE).unwrap();
     target.set_event_enable(EventTransitionBits::all()); // wire 0xE0 (MSB-first)
     let target_oid = target.object_identifier();
     // Keep this Event Enrollment target itself healthy now that Reliability
@@ -197,8 +193,7 @@ fn change_of_value_bitmask_criteria() {
     });
     db.add(Box::new(target)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(97, "EE-covbm", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(97, "EE-covbm", EventType::CHANGE_OF_VALUE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
@@ -273,13 +268,12 @@ fn change_of_value_wrong_type_monitored_value_skips() {
 
     // Target object whose EVENT_ENABLE is a BitString (not a Real) — the
     // ReferencedPropertyIncrement criterion needs a Real.
-    let mut target = EventEnrollmentObject::new(98, "Tgt2", EventType::NONE.to_raw()).unwrap();
+    let mut target = EventEnrollmentObject::new(98, "Tgt2", EventType::NONE).unwrap();
     target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(99, "EE-covwt", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(99, "EE-covwt", EventType::CHANGE_OF_VALUE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
@@ -292,7 +286,7 @@ fn change_of_value_wrong_type_monitored_value_skips() {
     // Force the enrollment into OFFNORMAL so a spurious NORMAL transition
     // would otherwise be emitted. Seeded via the internal builder, not a
     // network write — `Event_State` is read-only over the network (issue #130).
-    ee.set_event_state(EventState::OFFNORMAL.to_raw());
+    ee.set_event_state(EventState::OFFNORMAL);
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -307,7 +301,7 @@ fn change_of_value_wrong_type_monitored_value_skips() {
 fn no_reference_is_skipped() {
     let mut db = ObjectDatabase::new();
 
-    let ee = EventEnrollmentObject::new(91, "EE-noref", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let ee = EventEnrollmentObject::new(91, "EE-noref", EventType::OUT_OF_RANGE).unwrap();
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -323,8 +317,7 @@ fn empty_parameters_is_skipped() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(92, "EE-noparam", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(92, "EE-noparam", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -354,7 +347,7 @@ fn evaluation_does_not_use_network_write_route() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(77, "EE-77", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(77, "EE-77", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),

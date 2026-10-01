@@ -6,10 +6,10 @@ use super::super::*;
 fn projection_resolves_direct_instance_selects_coordinate_and_matches_membership() {
     let recipient = BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap());
     let mut destination = super::make_dest_device(9);
-    destination.valid_days = 0;
+    destination.valid_days = DaysOfWeek::empty();
     destination.from_time = super::make_time(23, 0);
     destination.to_time = super::make_time(1, 0);
-    destination.transitions = 0;
+    destination.transitions = EventTransitionBits::empty();
     destination.issue_confirmed_notifications = false;
     destination.process_identifier = 77;
 

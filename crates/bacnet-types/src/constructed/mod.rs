@@ -7,6 +7,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
+use crate::bitstring::{DaysOfWeek, EventTransitionBits};
 use crate::enums::LifeSafetyState;
 use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, Time};
@@ -325,8 +326,8 @@ pub enum BACnetRecipient {
 /// (confirmed vs. unconfirmed, which transition types).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetDestination {
-    /// Bitmask of valid days (bit 0 = Monday ... bit 6 = Sunday), 7 bits used.
-    pub valid_days: u8,
+    /// Weekdays when this destination accepts notifications.
+    pub valid_days: DaysOfWeek,
     /// Start of the daily time window during which this destination is active.
     pub from_time: Time,
     /// End of the daily time window.
@@ -337,9 +338,8 @@ pub struct BACnetDestination {
     pub process_identifier: u32,
     /// If true, use ConfirmedEventNotification; otherwise unconfirmed.
     pub issue_confirmed_notifications: bool,
-    /// Bitmask of event transitions to send (bit 0=ToOffNormal, bit 1=ToFault,
-    /// bit 2=ToNormal), 3 bits used.
-    pub transitions: u8,
+    /// Event transitions whose notifications this destination receives.
+    pub transitions: EventTransitionBits,
 }
 
 // ---------------------------------------------------------------------------

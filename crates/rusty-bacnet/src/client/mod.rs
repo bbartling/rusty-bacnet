@@ -36,17 +36,18 @@ use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bacnet_types::enums::{AcknowledgmentFilter, ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 use crate::errors::to_py_err;
 use crate::types::{
     audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
-    parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyBACnetTimeStamp,
-    PyCovNotificationIterator, PyDeviceWrite, PyDiscoveredDevice, PyEnableDisable,
-    PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType, PyLifeSafetyOperation,
-    PyMessagePriority, PyObjectIdentifier, PyObjectType, PyPropertyIdentifier, PyPropertyValue,
-    PyPropertyWrite, PyReadAccessSpec, PyReinitializedState, PyWriteAccessSpec,
+    parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyAcknowledgmentFilter,
+    PyBACnetTimeStamp, PyCovNotificationIterator, PyDeviceWrite, PyDiscoveredDevice,
+    PyEnableDisable, PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType,
+    PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier, PyObjectType,
+    PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec, PyReinitializedState,
+    PyWriteAccessSpec,
 };
 
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {

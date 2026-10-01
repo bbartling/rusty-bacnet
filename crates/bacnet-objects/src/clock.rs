@@ -1,5 +1,6 @@
 //! Dependency-neutral clock data exposed to BACnet objects.
 
+use bacnet_types::bitstring::DaysOfWeek;
 use bacnet_types::primitives::{Date, Time};
 
 /// One coherent sample of the Device clock.
@@ -16,12 +17,12 @@ pub struct ClockFrame {
 }
 
 impl ClockFrame {
-    /// Return the BACnetDaysOfWeek bit for this frame, or `None` for an
-    /// unavailable/invalid day-of-week value.
-    pub fn day_of_week_bit(self) -> Option<u8> {
+    /// Return this frame's day of the week as a single [`DaysOfWeek`] flag,
+    /// or `None` for an unavailable/invalid day-of-week value.
+    pub fn day_of_week(self) -> Option<DaysOfWeek> {
         (1..=7)
             .contains(&self.local_date.day_of_week)
-            .then(|| 1 << (self.local_date.day_of_week - 1))
+            .then(|| DaysOfWeek::from_bits_truncate(1 << (self.local_date.day_of_week - 1)))
     }
 
     /// Whether this frame is a fully specified, internally consistent Device

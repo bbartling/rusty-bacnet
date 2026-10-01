@@ -5,6 +5,7 @@ use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, ChangeOfValueCriteria,
 };
@@ -42,7 +43,7 @@ fn timestamp_at(
 fn stock_transition_commits_timestamp_before_report_token_escapes() {
     let (mut db, enrollment_oid, monitored_oid) = setup_out_of_range(90.0, 80.0, 20.0, 2.0);
     let mut notification_class = NotificationClass::new(7, "NC-7").unwrap();
-    notification_class.ack_required = [true, false, false];
+    notification_class.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(notification_class)).unwrap();
     db.get_mut(&enrollment_oid)
         .unwrap()
@@ -57,7 +58,10 @@ fn stock_transition_commits_timestamp_before_report_token_escapes() {
     let report = evaluate_event_enrollments_report(&mut db, 1);
 
     assert_eq!(report.transitions.len(), 1);
-    assert_eq!(acked_transitions(&db, &enrollment_oid), 0b110);
+    assert_eq!(
+        acked_transitions(&db, &enrollment_oid),
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
+    );
     assert_eq!(
         timestamp_at(&db, &enrollment_oid, 1),
         BACnetTimeStamp::SequenceNumber(0)
@@ -85,7 +89,10 @@ fn stock_transition_commits_timestamp_before_report_token_escapes() {
     let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(report.transitions.len(), 1);
     assert_eq!(report.transitions[0].change.to, EventState::NORMAL);
-    assert_eq!(acked_transitions(&db, &enrollment_oid), 0b110);
+    assert_eq!(
+        acked_transitions(&db, &enrollment_oid),
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
+    );
     assert_eq!(
         timestamp_at(&db, &enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(0)
@@ -131,7 +138,10 @@ fn stock_transition_commits_exact_device_clock_datetime() {
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
 }
 
-fn acked_transitions(db: &ObjectDatabase, enrollment_oid: &ObjectIdentifier) -> u8 {
+fn acked_transitions(
+    db: &ObjectDatabase,
+    enrollment_oid: &ObjectIdentifier,
+) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = db
         .get(enrollment_oid)
         .unwrap()
@@ -140,7 +150,7 @@ fn acked_transitions(db: &ObjectDatabase, enrollment_oid: &ObjectIdentifier) -> 
     else {
         panic!("Acked_Transitions must be a bit string");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
 #[test]
@@ -152,7 +162,7 @@ fn same_state_transition_still_commits_ack_and_history() {
     db.add(Box::new(monitored)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(31, "EE-COV", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+        EventEnrollmentObject::new(31, "EE-COV", EventType::CHANGE_OF_VALUE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         monitored_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -166,7 +176,7 @@ fn same_state_transition_still_commits_ack_and_history() {
     db.add(Box::new(enrollment)).unwrap();
 
     let mut notification_class = NotificationClass::new(31, "NC-COV").unwrap();
-    notification_class.ack_required = [false, false, true];
+    notification_class.ack_required = EventTransitionBits::TO_NORMAL;
     db.add(Box::new(notification_class)).unwrap();
 
     assert!(evaluate_event_enrollments_report(&mut db, 1)
@@ -200,7 +210,10 @@ fn same_state_transition_still_commits_ack_and_history() {
             to: EventState::NORMAL,
         }
     );
-    assert_eq!(acked_transitions(&db, &enrollment_oid), 0b011);
+    assert_eq!(
+        acked_transitions(&db, &enrollment_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT
+    );
     assert_eq!(
         timestamp_at(&db, &enrollment_oid, 3),
         BACnetTimeStamp::SequenceNumber(0)

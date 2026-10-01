@@ -50,7 +50,8 @@ fn transition(from: EventState, to: EventState, timestamp: u16) -> EventTransiti
 
 #[test]
 fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
-    let mut object = EventEnrollmentObject::new(31, "EE-reliability", 0).unwrap();
+    let mut object =
+        EventEnrollmentObject::new(31, "EE-reliability", EventType::CHANGE_OF_BITSTRING).unwrap();
 
     object
         .commit_event_enrollment_reliability_internal(EventEnrollmentReliabilityCommit {
@@ -130,7 +131,9 @@ fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
 
 #[test]
 fn rejected_stock_reliability_commit_changes_nothing() {
-    let mut object = EventEnrollmentObject::new(32, "EE-reliability-reject", 0).unwrap();
+    let mut object =
+        EventEnrollmentObject::new(32, "EE-reliability-reject", EventType::CHANGE_OF_BITSTRING)
+            .unwrap();
     let before = snapshot(&object);
 
     let mut invalid = transition(EventState::NORMAL, EventState::FAULT, 99);
@@ -150,7 +153,9 @@ fn rejected_stock_reliability_commit_changes_nothing() {
 
 #[test]
 fn network_reliability_write_remains_denied() {
-    let mut object = EventEnrollmentObject::new(33, "EE-network-reliability", 0).unwrap();
+    let mut object =
+        EventEnrollmentObject::new(33, "EE-network-reliability", EventType::CHANGE_OF_BITSTRING)
+            .unwrap();
     assert!(object
         .write_property(
             PropertyIdentifier::RELIABILITY,

@@ -3,7 +3,7 @@
 //! Per ASHRAE 135-2020 §12.61 Table 12-79 (Accumulator) and §12.23 Table 12-27 (PulseConverter).
 
 use bacnet_types::constructed::{BACnetObjectPropertyReference, BACnetPrescale, BACnetScale};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -30,7 +30,7 @@ pub struct AccumulatorObject {
     units: u32,
     limit_monitoring_interval: u32,
     status_flags: StatusFlags,
-    event_state: u32,
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
     value_before_change: u64,
@@ -53,7 +53,7 @@ impl AccumulatorObject {
             units,
             limit_monitoring_interval: 0,
             status_flags: StatusFlags::empty(),
-            event_state: 0,
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
             value_before_change: 0,
@@ -130,7 +130,7 @@ impl BACnetObject for AccumulatorObject {
                 self.limit_monitoring_interval as u64,
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::VALUE_BEFORE_CHANGE => {
                 Ok(PropertyValue::Unsigned(self.value_before_change))
@@ -222,7 +222,7 @@ pub struct PulseConverterObject {
     cov_increment: f32,
     input_reference: Option<BACnetObjectPropertyReference>,
     status_flags: StatusFlags,
-    event_state: u32,
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
 }
@@ -242,7 +242,7 @@ impl PulseConverterObject {
             cov_increment: 0.0,
             input_reference: None,
             status_flags: StatusFlags::empty(),
-            event_state: 0,
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
         })
@@ -297,7 +297,7 @@ impl BACnetObject for PulseConverterObject {
                 crate::reference::reference_read_value(&self.input_reference),
             ),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }

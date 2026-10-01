@@ -138,7 +138,7 @@ async fn clockless_intrinsic_commit_stores_and_sends_one_reserved_sequence() {
         let mut guard = db.write().await;
         guard.set_clock_reader(None);
         let mut notification_class = notification_class_0_broadcasting();
-        notification_class.ack_required = [true, false, false];
+        notification_class.ack_required = EventTransitionBits::TO_OFFNORMAL;
         guard.add(Box::new(notification_class)).unwrap();
     }
 
@@ -178,7 +178,7 @@ async fn clockless_intrinsic_commit_stores_and_sends_one_reserved_sequence() {
     assert_eq!(guard.reserve_event_sequence_number().number(), 1);
 
     let mut replacement = notification_class_0_broadcasting();
-    replacement.ack_required = [false; 3];
+    replacement.ack_required = EventTransitionBits::empty();
     guard.add(Box::new(replacement)).unwrap();
     assert_eq!(
         guard
@@ -201,7 +201,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
     let committed = {
         let mut guard = db.write().await;
         let mut notification_class = notification_class_0_broadcasting();
-        notification_class.ack_required = [true, false, false];
+        notification_class.ack_required = EventTransitionBits::TO_OFFNORMAL;
         guard.add(Box::new(notification_class)).unwrap();
         let outcome = guard
             .get_mut(&oid)
@@ -215,7 +215,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
     {
         let mut guard = db.write().await;
         let mut replacement = notification_class_0_broadcasting();
-        replacement.ack_required = [false; 3];
+        replacement.ack_required = EventTransitionBits::empty();
         guard.add(Box::new(replacement)).unwrap();
         assert_eq!(
             guard

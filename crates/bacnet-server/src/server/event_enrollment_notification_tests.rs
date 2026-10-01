@@ -6,6 +6,7 @@ use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{ChangeOfValueChoice, NotificationParameters};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     ChangeOfValueCriteria, FaultParameters,
@@ -313,7 +314,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             )
             .unwrap();
         let mut replacement = NotificationClass::new(0, "NC-replaced").unwrap();
-        replacement.ack_required = [false; 3];
+        replacement.ack_required = EventTransitionBits::empty();
         replacement.add_destination(
             crate::server::event_notifications_tests::local_broadcast_destination(),
         );

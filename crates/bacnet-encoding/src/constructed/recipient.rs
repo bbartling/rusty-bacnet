@@ -27,6 +27,7 @@
 //! `BACnetAddress` is constructed, so `address [1]` is an opening tag 1 /
 //! application-tagged Unsigned16 + OCTET STRING / closing tag 1.
 
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, Time};
@@ -38,20 +39,19 @@ use crate::tags::{self, TagClass};
 
 use super::MAX_FRAMED_ITEMS;
 
+/// Encode one [`BACnetDestination`].
+///
 /// The two bit-string members travel MSB-first per Clause 20.2.10:
 /// `BACnetDaysOfWeek` is 7 bits (monday(0) at 0x80), so the fill octet has 1
 /// unused bit; `BACnetEventTransitionBits` is 3 bits, so 5 unused.
-use bacnet_types::bitstring::{pack_octet, unpack_octet};
-
-/// Encode one [`BACnetDestination`].
 pub fn encode_destination(buf: &mut BytesMut, dest: &BACnetDestination) {
-    primitives::encode_app_bit_string(buf, 1, &[pack_octet(dest.valid_days)]);
+    primitives::encode_app_bit_string(buf, 1, &[dest.valid_days.to_bacnet()]);
     primitives::encode_app_time(buf, &dest.from_time);
     primitives::encode_app_time(buf, &dest.to_time);
     encode_recipient(buf, &dest.recipient);
     primitives::encode_app_unsigned(buf, dest.process_identifier as u64);
     primitives::encode_app_boolean(buf, dest.issue_confirmed_notifications);
-    primitives::encode_app_bit_string(buf, 5, &[pack_octet(dest.transitions)]);
+    primitives::encode_app_bit_string(buf, 5, &[dest.transitions.to_bacnet()]);
 }
 
 /// Encode a `BACnetLIST of BACnetDestination`: plain concatenation, no
@@ -157,7 +157,7 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
         1,
         "valid-days (BACnetDaysOfWeek: 7 bits)",
     )?;
-    let valid_days = unpack_octet(&days_data, 7);
+    let valid_days = DaysOfWeek::from_bacnet(&days_data);
     // from-time / to-time.
     let (from_time, pos) = decode_app_time(data, pos, what)?;
     let (to_time, pos) = decode_app_time(data, pos, what)?;
@@ -189,7 +189,7 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
         5,
         "transitions (BACnetEventTransitionBits: 3 bits)",
     )?;
-    let transitions = unpack_octet(&transitions_data, 3);
+    let transitions = EventTransitionBits::from_bacnet(&transitions_data);
 
     Ok((
         BACnetDestination {

@@ -138,7 +138,7 @@ impl BACnetObject for AnalogInputObject {
                 self.status_flags,
                 self.reliability,
                 self.out_of_service,
-                self.event_detector.event_state.to_raw(),
+                self.event_detector.event_state,
             ));
         }
         if let Some(value) = self.reliability_inhibit.read(property) {

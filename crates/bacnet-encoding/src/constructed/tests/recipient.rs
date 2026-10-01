@@ -3,6 +3,7 @@
 //! MAC broadcast), an 8-entry list round-trip, and negatives.
 
 use super::*;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::primitives::Time;
 
@@ -19,13 +20,13 @@ fn device_destination() -> BACnetDestination {
     // valid_days: all seven days -> MSB-first fill octet 0xFE.
     // transitions: all three -> 0xE0.
     BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: t(0, 0, 0, 0),
         to_time: t(23, 59, 59, 99),
         recipient: BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
         process_identifier: 1,
         issue_confirmed_notifications: true,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     }
 }
 
@@ -55,7 +56,12 @@ fn destination_device_form_golden() {
 fn destination_address_form_golden() {
     // Address recipient on a nonzero network with a 6-octet MAC.
     let dest = BACnetDestination {
-        valid_days: 0b0011_1110, // Tue..Sat -> MSB-first 0b0111_1100
+        // Tue..Sat -> MSB-first 0b0111_1100
+        valid_days: DaysOfWeek::TUESDAY
+            | DaysOfWeek::WEDNESDAY
+            | DaysOfWeek::THURSDAY
+            | DaysOfWeek::FRIDAY
+            | DaysOfWeek::SATURDAY,
         from_time: t(8, 0, 0, 0),
         to_time: t(17, 0, 0, 0),
         recipient: BACnetRecipient::Address(BACnetAddress {
@@ -64,7 +70,7 @@ fn destination_address_form_golden() {
         }),
         process_identifier: 42,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0001, // TO_OFFNORMAL only -> 0x80
+        transitions: EventTransitionBits::TO_OFFNORMAL, // -> 0x80
     };
     let mut buf = BytesMut::new();
     encode_destination(&mut buf, &dest);
@@ -93,7 +99,7 @@ fn destination_address_form_golden() {
 fn destination_broadcast_address_golden() {
     // Broadcast address: nonzero network number AND zero-length MAC.
     let dest = BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: t(0, 0, 0, 0),
         to_time: t(23, 59, 59, 99),
         recipient: BACnetRecipient::Address(BACnetAddress {
@@ -102,7 +108,7 @@ fn destination_broadcast_address_golden() {
         }),
         process_identifier: 0,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     };
     let mut buf = BytesMut::new();
     encode_destination(&mut buf, &dest);
@@ -160,6 +166,25 @@ fn destination_list_empty_encodes_to_nothing() {
     encode_destination_list(&mut buf, &[]);
     assert!(buf.is_empty());
     assert!(decode_destination_list(&buf).unwrap().is_empty());
+}
+
+#[test]
+fn destination_pad_bits_are_dropped() {
+    // A peer that sets the unused pad bits still gets the defined bits only:
+    // 0xFF with unused_bits 1 is every day, and with unused_bits 5 every
+    // transition.
+    let base = device_destination();
+    let mut buf = BytesMut::new();
+    primitives::encode_app_bit_string(&mut buf, 1, &[0xFF]);
+    primitives::encode_app_time(&mut buf, &base.from_time);
+    primitives::encode_app_time(&mut buf, &base.to_time);
+    encode_recipient(&mut buf, &base.recipient);
+    primitives::encode_app_unsigned(&mut buf, base.process_identifier as u64);
+    primitives::encode_app_boolean(&mut buf, base.issue_confirmed_notifications);
+    primitives::encode_app_bit_string(&mut buf, 5, &[0xFF]);
+    let (decoded, end) = decode_destination(&buf, 0).unwrap();
+    assert_eq!(decoded, base);
+    assert_eq!(end, buf.len());
 }
 
 // --- Negatives -----------------------------------------------------------------

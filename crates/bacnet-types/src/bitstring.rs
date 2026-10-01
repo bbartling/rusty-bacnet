@@ -25,6 +25,7 @@ use crate::enums::{AuditOperation, ObjectType, ServiceSupported};
 use crate::error::{Error, Result};
 
 pub use crate::primitives::StatusFlags;
+pub use days_of_week::DaysOfWeek;
 pub use priority_filter::BACnetPriorityFilter;
 
 mod priority_filter;
@@ -45,7 +46,7 @@ fn wire_bit(data: &[u8], n: usize) -> bool {
 /// …), while the wire wants the first defined bit in the most significant bit
 /// of the octet. Reversing the byte is that whole conversion: bit 0 lands at
 /// `0x80`, bit 1 at `0x40`, and the result is left-aligned for any width.
-pub fn pack_octet(bits_lsb0: u8) -> u8 {
+fn pack_octet(bits_lsb0: u8) -> u8 {
     bits_lsb0.reverse_bits()
 }
 
@@ -54,7 +55,7 @@ pub fn pack_octet(bits_lsb0: u8) -> u8 {
 ///
 /// Masking (rather than trusting the peer's declared unused-bit count) keeps
 /// nonconformant padding out of the value; an empty payload reads as zero.
-pub fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
+fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
     let mask = if defined_bits >= 8 {
         u8::MAX
     } else {
@@ -106,6 +107,9 @@ macro_rules! impl_named_bit_display {
         }
     };
 }
+
+// Declared after `impl_named_bit_display!` so the module can use the macro.
+mod days_of_week;
 
 /// Write `Display` items as ` A | B | C ` (or `()` when empty).
 fn write_joined<T: core::fmt::Display>(
@@ -488,7 +492,7 @@ mod tests {
         // inversion, only literal wire bytes can.
         assert_eq!(pack_octet(0b001), 0x80); // TO_OFFNORMAL / monday
         assert_eq!(pack_octet(0b100), 0x20); // TO_NORMAL
-        assert_eq!(pack_octet(0b0100_0000), 0x02); // sunday (7-bit valid_days)
+        assert_eq!(pack_octet(0b0100_0000), 0x02); // sunday (7-bit DaysOfWeek)
         assert_eq!(unpack_octet(&[0x80], 3), 0b001);
         assert_eq!(unpack_octet(&[0x20], 3), 0b100);
         assert_eq!(unpack_octet(&[0xFE], 7), 0x7F); // all seven days

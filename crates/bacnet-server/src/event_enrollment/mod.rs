@@ -169,8 +169,8 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             continue;
         }
 
-        let event_type_raw = match enrollment.read_property(PropertyIdentifier::EVENT_TYPE, None) {
-            Ok(PropertyValue::Enumerated(v)) => v,
+        let event_type = match enrollment.read_property(PropertyIdentifier::EVENT_TYPE, None) {
+            Ok(PropertyValue::Enumerated(v)) => EventType::from_raw(v),
             _ => continue,
         };
 
@@ -502,7 +502,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // and re-gates from the current parameters; no partial countdown is
         // resumed.
         let Ok(fingerprint) =
-            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored)
+            params_fingerprint(&params, normal_delay as u64, event_type, &monitored)
         else {
             queue_pending_cancellation(&mut updates, *oid, eval_state_supported, &mut eval_state);
             continue;
@@ -520,8 +520,6 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     .set_eval_state(eval_state.clone());
             }
         }
-
-        let event_type = EventType::from_raw(event_type_raw);
 
         let mut projection_setpoint = None;
         let (time_delay, arm) = match &params {
@@ -786,7 +784,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         }
         update.fire(FiredTransition {
             monitored_oid,
-            event_type_raw,
+            event_type,
             from: current_state,
             to: fired.target,
             distribute,

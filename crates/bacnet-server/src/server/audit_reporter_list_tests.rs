@@ -554,10 +554,14 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
 #[tokio::test]
 async fn audit_reporter_list_framed_destinations_decode_before_observation() {
     use bacnet_objects::notification_class::NotificationClass;
-    use bacnet_types::{constructed::BACnetDestination, primitives::Time};
+    use bacnet_types::{
+        bitstring::{DaysOfWeek, EventTransitionBits},
+        constructed::BACnetDestination,
+        primitives::Time,
+    };
     let target = oid(ObjectType::NOTIFICATION_CLASS, 1);
     let destination = BACnetDestination {
-        valid_days: 0x7f,
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -573,7 +577,7 @@ async fn audit_reporter_list_framed_destinations_decode_before_observation() {
         recipient: BACnetRecipient::Device(oid(ObjectType::DEVICE, 20)),
         process_identifier: 1,
         issue_confirmed_notifications: false,
-        transitions: 7,
+        transitions: EventTransitionBits::all(),
     };
     let mut delta = BytesMut::new();
     bacnet_encoding::constructed::encode_destination_list(

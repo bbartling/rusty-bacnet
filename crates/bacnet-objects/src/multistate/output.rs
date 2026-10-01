@@ -202,7 +202,7 @@ impl BACnetObject for MultiStateOutputObject {
                 self.status_flags,
                 self.reliability,
                 self.out_of_service,
-                self.event_detector.event_state.to_raw(),
+                self.event_detector.event_state,
             ));
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {

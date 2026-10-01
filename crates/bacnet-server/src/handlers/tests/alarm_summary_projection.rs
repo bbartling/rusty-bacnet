@@ -37,7 +37,7 @@ impl AlarmSummaryFixture {
                 ),
                 (
                     PropertyIdentifier::ACKED_TRANSITIONS,
-                    transition_bits(0b111),
+                    transition_bits(EventTransitionBits::all()),
                 ),
             ],
         }
@@ -101,10 +101,10 @@ impl BACnetObject for AlarmSummaryFixture {
     }
 }
 
-fn transition_bits(bits: u8) -> PropertyValue {
+fn transition_bits(bits: EventTransitionBits) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 5,
-        data: vec![bacnet_types::bitstring::pack_octet(bits)],
+        data: vec![bits.to_bacnet()],
     }
 }
 
@@ -151,7 +151,7 @@ fn selects_only_active_alarm_notify_type_and_preserves_output_fields() {
     );
     selected.set(
         PropertyIdentifier::ACKED_TRANSITIONS,
-        transition_bits(0b010),
+        transition_bits(EventTransitionBits::TO_FAULT),
     );
     add(&mut db, selected);
 

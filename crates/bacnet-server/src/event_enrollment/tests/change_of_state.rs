@@ -26,7 +26,7 @@ fn setup_integer_change_of_state(
     db.add(Box::new(value)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(3, "EE-COS-IV", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+        EventEnrollmentObject::new(3, "EE-COS-IV", EventType::CHANGE_OF_STATE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         value_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -107,7 +107,7 @@ fn change_of_state_large_unsigned_is_a_delayed_nonmatch() {
     db.add(Box::new(accumulator)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(3, "EE-COS-U", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+        EventEnrollmentObject::new(3, "EE-COS-U", EventType::CHANGE_OF_STATE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         accumulator_oid,
         PropertyIdentifier::MAX_PRES_VALUE.to_raw(),

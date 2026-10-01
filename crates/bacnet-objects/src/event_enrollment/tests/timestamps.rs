@@ -30,7 +30,7 @@ fn assert_default_timestamp_array(object: &dyn BACnetObject, label: &str) {
 
 #[test]
 fn enrollment_objects_default_event_time_stamps_are_three_zero_sequences() {
-    let event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let event = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
 
     assert_default_timestamp_array(&event, "Event Enrollment");
@@ -158,7 +158,7 @@ fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
 #[test]
 fn enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices() {
     let expected = seeded_timestamps();
-    let mut event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut event = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     event.event_history.time_stamps = expected.clone();
     let mut alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     alert.event_history.time_stamps = expected.clone();
@@ -172,7 +172,7 @@ fn enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices() {
 #[test]
 fn event_enrollment_rejected_detection_write_preserves_history_then_disable_resets() {
     let expected = seeded_timestamps();
-    let mut object = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut object = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     object.event_history.time_stamps = expected.clone();
     object.event_history.original_from_states = [
         Some(EventState::NORMAL),
@@ -305,7 +305,7 @@ fn metadata_row(object: &dyn BACnetObject, property: PropertyIdentifier) -> Prop
 
 #[test]
 fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
-    let event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let event = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let event_ids = [
         PropertyIdentifier::OBJECT_IDENTIFIER,
         PropertyIdentifier::OBJECT_NAME,

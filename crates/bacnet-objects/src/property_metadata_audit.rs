@@ -43,7 +43,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -154,7 +154,7 @@ fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
         Box::new(CalendarObject::new(1, "CAL-1").unwrap()),
         Box::new(CommandObject::new(1, "CMD-1").unwrap()),
         Box::new(DeviceObject::new(Default::default()).unwrap()),
-        Box::new(EventEnrollmentObject::new(1, "EE-1", 0).unwrap()),
+        Box::new(EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap()),
         Box::new(FileObject::new(1, "FILE-1", "raw").unwrap()),
         Box::new(GroupObject::new(1, "GRP-1").unwrap()),
         Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()),

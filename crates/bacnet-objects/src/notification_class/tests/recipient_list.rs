@@ -13,7 +13,7 @@ use bacnet_types::MacAddr;
 /// Build an address destination with the given network number and MAC.
 fn make_dest_address(network_number: u16, mac: &[u8]) -> BACnetDestination {
     BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: make_time(0, 0),
         to_time: make_time(23, 59),
         recipient: BACnetRecipient::Address(BACnetAddress {
@@ -22,7 +22,7 @@ fn make_dest_address(network_number: u16, mac: &[u8]) -> BACnetDestination {
         }),
         process_identifier: 1,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     }
 }
 
@@ -193,7 +193,12 @@ fn recipient_list_malformed_tail_fails_whole_decode_no_prefix_delivery() {
     framed.push(0x5E);
     let val = PropertyValue::ApplicationData(framed);
     assert!(decode_destination_list_pv(&val).is_err());
-    let hits = filter_recipient_list(&val, EventTransition::ToOffnormal, 0x01, &make_time(12, 0));
+    let hits = filter_recipient_list(
+        &val,
+        EventTransition::ToOffnormal,
+        DaysOfWeek::MONDAY,
+        &make_time(12, 0),
+    );
     assert!(
         hits.is_empty(),
         "malformed list must NOT deliver to the valid prefix"
@@ -267,7 +272,7 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
         &db,
         1,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     ) else {
         panic!("undecodable Recipient_List must fail closed with None");
@@ -278,7 +283,7 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
         &db,
         99,
         EventTransition::ToOffnormal,
-        0x01,
+        DaysOfWeek::MONDAY,
         &make_time(12, 0),
     );
     assert_eq!(empty, Some(Vec::new()));
@@ -321,7 +326,13 @@ fn recipient_list_framed_eight_entry_write_round_trip() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(nc)).unwrap();
     let noon = make_time(12, 0);
-    let hits = get_notification_recipients(&db, 9, EventTransition::ToOffnormal, 0x01, &noon);
+    let hits = get_notification_recipients(
+        &db,
+        9,
+        EventTransition::ToOffnormal,
+        DaysOfWeek::MONDAY,
+        &noon,
+    );
     assert_eq!(hits.len(), 8);
 }
 
@@ -402,8 +413,8 @@ fn write_recipient_list_rejects_malformed_address() {
 fn written_valid_days_decodes_msb_first() {
     // Decode-side witness for #203: valid_days arrives as wire bytes and the
     // filter observes the decoded internal mask, so a Monday-only wire byte
-    // (monday(0) = 0x80 per Clause 20.2.10) must match today_bit 0x01 (Monday)
-    // and not 0x40 (Sunday). Pure round trips cannot catch an inverted decode;
+    // (monday(0) = 0x80 per Clause 20.2.10) must match Monday and not
+    // Sunday. Pure round trips cannot catch an inverted decode;
     // this asymmetric byte can.
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap();
@@ -434,9 +445,21 @@ fn written_valid_days_decodes_msb_first() {
     db.add(Box::new(nc)).unwrap();
     let noon = make_time(12, 0);
 
-    let monday = get_notification_recipients(&db, 1, EventTransition::ToOffnormal, 0x01, &noon);
+    let monday = get_notification_recipients(
+        &db,
+        1,
+        EventTransition::ToOffnormal,
+        DaysOfWeek::MONDAY,
+        &noon,
+    );
     assert_eq!(monday.len(), 1, "Monday-only entry must match Monday");
 
-    let sunday = get_notification_recipients(&db, 1, EventTransition::ToOffnormal, 0x40, &noon);
+    let sunday = get_notification_recipients(
+        &db,
+        1,
+        EventTransition::ToOffnormal,
+        DaysOfWeek::SUNDAY,
+        &noon,
+    );
     assert!(sunday.is_empty(), "Monday-only entry must not match Sunday");
 }

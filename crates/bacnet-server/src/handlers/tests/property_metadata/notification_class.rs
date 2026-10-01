@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::{notification_class::NotificationClass, traits::BACnetObject};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::primitives::{PropertyValue, Time};
 use PropertyIdentifier as P;
@@ -42,7 +43,8 @@ fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {
         if configured {
             object.set_description("long class label".repeat(100));
             object.priority = [12, 34, 56];
-            object.ack_required = [true, false, true];
+            object.ack_required =
+                EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL;
             object
                 .write_property(
                     P::NOTIFICATION_CLASS,
@@ -55,7 +57,7 @@ fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {
                 .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
                 .unwrap();
             object.add_destination(BACnetDestination {
-                valid_days: 0x7f,
+                valid_days: DaysOfWeek::all(),
                 from_time: Time {
                     hour: 0,
                     minute: 0,
@@ -73,7 +75,7 @@ fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {
                 ),
                 process_identifier: 123,
                 issue_confirmed_notifications: true,
-                transitions: 0b101,
+                transitions: EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
             });
         }
         let oid = object.object_identifier();

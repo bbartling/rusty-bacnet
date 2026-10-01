@@ -10,13 +10,13 @@ use super::super::*;
 // -----------------------------------------------------------------------
 
 /// Build a NotificationClass whose instance matches `class_number`, with the
-/// given per-transition `priority` and `ack_required` arrays, and add it to a
+/// given per-transition `priority` array and `ack_required` bits, and add it to a
 /// fresh ObjectDatabase. The struct fields are public so the test pins exact
 /// values rather than relying on the all-255/all-false defaults.
 fn make_nc_db_with(
     class_number: u32,
     priority: [u8; 3],
-    ack_required: [bool; 3],
+    ack_required: EventTransitionBits,
 ) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     let mut nc = NotificationClass::new(class_number, "NC").unwrap();
@@ -28,7 +28,11 @@ fn make_nc_db_with(
 
 #[test]
 fn resolve_priority_ack_offnormal_transition() {
-    let db = make_nc_db_with(7, [50, 150, 250], [true, false, true]);
+    let db = make_nc_db_with(
+        7,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    );
     let (p, a) = resolve_transition_priority_ack(&db, 7, EventTransition::ToOffnormal);
     assert_eq!(p, 50, "TO_OFFNORMAL priority is PRIORITY[0]");
     assert!(a, "TO_OFFNORMAL ack_required is ACK_REQUIRED bit 0");
@@ -36,7 +40,11 @@ fn resolve_priority_ack_offnormal_transition() {
 
 #[test]
 fn resolve_priority_ack_fault_transition() {
-    let db = make_nc_db_with(7, [50, 150, 250], [true, false, true]);
+    let db = make_nc_db_with(
+        7,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    );
     let (p, a) = resolve_transition_priority_ack(&db, 7, EventTransition::ToFault);
     assert_eq!(p, 150, "TO_FAULT priority is PRIORITY[1]");
     assert!(!a, "TO_FAULT ack_required is ACK_REQUIRED bit 1");
@@ -44,7 +52,11 @@ fn resolve_priority_ack_fault_transition() {
 
 #[test]
 fn resolve_priority_ack_normal_transition() {
-    let db = make_nc_db_with(7, [50, 150, 250], [true, false, true]);
+    let db = make_nc_db_with(
+        7,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    );
     let (p, a) = resolve_transition_priority_ack(&db, 7, EventTransition::ToNormal);
     assert_eq!(p, 250, "TO_NORMAL priority is PRIORITY[2]");
     assert!(a, "TO_NORMAL ack_required is ACK_REQUIRED bit 2");
@@ -62,8 +74,8 @@ fn resolve_priority_ack_missing_class_falls_back_to_defaults() {
 #[test]
 fn resolve_priority_ack_default_class_values() {
     // A freshly-constructed NotificationClass uses the BACnet defaults:
-    // Priority = [255, 255, 255] and Ack_Required = [false, false, false].
-    let db = make_nc_db_with(1, [255, 255, 255], [false, false, false]);
+    // Priority = [255, 255, 255] and an empty Ack_Required.
+    let db = make_nc_db_with(1, [255, 255, 255], EventTransitionBits::empty());
     for t in [
         EventTransition::ToOffnormal,
         EventTransition::ToFault,
@@ -83,7 +95,7 @@ fn resolve_priority_ack_finds_class_by_scan_when_oid_instance_differs() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     nc.notification_class = 42;
     nc.priority = [10, 20, 30];
-    nc.ack_required = [false, true, false];
+    nc.ack_required = EventTransitionBits::TO_FAULT;
     db.add(Box::new(nc)).unwrap();
 
     let (p, a) = resolve_transition_priority_ack(&db, 42, EventTransition::ToFault);

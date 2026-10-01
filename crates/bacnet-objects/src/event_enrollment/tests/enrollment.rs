@@ -6,7 +6,7 @@ use super::super::*;
 
 #[test]
 fn create_event_enrollment() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert_eq!(
         ee.object_identifier().object_type(),
         ObjectType::EVENT_ENROLLMENT
@@ -17,7 +17,7 @@ fn create_event_enrollment() {
 
 #[test]
 fn read_object_type() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::OBJECT_TYPE, None)
         .unwrap();
@@ -29,7 +29,7 @@ fn read_object_type() {
 
 #[test]
 fn read_event_type() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 3).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::COMMAND_FAILURE).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::EVENT_TYPE, None)
         .unwrap();
@@ -37,8 +37,18 @@ fn read_event_type() {
 }
 
 #[test]
+fn read_event_type_preserves_a_proprietary_value() {
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::from_raw(600)).unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_TYPE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(600)
+    );
+}
+
+#[test]
 fn read_event_enable() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::EVENT_ENABLE, None)
         .unwrap();
@@ -54,7 +64,7 @@ fn read_event_enable() {
 
 #[test]
 fn read_notification_class() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
         .unwrap();
@@ -63,7 +73,7 @@ fn read_notification_class() {
 
 #[test]
 fn write_notify_type() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::NOTIFY_TYPE,
         None,
@@ -79,7 +89,7 @@ fn write_notify_type() {
 
 #[test]
 fn write_notify_type_wrong_type() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let result = ee.write_property(
         PropertyIdentifier::NOTIFY_TYPE,
         None,
@@ -91,7 +101,7 @@ fn write_notify_type_wrong_type() {
 
 #[test]
 fn read_acked_transitions() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
         .unwrap();
@@ -107,7 +117,7 @@ fn read_acked_transitions() {
 
 #[test]
 fn read_object_property_reference_none() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
         .unwrap();
@@ -116,7 +126,7 @@ fn read_object_property_reference_none() {
 
 #[test]
 fn read_object_property_reference_some() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
         object_identifier: ai_oid,
@@ -143,7 +153,7 @@ fn read_object_property_reference_some() {
 
 #[test]
 fn write_notification_class() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::NOTIFICATION_CLASS,
         None,
@@ -159,7 +169,7 @@ fn write_notification_class() {
 
 #[test]
 fn write_event_enable() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     // Write only TO_OFFNORMAL enabled (wire bit 0 = 0x80, Clause 20.2.10)
     ee.write_property(
         PropertyIdentifier::EVENT_ENABLE,
@@ -185,7 +195,7 @@ fn write_event_enable() {
 
 #[test]
 fn property_list_complete() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let props = ee.property_list();
     assert!(props.contains(&PropertyIdentifier::EVENT_TYPE));
     assert!(props.contains(&PropertyIdentifier::NOTIFY_TYPE));
@@ -212,7 +222,7 @@ fn decode_framed_event_parameters(
 #[test]
 fn write_event_parameters_structured_round_trip() {
     use bacnet_types::constructed::{event_parameter_tag, BACnetEventParameter};
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let params = BACnetEventParameter::OutOfRange {
         time_delay: 5,
         low_limit: 10.0,
@@ -237,7 +247,7 @@ fn write_event_parameters_structured_round_trip() {
 #[test]
 fn write_event_parameters_framed_round_trip() {
     use bacnet_types::constructed::BACnetEventParameter;
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let params = BACnetEventParameter::OutOfRange {
         time_delay: 5,
         low_limit: 10.0,
@@ -283,7 +293,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
     let mut good = bytes::BytesMut::new();
     bacnet_encoding::constructed::encode_event_parameter(&mut good, &params).unwrap();
     for extra in 1..=4usize {
-        let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+        let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
         let mut bytes = good.to_vec();
         bytes.extend_from_slice(&vec![0xAA; extra]);
         let result = ee.write_property(
@@ -325,7 +335,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
 
 #[test]
 fn write_event_parameters_framed_malformed_rejected() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     for malformed in [
         vec![0x5E, 0x09, 0x07], // out-of-range opening with no closing
         vec![0x58],             // out-of-range encoded as a primitive tag
@@ -345,7 +355,7 @@ fn write_event_parameters_framed_malformed_rejected() {
 fn write_event_parameters_flat_malformed_proprietary_body_rejected() {
     use bacnet_types::constructed::{BACnetPropertyStates, BACnetProprietaryPropertyState};
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let before = ee
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
@@ -373,7 +383,7 @@ fn write_event_parameters_flat_malformed_proprietary_body_rejected() {
 
 #[test]
 fn write_event_parameters_flat_reference_malformed_rejected() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let before = ee
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
@@ -423,7 +433,7 @@ fn write_event_parameters_flat_reference_malformed_rejected() {
 #[test]
 fn write_event_parameters_opaque_octets_preserved() {
     use bacnet_types::constructed::BACnetEventParameter;
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     // Legacy raw-octet writes are preserved verbatim as an Opaque value so a
     // remote client that wrote an algorithm this library does not model is
     // never silently dropped.
@@ -446,7 +456,7 @@ fn write_event_parameters_opaque_octets_preserved() {
 
 #[test]
 fn write_event_parameters_rejects_non_list() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let result = ee.write_property(
         PropertyIdentifier::EVENT_PARAMETERS,
         None,
@@ -458,7 +468,7 @@ fn write_event_parameters_rejects_non_list() {
 
 #[test]
 fn read_event_state_default() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::EVENT_STATE, None)
         .unwrap();
@@ -470,7 +480,7 @@ fn read_event_state_default() {
 /// with `WRITE_ACCESS_DENIED` and leaves the field unchanged (issue #130).
 #[test]
 fn write_event_state_rejected_over_network() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let result = ee.write_property(
         PropertyIdentifier::EVENT_STATE,
         None,
@@ -493,7 +503,7 @@ fn write_event_state_rejected_over_network() {
 /// network `write_property` route (issue #130).
 #[test]
 fn set_event_state_internal_updates_field() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let result = ee.set_event_state_internal(EventState::HIGH_LIMIT);
     assert!(
         result.is_ok(),
@@ -512,8 +522,8 @@ fn set_event_state_internal_updates_field() {
 /// going through the network write route (issue #130).
 #[test]
 fn set_event_state_seeds_field() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    ee.set_event_state(EventState::LOW_LIMIT.to_raw());
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    ee.set_event_state(EventState::LOW_LIMIT);
     let val = ee
         .read_property(PropertyIdentifier::EVENT_STATE, None)
         .unwrap();
@@ -602,7 +612,7 @@ fn set_event_state_internal_default_rejects() {
 
 #[test]
 fn write_unknown_property_denied() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let result = ee.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -625,7 +635,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 /// VALUE_OUT_OF_RANGE (Clause 15.9.1.3) and leaves the stored value untouched.
 #[test]
 fn ee_notify_type_rejects_out_of_production_values() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert_eq!(
         ee.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
             .unwrap(),
@@ -672,7 +682,7 @@ fn ee_notify_type_rejects_out_of_production_values() {
 /// value to mask and normalize.
 #[test]
 fn ee_event_enable_rejects_noncanonical_bit_strings() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let canonical = ee
         .read_property(PropertyIdentifier::EVENT_ENABLE, None)
         .unwrap();

@@ -50,10 +50,11 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::enums::EventType;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;
-use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
+use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 
 mod audit_configuration;
 use audit_configuration::AuditNotificationSink;

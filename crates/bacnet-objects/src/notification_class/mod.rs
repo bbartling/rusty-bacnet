@@ -2,18 +2,12 @@
 //!
 //! # Recipient-list day/time convention
 //!
-//! `RECIPIENT_LIST` entries are `BACnetDestination` notification destinations. The
-//! `valid_days` field is a `BACnetDaysOfWeek` bit string defined as
-//! `BIT STRING { monday(0), tuesday(1), ..., sunday(6) }` (Clause 21): **bit 0
-//! is Monday and bit 6 is Sunday** in the in-memory `u8`. Callers must build
-//! `today_bit` with the same convention (`1 << dow` where `dow = 0` on
-//! Monday). On the wire both bit strings are packed MSB-first per Clause
-//! 20.2.10 — monday(0) at `0x80` of the `valid_days` octet (`unused_bits: 1`),
-//! to-offnormal(0) at `0x80` of the `transitions` octet (`unused_bits: 5`) —
-//! via [`bacnet_types::bitstring::pack_octet`]/[`unpack_octet`], which reverse
-//! the in-memory bit0-first byte.
-//!
-//! [`unpack_octet`]: bacnet_types::bitstring::unpack_octet
+//! `RECIPIENT_LIST` entries are `BACnetDestination` notification destinations.
+//! Their `valid_days` is a [`DaysOfWeek`] (Monday first, Clause 21) and their
+//! `transitions` an [`EventTransitionBits`]. The recipient filters take the
+//! current day as a `DaysOfWeek` flag, which [`local_day_and_time`] derives.
+//! Both bit strings convert to their MSB-first Clause 20.2.10 wire octets
+//! through `to_bacnet`/`from_bacnet`.
 //!
 //! `from_time`/`to_time` are BACnet `Time` values interpreted in the device's
 //! *local* time, derived from the wall clock plus the Device object's
@@ -21,8 +15,9 @@
 //! `to_time < from_time` (e.g. 22:00–02:00) crosses midnight and is active
 //! outside the `[from, to]` interval; see `time_in_window`.
 
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use bacnet_types::MacAddr;
@@ -57,8 +52,8 @@ pub struct NotificationClass {
     pub notification_class: u32,
     /// Priority: [TO_OFFNORMAL, TO_FAULT, TO_NORMAL]. Default [255, 255, 255].
     pub priority: [u8; 3],
-    /// Ack required: [TO_OFFNORMAL, TO_FAULT, TO_NORMAL]. Default [false, false, false].
-    pub ack_required: [bool; 3],
+    /// Transitions whose notifications require acknowledgment. Default empty.
+    pub ack_required: EventTransitionBits,
     /// Recipient list.
     pub recipient_list: Vec<BACnetDestination>,
 }
@@ -78,7 +73,7 @@ impl NotificationClass {
             reliability: 0,
             notification_class: instance,
             priority: [255, 255, 255],
-            ack_required: [false, false, false],
+            ack_required: EventTransitionBits::empty(),
             recipient_list: Vec::new(),
         })
     }
@@ -116,7 +111,7 @@ impl BACnetObject for NotificationClass {
                 ObjectType::NOTIFICATION_CLASS.to_raw(),
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(0)) // normal
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
@@ -133,23 +128,10 @@ impl BACnetObject for NotificationClass {
                 ])),
                 _ => Err(common::invalid_array_index_error()),
             },
-            p if p == PropertyIdentifier::ACK_REQUIRED => {
-                // 3-bit bitstring: bit 0=TO_OFFNORMAL, bit 1=TO_FAULT, bit 2=TO_NORMAL
-                let mut byte: u8 = 0;
-                if self.ack_required[0] {
-                    byte |= 0x80;
-                } // bit 0 in MSB
-                if self.ack_required[1] {
-                    byte |= 0x40;
-                } // bit 1
-                if self.ack_required[2] {
-                    byte |= 0x20;
-                } // bit 2
-                Ok(PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![byte],
-                })
-            }
+            p if p == PropertyIdentifier::ACK_REQUIRED => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.ack_required.to_bacnet()],
+            }),
             p if p == PropertyIdentifier::RECIPIENT_LIST => {
                 // Full ASN.1 framing: BACnetLIST of BACnetDestination — each
                 // entry a 7-element application-tagged SEQUENCE with the
@@ -291,21 +273,20 @@ fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
     }
 }
 
-/// Derive the local day-of-week bit and time-of-day for recipient filtering.
+/// Derive the local day of the week and time of day for recipient filtering.
 ///
 /// `utc_secs` is seconds since the Unix epoch (1970-01-01, a Thursday).
 /// `utc_offset_minutes` is the Device object's `UTC_Offset` (signed minutes
-/// west of UTC); 0 keeps UTC. The day-of-week follows
-/// `BACnetDaysOfWeek` (monday(0)..sunday(6), Clause 21): the `+3` makes
-/// Monday=0 because the epoch was a Thursday, and `today_bit = 1 << dow`
-/// uses the same convention as `valid_days`. The returned `Time` is the
-/// local time of day (hundredths are supplied by the caller via `subsec`).
-pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (u8, Time) {
+/// west of UTC); 0 keeps UTC. The day comes back as the single matching
+/// [`DaysOfWeek`] flag: the `+3` makes Monday day 0 because the epoch was a
+/// Thursday. The returned `Time` is the local time of day (hundredths are
+/// supplied by the caller via `subsec`).
+pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (DaysOfWeek, Time) {
     // BACnet UTC_Offset is signed minutes west of UTC, so local standard time
     // subtracts it. Saturation only affects values close to the Unix epoch.
     let local_secs = utc_secs.saturating_add_signed(-i64::from(utc_offset_minutes) * 60);
-    let dow = ((local_secs / 86400 + 3) % 7) as u8;
-    let today_bit = 1u8 << dow;
+    let dow = (local_secs / 86400 + 3) % 7;
+    let today = DaysOfWeek::from_bits_truncate(1 << dow);
     let day_secs = (local_secs % 86400) as u32;
     let current_time = Time {
         hour: (day_secs / 3600) as u8,
@@ -313,7 +294,7 @@ pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (u8, Time) 
         second: (day_secs % 60) as u8,
         hundredths: 0,
     };
-    (today_bit, current_time)
+    (today, current_time)
 }
 
 /// Resolve the NotificationClass object whose `Notification_Class` property
@@ -357,8 +338,10 @@ fn find_notification_class(
 /// projected into an `EventNotification` come from the NotificationClass
 /// referenced by the event-generating object's `Notification_Class` property,
 /// selected by the transition coordinate (TO_OFFNORMAL, TO_FAULT, or
-/// TO_NORMAL). Both properties are 3-element arrays ordered
-/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
+/// TO_NORMAL). `Priority` is a 3-element array ordered
+/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`, indexed by [`EventTransition::index`];
+/// `Ack_Required` is a `BACnetEventTransitionBits` string, tested with
+/// [`EventTransition::bit_mask`].
 ///
 /// When no NotificationClass matches the given number (the object's
 /// `Notification_Class` was never configured or points at a missing class),
@@ -392,17 +375,12 @@ pub fn resolve_transition_priority_ack(
         })
         .unwrap_or(255);
 
-    // ACK_REQUIRED is a 3-bit bitstring: bit 0 (0x80) = TO_OFFNORMAL,
-    // bit 1 (0x40) = TO_FAULT, bit 2 (0x20) = TO_NORMAL.
-    let ack_required = nc
-        .read_property(PropertyIdentifier::ACK_REQUIRED, None)
-        .ok()
-        .and_then(|v| match v {
-            PropertyValue::BitString { data, .. } => data.first().copied(),
-            _ => None,
-        })
-        .map(|byte| byte & (0x80 >> idx) != 0)
-        .unwrap_or(false);
+    let ack_required = match nc.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
+        Ok(PropertyValue::BitString { data, .. }) => {
+            EventTransitionBits::from_bacnet(&data).intersects(transition.bit_mask())
+        }
+        _ => false,
+    };
 
     (priority, ack_required)
 }
@@ -433,8 +411,8 @@ pub enum RecipientLookupOutcome {
 ///
 /// This is the canonical recipient lookup API and distinguishes configuration
 /// failures from valid empty or ineligible configuration. Selection uses the
-/// configured destination's day mask, local time window, and transition mask.
-/// `today_bit` uses bit 0 for Monday through bit 6 for Sunday.
+/// configured destination's valid days, local time window, and transitions.
+/// `today` is the current local day, as [`local_day_and_time`] returns it.
 ///
 /// A malformed complete list returns
 /// [`RecipientListInvalid`](RecipientLookupOutcome::RecipientListInvalid);
@@ -444,7 +422,7 @@ pub fn lookup_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> RecipientLookupOutcome {
     let Some(nc) = find_notification_class(db, notification_class) else {
@@ -461,7 +439,7 @@ pub fn lookup_notification_recipients(
         return RecipientLookupOutcome::NoConfiguredDestinations;
     }
 
-    let recipients = filter_destinations(destinations, transition, today_bit, current_time);
+    let recipients = filter_destinations(destinations, transition, today, current_time);
     if recipients.is_empty() {
         RecipientLookupOutcome::NoMatchingDestinations
     } else {
@@ -478,16 +456,10 @@ pub fn get_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    match lookup_notification_recipients(
-        db,
-        notification_class,
-        transition,
-        today_bit,
-        current_time,
-    ) {
+    match lookup_notification_recipients(db, notification_class, transition, today, current_time) {
         RecipientLookupOutcome::Matched(recipients) => recipients,
         RecipientLookupOutcome::NotificationClassMissing
         | RecipientLookupOutcome::RecipientListUnavailable
@@ -508,16 +480,10 @@ pub fn get_notification_recipients_strict(
     db: &ObjectDatabase,
     notification_class: u32,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Option<Vec<(BACnetRecipient, u32, bool)>> {
-    match lookup_notification_recipients(
-        db,
-        notification_class,
-        transition,
-        today_bit,
-        current_time,
-    ) {
+    match lookup_notification_recipients(db, notification_class, transition, today, current_time) {
         RecipientLookupOutcome::RecipientListInvalid => None,
         RecipientLookupOutcome::Matched(recipients) => Some(recipients),
         RecipientLookupOutcome::NotificationClassMissing
@@ -541,9 +507,7 @@ fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestin
     }
     // [0] valid_days: BitString (7 bits, 1 unused)
     let valid_days = match &fields[0] {
-        PropertyValue::BitString { data, .. } if !data.is_empty() => {
-            bacnet_types::bitstring::unpack_octet(data, 7)
-        }
+        PropertyValue::BitString { data, .. } if !data.is_empty() => DaysOfWeek::from_bacnet(data),
         _ => return None,
     };
     // [1] from_time
@@ -589,7 +553,7 @@ fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestin
     // [6] transitions: BitString (3 bits, 5 unused)
     let transitions = match &fields[6] {
         PropertyValue::BitString { data, .. } if !data.is_empty() => {
-            bacnet_types::bitstring::unpack_octet(data, 3)
+            EventTransitionBits::from_bacnet(data)
         }
         _ => return None,
     };
@@ -643,15 +607,15 @@ pub(super) fn decode_destination_list_pv(
 fn filter_destinations(
     destinations: Vec<BACnetDestination>,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    let transition_mask = transition.bit_mask().bits();
+    let transition_mask = transition.bit_mask();
     destinations
         .into_iter()
-        .filter(|dest| dest.valid_days & today_bit != 0)
+        .filter(|dest| dest.valid_days.intersects(today))
         .filter(|dest| time_in_window(current_time, &dest.from_time, &dest.to_time))
-        .filter(|dest| dest.transitions & transition_mask != 0)
+        .filter(|dest| dest.transitions.intersects(transition_mask))
         .map(|dest| {
             (
                 dest.recipient,
@@ -673,13 +637,13 @@ fn filter_destinations(
 pub fn filter_recipient_list(
     recipient_list_value: &PropertyValue,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
     let Ok(destinations) = decode_destination_list_pv(recipient_list_value) else {
         return Vec::new();
     };
-    filter_destinations(destinations, transition, today_bit, current_time)
+    filter_destinations(destinations, transition, today, current_time)
 }
 
 #[cfg(test)]

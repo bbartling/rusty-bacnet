@@ -16,7 +16,7 @@ pub struct AccessPointObject {
     access_event_tag: u64,
     access_event_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
     access_doors: Vec<ObjectIdentifier>,
-    event_state: u32,
+    event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: u32,
@@ -35,7 +35,7 @@ impl AccessPointObject {
             access_event_tag: 0,
             access_event_time: ([0xFF, 0xFF, 0xFF, 0xFF], [0xFF, 0xFF, 0xFF, 0xFF]),
             access_doors: Vec::new(),
-            event_state: 0,
+            event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
@@ -97,7 +97,7 @@ impl BACnetObject for AccessPointObject {
                     .collect(),
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }

@@ -88,7 +88,7 @@ fn setup(
     db.add(Box::new(target)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(301, "EE-fault", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+        EventEnrollmentObject::new(301, "EE-fault", EventType::OUT_OF_RANGE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -377,7 +377,7 @@ fn absent_optional_target_reliability_falls_through_but_malformed_type_is_config
         let mut enrollment = EventEnrollmentObject::new(
             320 + u32::from(malformed),
             "EE-optional-reliability",
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
         )
         .unwrap();
         enrollment.set_object_property_reference(Some(
@@ -532,7 +532,7 @@ fn missing_target_is_observation_unavailable_without_public_transition() {
     let mut db = ObjectDatabase::new();
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
     let mut enrollment =
-        EventEnrollmentObject::new(303, "EE-missing", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+        EventEnrollmentObject::new(303, "EE-missing", EventType::OUT_OF_RANGE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         missing_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),

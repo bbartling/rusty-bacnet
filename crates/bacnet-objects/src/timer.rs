@@ -3,7 +3,7 @@
 //! The Timer object represents a countdown or count-up timer. Its present value
 //! is an Enumerated representing the timer state: 0=idle, 1=running, 2=expired.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -29,8 +29,8 @@ pub struct TimerObject {
     update_time: (Date, Time),
     expiration_time: (Date, Time),
     status_flags: StatusFlags,
-    /// Event_State: 0 = NORMAL.
-    event_state: u32,
+    /// Event_State.
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
 }
@@ -75,7 +75,7 @@ impl TimerObject {
                 },
             ),
             status_flags: StatusFlags::empty(),
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
         })
@@ -151,7 +151,7 @@ impl BACnetObject for TimerObject {
                 PropertyValue::Time(self.expiration_time.1),
             ])),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
