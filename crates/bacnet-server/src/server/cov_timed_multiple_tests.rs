@@ -23,6 +23,22 @@ async fn initial_report_carries_admission_time() {
     h.server.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn initial_report_captured_at_admission_survives_an_invalid_clock_at_preparation() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.set_clock(3);
+    // Admission samples a valid clock; it is invalid by the time the initial
+    // report is prepared.
+    let mut invalid = at(3);
+    invalid.local_time.hour = 24;
+    *h.after_ack.lock().unwrap() = Some(invalid);
+    h.subscribe(false).await;
+    let initial = h.notification().await;
+    assert_eq!(pv_rows(&initial), vec![(real(0.0), Some(time(3)))]);
+    assert_eq!(envelope(&initial), Some((at(3).local_date, time(3))));
+    h.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn write_property_change_reports_commit_time_not_preparation_time() {
     for confirmed in [false, true] {
@@ -318,7 +334,7 @@ async fn any_notification_to_the_context_conveys_every_pending_timestamped_chang
 }
 
 #[tokio::test]
-async fn an_explicit_untimestamped_selector_is_never_repeated_as_history() {
+async fn an_explicit_untimestamped_selector_is_never_repeated_or_timestamped() {
     let mut h = Harness::start(ServerConfig::default()).await;
     h.subscribe_specs(false, vec![(av1(), vec![(PV, true), (SF, false)])])
         .await;
@@ -344,13 +360,13 @@ async fn an_explicit_untimestamped_selector_is_never_repeated_as_history() {
         .into_iter()
         .filter(|(property, _, _)| *property == SF)
         .collect();
-    // One current row only. It still carries the timestamped companion's time
-    // because the unchanged explicit selector did not qualify (the existing
-    // #823 rule; tracked as a #856 follow-up).
+    // One current row only, and untimestamped: the explicit selector governs
+    // its coordinate even though Status_Flags did not change in this round,
+    // over the timestamped PV reference's companion (§13.17.3.1.2.4).
     assert_eq!(
         flags.iter().map(|(_, _, time)| *time).collect::<Vec<_>>(),
-        vec![Some(time(56))],
-        "Status_Flags is not timestamped history: {flags:?}"
+        vec![None],
+        "Status_Flags is neither history nor timestamped: {flags:?}"
     );
     h.server.stop().await.unwrap();
 }

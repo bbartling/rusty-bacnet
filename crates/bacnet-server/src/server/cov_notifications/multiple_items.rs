@@ -49,7 +49,7 @@ pub(super) fn build_items(
                 Some(value.property_identifier),
                 value.property_array_index,
             );
-            if !untimed.contains(&coordinate) && !list.contains(value) {
+            if !untimed.contains(&coordinate) {
                 list.push(value.clone());
             }
         }
@@ -121,16 +121,50 @@ pub(super) fn build_items(
                 .flatten();
         }
     }
-    // A history row identical to a current row adds nothing.
+    // An explicit untimestamped selector governs its coordinate whether or not
+    // it qualified this round, over any timestamped companion (§13.17.3.1.2.4).
     for (index, item) in items.iter_mut().enumerate() {
-        let (earlier, current) = item.list_of_values.split_at(start(index));
-        let mut values: Vec<_> = earlier
-            .iter()
-            .filter(|value| !current.contains(value))
-            .cloned()
-            .collect();
-        values.extend_from_slice(current);
-        item.list_of_values = values;
+        let oid = item.monitored_object_identifier;
+        for value in &mut item.list_of_values[start(index)..] {
+            if untimed.contains(&(
+                oid,
+                Some(value.property_identifier),
+                value.property_array_index,
+            )) {
+                value.time_of_change = None;
+            }
+        }
+    }
+    for (index, item) in items.iter_mut().enumerate() {
+        item.list_of_values =
+            collapse_repeats(std::mem::take(&mut item.list_of_values), start(index));
     }
     items
+}
+
+/// Drop each history row (the first `history` values) whose next row for the
+/// same coordinate repeats it exactly, value and time: overlapping selectors
+/// of one change, or a companion that did not change. A value that returns
+/// after a different one is a distinct change and stays (A-B-A).
+fn collapse_repeats(
+    values: Vec<COVNotificationValue>,
+    history: usize,
+) -> Vec<COVNotificationValue> {
+    let repeated: Vec<bool> = (0..values.len())
+        .map(|at| {
+            at < history
+                && values[at + 1..]
+                    .iter()
+                    .find(|later| {
+                        later.property_identifier == values[at].property_identifier
+                            && later.property_array_index == values[at].property_array_index
+                    })
+                    .is_some_and(|next| *next == values[at])
+        })
+        .collect();
+    values
+        .into_iter()
+        .zip(repeated)
+        .filter_map(|(value, repeated)| (!repeated).then_some(value))
+        .collect()
 }

@@ -67,22 +67,24 @@ impl BackgroundCommit {
         if self.changed.is_empty() {
             return CommittedCov::default();
         }
+        let (life_safety, coarse): (Vec<_>, Vec<_>) = self
+            .changed
+            .into_iter()
+            .partition(|oid| is_life_safety_object(*oid));
+        let life_safety = self.life_safety.changes(db, &life_safety);
         let captures: Vec<_> = {
             let table = cov_table.read().await;
-            self.changed
+            coarse
                 .iter()
                 .map(|oid| table.timed_capture(*oid))
+                .chain(std::iter::once(table.timed_capture_exact(&life_safety)))
                 .collect()
         };
         for capture in captures {
             capture.run(db);
         }
-        let (life_safety, coarse): (Vec<_>, Vec<_>) = self
-            .changed
-            .into_iter()
-            .partition(|oid| is_life_safety_object(*oid));
         CommittedCov {
-            life_safety: self.life_safety.changes(db, &life_safety),
+            life_safety,
             coarse,
         }
     }

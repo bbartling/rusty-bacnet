@@ -267,10 +267,14 @@ async fn value_source_cov_multiple_dedup_qualification_and_timestamps() {
     let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
     let values = &report.list_of_cov_notifications[0].list_of_values;
     assert_eq!(values.len(), 5);
-    assert!(
-        values.iter().all(|v| v.time_of_change.is_some()),
-        "unqualified explicit false selectors cannot suppress source companions"
-    );
+    for value in values {
+        assert_eq!(
+            value.time_of_change.is_some(),
+            value.property_identifier == PropertyIdentifier::VALUE_SOURCE,
+            "an explicit false selector governs {:?} even unqualified (#856)",
+            value.property_identifier
+        );
+    }
     assert_eq!(baseline(&f, pv).await, before);
     let source = snapshots
         .iter()

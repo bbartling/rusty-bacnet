@@ -30,6 +30,7 @@ pub(crate) mod multiple_reads;
 pub(crate) mod prepare;
 pub(crate) mod timed;
 mod timed_capture;
+pub(crate) use timed_capture::TimedWriteCapture;
 pub(crate) mod value_source;
 pub use lifetime::CovTimeRemaining;
 
@@ -310,6 +311,16 @@ impl CovSubscriptionTable {
                 .store(self.subs.len() as u64, Ordering::Relaxed);
         }
         purged_count
+    }
+
+    /// Test fixture: let every subscription's lifetime run out now, without
+    /// waiting on the wall clock that lifetimes use.
+    #[cfg(test)]
+    pub(crate) fn expire_all_for_test(&mut self) {
+        let now = Instant::now();
+        for entry in self.subs.values_mut() {
+            entry.subscription.expires_at = Some(now);
+        }
     }
 
     /// Get all active (non-expired) subscriptions for a given object.

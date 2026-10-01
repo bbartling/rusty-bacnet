@@ -217,6 +217,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // the next report conveys it again in capture order.
                     drop(claim);
                     flight.failed(hold_off);
+                    // Its timestamped history goes out once the hold-off ends.
+                    if let Some(context) = route.key().multiple_context() {
+                        let until = tokio::time::Instant::now() + hold_off;
+                        cov_table.read().await.timed().hold_until(context, until);
+                    }
                     Vec::new()
                 }
                 NotificationWorkerResult::Closed => {
