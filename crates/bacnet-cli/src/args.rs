@@ -374,15 +374,20 @@ mod tests {
     use bacnet_types::primitives::{Date, Time};
     use clap::error::ErrorKind;
 
+    // The derived parser's debug-build frames nearly fill a 1 MiB test thread,
+    // so parse where `main` does: on a thread with a larger stack (#953).
+    fn parse<const N: usize>(args: [&'static str; N]) -> Result<Cli, clap::Error> {
+        crate::parse_on_large_stack(move || Cli::try_parse_from(args))
+    }
+
     #[test]
     fn ack_alarm_and_alias_require_both_timestamp_flags() {
         for command in ["ack-alarm", "ack"] {
             let missing_both =
-                Cli::try_parse_from(["bacnet", command, "127.0.0.1", "ai:1", "--state", "1"])
-                    .unwrap_err();
+                parse(["bacnet", command, "127.0.0.1", "ai:1", "--state", "1"]).unwrap_err();
             assert_eq!(missing_both.kind(), ErrorKind::MissingRequiredArgument);
 
-            let missing_ack_time = Cli::try_parse_from([
+            let missing_ack_time = parse([
                 "bacnet",
                 command,
                 "127.0.0.1",
@@ -399,7 +404,7 @@ mod tests {
 
     #[test]
     fn ack_alarm_clap_uses_lossless_shared_timestamp_parser() {
-        let cli = Cli::try_parse_from([
+        let cli = parse([
             "bacnet",
             "ack",
             "127.0.0.1",
@@ -456,7 +461,7 @@ mod tests {
 
     #[test]
     fn ack_alarm_clap_reports_shared_parser_error_before_execution() {
-        let error = Cli::try_parse_from([
+        let error = parse([
             "bacnet",
             "ack-alarm",
             "127.0.0.1",
