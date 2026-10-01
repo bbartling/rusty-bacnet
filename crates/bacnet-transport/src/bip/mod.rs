@@ -27,8 +27,8 @@ mod bvlc_response;
 mod fanout;
 mod socket;
 use bbmd_start::{
-    bind_probe, initial_bbmd_state, refresh_own_address,
-    warn_if_broadcast_may_leave_another_interface, BbmdConfig, HostAddresses, OwnAddressContext,
+    initial_bbmd_state, refresh_own_address, warn_if_broadcast_may_leave_another_interface,
+    BbmdConfig, OwnAddressContext,
 };
 use bvlc_response::{
     bvlc_result_error, decode_bvlc_result_code, expect_bvlc_function, BvlcResponseKind,
@@ -40,8 +40,8 @@ mod own_broadcast;
 mod rate_limit;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 use io::{
-    handle_bvll_message, original_destination_matches, resolve_local_ip,
-    send_register_foreign_device, Delivery, RecvContext,
+    handle_bvll_message, original_destination_matches, send_register_foreign_device, Delivery,
+    RecvContext,
 };
 use own_broadcast::OwnBroadcastForwarder;
 pub use rate_limit::ManagementCounters;
@@ -125,17 +125,21 @@ pub struct BipTransport {
     /// Forwards this BBMD's own broadcasts to BDT peers and foreign devices
     /// (BBMD mode only, created in `start()`).
     own_broadcast: Option<OwnBroadcastForwarder>,
-    /// Replaces the host's local IPv4 addresses and default-route address
-    /// that a wildcard bind reads in `start()`.
+    /// Replaces the result of listing the host's local IPv4 addresses (and
+    /// its default-route address) that a wildcard bind reads in `start()`.
     #[cfg(test)]
-    local_ipv4_for_test: Option<(Vec<Ipv4Addr>, Option<Ipv4Addr>)>,
+    local_ipv4_for_test: Option<std::io::Result<(Vec<Ipv4Addr>, Option<Ipv4Addr>)>>,
 }
 
 impl BipTransport {
     /// Create a new BACnet/IP transport.
     ///
     /// - `interface`: Local IP to bind (use `0.0.0.0` for all interfaces; see
-    ///   [`enable_bbmd`](Self::enable_bbmd) for how a BBMD then picks its own address)
+    ///   [`enable_bbmd`](Self::enable_bbmd) for how a BBMD then picks its own address).
+    ///   With `0.0.0.0`, `start()` lists the host's IPv4 addresses and accepts
+    ///   unicast only to one of them; it fails when they cannot be listed or
+    ///   none is usable. The list is read at each start, so an address added
+    ///   later is accepted after the next restart.
     /// - `port`: UDP port (default 47808 / 0xBAC0)
     /// - `broadcast_address`: Directed broadcast address (e.g., `255.255.255.255`)
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
@@ -182,14 +186,10 @@ impl BipTransport {
     /// default route, if that is one of the host's addresses and not loopback.
     /// Several such rows, or no usable address, fail `start()`. A persisted
     /// BDT that loads is the one used, and a failure to choose from it fails
-    /// `start()` without trying the configured BDT. On platforms where local
-    /// addresses cannot be listed (Windows), a row is local when a socket can
-    /// bind to its IP; with no such row, any non-loopback default-route
-    /// address is used with a warning, so an explicit interface is the
-    /// reliable choice there. Each start of a `0.0.0.0` BBMD repeats the
-    /// choice, and the self row the BBMD appended follows it. With
-    /// broadcast address 255.255.255.255 and an own address that is not the
-    /// default-route address, `start()` warns that the kernel may send
+    /// `start()` without trying the configured BDT. Each start of a `0.0.0.0`
+    /// BBMD repeats the choice, and the self row the BBMD appended follows it.
+    /// With broadcast address 255.255.255.255 and an own address that is not
+    /// the default-route address, `start()` warns that the kernel may send
     /// broadcasts from another interface; bind an explicit interface and its
     /// subnet's broadcast address instead.
     pub fn enable_bbmd(&mut self, bdt: Vec<BdtEntry>) {
@@ -304,13 +304,51 @@ impl BipTransport {
     }
 
     /// The host's local IPv4 addresses and its local address toward the
-    /// default route, as a wildcard bind reads them.
-    fn wildcard_local_ipv4(&self) -> (Vec<Ipv4Addr>, Option<Ipv4Addr>) {
-        #[cfg(test)]
-        if let Some(local) = &self.local_ipv4_for_test {
-            return local.clone();
+    /// default route, as a wildcard bind reads them. A wildcard bind accepts
+    /// unicast only to a listed address, so this fails when the addresses
+    /// cannot be listed or none is usable. A listing error keeps its kind.
+    async fn wildcard_local_ipv4(&self) -> Result<(Vec<Ipv4Addr>, Option<Ipv4Addr>), Error> {
+        const ADVICE: &str = "bind an explicit interface address instead";
+        let (ips, route_ip) = self.host_ipv4().await.map_err(|e| {
+            Error::Transport(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "a B/IP transport bound to 0.0.0.0 could not list the host's IPv4 \
+                     addresses ({e}); {ADVICE}"
+                ),
+            ))
+        })?;
+        if ips.is_empty() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                format!(
+                    "a B/IP transport bound to 0.0.0.0 found no usable IPv4 address on this \
+                     host; {ADVICE}"
+                ),
+            )));
         }
-        (crate::local_addresses::ipv4(), resolve_local_ip())
+        Ok((ips, route_ip))
+    }
+
+    /// The listed IPv4 addresses and the default-route address, or what a
+    /// test injected. Listing adapters can be slow on a host with many
+    /// virtual adapters, so it runs on a blocking thread.
+    async fn host_ipv4(&self) -> std::io::Result<(Vec<Ipv4Addr>, Option<Ipv4Addr>)> {
+        #[cfg(test)]
+        if let Some(injected) = &self.local_ipv4_for_test {
+            return match injected {
+                Ok(local) => Ok(local.clone()),
+                Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+            };
+        }
+        tokio::task::spawn_blocking(|| {
+            Ok((
+                crate::local_addresses::ipv4()?,
+                crate::local_addresses::route_ipv4(),
+            ))
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 
     fn spawn_bbmd_fdt_purge_task(bbmd: Arc<Mutex<BbmdState>>) -> JoinHandle<()> {
@@ -573,17 +611,10 @@ impl TransportPort for BipTransport {
 
         let wildcard_bind = self.interface.is_unspecified();
         let (local_unicast_ips, route_ip) = if wildcard_bind {
-            self.wildcard_local_ipv4()
+            self.wildcard_local_ipv4().await?
         } else {
             (vec![self.interface], None)
         };
-        #[cfg(unix)]
-        if wildcard_bind && local_unicast_ips.is_empty() {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::AddrNotAvailable,
-                "could not enumerate local IPv4 addresses for wildcard ingress",
-            )));
-        }
 
         let local_port = socket.local_addr().map_err(Error::Transport)?.port();
 
@@ -593,11 +624,7 @@ impl TransportPort for BipTransport {
         let own_address = OwnAddressContext {
             interface: self.interface,
             port: local_port,
-            host: if local_unicast_ips.is_empty() {
-                HostAddresses::Probed(&bind_probe)
-            } else {
-                HostAddresses::Listed(&local_unicast_ips)
-            },
+            host: &local_unicast_ips,
             route_ip,
         };
         let bbmd_ip = if let Some(config) = &self.bbmd_config {
@@ -882,6 +909,8 @@ mod response_amplification_tests;
 mod socket_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wildcard_ingress_tests;
 
 #[cfg(test)]
 mod registration_tests;

@@ -533,6 +533,18 @@ same port, with the same single-receiver unicast caveat; macOS and BSD refuse a
 second wildcard bind. B/IPv6 applies the same port-zero and explicit-port rule,
 but binds a fresh ephemeral port on each start instead of remembering one.
 
+With the `0.0.0.0` interface, `start()` lists the host's IPv4 addresses, with
+`getifaddrs` on Linux, macOS and the BSDs and `GetAdaptersAddresses` on
+Windows, and the transport accepts a unicast datagram only when the
+destination the OS reports for it is one of them. The list holds every address
+configured on the host, on any interface, up or down, loopback and link-local
+included. On Windows that is every address except those duplicate address
+detection marked as duplicate (in use by another host) or invalid, so a
+tentative address, such as a static address on a disconnected adapter, counts.
+The list is read at each start, so an address added later is accepted after
+the next restart. If the addresses cannot be listed, or none is usable,
+`start()` fails and suggests binding an explicit interface address.
+
 ### BIP6 (IPv6)
 
 ```rust
@@ -1346,11 +1358,9 @@ falls back to the configured BDT, with a warning.
 Each `start()` of a `0.0.0.0` BBMD repeats this, so a restart follows a
 changed address. The self row the BBMD appended moves with it, and rows listed
 in the BDT stay. A failed `start()` keeps the BBMD configuration, and a failed
-restart leaves its BDT and FDT as they were. Where the transport cannot list
-local addresses (currently Windows), a row counts as local when a socket can
-bind to its IP, and the same rules apply, except that with no local row any
-non-loopback default-route address is used and a warning is logged; bind an
-explicit interface there.
+restart leaves its BDT and FDT as they were. The host's IPv4 addresses are
+the list described under [BIP (IPv4)](#bip-ipv4), the same on every platform,
+so these rules are too.
 
 On a multihomed host, prefer an explicit interface and that subnet's broadcast
 address, so the echo of each broadcast comes back from the BBMD's own address.

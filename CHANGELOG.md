@@ -232,6 +232,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On Windows, a B/IP transport bound to `0.0.0.0` now lists the host's IPv4
+  addresses with `GetAdaptersAddresses`, as Linux and macOS do with
+  `getifaddrs`, and accepts a unicast datagram only when its destination is
+  one of them, as they do (#952). Before, it had no list and accepted any
+  datagram that Windows flagged as unicast. A wildcard BBMD finds its own BDT
+  row in the same list, by the same rules on every platform (#937). The list
+  is read at each `start()`, so an address added later is accepted after the
+  next restart. It holds every address configured on the host, on any
+  interface, up or down, loopback and link-local included. On Windows that is
+  every address except those duplicate address detection marked as duplicate
+  (in use by another host) or invalid; a tentative one, as Windows reports a
+  static address on a disconnected adapter, counts. The listing runs on a
+  blocking thread. A `0.0.0.0` `start()` now fails on every platform when the
+  addresses cannot be listed, with the OS error's kind, or when none is
+  usable, and the error suggests binding an explicit interface address.
+
 - On Windows, a B/IP or B/IPv6 transport on an ephemeral port now owns the
   port (#950). It binds the wildcard address without SO_REUSEADDR, and
   Windows still let another socket bind a more specific address on the same
@@ -289,17 +305,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interface, when several rows qualify or no usable address is found. A
   persisted BDT that loads is authoritative: a failure to choose from it fails
   `start()` rather than falling back to the configured BDT (a self row that
-  would overflow it still falls back, with a warning). Where local addresses
-  cannot be listed (Windows), a row is local when a socket can bind to its IP;
-  with no such row, any non-loopback default-route address is used, with a
-  warning. Before, it took the default-route address or 127.0.0.1, so a
-  multihomed or offline BBMD forwarded with the wrong origin and could forward
-  to itself. Each start of a `0.0.0.0` BBMD chooses again, moving the self row
-  the BBMD appended; a failed start keeps the BBMD configuration, and a failed
-  restart keeps its BDT and FDT. With broadcast address 255.255.255.255 and an
-  own address that is not the default-route address, `start()` warns that the
-  kernel may send broadcasts from another interface, whose echo would not be
-  recognised. `BbmdState::local_address` is new.
+  would overflow it still falls back, with a warning). Windows applies the
+  same rules, since it now lists local addresses too (#952). Before, it took
+  the default-route address or 127.0.0.1, so a multihomed or offline BBMD
+  forwarded with the wrong origin and could forward to itself. Each start of a
+  `0.0.0.0` BBMD chooses again, moving the self row the BBMD appended; a
+  failed start keeps the BBMD configuration, and a failed restart keeps its
+  BDT and FDT. With broadcast address 255.255.255.255 and an own address that
+  is not the default-route address, `start()` warns that the kernel may send
+  broadcasts from another interface, whose echo would not be recognised.
+  `BbmdState::local_address` is new.
 
   A BBMD no longer rebroadcasts on its subnet a Forwarded-NPDU that arrived by
   broadcast, to the configured broadcast address or 255.255.255.255, even from
@@ -1423,9 +1438,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names a local address at the bound port, or, with no such row, the host's
   default-route address is one of its own addresses and not loopback. A loaded
   persisted BDT decides on its own; the configured BDT is not tried after it.
-  On Windows, where local addresses cannot be listed, rows are checked by
-  binding a socket to their IP, and with no local row any non-loopback
-  default-route address is used with a warning. Binding the BBMD's interface
+  The rules are the same on Windows (#952). Binding the BBMD's interface
   address avoids all of this (#937); see the
   [BBMD section](docs/rust-api.md#bbmd) of the Rust API guide.
 
