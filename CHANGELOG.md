@@ -187,10 +187,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that 0.11.0 built on GitHub's runners, under the same names, with the same
   minimum macOS (10.12 on x86_64, 11.0 on arm64). The Windows CLI now links the
   C runtime statically, so it no longer needs the Visual C++ Redistributable.
-  The release's artifact test checks every file's architecture, minimum OS and
-  linked libraries, but it can only run the Linux ones (#944). Starting
-  with the next release, `bacnet-cli` and `bacnet-endpoint` are published on
-  crates.io; the Linux CLI binaries need glibc 2.17 instead of 2.39, so they
+  The release's artifact test checks every file's architecture and linked
+  libraries, and the macOS files' minimum OS and code signatures, but it can
+  only run the Linux ones (#944). Starting with the next release, `bacnet-cli`
+  and `bacnet-endpoint` are published on crates.io; the Linux CLI binaries
+  need glibc 2.17 instead of 2.39, so they
   run on RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later, and link libpcap
   statically; and each release has a `SHA256SUMS` file and a
   `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
@@ -199,10 +200,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tokio-tungstenite` is built without TLS features. BACnet/SC already ran its
   own `tokio-rustls` handshake against the configured trust anchors and only
   wrapped the result for tungstenite, so nothing loads the operating system's
-  root certificates any more, and `rustls-native-certs` and its platform crates
-  (`security-framework` on macOS, `schannel` on Windows, `openssl-probe` on
-  Linux) drop out of the dependency tree. On macOS the CLI no longer links the
-  Security and CoreFoundation frameworks. An application that relied on
+  root certificates any more. The benchmark tests dial the same way, so
+  `rustls-native-certs` and its platform crates (`security-framework` on macOS,
+  `schannel` on Windows, `openssl-probe` on Linux) leave `Cargo.lock`, and with
+  it what cargo-deny and cargo-audit check. On macOS the CLI no longer links
+  the Security and CoreFoundation frameworks. An application that relied on
   `bacnet-transport` to turn on a tungstenite TLS feature must now turn it on
   itself (#944).
 

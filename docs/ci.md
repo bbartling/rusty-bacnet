@@ -283,13 +283,24 @@ GitHub Actions, and Actions is disabled on the mirror.
   `dry_run=false` is accepted only on a `v*` tag, where it runs that tag's
   release again.
 
-To release, set the workspace version, add its `CHANGELOG.md` section, merge,
-and tag a commit on `main` or `dev`:
+To release:
 
-```bash
-git tag -a v0.12.0 -m "Rusty BACnet 0.12.0"
-git push origin v0.12.0
-```
+1. Set the workspace version, add its `CHANGELOG.md` section, and merge.
+2. Dispatch a dry run on the release commit, and download its
+   `release-assets` artifact. On an Apple Silicon Mac, install the arm64 wheel
+   (`macosx_11_0_arm64`) in a fresh virtual environment and run the Python
+   suite (`python -m unittest discover -s crates/rusty-bacnet/tests`), then run
+   `bacnet-macos-arm64 --version` and the README quickstart `read` against a
+   local Python server on that wheel. Rebuilds of a commit are byte-identical
+   (see [Re-running a partial release](#re-running-a-partial-release)), so
+   the tag builds the same files. This step stands until the GitHub-hosted
+   smoke gate for the macOS and Windows artifacts lands (#951).
+3. Tag the commit, on `main` or `dev`:
+
+   ```bash
+   git tag -a v0.12.0 -m "Rusty BACnet 0.12.0"
+   git push origin v0.12.0
+   ```
 
 The tag push also starts CI on the tagged commit, with the heavy jobs, and the
 release waits for it (see [CI gate](#ci-gate)). Before that, and before any
@@ -305,7 +316,7 @@ the release.
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then the crates.io job's plan (read only), `cargo package` for the `crates` artifact, and `maturin sdist`. |
 | Wheels (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | `maturin build --release --locked` for CPython 3.11 to 3.14: with `--zig --compatibility manylinux2014` for Linux, `--zig` for macOS, and maturin's built-in xwin for Windows ([macOS and Windows builds](#macos-and-windows-builds)). The image has only Python 3.12; maturin uses its bundled sysconfig for the others and for macOS and Windows. |
 | CLI (linux-amd64, linux-arm64, macos-amd64, macos-arm64, windows-amd64) | Linux: `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. macOS: `cargo zigbuild` with `--features sc-tls`. Windows: `cargo xwin build` with `--features sc-tls` and the C runtime linked statically. |
-| Test the artifacts | `check_artifacts.py`: one wheel per Python and platform with the right tags, version (the workspace version in PEP 440 form) and extension module, and `THIRD-PARTY-NOTICES` in each wheel and the sdist. For every binary, its architecture and linkage: ELF with nothing above glibc 2.17 (`objdump -T`) and no dynamic libpcap; Mach-O with the tag's minimum macOS and only the expected libraries and flat lookups (`llvm-objdump`); PE with only the expected DLLs (`llvm-readobj`). The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. The quickstart read again with the server on each other x86_64 wheel, in CPython 3.11, 3.13 and 3.14 from `uv python install`. The arm64 CLI's `--version`, `--help` and offline capture under `qemu-aarch64-static`. |
+| Test the artifacts | `check_artifacts.py`: one wheel per Python and platform with the right tags, version (the workspace version in PEP 440 form) and extension module, and `THIRD-PARTY-NOTICES` in each wheel and the sdist. For every binary, its architecture and linkage: ELF with nothing above glibc 2.17 (`objdump -T`) and no dynamic libpcap; Mach-O with the tag's minimum macOS, a code signature on arm64, and only the expected libraries and flat lookups (`llvm-objdump`); PE with only the expected DLLs (`llvm-readobj`). Output that parses to nothing fails (no bind table, no Python lookups in an extension module, no `kernel32.dll` import). The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. The quickstart read again with the server on each other x86_64 wheel, in CPython 3.11, 3.13 and 3.14 from `uv python install`. The arm64 CLI's `--version`, `--help` and offline capture under `qemu-aarch64-static`. |
 | Release API (dry run) | Dry runs only. `release_api.py forgejo --dry-run` against Forgejo with the job token, and `release_api.py github --dry-run` if `GH_RELEASE_TOKEN` is set (otherwise a notice says it was skipped). Both read only, for the tag `v<version>`. |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `maturin upload --skip-existing` of the wheels and the sdist. |
@@ -571,10 +582,15 @@ can't find an SDK; zig doesn't need one.
 
   The artifact test checks that an extension module loads only libSystem,
   libiconv, libcharset, IOKit and CoreFoundation, and that every symbol it
-  leaves to a flat lookup is Python's, CoreFoundation's or IOKit's. A CLI
-  binary may load only the first three and may leave nothing to a flat
-  lookup. libcharset comes from cargo-zigbuild's libiconv stub and is part of
-  macOS.
+  leaves to a flat lookup is either Python's C API (`_Py*`) or one of the 82
+  CoreFoundation and IOKit symbols listed in `check_artifacts.py`, with that
+  framework loaded. The list is exactly what the 0.12.0 wheels use, so a new
+  symbol, or a lookalike from another framework such as `_CFNetwork*`, fails
+  until someone reviews it and adds it. A CLI binary may load only the first
+  three libraries and may leave nothing to a flat lookup. libcharset comes from
+  cargo-zigbuild's libiconv stub and is part of macOS. Every arm64 file must
+  carry a code signature (`LC_CODE_SIGNATURE`), which macOS requires on Apple
+  Silicon; zig signs ad hoc, as Apple's linker does.
 - **AWS-LC** (`aws-lc-sys`, for BACnet/SC) builds with zig's clang for both
   architectures with its default builder, assembly included. It needs no
   CMake, no bindgen (its bindings for both targets are pregenerated) and no
@@ -590,7 +606,9 @@ maturin's built-in xwin, the same cargo-xwin 0.23.1, for the wheels.
   accepts Microsoft's licence terms for them, which the owner accepted, and the
   image stays in the private registry. `XWIN_CACHE_DIR=/opt/xwin` and the
   `DONE` file, which lists the architectures cargo-xwin has, stop cargo-xwin
-  and maturin from downloading a copy of their own. To move to a newer CRT or
+  and maturin from downloading a copy of their own, and the Windows jobs fail
+  if a build changed anything under `/opt/xwin/xwin` or used cargo-xwin's
+  default cache, so a build can't quietly fetch an unpinned CRT or SDK. To move to a newer CRT or
   SDK, update `VS_CHANNEL_URL` and `VS_CHANNEL_SHA256` in the Dockerfile
   (`curl -sI https://aka.ms/vs/17/release/channel` shows the current URL), and
   `MSVC_CRT_VERSION` and `WINDOWS_SDK_VERSION` (`xwin --accept-license
@@ -684,6 +702,20 @@ and 90, 2026-10-01) again produced the same SHA-256 for all 27
 `release-assets` files. The Windows files need two linker flags for that,
 `-C link-arg=/DEBUG:NONE -C link-arg=/Brepro`: without them, the PE timestamps
 and the PDB build ID changed on every build.
+
+"Rebuilds match" means rebuilding a commit's artifacts in the same CI image,
+not rebuilding the image. The image tag is content-addressed: it's a hash of
+the Dockerfile, and the published image under that tag never changes, so every
+run with that tag gets the same tools. Only a Dockerfile change builds a new
+image, and that build installs whatever Ubuntu's archive then has for the apt
+packages, which can change the release binaries: clang and nasm build AWS-LC
+for Windows, and flex and bison generate libpcap's filter parser. They aren't
+pinned on purpose: Ubuntu removes superseded package versions from its
+archive, so a pinned version would stop the image from building later. The
+downloaded tools (rustup, zig, cargo-zigbuild, cargo-xwin, xwin, maturin, uv,
+libpcap and the others) are pinned by version and SHA-256, the Rust
+toolchains by version, and the Windows CRT and SDK by version, from a Visual
+Studio channel manifest pinned by SHA-256 that lists each download's SHA-256.
 
 ### Secrets
 
