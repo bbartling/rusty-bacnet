@@ -5,8 +5,12 @@ use super::*;
 /// not the legacy hardcoded 100.
 #[tokio::test]
 async fn event_notification_projects_offnormal_priority_from_class() {
-    let (db, network, comm_state, learned_routers, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+    let (db, network, comm_state, learned_routers, sent, oid) = fixture_with_commanded_nc(
+        5,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    )
+    .await;
 
     let change = EventStateChange {
         from: EventState::NORMAL,
@@ -41,8 +45,12 @@ async fn event_notification_projects_offnormal_priority_from_class() {
 /// TO_FAULT projects PRIORITY[1] and ACK_REQUIRED bit 1.
 #[tokio::test]
 async fn event_notification_projects_fault_priority_from_class() {
-    let (db, network, comm_state, learned_routers, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+    let (db, network, comm_state, learned_routers, sent, oid) = fixture_with_commanded_nc(
+        5,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    )
+    .await;
 
     let change = EventStateChange {
         from: EventState::NORMAL,
@@ -93,8 +101,12 @@ async fn event_notification_projects_fault_priority_from_class() {
 /// off the transition category rather than the states would get this wrong.
 #[tokio::test]
 async fn event_notification_from_fault_is_change_of_reliability() {
-    let (db, network, comm_state, learned_routers, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+    let (db, network, comm_state, learned_routers, sent, oid) = fixture_with_commanded_nc(
+        5,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    )
+    .await;
 
     let change = EventStateChange {
         from: EventState::FAULT,
@@ -131,8 +143,12 @@ async fn event_notification_from_fault_is_change_of_reliability() {
 /// TO_NORMAL projects PRIORITY[2] (250), not the legacy hardcoded 200.
 #[tokio::test]
 async fn event_notification_projects_normal_priority_from_class() {
-    let (db, network, comm_state, learned_routers, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+    let (db, network, comm_state, learned_routers, sent, oid) = fixture_with_commanded_nc(
+        5,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    )
+    .await;
 
     let change = EventStateChange {
         from: EventState::HIGH_LIMIT,

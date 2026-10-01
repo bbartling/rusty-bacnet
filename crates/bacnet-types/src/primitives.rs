@@ -340,30 +340,6 @@ impl core::fmt::Debug for StatusFlags {
         core::fmt::Display::fmt(self, f)
     }
 }
-bitflags::bitflags! {
-    /// BACnet DaysOfWeek -- 7-bit bitstring (Clause 21).
-    ///
-    /// Bit 0 (MSB=0x40) = Monday, Bit 6 (0x01) = Sunday.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct DaysOfWeek: u8 {
-        /// Monday.
-        const MONDAY    = 0b0100_0000;
-        /// Tuesday.
-        const TUESDAY   = 0b0010_0000;
-        /// Wednesday.
-        const WEDNESDAY = 0b0001_0000;
-        /// Thursday.
-        const THURSDAY  = 0b0000_1000;
-        /// Friday.
-        const FRIDAY    = 0b0000_0100;
-        /// Saturday.
-        const SATURDAY  = 0b0000_0010;
-        /// Sunday.
-        const SUNDAY    = 0b0000_0001;
-        /// Every day of the week.
-        const ALL       = 0b0111_1111;
-    }
-}
 
 // ---------------------------------------------------------------------------
 // PropertyValue -- sum type for BACnet property values

@@ -5,6 +5,7 @@
 use super::*;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{
     BACnetDestination, BACnetEventParameter, BACnetRecipient, FaultParameters,
 };
@@ -46,16 +47,16 @@ fn framed_recipient_list() -> (Vec<u8>, Vec<BACnetDestination>) {
         hundredths: 99,
     };
     let device_entry = BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: midnight,
         to_time: end_of_day,
         recipient: BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
         process_identifier: 1,
         issue_confirmed_notifications: true,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     };
     let address_entry = BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: midnight,
         to_time: end_of_day,
         recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
@@ -64,7 +65,7 @@ fn framed_recipient_list() -> (Vec<u8>, Vec<BACnetDestination>) {
         }),
         process_identifier: 42,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     };
     let destinations = vec![device_entry, address_entry];
     let mut buf = BytesMut::new();

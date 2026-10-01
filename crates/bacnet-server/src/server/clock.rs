@@ -422,7 +422,10 @@ mod tests {
             crate::schedule::current_time_components(frame),
             Some((3, 9, 15))
         );
-        assert_eq!(frame.day_of_week_bit(), Some(0x08));
+        assert_eq!(
+            frame.day_of_week_bit(),
+            Some(bacnet_types::bitstring::DaysOfWeek::THURSDAY)
+        );
         assert_eq!(
             crate::server::cov_clock::cov_multiple_datetime(frame),
             (frame.local_date, frame.local_time)

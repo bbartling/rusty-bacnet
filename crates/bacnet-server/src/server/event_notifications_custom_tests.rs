@@ -245,7 +245,7 @@ fn database(
     ))
     .unwrap();
     let mut class = notification_class_0_broadcasting();
-    class.ack_required = [true, false, false];
+    class.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(class)).unwrap();
     (db, commits)
 }

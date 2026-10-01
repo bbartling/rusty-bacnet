@@ -312,6 +312,7 @@ mod tests {
     // ---- Framed Recipient_List element editing (#152 review) ----
 
     use bacnet_objects::notification_class::NotificationClass;
+    use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
     use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
     use bacnet_types::primitives::Time;
 
@@ -323,7 +324,7 @@ mod tests {
             hundredths: 0,
         };
         BACnetDestination {
-            valid_days: 0b0111_1111,
+            valid_days: DaysOfWeek::all(),
             from_time: t(0, 0),
             to_time: t(23, 59),
             recipient: BACnetRecipient::Device(
@@ -331,7 +332,7 @@ mod tests {
             ),
             process_identifier: device_instance,
             issue_confirmed_notifications: false,
-            transitions: 0b0000_0111,
+            transitions: EventTransitionBits::all(),
         }
     }
 

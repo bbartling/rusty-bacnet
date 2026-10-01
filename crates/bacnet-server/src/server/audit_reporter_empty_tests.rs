@@ -1,13 +1,17 @@
 use super::*;
 use bacnet_objects::notification_class::NotificationClass;
-use bacnet_types::{constructed::BACnetDestination, primitives::Time};
+use bacnet_types::{
+    bitstring::{DaysOfWeek, EventTransitionBits},
+    constructed::BACnetDestination,
+    primitives::Time,
+};
 
 #[tokio::test]
 async fn audit_empty_values_wp_recipient_list_preserves_present_empty_and_null() {
     let mut fixture = server(reporter()).await;
     let target = oid(ObjectType::NOTIFICATION_CLASS, 1);
     let destination = BACnetDestination {
-        valid_days: 0x7f,
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -23,7 +27,7 @@ async fn audit_empty_values_wp_recipient_list_preserves_present_empty_and_null()
         recipient: BACnetRecipient::Device(oid(ObjectType::DEVICE, 20)),
         process_identifier: 1,
         issue_confirmed_notifications: false,
-        transitions: 7,
+        transitions: EventTransitionBits::all(),
     };
     let mut populated = BytesMut::new();
     bacnet_encoding::constructed::encode_destination_list(

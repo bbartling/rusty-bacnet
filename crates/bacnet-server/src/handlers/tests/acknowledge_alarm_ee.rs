@@ -43,7 +43,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     db.add(Box::new(ee)).unwrap();
 
     let mut nc = NotificationClass::new(7, "NC-7").unwrap();
-    nc.ack_required = [true, false, false]; // TO_OFFNORMAL requires ack
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL; // TO_OFFNORMAL requires ack
     db.add(Box::new(nc)).unwrap();
     db.add(Box::new(NotificationClass::new(0, "NC-0").unwrap()))
         .unwrap();

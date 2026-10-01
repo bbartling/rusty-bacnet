@@ -10,6 +10,7 @@ use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCo
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, EventNotificationRequest};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
@@ -76,7 +77,7 @@ fn destination(
     confirmed: bool,
 ) -> BACnetDestination {
     BACnetDestination {
-        valid_days: 0x7f,
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -92,7 +93,7 @@ fn destination(
         recipient,
         process_identifier,
         issue_confirmed_notifications: confirmed,
-        transitions: 0x07,
+        transitions: EventTransitionBits::all(),
     }
 }
 

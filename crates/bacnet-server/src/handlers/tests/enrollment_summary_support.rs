@@ -4,6 +4,7 @@ use bacnet_objects::event::{EnrollmentSummaryCapability, EventTransition};
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::Time;
@@ -169,7 +170,7 @@ pub(super) fn destination(
     process_identifier: u32,
 ) -> BACnetDestination {
     BACnetDestination {
-        valid_days: 0,
+        valid_days: DaysOfWeek::empty(),
         from_time: Time {
             hour: 23,
             minute: 0,
@@ -185,7 +186,7 @@ pub(super) fn destination(
         recipient,
         process_identifier,
         issue_confirmed_notifications: false,
-        transitions: 0,
+        transitions: EventTransitionBits::empty(),
     }
 }
 

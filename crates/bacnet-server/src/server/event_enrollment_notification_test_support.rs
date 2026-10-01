@@ -8,6 +8,7 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
@@ -225,7 +226,7 @@ pub(super) fn add_server_context(db: &mut ObjectDatabase, recipients: bool) {
     .unwrap();
 
     let mut notification_class = NotificationClass::new(0, "NC-0").unwrap();
-    notification_class.ack_required = [true; 3];
+    notification_class.ack_required = EventTransitionBits::all();
     if recipients {
         notification_class.add_destination(
             crate::server::event_notifications_tests::local_broadcast_destination(),

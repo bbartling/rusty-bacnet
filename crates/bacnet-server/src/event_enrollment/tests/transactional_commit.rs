@@ -42,7 +42,7 @@ fn timestamp_at(
 fn stock_transition_commits_timestamp_before_report_token_escapes() {
     let (mut db, enrollment_oid, monitored_oid) = setup_out_of_range(90.0, 80.0, 20.0, 2.0);
     let mut notification_class = NotificationClass::new(7, "NC-7").unwrap();
-    notification_class.ack_required = [true, false, false];
+    notification_class.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(notification_class)).unwrap();
     db.get_mut(&enrollment_oid)
         .unwrap()
@@ -166,7 +166,7 @@ fn same_state_transition_still_commits_ack_and_history() {
     db.add(Box::new(enrollment)).unwrap();
 
     let mut notification_class = NotificationClass::new(31, "NC-COV").unwrap();
-    notification_class.ack_required = [false, false, true];
+    notification_class.ack_required = EventTransitionBits::TO_NORMAL;
     db.add(Box::new(notification_class)).unwrap();
 
     assert!(evaluate_event_enrollments_report(&mut db, 1)

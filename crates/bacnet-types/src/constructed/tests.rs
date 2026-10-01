@@ -242,7 +242,7 @@ fn bacnet_recipient_address_variant() {
 fn bacnet_destination_construction() {
     let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap();
     let dest = BACnetDestination {
-        valid_days: 0b0111_1111, // all days
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -258,11 +258,11 @@ fn bacnet_destination_construction() {
         recipient: BACnetRecipient::Device(dev_oid),
         process_identifier: 1,
         issue_confirmed_notifications: true,
-        transitions: 0b0000_0111, // all transitions
+        transitions: EventTransitionBits::all(),
     };
-    assert_eq!(dest.valid_days & 0x7F, 0x7F);
+    assert!(dest.valid_days.contains(DaysOfWeek::SUNDAY));
     assert!(dest.issue_confirmed_notifications);
-    assert_eq!(dest.transitions & 0x07, 0x07);
+    assert!(dest.transitions.contains(EventTransitionBits::TO_NORMAL));
 }
 
 // --- LogDatum ---

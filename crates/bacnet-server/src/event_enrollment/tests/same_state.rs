@@ -277,7 +277,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
 
     // Reference a Notification Class (instance 7) requiring TO_OFFNORMAL ack.
     let mut nc = NotificationClass::new(7, "NC-7").unwrap();
-    nc.ack_required = [true, false, false];
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(nc)).unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
@@ -406,7 +406,7 @@ fn acked_transitions_to_normal_clear_with_ack_required() {
     let (mut db, ee_oid, bi_oid) = setup_cos(1, &[1], 0);
 
     let mut nc = NotificationClass::new(9, "NC-9").unwrap();
-    nc.ack_required = [false, false, true]; // TO_NORMAL
+    nc.ack_required = EventTransitionBits::TO_NORMAL;
     db.add(Box::new(nc)).unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
@@ -440,7 +440,7 @@ fn ack_bit_maintenance_is_independent_of_event_enable() {
     let (mut db, ee_oid, _bi_oid) = setup_cos(1, &[1], 0);
 
     let mut nc = NotificationClass::new(11, "NC-11").unwrap();
-    nc.ack_required = [true, false, false];
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(nc)).unwrap();
     {
         let obj = db.get_mut(&ee_oid).unwrap();

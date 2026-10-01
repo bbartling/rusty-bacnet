@@ -35,6 +35,7 @@ pub(super) fn for_object(_object: &NotificationClass) -> Cow<'_, [PropertyMetada
 mod tests {
     use super::*;
     use crate::traits::BACnetObject;
+    use bacnet_types::bitstring::EventTransitionBits;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
@@ -180,7 +181,8 @@ mod tests {
                 .unwrap();
             object.set_description("configured class");
             object.priority = [12, 34, 56];
-            object.ack_required = [true, false, true];
+            object.ack_required =
+                EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL;
             assert_eq!(object.object_identifier().instance_number(), 7);
             assert_eq!(
                 object.read_property(P::NOTIFICATION_CLASS, None).unwrap(),

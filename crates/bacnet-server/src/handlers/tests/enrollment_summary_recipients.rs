@@ -76,8 +76,8 @@ fn enrollment_membership_matches_exact_device_or_address_and_process() {
 fn membership_ignores_days_time_transitions_and_confirmed_setting() {
     let recipient = BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 44).unwrap());
     let configured = destination(recipient.clone(), 8);
-    assert_eq!(configured.valid_days, 0);
-    assert_eq!(configured.transitions, 0);
+    assert!(configured.valid_days.is_empty());
+    assert!(configured.transitions.is_empty());
     assert!(!configured.issue_confirmed_notifications);
     assert!(configured.to_time.hour < configured.from_time.hour);
 

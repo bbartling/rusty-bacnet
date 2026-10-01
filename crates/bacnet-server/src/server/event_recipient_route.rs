@@ -1,6 +1,7 @@
 use super::device_bindings::{BindingFreshness, DeviceResolution};
 use super::*;
 use bacnet_objects::notification_class::local_day_and_time;
+use bacnet_types::bitstring::DaysOfWeek;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::primitives::Time;
 
@@ -15,10 +16,10 @@ pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
     }
 }
 
-pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (u8, Time) {
-    let (today_bit, mut current_time) = local_day_and_time(now.as_secs(), 0);
+pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (DaysOfWeek, Time) {
+    let (today, mut current_time) = local_day_and_time(now.as_secs(), 0);
     current_time.hundredths = (now.subsec_millis() / 10) as u8;
-    (today_bit, current_time)
+    (today, current_time)
 }
 
 /// The transport action selected for one matched Notification Class recipient.

@@ -4,6 +4,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 
@@ -131,7 +132,7 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
     use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
     use bacnet_types::primitives::Time;
     BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -150,7 +151,7 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
         }),
         process_identifier: 0,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     }
 }
 
@@ -166,12 +167,12 @@ pub(super) fn notification_class_0_broadcasting(
 
 /// Build a server fixture: a Device, a NotificationClass (instance `nc`, whose
 /// recipient list holds the Clause 12.21 local-broadcast entry) with the given
-/// per-transition `priority` / `ack_required`, and an AnalogInput whose
+/// per-transition `priority` and `ack_required` bits, and an AnalogInput whose
 /// `Notification_Class` points at it with `Notify_Type = ALARM`.
 async fn fixture_with_commanded_nc(
     nc: u32,
     priority: [u8; 3],
-    ack_required: [bool; 3],
+    ack_required: EventTransitionBits,
 ) -> (
     Arc<RwLock<ObjectDatabase>>,
     Arc<NetworkLayer<TestTransport>>,
@@ -312,8 +313,12 @@ async fn event_notification_missing_class_distributes_nothing() {
 /// `Notify_Type == ALARM`, so an EVENT notification would wrongly clear it.
 #[tokio::test]
 async fn event_notification_event_notify_type_honors_class_ack_required() {
-    let (db, network, comm_state, learned_routers, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+    let (db, network, comm_state, learned_routers, sent, oid) = fixture_with_commanded_nc(
+        5,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    )
+    .await;
     // Reconfigure the AI to Notify_Type = EVENT.
     {
         let mut guard = db.write().await;
