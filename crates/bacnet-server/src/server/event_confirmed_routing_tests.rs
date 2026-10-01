@@ -25,6 +25,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::primitives::StatusFlags;
 use bytes::Bytes;
 
 mod learned_router_cache;
@@ -337,7 +338,7 @@ async fn confirmed_retry_reuses_committed_message_bytes_after_history_changes() 
         Some(
             bacnet_services::alarm_event::NotificationParameters::OutOfRange {
                 exceeding_value: 0.0,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 deadband: 1.0,
                 exceeded_limit: 100.0,
             }

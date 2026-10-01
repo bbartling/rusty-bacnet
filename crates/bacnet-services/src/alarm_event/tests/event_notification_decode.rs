@@ -114,10 +114,10 @@ fn event_notification_numeric_fields_accept_fitting_leading_zero() {
     assert_eq!(decoded.process_identifier, u32::MAX);
     assert_eq!(decoded.notification_class, u32::MAX);
     assert_eq!(decoded.priority, u8::MAX);
-    assert_eq!(decoded.event_type, u32::MAX);
-    assert_eq!(decoded.notify_type, u32::MAX);
-    assert_eq!(decoded.from_state, u32::MAX);
-    assert_eq!(decoded.to_state, u32::MAX);
+    assert_eq!(decoded.event_type, EventType::from_raw(u32::MAX));
+    assert_eq!(decoded.notify_type, NotifyType::from_raw(u32::MAX));
+    assert_eq!(decoded.from_state, EventState::from_raw(u32::MAX));
+    assert_eq!(decoded.to_state, EventState::from_raw(u32::MAX));
 }
 
 #[test]
@@ -178,12 +178,12 @@ fn event_notification_preserves_optional_envelope_fields() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: Some("high limit".into()),
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut encoded = BytesMut::new();
@@ -213,15 +213,15 @@ fn ack_notification_omits_ack_from_state_and_event_values_exactly() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 2,
+        notify_type: NotifyType::ACK_NOTIFICATION,
         ack_required: true,
-        from_state: 4,
-        to_state: 3,
+        from_state: EventState::LOW_LIMIT,
+        to_state: EventState::HIGH_LIMIT,
         event_values: Some(NotificationParameters::OutOfRange {
             exceeding_value: 85.0,
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
             deadband: 2.0,
             exceeded_limit: 80.0,
         }),
@@ -239,13 +239,14 @@ fn ack_notification_omits_ack_from_state_and_event_values_exactly() {
     );
 
     let decoded = EventNotificationRequest::decode(&encoded).unwrap();
-    assert_eq!(decoded.notify_type, 2);
+    assert_eq!(decoded.notify_type, NotifyType::ACK_NOTIFICATION);
     assert!(!decoded.ack_required);
     assert_eq!(
-        decoded.from_state, 0,
+        decoded.from_state,
+        EventState::NORMAL,
         "absent From State uses the neutral default"
     );
-    assert_eq!(decoded.to_state, 3);
+    assert_eq!(decoded.to_state, EventState::HIGH_LIMIT);
     assert!(decoded.event_values.is_none());
 }
 
@@ -258,12 +259,12 @@ fn event_notification_rejects_every_truncated_prefix() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: Some("high limit".into()),
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut encoded = BytesMut::new();

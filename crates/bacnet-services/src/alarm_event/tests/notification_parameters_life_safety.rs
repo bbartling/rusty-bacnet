@@ -35,12 +35,12 @@ fn encoded_event_notification() -> (BytesMut, usize) {
         timestamp: BACnetTimeStamp::SequenceNumber(1),
         notification_class: 1,
         priority: 1,
-        event_type: 8,
+        event_type: EventType::CHANGE_OF_LIFE_SAFETY,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 1,
+        from_state: EventState::NORMAL,
+        to_state: EventState::FAULT,
         event_values: None,
     };
     let mut buf = BytesMut::new();
@@ -48,10 +48,10 @@ fn encoded_event_notification() -> (BytesMut, usize) {
     let event_values_offset = buf.len();
     tags::encode_opening_tag(&mut buf, 12);
     NotificationParameters::ChangeOfLifeSafety {
-        new_state: 1,
-        new_mode: 1,
-        status_flags: 8,
-        operation_expected: 1,
+        new_state: LifeSafetyState::PRE_ALARM,
+        new_mode: LifeSafetyMode::ON,
+        status_flags: StatusFlags::IN_ALARM,
+        operation_expected: LifeSafetyOperation::SILENCE,
     }
     .encode(&mut buf)
     .unwrap();
@@ -73,10 +73,10 @@ fn change_of_life_safety_accepts_u32_max_with_leading_zero() {
     assert_eq!(
         decoded,
         NotificationParameters::ChangeOfLifeSafety {
-            new_state: u32::MAX,
-            new_mode: u32::MAX,
-            status_flags: 0x0f,
-            operation_expected: u32::MAX,
+            new_state: LifeSafetyState::from_raw(u32::MAX),
+            new_mode: LifeSafetyMode::from_raw(u32::MAX),
+            status_flags: StatusFlags::all(),
+            operation_expected: LifeSafetyOperation::from_raw(u32::MAX),
         }
     );
 }

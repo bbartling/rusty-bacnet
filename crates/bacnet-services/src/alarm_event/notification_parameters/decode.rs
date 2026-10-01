@@ -5,7 +5,7 @@ use super::decode_helpers::{
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::structured::{decode_access_event, decode_complex_event_type};
 use super::*;
-use crate::common::{decode_context, decode_context_u32};
+use crate::common::{decode_context_enum, decode_context_u32};
 use bacnet_encoding::constructed::validate_tlv_sequence;
 
 impl NotificationParameters {
@@ -349,27 +349,29 @@ impl NotificationParameters {
             }
             // [8] Change of life safety
             8 => {
-                let (new_state, pos) =
-                    decode_context_u32(data, inner_start, 0, "ChangeOfLifeSafety new-state")?;
-                let (new_mode, pos) =
-                    decode_context_u32(data, pos, 1, "ChangeOfLifeSafety new-mode")?;
-                let flags_offset = pos;
-                let (flags, pos) = decode_context(data, pos, 2, "ChangeOfLifeSafety status-flags")?;
-                let [4, bits] = flags else {
-                    return Err(Error::decoding(
-                        flags_offset,
-                        "ChangeOfLifeSafety status-flags must contain four bits",
-                    ));
-                };
-                if bits & 0x0f != 0 {
-                    return Err(Error::decoding(
-                        flags_offset,
-                        "ChangeOfLifeSafety status-flags must have zero padding",
-                    ));
-                }
-                let status_flags = bits >> 4;
-                let (operation_expected, pos) =
-                    decode_context_u32(data, pos, 3, "ChangeOfLifeSafety operation-expected")?;
+                let (new_state, pos) = decode_context_enum(
+                    data,
+                    inner_start,
+                    0,
+                    "ChangeOfLifeSafety new-state",
+                    LifeSafetyState::from_raw,
+                )?;
+                let (new_mode, pos) = decode_context_enum(
+                    data,
+                    pos,
+                    1,
+                    "ChangeOfLifeSafety new-mode",
+                    LifeSafetyMode::from_raw,
+                )?;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 2, "ChangeOfLifeSafety status-flags")?;
+                let (operation_expected, pos) = decode_context_enum(
+                    data,
+                    pos,
+                    3,
+                    "ChangeOfLifeSafety operation-expected",
+                    LifeSafetyOperation::from_raw,
+                )?;
                 finish_variant(
                     Self::ChangeOfLifeSafety {
                         new_state,
@@ -594,8 +596,13 @@ impl NotificationParameters {
             // [19] Change of reliability
             19 => {
                 // [0] reliability
-                let (reliability, pos) =
-                    decode_context_u32(data, inner_start, 0, "ChangeOfReliability reliability")?;
+                let (reliability, pos) = decode_context_enum(
+                    data,
+                    inner_start,
+                    0,
+                    "ChangeOfReliability reliability",
+                    Reliability::from_raw,
+                )?;
                 // [1] status-flags
                 let (status_flags, pos) =
                     decode_context_status_flags(data, pos, 1, "ChangeOfReliability status-flags")?;

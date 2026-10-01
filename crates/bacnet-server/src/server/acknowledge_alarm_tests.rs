@@ -17,7 +17,7 @@ fn request(oid: ObjectIdentifier, state: EventState) -> AcknowledgeAlarmRequest 
     AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 71,
         event_object_identifier: oid,
-        event_state_acknowledged: state.to_raw(),
+        event_state_acknowledged: state,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(77),

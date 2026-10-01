@@ -3,7 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
-use bacnet_types::enums::FaultType;
+use bacnet_types::enums::{FaultType, LifeSafetyState};
 
 /// Decode the read arm's framed wire form back to a structured value.
 fn decode_framed(val: PropertyValue) -> FaultParameters {
@@ -66,8 +66,8 @@ fn fault_type_tracks_each_fault_parameters_alternative() {
         ),
         (
             FaultParameters::FaultLifeSafety {
-                fault_values: vec![1],
-                mode_for_reference: reference.clone(),
+                fault_values: vec![LifeSafetyState::PRE_ALARM],
+                mode_property_reference: reference.clone(),
             },
             FaultType::FAULT_LIFE_SAFETY,
         ),
@@ -147,8 +147,12 @@ fn fault_parameters_life_safety() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let fp = FaultParameters::FaultLifeSafety {
-        fault_values: vec![1, 2, 3],
-        mode_for_reference: BACnetDeviceObjectPropertyReference {
+        fault_values: vec![
+            LifeSafetyState::PRE_ALARM,
+            LifeSafetyState::ALARM,
+            LifeSafetyState::FAULT,
+        ],
+        mode_property_reference: BACnetDeviceObjectPropertyReference {
             object_identifier: ai_oid,
             property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
             property_array_index: None,
@@ -301,8 +305,8 @@ fn fault_parameters_flat_life_safety_overflow_rejected() {
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
     let mut malformed = FaultParameters::FaultLifeSafety {
-        fault_values: vec![1],
-        mode_for_reference: BACnetDeviceObjectPropertyReference::new_local(
+        fault_values: vec![LifeSafetyState::PRE_ALARM],
+        mode_property_reference: BACnetDeviceObjectPropertyReference::new_local(
             ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             PropertyIdentifier::PRESENT_VALUE.to_raw(),
         ),

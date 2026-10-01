@@ -50,7 +50,7 @@ async fn canonical_acknowledge_alarm_preserves_every_caller_supplied_field() {
         AcknowledgeAlarmRequest {
             acknowledging_process_identifier: 11,
             event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            event_state_acknowledged: EventState::HIGH_LIMIT.to_raw(),
+            event_state_acknowledged: EventState::HIGH_LIMIT,
             timestamp: BACnetTimeStamp::SequenceNumber(101),
             acknowledgment_source: "sequence-to-time".into(),
             time_of_acknowledgment: time(9),
@@ -58,7 +58,7 @@ async fn canonical_acknowledge_alarm_preserves_every_caller_supplied_field() {
         AcknowledgeAlarmRequest {
             acknowledging_process_identifier: 22,
             event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
-            event_state_acknowledged: EventState::FAULT.to_raw(),
+            event_state_acknowledged: EventState::FAULT,
             timestamp: time(10),
             acknowledgment_source: "time-to-date-time".into(),
             time_of_acknowledgment: date_time(2),
@@ -67,7 +67,7 @@ async fn canonical_acknowledge_alarm_preserves_every_caller_supplied_field() {
             acknowledging_process_identifier: 33,
             event_object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 3)
                 .unwrap(),
-            event_state_acknowledged: EventState::NORMAL.to_raw(),
+            event_state_acknowledged: EventState::NORMAL,
             timestamp: date_time(3),
             acknowledgment_source: "date-time-to-sequence".into(),
             time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(303),

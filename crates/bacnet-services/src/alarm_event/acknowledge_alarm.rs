@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::common::{decode_context, decode_context_u32};
+use crate::common::{decode_context, decode_context_enum, decode_context_u32};
 
 fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
     if content.is_empty() {
@@ -21,8 +21,8 @@ pub struct AcknowledgeAlarmRequest {
     pub acknowledging_process_identifier: u32,
     /// Object whose event transition is being acknowledged.
     pub event_object_identifier: ObjectIdentifier,
-    /// BACnetEventState value (raw enumeration) of the transition being acknowledged.
-    pub event_state_acknowledged: u32,
+    /// Event state of the transition being acknowledged.
+    pub event_state_acknowledged: EventState,
     /// Timestamp of the event transition being acknowledged, as given in the original notification.
     pub timestamp: BACnetTimeStamp,
     /// Free-form identification of the operator or system acknowledging the alarm.
@@ -39,7 +39,7 @@ impl AcknowledgeAlarmRequest {
         // [1] eventObjectIdentifier
         primitives::encode_ctx_object_id(buf, 1, &self.event_object_identifier);
         // [2] eventStateAcknowledged
-        primitives::encode_ctx_enumerated(buf, 2, self.event_state_acknowledged);
+        primitives::encode_ctx_enumerated(buf, 2, self.event_state_acknowledged.to_raw());
         // [3] timestamp
         primitives::encode_timestamp(buf, 3, &self.timestamp)?;
         // [4] acknowledgmentSource
@@ -64,8 +64,13 @@ impl AcknowledgeAlarmRequest {
         offset = end;
 
         // [2]
-        let (event_state_acknowledged, end) =
-            decode_context_u32(data, offset, 2, "AcknowledgeAlarm event-state")?;
+        let (event_state_acknowledged, end) = decode_context_enum(
+            data,
+            offset,
+            2,
+            "AcknowledgeAlarm event-state",
+            EventState::from_raw,
+        )?;
         offset = end;
 
         // [3] timestamp

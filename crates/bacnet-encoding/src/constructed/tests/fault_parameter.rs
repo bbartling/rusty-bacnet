@@ -3,6 +3,7 @@
 
 use super::*;
 use bacnet_types::constructed::FaultParameters;
+use bacnet_types::enums::LifeSafetyState;
 
 fn round_trip(value: &FaultParameters) {
     let mut buf = BytesMut::new();
@@ -227,8 +228,12 @@ fn fault_extended_rejects_malformed_application_forms_atomically() {
 #[test]
 fn fault_life_safety_golden() {
     let value = FaultParameters::FaultLifeSafety {
-        fault_values: vec![1, 2, 3],
-        mode_for_reference: dopr_ai(1, 85),
+        fault_values: vec![
+            LifeSafetyState::PRE_ALARM,
+            LifeSafetyState::ALARM,
+            LifeSafetyState::FAULT,
+        ],
+        mode_property_reference: dopr_ai(1, 85),
     };
     let mut buf = BytesMut::new();
     encode_fault_parameters(&mut buf, &value).unwrap();
@@ -354,8 +359,13 @@ fn fault_all_modeled_alternatives_round_trip() {
         parameters: Vec::new(),
     });
     round_trip(&FaultParameters::FaultLifeSafety {
-        fault_values: vec![0, 8],
-        mode_for_reference: dopr_ai(9, 85),
+        fault_values: vec![LifeSafetyState::QUIET, LifeSafetyState::TAMPER],
+        mode_property_reference: dopr_ai(9, 85),
+    });
+    // A proprietary life-safety state survives the round trip unchanged.
+    round_trip(&FaultParameters::FaultLifeSafety {
+        fault_values: vec![LifeSafetyState::from_raw(u32::MAX)],
+        mode_property_reference: dopr_ai(9, 85),
     });
     round_trip(&FaultParameters::FaultState {
         fault_values: vec![BACnetPropertyStates::LifeSafetyState(2)],

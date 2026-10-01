@@ -2234,7 +2234,7 @@ client.delete_object(&mac, oid).await?;
 ### Alarms & Events
 
 ```rust
-client.acknowledge_alarm(&mac, process_id, oid, event_state, "operator").await?;
+client.acknowledge_alarm(&mac, process_id, oid, EventState::HIGH_LIMIT, "operator").await?;
 let raw = client.get_event_information(&mac, None).await?;
 ```
 

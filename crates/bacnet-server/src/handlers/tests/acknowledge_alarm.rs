@@ -56,7 +56,7 @@ fn encode_request(
     let request = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 17,
         event_object_identifier: oid,
-        event_state_acknowledged: state.to_raw(),
+        event_state_acknowledged: state,
         timestamp,
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(88),

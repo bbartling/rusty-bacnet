@@ -78,7 +78,7 @@ async fn event_notification_projects_fault_priority_from_class() {
     // value is checked where it actually reaches a peer.
     assert_eq!(
         notif.event_type,
-        EventType::CHANGE_OF_RELIABILITY.to_raw(),
+        EventType::CHANGE_OF_RELIABILITY,
         "TO_FAULT must be reported as CHANGE_OF_RELIABILITY"
     );
 }
@@ -121,7 +121,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
     let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(
         notif.event_type,
-        EventType::CHANGE_OF_RELIABILITY.to_raw(),
+        EventType::CHANGE_OF_RELIABILITY,
         "a transition FROM FAULT is also CHANGE_OF_RELIABILITY"
     );
     // ...while the transition coordinate is still TO_NORMAL.

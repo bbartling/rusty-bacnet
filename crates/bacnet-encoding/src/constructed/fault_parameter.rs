@@ -32,6 +32,7 @@
 //! accepts all four.
 
 use bacnet_types::constructed::FaultParameters;
+use bacnet_types::enums::LifeSafetyState;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
@@ -87,17 +88,17 @@ fn encode_fault_parameters_into(buf: &mut BytesMut, value: &FaultParameters) -> 
         }
         F::FaultLifeSafety {
             fault_values,
-            mode_for_reference,
+            mode_property_reference,
         } => {
             tags::encode_opening_tag(buf, 3);
             tags::encode_opening_tag(buf, 0);
             for v in fault_values {
-                primitives::encode_app_enumerated(buf, *v);
+                primitives::encode_app_enumerated(buf, v.to_raw());
             }
             tags::encode_closing_tag(buf, 0);
             // mode-property-reference [1] BACnetDeviceObjectPropertyReference
             tags::encode_opening_tag(buf, 1);
-            encode_dopr_body(buf, mode_for_reference);
+            encode_dopr_body(buf, mode_property_reference);
             tags::encode_closing_tag(buf, 1);
             tags::encode_closing_tag(buf, 3);
         }
@@ -276,19 +277,19 @@ pub fn decode_fault_parameters(
                     ));
                 }
                 let (v, p) = decode_app_enumerated(data, pos, what)?;
-                fault_values.push(v);
+                fault_values.push(LifeSafetyState::from_raw(v));
                 pos = p;
             }
             pos = expect_closing(data, pos, 0, what)?;
             pos = expect_opening(data, pos, 1, what)?;
-            let (mode_for_reference, p) = decode_dopr_body(data, pos, what)?;
+            let (mode_property_reference, p) = decode_dopr_body(data, pos, what)?;
             pos = p;
             pos = expect_closing(data, pos, 1, what)?;
             pos = expect_closing(data, pos, 3, what)?;
             (
                 F::FaultLifeSafety {
                     fault_values,
-                    mode_for_reference,
+                    mode_property_reference,
                 },
                 pos,
             )

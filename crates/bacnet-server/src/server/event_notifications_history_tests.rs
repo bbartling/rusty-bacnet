@@ -11,7 +11,7 @@ use bacnet_objects::event::{
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::enums::{EventState, EventType};
-use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
+use bacnet_types::primitives::{BACnetTimeStamp, Date, StatusFlags, Time};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
@@ -270,7 +270,7 @@ fn committed_enrollment_normal(
         event_type: EventType::OUT_OF_RANGE,
         event_values: CommittedNotificationPayload::for_test(NotificationParameters::OutOfRange {
             exceeding_value: 1.0,
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
             deadband: 0.0,
             exceeded_limit: 1.0,
         }),
@@ -296,8 +296,8 @@ fn committed_enrollment_reliability(oid: ObjectIdentifier) -> CommittedEventEnro
         event_type: EventType::CHANGE_OF_RELIABILITY,
         event_values: CommittedNotificationPayload::for_test(
             NotificationParameters::ChangeOfReliability {
-                reliability: bacnet_types::enums::Reliability::OVER_RANGE.to_raw(),
-                status_flags: 0,
+                reliability: bacnet_types::enums::Reliability::OVER_RANGE,
+                status_flags: StatusFlags::empty(),
                 property_values: Vec::new(),
             },
         ),

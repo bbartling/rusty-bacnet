@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{decode_context, decode_context_bool, decode_context_u32};
+use crate::common::{decode_context, decode_context_bool, decode_context_enum, decode_context_u32};
 use bacnet_encoding::constructed::validate_tlv_sequence;
 
 // ---------------------------------------------------------------------------
@@ -21,18 +21,19 @@ pub struct EventNotificationRequest {
     pub notification_class: u32,
     /// Priority (0-255).
     pub priority: u8,
-    /// Event type (e.g., OUT_OF_RANGE = 5).
-    pub event_type: u32,
+    /// Event algorithm that produced the notification.
+    pub event_type: EventType,
     /// Optional message text (\[7\]).
     pub message_text: Option<String>,
-    /// Notify type: ALARM(0), EVENT(1), ACK_NOTIFICATION(2).
-    pub notify_type: u32,
+    /// Whether this is an alarm, an event, or an acknowledgment notification.
+    pub notify_type: NotifyType,
     /// Whether the recipient must acknowledge.
     pub ack_required: bool,
-    /// Event state before this transition.
-    pub from_state: u32,
+    /// Event state before this transition. Not encoded for ACK_NOTIFICATION; decode sets
+    /// NORMAL when the field is absent.
+    pub from_state: EventState,
     /// Event state after this transition.
-    pub to_state: u32,
+    pub to_state: EventState,
     /// Optional event values (tag \[12\]).
     pub event_values: Option<NotificationParameters>,
 }
@@ -62,25 +63,25 @@ impl EventNotificationRequest {
         // [5] priority
         primitives::encode_ctx_unsigned(buf, 5, self.priority as u64);
         // [6] eventType
-        primitives::encode_ctx_enumerated(buf, 6, self.event_type);
+        primitives::encode_ctx_enumerated(buf, 6, self.event_type.to_raw());
         // [7] messageText (optional)
         if let Some(ref text) = self.message_text {
             primitives::encode_ctx_character_string(buf, 7, text)?;
         }
         // [8] notifyType
-        primitives::encode_ctx_enumerated(buf, 8, self.notify_type);
+        primitives::encode_ctx_enumerated(buf, 8, self.notify_type.to_raw());
         // [9] ackRequired (only for ALARM/EVENT)
-        if self.notify_type != 2 {
+        if self.notify_type != NotifyType::ACK_NOTIFICATION {
             primitives::encode_ctx_boolean(buf, 9, self.ack_required);
         }
         // [10] fromState (only for ALARM/EVENT)
-        if self.notify_type != 2 {
-            primitives::encode_ctx_enumerated(buf, 10, self.from_state);
+        if self.notify_type != NotifyType::ACK_NOTIFICATION {
+            primitives::encode_ctx_enumerated(buf, 10, self.from_state.to_raw());
         }
         // [11] toState
-        primitives::encode_ctx_enumerated(buf, 11, self.to_state);
+        primitives::encode_ctx_enumerated(buf, 11, self.to_state.to_raw());
         // [12] eventValues — optional
-        if self.notify_type != 2 {
+        if self.notify_type != NotifyType::ACK_NOTIFICATION {
             if let Some(ref params) = self.event_values {
                 tags::encode_opening_tag(buf, 12);
                 params.encode(buf)?;
@@ -132,8 +133,13 @@ impl EventNotificationRequest {
         offset = new_offset;
 
         // [6] eventType
-        let (event_type, new_offset) =
-            decode_context_u32(data, offset, 6, "EventNotification eventType")?;
+        let (event_type, new_offset) = decode_context_enum(
+            data,
+            offset,
+            6,
+            "EventNotification eventType",
+            EventType::from_raw,
+        )?;
         offset = new_offset;
 
         // [7] messageText (optional)
@@ -149,8 +155,13 @@ impl EventNotificationRequest {
         }
 
         // [8] notifyType
-        let (notify_type, new_offset) =
-            decode_context_u32(data, offset, 8, "EventNotification notifyType")?;
+        let (notify_type, new_offset) = decode_context_enum(
+            data,
+            offset,
+            8,
+            "EventNotification notifyType",
+            NotifyType::from_raw,
+        )?;
         offset = new_offset;
 
         // [9] ackRequired (optional — present for ALARM/EVENT)
@@ -164,19 +175,24 @@ impl EventNotificationRequest {
         }
 
         // [10] fromState (absent for ACK_NOTIFICATION)
-        let mut from_state = 0;
+        let mut from_state = EventState::NORMAL;
         if offset < data.len() {
             let (peek, _) = tags::decode_tag(data, offset)?;
             if peek.is_context(10) {
-                (from_state, offset) =
-                    decode_context_u32(data, offset, 10, "EventNotification fromState")?;
-            } else if notify_type != 2 {
+                (from_state, offset) = decode_context_enum(
+                    data,
+                    offset,
+                    10,
+                    "EventNotification fromState",
+                    EventState::from_raw,
+                )?;
+            } else if notify_type != NotifyType::ACK_NOTIFICATION {
                 return Err(Error::decoding(
                     offset,
                     "EventNotification expected fromState",
                 ));
             }
-        } else if notify_type != 2 {
+        } else if notify_type != NotifyType::ACK_NOTIFICATION {
             return Err(Error::decoding(
                 offset,
                 "EventNotification missing fromState",
@@ -184,8 +200,13 @@ impl EventNotificationRequest {
         }
 
         // [11] toState
-        let (to_state, new_offset) =
-            decode_context_u32(data, offset, 11, "EventNotification toState")?;
+        let (to_state, new_offset) = decode_context_enum(
+            data,
+            offset,
+            11,
+            "EventNotification toState",
+            EventState::from_raw,
+        )?;
         offset = new_offset;
 
         // [12] eventValues — optional

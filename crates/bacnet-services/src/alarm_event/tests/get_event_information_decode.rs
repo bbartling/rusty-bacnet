@@ -160,8 +160,8 @@ fn ack_accepts_u32_max_with_leading_zero_octet() {
 
     let decoded = GetEventInformationAck::decode(&encode_ack(&wire, 1, &[1], &[])).unwrap();
     let summary = &decoded.list_of_event_summaries[0];
-    assert_eq!(summary.event_state, u32::MAX);
-    assert_eq!(summary.notify_type, u32::MAX);
+    assert_eq!(summary.event_state, EventState::from_raw(u32::MAX));
+    assert_eq!(summary.notify_type, NotifyType::from_raw(u32::MAX));
     assert_eq!(summary.event_priorities, [u32::MAX; 3]);
 }
 

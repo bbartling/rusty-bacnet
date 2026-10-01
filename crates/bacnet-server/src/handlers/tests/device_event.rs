@@ -1,6 +1,8 @@
 use super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::NotifyType;
 use bacnet_types::primitives::{Date, Time};
 
 struct EventSummaryFixture {
@@ -380,8 +382,11 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     handle_get_event_information(&db, &buf, &mut ack_buf).unwrap();
     let ack = GetEventInformationAck::decode(&ack_buf).unwrap();
     let summary = &ack.list_of_event_summaries[0];
-    assert_eq!(summary.event_enable, 0x05);
-    assert_eq!(summary.notify_type, 1);
+    assert_eq!(
+        summary.event_enable,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
+    assert_eq!(summary.notify_type, NotifyType::EVENT);
     assert_eq!(summary.event_priorities, [100, 150, 200]);
 }
 

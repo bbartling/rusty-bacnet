@@ -39,13 +39,13 @@ fn ack_with_timestamps(event_timestamps: [BACnetTimeStamp; 3]) -> GetEventInform
     GetEventInformationAck {
         list_of_event_summaries: vec![EventSummary {
             object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            event_state: 3,
-            acknowledged_transitions: 0b101,
+            event_state: EventState::HIGH_LIMIT,
+            acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
+                | EventTransitionBits::TO_NORMAL,
             event_timestamps,
-            notify_type: 0,
-            event_enable: 0b111,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::all(),
             event_priorities: [3, 3, 3],
-            notification_class: 0,
         }],
         more_events: true,
     }

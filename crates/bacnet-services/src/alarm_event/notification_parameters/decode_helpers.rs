@@ -65,7 +65,7 @@ pub(super) fn decode_context_status_flags(
     offset: usize,
     expected_tag: u8,
     field: &str,
-) -> Result<(u8, usize), Error> {
+) -> Result<(StatusFlags, usize), Error> {
     let (content, end) = decode_context(data, offset, expected_tag, field)?;
     let [4, bits] = content else {
         return Err(Error::decoding(
@@ -79,5 +79,5 @@ pub(super) fn decode_context_status_flags(
             format!("{field} must have zero padding"),
         ));
     }
-    Ok((bits >> 4, end))
+    Ok((StatusFlags::from_bits_retain(bits >> 4), end))
 }

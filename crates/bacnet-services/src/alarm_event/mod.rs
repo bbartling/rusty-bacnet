@@ -8,6 +8,7 @@ use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
 };
+use bacnet_types::enums::{EventState, EventType, NotifyType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 use bytes::BytesMut;

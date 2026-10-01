@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import rusty_bacnet
-from rusty_bacnet import BACnetClient, BACnetTimeStamp, ObjectIdentifier, ObjectType
+from rusty_bacnet import (
+    BACnetClient,
+    BACnetTimeStamp,
+    EventState,
+    ObjectIdentifier,
+    ObjectType,
+)
 
 
 def stub_classes() -> dict[str, ast.ClassDef]:
@@ -145,13 +151,13 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
         timestamp = BACnetTimeStamp.sequence_number(1)
         call: Any = client.acknowledge_alarm_request
         with self.assertRaises(TypeError):
-            call("127.0.0.1:47808", 7, oid, 1, timestamp, "operator")
+            call("127.0.0.1:47808", 7, oid, EventState.FAULT, timestamp, "operator")
         with self.assertRaises(TypeError):
             call(
                 "127.0.0.1:47808",
                 7,
                 oid,
-                1,
+                EventState.FAULT,
                 0,
                 "operator",
                 timestamp,
@@ -176,7 +182,7 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
                 warnings.simplefilter("always")
                 with self.assertRaisesRegex(RuntimeError, "client not started"):
                     await client.acknowledge_alarm(
-                        "127.0.0.1:47808", 7, oid, 1, "legacy-operator"
+                        "127.0.0.1:47808", 7, oid, EventState.FAULT, "legacy-operator"
                     )
                 self.assertEqual(len(caught), 1)
                 self.assertIs(caught[0].category, DeprecationWarning)

@@ -77,6 +77,19 @@ pub(crate) fn decode_context_u32(
     Ok((value, end))
 }
 
+/// Decode a context-tagged Enumerated into an open enumeration newtype through its `from_raw`
+/// constructor, so values outside the named set (including proprietary ones) are kept as-is.
+pub(crate) fn decode_context_enum<T>(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+    from_raw: fn(u32) -> T,
+) -> Result<(T, usize), Error> {
+    let (value, end) = decode_context_u32(data, offset, expected_tag, field)?;
+    Ok((from_raw(value), end))
+}
+
 pub(crate) fn decode_context_bool(
     data: &[u8],
     offset: usize,

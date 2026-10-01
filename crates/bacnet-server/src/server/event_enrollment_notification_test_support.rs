@@ -12,7 +12,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, EventType, Reliability};
-use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::primitives::{BACnetTimeStamp, StatusFlags};
 use bytes::Bytes;
 use std::borrow::Cow;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -316,12 +316,9 @@ pub(super) fn assert_committed_reliability_notifications(
         expected_instances
     );
     for (offset, notification) in notifications.iter().enumerate() {
-        assert_eq!(
-            notification.event_type,
-            EventType::CHANGE_OF_RELIABILITY.to_raw()
-        );
-        assert_eq!(notification.from_state, from.to_raw());
-        assert_eq!(notification.to_state, to.to_raw());
+        assert_eq!(notification.event_type, EventType::CHANGE_OF_RELIABILITY);
+        assert_eq!(notification.from_state, from);
+        assert_eq!(notification.to_state, to);
         assert!(notification.ack_required);
         assert_eq!(notification.message_text, None);
         let Some(NotificationParameters::ChangeOfReliability {
@@ -334,7 +331,11 @@ pub(super) fn assert_committed_reliability_notifications(
         };
         assert_eq!(
             *status_flags,
-            if to == EventState::FAULT { 0b1100 } else { 0 }
+            if to == EventState::FAULT {
+                StatusFlags::IN_ALARM | StatusFlags::FAULT
+            } else {
+                StatusFlags::empty()
+            }
         );
         let mut properties = Vec::new();
         let mut position = 0;

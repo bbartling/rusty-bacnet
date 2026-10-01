@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
 use bacnet_services::alarm_event::NotificationParameters;
+use bacnet_types::primitives::StatusFlags;
 use std::borrow::Cow;
 use std::sync::Mutex as StdMutex;
 
@@ -296,13 +297,13 @@ fn assert_committed(
     assert_eq!(notification.message_text, commit.message_text);
     assert_eq!(notification.ack_required, commit.ack_required);
     assert!(notification.ack_required);
-    assert_eq!(notification.from_state, EventState::NORMAL.to_raw());
-    assert_eq!(notification.to_state, EventState::HIGH_LIMIT.to_raw());
+    assert_eq!(notification.from_state, EventState::NORMAL);
+    assert_eq!(notification.to_state, EventState::HIGH_LIMIT);
     assert_eq!(
         notification.event_values,
         Some(NotificationParameters::OutOfRange {
             exceeding_value: 81.0,
-            status_flags: 8,
+            status_flags: StatusFlags::IN_ALARM,
             deadband: 2.0,
             exceeded_limit: 80.0
         })

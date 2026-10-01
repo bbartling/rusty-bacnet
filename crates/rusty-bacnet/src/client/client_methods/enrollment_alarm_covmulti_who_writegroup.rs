@@ -131,10 +131,13 @@ impl BACnetClient {
                             inner: entry.alarm_state,
                         },
                     )?;
-                    let (unused_bits, ref data) = entry.acknowledged_transitions;
+                    // Keep the raw bit-string shape: three defined bits, five unused.
                     let trans_dict = PyDict::new(py);
-                    trans_dict.set_item("unused_bits", unused_bits)?;
-                    trans_dict.set_item("data", PyBytes::new(py, data))?;
+                    trans_dict.set_item("unused_bits", 5u8)?;
+                    trans_dict.set_item(
+                        "data",
+                        PyBytes::new(py, &[entry.acknowledged_transitions.to_bacnet()]),
+                    )?;
                     dict.set_item("acknowledged_transitions", trans_dict)?;
                     list.append(dict)?;
                 }

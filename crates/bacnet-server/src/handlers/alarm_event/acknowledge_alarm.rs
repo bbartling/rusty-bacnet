@@ -37,7 +37,6 @@ pub fn handle_acknowledge_alarm(
     service_data: &[u8],
 ) -> Result<AcceptedAcknowledgeAlarm, Error> {
     let request = AcknowledgeAlarmRequest::decode(service_data)?;
-    let event_state = EventState::from_raw(request.event_state_acknowledged);
 
     let object = db
         .get_mut(&request.event_object_identifier)
@@ -46,8 +45,10 @@ pub fn handle_acknowledge_alarm(
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    let change =
-        object.acknowledge_alarm_correlated_detailed_internal(event_state, &request.timestamp)?;
+    let change = object.acknowledge_alarm_correlated_detailed_internal(
+        request.event_state_acknowledged,
+        &request.timestamp,
+    )?;
 
     let notification = change.and_then(|change| {
         let algorithm = object.enrollment_summary_capability_internal()?.event_type;

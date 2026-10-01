@@ -1902,7 +1902,7 @@ class BACnetClient:
         address: str,
         acknowledging_process_identifier: int,
         event_object_identifier: ObjectIdentifier,
-        event_state_acknowledged: int,
+        event_state_acknowledged: EventState,
         timestamp: BACnetTimeStamp,
         acknowledgment_source: str,
         time_of_acknowledgment: BACnetTimeStamp,
@@ -1919,7 +1919,7 @@ class BACnetClient:
         address: str,
         acknowledging_process_identifier: int,
         event_object_identifier: ObjectIdentifier,
-        event_state_acknowledged: int,
+        event_state_acknowledged: EventState,
         acknowledgment_source: str,
     ) -> Awaitable[None]:
         """Deprecated compatibility method.

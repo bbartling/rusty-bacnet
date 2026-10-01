@@ -758,11 +758,13 @@ await client.reinitialize_device(
 #### `acknowledge_alarm(address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source)`
 
 ```python
+from rusty_bacnet import EventState
+
 await client.acknowledge_alarm(
     "192.168.1.100:47808",
     acknowledging_process_identifier=1,
     event_object_identifier=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-    event_state_acknowledged=3,       # EVENT_STATE value
+    event_state_acknowledged=EventState.HIGH_LIMIT,
     acknowledgment_source="operator",
 )
 ```

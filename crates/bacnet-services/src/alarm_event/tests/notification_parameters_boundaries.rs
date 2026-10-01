@@ -133,12 +133,12 @@ fn event_request(event_values: NotificationParameters) -> EventNotificationReque
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 1,
         priority: 1,
-        event_type: 1,
+        event_type: EventType::CHANGE_OF_STATE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 1,
+        from_state: EventState::NORMAL,
+        to_state: EventState::FAULT,
         event_values: Some(event_values),
     }
 }
@@ -151,8 +151,8 @@ fn encode_event(event_values: NotificationParameters) -> BytesMut {
 
 fn access_event(authentication_factor: Option<Vec<u8>>) -> NotificationParameters {
     NotificationParameters::AccessEvent {
-        access_event: 5,
-        status_flags: 0b1000,
+        access_event: AccessEvent::TRACE,
+        status_flags: StatusFlags::IN_ALARM,
         access_event_tag: 10,
         access_event_time: test_date_time(),
         access_credential: BACnetDeviceObjectReference {
@@ -232,10 +232,10 @@ fn notification_parameter_values_accept_fitting_leading_zero() {
             &[4, 0x80]
         )),
         Ok(NotificationParameters::AccessEvent {
-            access_event: u32::MAX,
+            access_event,
             access_event_tag: u32::MAX,
             ..
-        })
+        }) if access_event == AccessEvent::from_raw(u32::MAX)
     ));
     assert!(matches!(
         decode_variant(&raw_change_of_reliability(
@@ -243,10 +243,8 @@ fn notification_parameter_values_accept_fitting_leading_zero() {
             0,
             &[4, 0x80]
         )),
-        Ok(NotificationParameters::ChangeOfReliability {
-            reliability: u32::MAX,
-            ..
-        })
+        Ok(NotificationParameters::ChangeOfReliability { reliability, .. })
+            if reliability == Reliability::from_raw(u32::MAX)
     ));
     assert!(matches!(
         decode_variant(&raw_change_of_timer(
@@ -255,11 +253,12 @@ fn notification_parameter_values_accept_fitting_leading_zero() {
             &[4, 0x80]
         )),
         Ok(NotificationParameters::ChangeOfTimer {
-            new_state: u32::MAX,
-            last_state_change: Some(u32::MAX),
+            new_state,
+            last_state_change: Some(last_state_change),
             initial_timeout: Some(u32::MAX),
             ..
-        })
+        }) if new_state == TimerState::from_raw(u32::MAX)
+            && last_state_change == TimerTransition::from_raw(u32::MAX)
     ));
 }
 
@@ -318,7 +317,7 @@ fn event_notification_preserves_trailing_opaque_payload_bytes() {
     let variants = [
         NotificationParameters::CommandFailure {
             command_value: encoded_octet_string(&[0x01]),
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
             feedback_value: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0x3f]),
         },
         NotificationParameters::Extended {
@@ -328,8 +327,8 @@ fn event_notification_preserves_trailing_opaque_payload_bytes() {
         },
         access_event(Some(authentication_factor(&[0x5e, 0x5f, 0xcf, 0xdf]))),
         NotificationParameters::ChangeOfReliability {
-            reliability: 7,
-            status_flags: 0b1000,
+            reliability: Reliability::UNRELIABLE_OTHER,
+            status_flags: StatusFlags::IN_ALARM,
             property_values: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0xff]),
         },
     ];
@@ -359,10 +358,10 @@ fn event_notification_requires_exact_event_values_suffix() {
         },
         access_event(Some(authentication_factor(&[0xab, 0xcd]))),
         NotificationParameters::ChangeOfTimer {
-            new_state: 1,
-            status_flags: 0b1000,
+            new_state: TimerState::RUNNING,
+            status_flags: StatusFlags::IN_ALARM,
             update_time: test_date_time(),
-            last_state_change: Some(2),
+            last_state_change: Some(TimerTransition::RUNNING_TO_IDLE),
             initial_timeout: Some(3),
             expiration_time: Some(test_date_time()),
         },
@@ -459,7 +458,7 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
     let variants = [
         NotificationParameters::CommandFailure {
             command_value: raw.clone(),
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
             feedback_value: raw.clone(),
         },
         NotificationParameters::Extended {
@@ -469,8 +468,8 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
         },
         access_event(Some(authentication_factor(&raw))),
         NotificationParameters::ChangeOfReliability {
-            reliability: 7,
-            status_flags: 0b1000,
+            reliability: Reliability::UNRELIABLE_OTHER,
+            status_flags: StatusFlags::IN_ALARM,
             property_values: raw,
         },
     ];
@@ -498,16 +497,16 @@ fn non_trailing_raw_fields_preserve_delimiters_inside_values() {
     let variants = [
         NotificationParameters::CommandFailure {
             command_value: raw.clone(),
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
             feedback_value: raw.clone(),
         },
         NotificationParameters::ChangeOfStatusFlags {
             present_value: Some(raw.clone()),
-            referenced_flags: 0b1000,
+            referenced_flags: StatusFlags::IN_ALARM,
         },
         NotificationParameters::ChangeOfDiscreteValue {
             new_value: raw,
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
         },
     ];
 
@@ -561,21 +560,21 @@ fn abstract_syntax_values_preserve_empty_aggregates_and_optional_presence() {
     for expected in [
         NotificationParameters::CommandFailure {
             command_value: Vec::new(),
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
             feedback_value: Vec::new(),
         },
         NotificationParameters::ChangeOfDiscreteValue {
             new_value: Vec::new(),
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
         },
         access_event(None),
         NotificationParameters::ChangeOfStatusFlags {
             present_value: None,
-            referenced_flags: 0,
+            referenced_flags: StatusFlags::empty(),
         },
         NotificationParameters::ChangeOfStatusFlags {
             present_value: Some(Vec::new()),
-            referenced_flags: 0,
+            referenced_flags: StatusFlags::empty(),
         },
     ] {
         let mut encoded = BytesMut::new();
@@ -601,7 +600,7 @@ fn event_notification_enforces_total_nesting_on_encode_and_decode() {
             new_state: BACnetPropertyStates::Other(
                 BACnetProprietaryPropertyState::constructed(64, body).unwrap(),
             ),
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
         }
     };
 
@@ -636,14 +635,14 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::ChangeOfBitstring {
                 referenced_bitstring: (0, vec![0x80]),
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
             },
             2,
         ),
         (
             NotificationParameters::FloatingLimit {
                 reference_value: 1.0,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 setpoint_value: 2.0,
                 error_limit: 3.0,
             },
@@ -652,7 +651,7 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::OutOfRange {
                 exceeding_value: 1.0,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 deadband: 2.0,
                 exceeded_limit: 3.0,
             },
@@ -661,7 +660,7 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::UnsignedRange {
                 exceeding_value: 1,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 exceeded_limit: 2,
             },
             3,
@@ -669,7 +668,7 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::DoubleOutOfRange {
                 exceeding_value: 1.0,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 deadband: 2.0,
                 exceeded_limit: 3.0,
             },
@@ -678,7 +677,7 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::SignedOutOfRange {
                 exceeding_value: -1,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 deadband: 2,
                 exceeded_limit: -3,
             },
@@ -687,7 +686,7 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::UnsignedOutOfRange {
                 exceeding_value: 1,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 deadband: 2,
                 exceeded_limit: 3,
             },
@@ -696,17 +695,17 @@ fn primitive_notification_fields_require_their_context_tags() {
         (
             NotificationParameters::ChangeOfCharacterstring {
                 changed_value: "changed".into(),
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
                 alarm_value: "alarm".into(),
             },
             3,
         ),
         (
             NotificationParameters::ChangeOfLifeSafety {
-                new_state: 1,
-                new_mode: 2,
-                status_flags: 0b1000,
-                operation_expected: 3,
+                new_state: LifeSafetyState::PRE_ALARM,
+                new_mode: LifeSafetyMode::TEST,
+                status_flags: StatusFlags::IN_ALARM,
+                operation_expected: LifeSafetyOperation::SILENCE_VISUAL,
             },
             4,
         ),

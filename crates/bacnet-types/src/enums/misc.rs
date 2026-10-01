@@ -116,15 +116,6 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Event transition bit positions (Clause 21.6 production).
-    pub struct EventTransitionBits(u8);
-
-    const TO_OFFNORMAL = 0;
-    const TO_FAULT = 1;
-    const TO_NORMAL = 2;
-}
-
-bacnet_enum! {
     /// Bit positions within a `BACnetServicesSupported` bit string (Clause 21).
     pub struct ServiceSupported(u8);
 

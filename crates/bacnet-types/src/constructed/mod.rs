@@ -7,6 +7,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
+use crate::enums::LifeSafetyState;
 use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, Time};
 use crate::MacAddr;
@@ -578,10 +579,10 @@ pub enum FaultParameters {
     },
     /// Fault on life safety state match.
     FaultLifeSafety {
-        /// Life safety states (raw BACnetLifeSafetyState values) that indicate a fault.
-        fault_values: Vec<u32>,
+        /// Life safety states that indicate a fault.
+        fault_values: Vec<LifeSafetyState>,
         /// Reference to the mode property consulted when evaluating these states.
-        mode_for_reference: BACnetDeviceObjectPropertyReference,
+        mode_property_reference: BACnetDeviceObjectPropertyReference,
     },
     /// Fault on property state match.
     FaultState {

@@ -292,7 +292,7 @@ async fn execute_command<T: TransportPort + 'static>(
                 commands::device::AcknowledgeAlarmArgs {
                     object_type,
                     instance,
-                    event_state: *state,
+                    event_state: bacnet_types::enums::EventState::from_raw(*state),
                     source,
                     timestamp: timestamp.clone(),
                     time_of_acknowledgment: ack_time.clone(),

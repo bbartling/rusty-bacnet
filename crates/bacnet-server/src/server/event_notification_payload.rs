@@ -13,8 +13,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{ChangeOfValueChoice, NotificationParameters};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_types::constructed::{BACnetEventParameter, BACnetPropertyStates};
-use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 /// One validated notification-parameter value captured for a committed event.
@@ -23,7 +23,7 @@ pub(crate) struct CommittedNotificationPayload(NotificationParameters);
 
 #[derive(Clone, Copy)]
 pub(crate) enum CapturedStatusFlags {
-    Value(u8),
+    Value(StatusFlags),
     Unavailable,
     Malformed,
 }
@@ -295,7 +295,7 @@ fn project_builtin_reliability(
     }
 
     Some(NotificationParameters::ChangeOfReliability {
-        reliability,
+        reliability: Reliability::from_raw(reliability),
         status_flags: required_status_flags(object)?,
         property_values,
     })
@@ -310,7 +310,7 @@ fn project_event_enrollment_normal(
     let monitored_value = snapshot.monitored_value.clone();
     let status_flags = match snapshot.status_flags {
         CapturedStatusFlags::Value(value) => value,
-        CapturedStatusFlags::Unavailable => 0,
+        CapturedStatusFlags::Unavailable => StatusFlags::empty(),
         CapturedStatusFlags::Malformed => return None,
     };
     let parameters = snapshot.parameters.clone();
@@ -483,7 +483,7 @@ fn project_event_enrollment_reliability(
     }
 
     Some(NotificationParameters::ChangeOfReliability {
-        reliability,
+        reliability: Reliability::from_raw(reliability),
         status_flags: required_status_flags(enrollment)?,
         property_values,
     })
@@ -602,7 +602,7 @@ fn read_real(object: &dyn BACnetObject, property: PropertyIdentifier) -> Option<
     value.is_finite().then_some(value)
 }
 
-fn required_status_flags(object: &dyn BACnetObject) -> Option<u8> {
+fn required_status_flags(object: &dyn BACnetObject) -> Option<StatusFlags> {
     let value = object
         .read_property(PropertyIdentifier::STATUS_FLAGS, None)
         .ok()?;
@@ -634,11 +634,12 @@ fn optional_reliability(object: &dyn BACnetObject) -> OptionalProjectionValue {
     }
 }
 
-fn status_flags(value: &PropertyValue) -> Option<u8> {
+fn status_flags(value: &PropertyValue) -> Option<StatusFlags> {
     let PropertyValue::BitString { unused_bits, data } = value else {
         return None;
     };
-    (*unused_bits == 4 && data.len() == 1 && data[0] & 0x0f == 0).then_some(data[0] >> 4)
+    (*unused_bits == 4 && data.len() == 1 && data[0] & 0x0f == 0)
+        .then(|| StatusFlags::from_bits_retain(data[0] >> 4))
 }
 
 fn validate_bitstring(unused_bits: u8, data: &[u8]) -> Option<()> {

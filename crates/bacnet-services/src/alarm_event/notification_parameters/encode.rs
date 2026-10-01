@@ -1,6 +1,12 @@
 use super::*;
 use bacnet_encoding::constructed::validate_tlv_sequence;
 
+/// Encode a context-tagged `BACnetStatusFlags`: four defined bits, so four unused bits, with
+/// `IN_ALARM` in the most significant bit of the content octet.
+fn encode_status_flags(buf: &mut BytesMut, tag: u8, flags: StatusFlags) {
+    primitives::encode_ctx_bit_string(buf, tag, 4, &[flags.bits() << 4]);
+}
+
 impl NotificationParameters {
     /// Encode notification parameters into the buffer.
     ///
@@ -45,7 +51,7 @@ impl NotificationParameters {
                     referenced_bitstring.0,
                     &referenced_bitstring.1,
                 );
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 tags::encode_closing_tag(buf, 0);
             }
             Self::ChangeOfState {
@@ -58,7 +64,7 @@ impl NotificationParameters {
                 encode_property_states(buf, new_state)?;
                 tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 tags::encode_closing_tag(buf, 1);
             }
             Self::ChangeOfValue {
@@ -78,7 +84,7 @@ impl NotificationParameters {
                 }
                 tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 tags::encode_closing_tag(buf, 2);
             }
             Self::CommandFailure {
@@ -92,7 +98,7 @@ impl NotificationParameters {
                 buf.extend_from_slice(command_value);
                 tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 // [2] feedback-value — abstract syntax, encoded as raw
                 tags::encode_opening_tag(buf, 2);
                 buf.extend_from_slice(feedback_value);
@@ -107,7 +113,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 4);
                 primitives::encode_ctx_real(buf, 0, *reference_value);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_real(buf, 2, *setpoint_value);
                 primitives::encode_ctx_real(buf, 3, *error_limit);
                 tags::encode_closing_tag(buf, 4);
@@ -120,7 +126,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 5);
                 primitives::encode_ctx_real(buf, 0, *exceeding_value);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_real(buf, 2, *deadband);
                 primitives::encode_ctx_real(buf, 3, *exceeded_limit);
                 tags::encode_closing_tag(buf, 5);
@@ -154,10 +160,10 @@ impl NotificationParameters {
                 operation_expected,
             } => {
                 tags::encode_opening_tag(buf, 8);
-                primitives::encode_ctx_enumerated(buf, 0, *new_state);
-                primitives::encode_ctx_enumerated(buf, 1, *new_mode);
-                primitives::encode_ctx_bit_string(buf, 2, 4, &[*status_flags << 4]);
-                primitives::encode_ctx_enumerated(buf, 3, *operation_expected);
+                primitives::encode_ctx_enumerated(buf, 0, new_state.to_raw());
+                primitives::encode_ctx_enumerated(buf, 1, new_mode.to_raw());
+                encode_status_flags(buf, 2, *status_flags);
+                primitives::encode_ctx_enumerated(buf, 3, operation_expected.to_raw());
                 tags::encode_closing_tag(buf, 8);
             }
             Self::Extended {
@@ -204,7 +210,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 11);
                 primitives::encode_ctx_unsigned(buf, 0, *exceeding_value);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_unsigned(buf, 2, *exceeded_limit);
                 tags::encode_closing_tag(buf, 11);
             }
@@ -221,8 +227,8 @@ impl NotificationParameters {
                         .map_err(|error| Error::Encoding(error.to_string()))?;
                 }
                 tags::encode_opening_tag(buf, 13);
-                primitives::encode_ctx_enumerated(buf, 0, *access_event);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                primitives::encode_ctx_enumerated(buf, 0, access_event.to_raw());
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_unsigned(buf, 2, *access_event_tag as u64);
                 // [3] access-event-time: BACnetTimeStamp (DateTime)
                 primitives::encode_timestamp(
@@ -256,7 +262,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 14);
                 primitives::encode_ctx_double(buf, 0, *exceeding_value);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_double(buf, 2, *deadband);
                 primitives::encode_ctx_double(buf, 3, *exceeded_limit);
                 tags::encode_closing_tag(buf, 14);
@@ -269,7 +275,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 15);
                 primitives::encode_ctx_signed(buf, 0, *exceeding_value);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_unsigned(buf, 2, *deadband);
                 primitives::encode_ctx_signed(buf, 3, *exceeded_limit);
                 tags::encode_closing_tag(buf, 15);
@@ -282,7 +288,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 16);
                 primitives::encode_ctx_unsigned(buf, 0, *exceeding_value);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_unsigned(buf, 2, *deadband);
                 primitives::encode_ctx_unsigned(buf, 3, *exceeded_limit);
                 tags::encode_closing_tag(buf, 16);
@@ -294,7 +300,7 @@ impl NotificationParameters {
             } => {
                 tags::encode_opening_tag(buf, 17);
                 primitives::encode_ctx_character_string(buf, 0, changed_value)?;
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 primitives::encode_ctx_character_string(buf, 2, alarm_value)?;
                 tags::encode_closing_tag(buf, 17);
             }
@@ -310,7 +316,7 @@ impl NotificationParameters {
                     tags::encode_closing_tag(buf, 0);
                 }
                 // [1] referenced-flags
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*referenced_flags << 4]);
+                encode_status_flags(buf, 1, *referenced_flags);
                 tags::encode_closing_tag(buf, 18);
             }
             Self::ChangeOfReliability {
@@ -319,8 +325,8 @@ impl NotificationParameters {
                 property_values,
             } => {
                 tags::encode_opening_tag(buf, 19);
-                primitives::encode_ctx_enumerated(buf, 0, *reliability);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                primitives::encode_ctx_enumerated(buf, 0, reliability.to_raw());
+                encode_status_flags(buf, 1, *status_flags);
                 // [2] property-values — abstract syntax, raw
                 tags::encode_opening_tag(buf, 2);
                 buf.extend_from_slice(property_values);
@@ -337,7 +343,7 @@ impl NotificationParameters {
                 buf.extend_from_slice(new_value);
                 tags::encode_closing_tag(buf, 0);
                 // [1] status-flags
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                encode_status_flags(buf, 1, *status_flags);
                 tags::encode_closing_tag(buf, 21);
             }
             Self::ChangeOfTimer {
@@ -349,15 +355,15 @@ impl NotificationParameters {
                 expiration_time,
             } => {
                 tags::encode_opening_tag(buf, 22);
-                primitives::encode_ctx_enumerated(buf, 0, *new_state);
-                primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
+                primitives::encode_ctx_enumerated(buf, 0, new_state.to_raw());
+                encode_status_flags(buf, 1, *status_flags);
                 // [2] update-time: BACnetDateTime
                 tags::encode_opening_tag(buf, 2);
                 primitives::encode_app_date(buf, &update_time.0);
                 primitives::encode_app_time(buf, &update_time.1);
                 tags::encode_closing_tag(buf, 2);
                 if let Some(last_state_change) = last_state_change {
-                    primitives::encode_ctx_enumerated(buf, 3, *last_state_change);
+                    primitives::encode_ctx_enumerated(buf, 3, last_state_change.to_raw());
                 }
                 if let Some(initial_timeout) = initial_timeout {
                     primitives::encode_ctx_unsigned(buf, 4, *initial_timeout as u64);

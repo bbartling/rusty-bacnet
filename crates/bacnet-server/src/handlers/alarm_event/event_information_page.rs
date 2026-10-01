@@ -41,11 +41,10 @@ pub(crate) fn handle_get_event_information_configured(
             continue;
         };
         // Do not stop validating when the page is full, even for NORMAL objects.
-        if let EventSummaryProjectionResult::Projected(projection) =
-            EventSummaryProjection::read(object, db)?
+        if let EventSummaryProjectionResult::Projected(summary) = project_event_summary(object, db)?
         {
-            if projection.is_selected() {
-                page.push(projection.into())?;
+            if is_active_event_state(&summary) {
+                page.push(summary)?;
             }
         }
     }
@@ -144,13 +143,12 @@ mod tests {
     fn summary(timestamp: BACnetTimeStamp, state: u32) -> EventSummary {
         EventSummary {
             object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            event_state: state,
-            acknowledged_transitions: 7,
+            event_state: EventState::from_raw(state),
+            acknowledged_transitions: EventTransitionBits::all(),
             event_timestamps: std::array::from_fn(|_| timestamp.clone()),
-            notify_type: state,
-            event_enable: 7,
+            notify_type: NotifyType::from_raw(state),
+            event_enable: EventTransitionBits::all(),
             event_priorities: [0, 100, 255],
-            notification_class: 42,
         }
     }
 

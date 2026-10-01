@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_services::alarm_event::{GetEventInformationAck, GetEventInformationRequest};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::primitives::{Date, Time};
 
 use super::*;
@@ -254,7 +255,10 @@ fn selection_uses_state_acknowledgments_and_detection_not_event_enable() {
         .map(|summary| summary.object_identifier.instance_number())
         .collect();
     assert_eq!(instances, vec![1, 3]);
-    assert_eq!(ack.list_of_event_summaries[0].event_enable, 0);
+    assert_eq!(
+        ack.list_of_event_summaries[0].event_enable,
+        EventTransitionBits::empty()
+    );
     assert_eq!(
         ack.list_of_event_summaries[0].event_priorities,
         [4, 80, 255]
