@@ -16,14 +16,14 @@ use tokio::sync::Mutex;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::WebSocketStream;
 
 use bacnet_types::error::Error;
 
 use crate::sc::{ScConnectError, ScWebSocketErrorKind, WebSocketPort};
 use crate::sc_frame::{BACNET_SC_DIRECT_SUBPROTOCOL, BACNET_SC_HUB_SUBPROTOCOL};
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type WsStream = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
 
 /// Turn off Nagle's algorithm on an SC TCP stream before TLS. SC traffic is
 /// small WebSocket messages; with Nagle on, a message written before the
@@ -136,10 +136,9 @@ impl TlsWebSocket {
                 .ok_or_else(|| {
                     Error::Encoding("verified TLS peer has no leaf certificate".into())
                 })?;
-        let stream = MaybeTlsStream::Rustls(tls_stream);
         let (ws_stream, response) = tokio_tungstenite::client_async_with_config(
             request,
-            stream,
+            tls_stream,
             // Public local capacities remain mutable u16 values. The adapter
             // bounds its first Vec copy; protocol layers apply current limits.
             Some(crate::sc_limits::websocket(u16::MAX as usize)),

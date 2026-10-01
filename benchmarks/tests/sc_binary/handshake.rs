@@ -196,14 +196,7 @@ async fn actual_binaries_mutual_tls_reads_and_denials_recover() {
         ),
     ];
     for (tls, expected) in negatives {
-        let error = match bounded(tokio_tungstenite::connect_async_tls_with_config(
-            &url,
-            None,
-            false,
-            Some(tokio_tungstenite::Connector::Rustls(tls)),
-        ))
-        .await
-        {
+        let error = match bounded(connect_ws_tls(&url, tls)).await {
             Ok(_) => panic!("invalid peer admitted"),
             Err(error) => error.to_string(),
         };

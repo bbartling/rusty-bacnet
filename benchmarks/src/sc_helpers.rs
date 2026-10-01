@@ -1,11 +1,18 @@
 //! SC benchmark helpers: cert generation and SC client/server setup.
 
+use std::io;
 use std::sync::Arc;
 
 use rcgen::{date_time_ymd, CertificateParams, Issuer, KeyPair};
+use tokio::net::TcpStream;
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use tokio_rustls::TlsConnector;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Response;
+use tokio_tungstenite::tungstenite::Error as WsError;
+use tokio_tungstenite::WebSocketStream;
 
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;
@@ -333,6 +340,31 @@ pub async fn start_sc_hub_mtls(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, 
     let addr = hub.local_addr().unwrap();
     let url = format!("wss://localhost:{}", addr.port());
     (hub, url)
+}
+
+/// A raw client WebSocket over the tokio-rustls stream that [`connect_ws_tls`] dials.
+pub type TlsClientWs = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+
+/// Dial a `wss://` request as SC nodes do: TCP, a tokio-rustls handshake with
+/// `tls`, then the WebSocket upgrade. Errors come back as tungstenite's, with
+/// TCP and TLS failures as `Error::Io`, like its own rustls connector's (#944).
+pub async fn connect_ws_tls<R: IntoClientRequest + Unpin>(
+    request: R,
+    tls: Arc<rustls::ClientConfig>,
+) -> Result<(TlsClientWs, Response), WsError> {
+    let request = request.into_client_request()?;
+    let invalid =
+        |what: &str| WsError::Io(io::Error::new(io::ErrorKind::InvalidInput, what.to_owned()));
+    let host = request
+        .uri()
+        .host()
+        .ok_or_else(|| invalid("no host in the URL"))?
+        .to_owned();
+    let port = request.uri().port_u16().unwrap_or(443);
+    let tcp = TcpStream::connect((host.as_str(), port)).await?;
+    let name = ServerName::try_from(host).map_err(|_| invalid("not a TLS server name"))?;
+    let stream = TlsConnector::from(tls).connect(name, tcp).await?;
+    tokio_tungstenite::client_async_with_config(request, stream, None).await
 }
 
 /// Dial a WebSocket to the hub with mTLS, returning an UNSTARTED SC transport.

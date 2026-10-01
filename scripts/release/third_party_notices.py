@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Write THIRD-PARTY-NOTICES for the release binaries (#943).
+"""Write THIRD-PARTY-NOTICES for the release binaries (#943, #944).
 
     third_party_notices.py --out THIRD-PARTY-NOTICES [--libpcap /opt/libpcap]
 
 Lists what the release binaries link statically, with where to get each
 component's source and every licence file it ships:
-- the Rust crates in the bacnet CLI (features sc-tls and pcap) and in the
-  rusty_bacnet Python extension, on both Linux targets: `cargo tree` with
-  normal edges only, so build scripts, proc-macros and dev-dependencies, which
-  end up in neither binary, are left out. A crate's source is its crates.io
+- the Rust crates in the bacnet CLI and in the rusty_bacnet Python extension,
+  for every release target (TARGETS, with the CLI's features on each):
+  `cargo tree` with normal edges only, so build scripts, proc-macros and
+  dev-dependencies, which end up in no binary, are left out, and so are the
+  crates of targets that aren't released. A crate's source is its crates.io
   page for that version (or, for a crate from elsewhere, its repository);
 - libpcap, which the CLI links statically (--libpcap: a directory with its
   LICENSE and VERSION, which the CI image installs under /opt/libpcap).
 
 Identical licence texts are printed once, followed by every crate that ships
 them. Generation fails if a crate under a licence that needs its notice kept
-(anything but the public-domain-like ones in NO_NOTICE) ships no licence file,
+(anything but the ones in NO_NOTICE, whose terms don't ask for it in a
+binary) ships no licence file,
 unless ALLOW_NO_LICENSE_FILE names it with a reason. The output depends only
 on Cargo.lock, the crate sources and libpcap, so a rebuild produces the same
 file. Run `cargo fetch --locked` first: cargo runs with --offline here.
@@ -29,11 +31,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-ARTIFACTS = {
-    "CLI": ["-p", "bacnet-cli", "--features", "sc-tls,pcap"],
-    "Python": ["-p", "rusty-bacnet"],
+# Each release target with the CLI's features there: packet capture (pcap)
+# only on Linux, as in .forgejo/workflows/release.yml. The Python extension has
+# the same features everywhere.
+TARGETS = {
+    "x86_64-unknown-linux-gnu": "sc-tls,pcap",
+    "aarch64-unknown-linux-gnu": "sc-tls,pcap",
+    "x86_64-apple-darwin": "sc-tls",
+    "aarch64-apple-darwin": "sc-tls",
+    "x86_64-pc-windows-msvc": "sc-tls",
 }
-TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 LICENSE_FILE = re.compile(r"^(licen[cs]e|copying|copyright|notice|unlicense)([-._].*)?$", re.IGNORECASE)
 SOURCE_SUFFIXES = {".rs", ".py", ".toml", ".json", ".sh", ".c", ".h", ".yml", ".yaml", ".html"}
 # Licences below a crate's root that cover code compiled into it, as (path,
@@ -47,13 +54,15 @@ EXTRA_LICENSES = {
         # The crate doesn't ship jitterentropy's LICENSE; its header carries the
         # licence, and aws-lc/LICENSE says which of its terms AWS-LC elects.
         ("aws-lc/third_party/jitterentropy/jitterentropy-library/jitterentropy.h", "comment",
-         "the licence of the jitterentropy library, built into AWS-LC on Linux, whose BSD-3-Clause"
-         " terms AWS-LC elects"),
+         "the licence of the jitterentropy library, built into AWS-LC on Linux and Windows, whose"
+         " BSD-3-Clause terms AWS-LC elects"),
     ],
 }
 # SPDX identifiers whose terms don't ask for the notice to go with a binary.
 # Any other identifier, unknown ones included, counts as needing its notice.
-NO_NOTICE = {"0BSD", "CC0-1.0", "MIT-0", "Unlicense", "WTFPL"}
+# BSL-1.0 asks for it in copies of the software except machine-executable
+# object code, so not in a binary (clipboard-win, in the Windows CLI).
+NO_NOTICE = {"0BSD", "BSL-1.0", "CC0-1.0", "MIT-0", "Unlicense", "WTFPL"}
 # Crates that may ship no licence file although their licence needs its notice:
 # {name: why that's fine}. Empty: every such crate ships one.
 ALLOW_NO_LICENSE_FILE = {}
@@ -79,8 +88,9 @@ def parse_tree(text):
 def linked_crates():
     """{(name, version): {artifact labels}} for every crate linked into a release binary."""
     used = {}
-    for label, args in ARTIFACTS.items():
-        for target in TARGETS:
+    for target, cli_features in TARGETS.items():
+        artifacts = {"CLI": ["-p", "bacnet-cli", "--features", cli_features], "Python": ["-p", "rusty-bacnet"]}
+        for label, args in artifacts.items():
             out = cargo("tree", "--locked", "--offline", *args, "--target", target,
                         "-e", "normal,no-proc-macro", "--prefix", "none", "--format", "{p}")
             for crate in parse_tree(out):
@@ -194,9 +204,14 @@ def render(version, own_license, crates, libpcap):
     out = [
         "THIRD-PARTY NOTICES", RULE, "",
         f"Rusty BACnet {version} release binaries:",
-        "- CLI: the bacnet command-line tool (bacnet-linux-amd64, bacnet-linux-arm64),",
-        "  built with the sc-tls and pcap features;",
-        "- Python: the rusty_bacnet extension module in the wheels.",
+        "- CLI: the bacnet command-line tool (bacnet-linux-amd64, bacnet-linux-arm64,",
+        "  bacnet-macos-amd64, bacnet-macos-arm64, bacnet-windows-amd64.exe), built",
+        "  with the sc-tls feature, and on Linux also with the pcap feature;",
+        "- Python: the rusty_bacnet extension module in the wheels for Linux, macOS",
+        "  and Windows.",
+        "",
+        "Some components are only in the binaries for some platforms; the list",
+        "below covers every platform.",
         "",
         "Rusty BACnet itself is under the MIT licence, below. The binaries also",
         "contain the third-party software listed after it, which is under the",
@@ -213,14 +228,16 @@ def render(version, own_license, crates, libpcap):
     for name, ver, lic, used, source in sorted(rows):
         out += [f"{name} {ver}: {lic} [{used}]", f"  source: {source}"]
     if libpcap:
-        out += ["", RULE, f"libpcap {libpcap[0]} (https://www.tcpdump.org/), linked into the CLI", RULE, "",
+        out += ["", RULE, f"libpcap {libpcap[0]} (https://www.tcpdump.org/), linked into the Linux CLI", RULE, "",
                 libpcap[1].rstrip("\n")]
 
     groups = {}
     missing = []
     for name, ver, lic, _source, _used, files in crates:
         if not files:
-            missing.append(f"{name} {ver}: {lic or '(none declared)'}; {ALLOW_NO_LICENSE_FILE.get(name, '')}")
+            why = ALLOW_NO_LICENSE_FILE.get(name) or (
+                "" if needs_notice(lic) else "its licence doesn't ask for the notice in a binary")
+            missing.append(f"{name} {ver}: {lic or '(none declared)'}; {why}")
         for file_name, text in files:
             groups.setdefault(text, []).append(f"{name} {ver} ({file_name})")
     out += ["", RULE, "Licence texts, each followed by the crates that ship it", RULE]

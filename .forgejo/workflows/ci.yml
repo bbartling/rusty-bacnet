@@ -50,7 +50,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   # Tag = first 12 hex digits of sha256(.forgejo/ci-image/Dockerfile). The image
   # carries the toolchains; the "CI image" job checks they match the repo's pins.
-  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:7fee32139ba3
+  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:11520c0607e5
   # Every optional feature that builds on Linux, including per-crate features
   # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap} that nothing
   # else in the workspace turns on (#906). bacnet-benchmarks/console is left

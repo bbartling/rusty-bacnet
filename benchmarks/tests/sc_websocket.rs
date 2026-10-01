@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use bacnet_benchmarks::sc_helpers::{
-    generate_test_certs, make_client_tls_config_mtls, make_sc_transport_mtls, start_sc_hub_mtls,
-    CertMaterial,
+    connect_ws_tls, generate_test_certs, make_client_tls_config_mtls, make_sc_transport_mtls,
+    start_sc_hub_mtls, CertMaterial, TlsClientWs,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScConnectionState;
@@ -15,13 +15,11 @@ use bacnet_transport::sc_frame::{
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::ClientRequestBuilder;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-type ClientWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type ClientWs = TlsClientWs;
 
 #[tokio::test]
 async fn sc_websocket_hub_subprotocol_handshake_succeeds() {
@@ -30,11 +28,9 @@ async fn sc_websocket_hub_subprotocol_handshake_succeeds() {
 
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
-    let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config_mtls(&certs));
-    let (_ws, response) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .unwrap();
+    let (_ws, response) = connect_ws_tls(request, make_client_tls_config_mtls(&certs))
+        .await
+        .unwrap();
 
     let selected = response
         .headers()
@@ -51,15 +47,7 @@ async fn sc_websocket_hub_rejects_missing_or_wrong_subprotocol() {
     let (mut hub, url) = start_sc_hub_mtls(&certs, [0x20; 6]).await;
 
     let missing_request = ClientRequestBuilder::new(url.parse().unwrap());
-    let missing_connector =
-        tokio_tungstenite::Connector::Rustls(make_client_tls_config_mtls(&certs));
-    let missing_result = tokio_tungstenite::connect_async_tls_with_config(
-        missing_request,
-        None,
-        false,
-        Some(missing_connector),
-    )
-    .await;
+    let missing_result = connect_ws_tls(missing_request, make_client_tls_config_mtls(&certs)).await;
     assert!(
         matches!(missing_result, Err(tokio_tungstenite::tungstenite::Error::Http(ref response))
         if response.status() == 400),
@@ -68,14 +56,7 @@ async fn sc_websocket_hub_rejects_missing_or_wrong_subprotocol() {
 
     let wrong_request =
         ClientRequestBuilder::new(url.parse().unwrap()).with_sub_protocol("dc.bsc.bacnet.org");
-    let wrong_connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config_mtls(&certs));
-    let wrong_result = tokio_tungstenite::connect_async_tls_with_config(
-        wrong_request,
-        None,
-        false,
-        Some(wrong_connector),
-    )
-    .await;
+    let wrong_result = connect_ws_tls(wrong_request, make_client_tls_config_mtls(&certs)).await;
     assert!(
         matches!(wrong_result, Err(tokio_tungstenite::tungstenite::Error::Http(ref response))
         if response.status() == 400),
@@ -92,11 +73,9 @@ async fn sc_websocket_text_frame_closes_with_unsupported_data() {
 
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
-    let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config_mtls(&certs));
-    let (mut ws, _response) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .unwrap();
+    let (mut ws, _response) = connect_ws_tls(request, make_client_tls_config_mtls(&certs))
+        .await
+        .unwrap();
 
     ws.send(Message::Text("not a BVLC-SC binary frame".into()))
         .await
@@ -539,11 +518,9 @@ async fn connect_sc_client_with_uuid(
 async fn open_sc_websocket(url: &str, certs: &CertMaterial) -> ClientWs {
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
-    let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config_mtls(certs));
-    let (ws, _response) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .unwrap();
+    let (ws, _response) = connect_ws_tls(request, make_client_tls_config_mtls(certs))
+        .await
+        .unwrap();
 
     ws
 }

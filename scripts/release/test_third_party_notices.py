@@ -23,6 +23,26 @@ class ParseTests(unittest.TestCase):
     def test_normalize(self):
         self.assertEqual(tpn.normalize("\r\n\r\nMIT  \r\ntext\t\r\n\r\n"), "MIT\ntext\n")
 
+    def test_linked_crates_cover_every_target_with_its_cli_features(self):
+        calls = []
+
+        def cargo(*args):
+            calls.append(args)
+            target = args[args.index("--target") + 1]
+            crate = "pcap" if "sc-tls,pcap" in args else "rusty" if "rusty-bacnet" in args else "cli"
+            return f"{crate} v1.0.0\n{target.split('-')[0]}-only v1.0.0\nshared v2.0.0\n"
+
+        with mock.patch.object(tpn, "cargo", cargo):
+            used = tpn.linked_crates()
+        self.assertEqual(len(calls), 2 * len(tpn.TARGETS))
+        cli_features = {c[c.index("--target") + 1]: c[c.index("--features") + 1] for c in calls if "bacnet-cli" in c}
+        self.assertEqual(cli_features, tpn.TARGETS)
+        self.assertEqual(cli_features["x86_64-pc-windows-msvc"], "sc-tls")
+        self.assertEqual(cli_features["aarch64-unknown-linux-gnu"], "sc-tls,pcap")
+        self.assertEqual(used[("pcap", "1.0.0")], {"CLI"})
+        self.assertEqual(used[("shared", "2.0.0")], {"CLI", "Python"})
+        self.assertIn(("aarch64-only", "1.0.0"), used)
+
     def test_two_sources_for_one_version_are_refused(self):
         packages = [{"name": "a", "version": "1.0.0"}, {"name": "a", "version": "1.0.0"}]
         with self.assertRaisesRegex(tpn.NoticesError, "two sources"):
@@ -101,7 +121,7 @@ class LicenceRuleTests(unittest.TestCase):
                            "Unlicense OR MIT", "LicenseRef-unknown", None, ""):
             with self.subTest(expression=expression):
                 self.assertTrue(tpn.needs_notice(expression))
-        for expression in ("Unlicense", "CC0-1.0 OR MIT-0", "0BSD", "Unlicense/CC0-1.0"):
+        for expression in ("Unlicense", "CC0-1.0 OR MIT-0", "0BSD", "Unlicense/CC0-1.0", "BSL-1.0"):
             with self.subTest(expression=expression):
                 self.assertFalse(tpn.needs_notice(expression))
 
@@ -152,6 +172,9 @@ class RenderTests(unittest.TestCase):
         self.assertIn("  a 1.0.0 (LICENSE-MIT)\n  b 2.0.0 (LICENSE)\n", text)
         self.assertIn("c 0.1.0: Zlib [Python]\n  source: https://example.invalid/c\n", text)
         self.assertIn("c 0.1.0: Zlib; allowed for the test", text)
+        boost = ("d", "5.4.1", "BSL-1.0", "https://crates.io/crates/d/5.4.1", {"CLI"}, [])
+        self.assertIn("d 5.4.1: BSL-1.0; its licence doesn't ask for the notice in a binary",
+                      tpn.render("1.2.3", "Our MIT\n", [boost], None))
         self.assertLess(text.index("Apache text"), text.index("MIT text"))
         with mock.patch.dict(tpn.ALLOW_NO_LICENSE_FILE, {"c": "allowed for the test"}):
             again = tpn.render("1.2.3", "Our MIT\n", list(reversed(crates)), ("1.10.7", "libpcap licence\n"))

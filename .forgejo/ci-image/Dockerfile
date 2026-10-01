@@ -77,8 +77,9 @@ RUN cd /tmp \
 
 # Release builds (#943, .forgejo/workflows/release.yml): zig links the Linux CLI
 # binaries and the manylinux wheels against an old glibc for both architectures,
-# through cargo-zigbuild and `maturin build --zig`. No extra Pythons: maturin
-# uses its bundled sysconfig for the interpreters it can't find.
+# through cargo-zigbuild and `maturin build --zig`, and the macOS ones too (see
+# below). No extra Pythons: maturin uses its bundled sysconfig for the
+# interpreters it can't find.
 ARG ZIG_VERSION=0.16.0
 ARG ZIG_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 ARG CARGO_ZIGBUILD_VERSION=0.23.4
@@ -129,6 +130,64 @@ RUN dpkg-query -W -f '${Package}\n' | sort >/tmp/packages-before \
  && echo "$LIBPCAP_VERSION" >/opt/libpcap/VERSION \
  && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/packages-before - | xargs apt-get purge -y \
  && rm -rf /tmp/libpcap* /tmp/packages-before "${XDG_CACHE_HOME:-$HOME/.cache}/zig" /var/lib/apt/lists/*
+
+# macOS and Windows release builds (#944), cross-compiled here like the Linux ones
+# (docs/ci.md, "macOS and Windows builds"):
+# - macOS: the zig above, through cargo-zigbuild and `maturin build --zig`. There
+#   is no Apple SDK: zig carries the libSystem link stubs, and the repository's
+#   scripts/release/macos-frameworks stand in for the two frameworks the Python
+#   extension loads.
+# - Windows: the MSVC target, through cargo-xwin (the CLI) and maturin's built-in
+#   xwin (the wheels). clang-cl is apt's clang, lld-link is rust-lld, llvm-lib is
+#   llvm-tools' llvm-ar (cargo-xwin links both), and nasm assembles AWS-LC.
+#   xwin puts Microsoft's CRT and Windows SDK, at the versions pinned below, in
+#   /opt/xwin once, from a pinned Visual Studio channel manifest that lists every
+#   payload's SHA-256. Building the image accepts Microsoft's licence terms for
+#   them (https://go.microsoft.com/fwlink/?LinkId=2086102), which the owner
+#   accepted (#944); the image stays in the private registry. XWIN_CACHE_DIR and
+#   the DONE file, which lists the architectures cargo-xwin has, make cargo-xwin
+#   and maturin use that copy instead of downloading one.
+# llvm-tools also brings llvm-objdump and llvm-readobj, which release.yml's
+# artifact test runs on the Mach-O and PE files.
+ARG CARGO_XWIN_VERSION=0.23.1
+ARG CARGO_XWIN_SHA256=c492c6dfb7e5ac0eee586b796e0fc950ba13077e7f0bbb046f445d71790d5360
+ARG XWIN_VERSION=0.10.0
+ARG XWIN_SHA256=d870eb4b2f390878af6da1ccd3cf321d22fcb72720984853b4be732ae597fc88
+# Visual Studio 2022 17.14.41's release channel manifest (aka.ms/vs/17/release/channel
+# on 2026-10-01).
+ARG VS_CHANNEL_URL=https://download.visualstudio.microsoft.com/download/pr/bc92e2cb-33de-4a0c-995d-efa817f16b16/0dbdfd40c17757e64fc9f72cd9954ec8471c04fd8461a77806e5291e23239ac0/VisualStudio.17.Release.chman
+ARG VS_CHANNEL_SHA256=fca418ba94ffbcfb7a2b25f10f16f39dd09660568d21eef4bd3f274cb0b27b8c
+ARG MSVC_CRT_VERSION=14.44.17.14
+ARG WINDOWS_SDK_VERSION=10.0.26100
+ENV XWIN_CACHE_DIR=/opt/xwin \
+    XWIN_ARCH=x86_64 \
+    XWIN_VARIANT=desktop \
+    XWIN_CRT_VERSION=$MSVC_CRT_VERSION \
+    XWIN_SDK_VERSION=$WINDOWS_SDK_VERSION
+RUN rustup target add --toolchain "$RUST_TOOLCHAIN" \
+      x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc \
+ && rustup component add --toolchain "$RUST_TOOLCHAIN" llvm-tools \
+ && llvm="$(rustup run "$RUST_TOOLCHAIN" rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin" \
+ && ln -s "$llvm/llvm-objdump" "$llvm/llvm-readobj" /usr/local/bin/ \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends clang nasm \
+ && rm -rf /var/lib/apt/lists/* \
+ && cd /tmp \
+ && fetch "https://github.com/rust-cross/cargo-xwin/releases/download/v$CARGO_XWIN_VERSION/cargo-xwin-v$CARGO_XWIN_VERSION.x86_64-unknown-linux-musl.tar.gz" \
+      "$CARGO_XWIN_SHA256" cargo-xwin.tgz \
+ && tar xzf cargo-xwin.tgz -C "$CARGO_HOME/bin" cargo-xwin \
+ && xwin="xwin-$XWIN_VERSION-x86_64-unknown-linux-musl" \
+ && fetch "https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/$xwin.tar.gz" "$XWIN_SHA256" xwin.tgz \
+ && tar xzf xwin.tgz "$xwin/xwin" \
+ && fetch "$VS_CHANNEL_URL" "$VS_CHANNEL_SHA256" vs-channel.json \
+ && "$xwin/xwin" --accept-license --manifest vs-channel.json --arch x86_64 --variant desktop \
+      --crt-version "$MSVC_CRT_VERSION" --sdk-version "$WINDOWS_SDK_VERSION" --cache-dir /tmp/xwin-cache \
+      splat --output "$XWIN_CACHE_DIR/xwin" \
+ && echo x86_64 >"$XWIN_CACHE_DIR/xwin/DONE" \
+ && rm -rf /tmp/cargo-xwin.tgz /tmp/xwin.tgz "/tmp/$xwin" /tmp/vs-channel.json /tmp/xwin-cache \
+ && cargo xwin --version && clang --version | head -1 && nasm -v \
+ && llvm-objdump --version | head -2 && llvm-readobj --version | head -2 \
+ && du -sh "$XWIN_CACHE_DIR"
 
 # The artifact test in release.yml: uv installs the other CPython versions the
 # wheels are built for (uv pins each download's SHA-256), and qemu's user-mode

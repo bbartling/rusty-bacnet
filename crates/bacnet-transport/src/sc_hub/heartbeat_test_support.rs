@@ -3,7 +3,7 @@ use super::*;
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{client::ClientRequestBuilder, Error};
 
-type ClientWs = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type ClientWs = WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 type AckHook = Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 
 pub(super) struct LiveClient {
@@ -37,7 +37,8 @@ impl LiveClient {
             .with_root_certificates(roots)
             .with_no_client_auth();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("wss://localhost:{}", listener.local_addr().unwrap().port());
+        let address = listener.local_addr().unwrap();
+        let url = format!("wss://localhost:{}", address.port());
         let request = ClientRequestBuilder::new(url.parse().unwrap())
             .with_sub_protocol(crate::sc_frame::BACNET_SC_HUB_SUBPROTOCOL);
         let accept = async {
@@ -55,12 +56,19 @@ impl LiveClient {
             }).await.unwrap();
             (ws, addr)
         };
-        let dial = tokio_tungstenite::connect_async_tls_with_config(
-            request,
-            None,
-            true, // disable_nagle, as SC dialers do
-            Some(tokio_tungstenite::Connector::Rustls(Arc::new(client))),
-        );
+        // Dialled like production SC sockets: tokio-rustls, then the upgrade.
+        let dial = async {
+            let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+            crate::sc_tls::disable_nagle(&tcp);
+            let tls = tokio_rustls::TlsConnector::from(Arc::new(client))
+                .connect(
+                    rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+                    tcp,
+                )
+                .await
+                .unwrap();
+            tokio_tungstenite::client_async(request, tls).await
+        };
         let ((server, peer_addr), client) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(accept, dial) })
                 .await
