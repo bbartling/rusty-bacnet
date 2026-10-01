@@ -99,6 +99,35 @@ class TruncateTests(unittest.TestCase):
         with self.assertRaises(notes.NotesError):
             notes.truncate("x" * 100, 10, self.URL)
 
+    def test_never_longer_than_max_chars(self):
+        bodies = {
+            "paragraphs": "".join(f"- item {i}\n\n" for i in range(100)),
+            "lines": "".join(f"- item {i}\n" for i in range(100)),
+            "one line": "x" * 2000,
+            "fenced": "intro\n\n```text\n" + "".join(f"line {i}\n" for i in range(200)) + "```\n",
+        }
+        for label, body in bodies.items():
+            for max_chars in range(110, 600, 7):
+                with self.subTest(body=label, max_chars=max_chars):
+                    out = notes.truncate(body, max_chars, self.URL)
+                    self.assertLessEqual(len(out), max_chars)
+                    self.assertTrue(out.endswith(f"[CHANGELOG.md]({self.URL})._\n"))
+
+    def test_cut_inside_a_code_block_closes_it(self):
+        body = "### Changed\n````rust\n" + "".join(f"let x{i} = {i};\n" for i in range(100)) + "````\n\nAfter.\n"
+        out = notes.truncate(body, 400, self.URL)
+        self.assertLessEqual(len(out), 400)
+        kept = out.split("\n_These notes")[0]
+        self.assertTrue(kept.endswith("\n````\n"), kept[-40:])
+        self.assertIsNone(notes.open_fence(kept))
+
+    def test_open_fence(self):
+        self.assertEqual(notes.open_fence("a\n```python\nx\n"), "```")
+        self.assertIsNone(notes.open_fence("```\nx\n```\n"))
+        # A shorter or different run doesn't close the block; an info string never closes.
+        self.assertEqual(notes.open_fence("````\n```\n~~~~\n```` x\n"), "````")
+        self.assertIsNone(notes.open_fence("~~~\n```\n~~~~\n"))
+
 
 class MainTests(unittest.TestCase):
     def run_main(self, *args):
@@ -117,6 +146,16 @@ class MainTests(unittest.TestCase):
     def test_missing_version_fails_with_message(self):
         code, out, err = self.run_main("--version", "3.0.0")
         self.assertEqual((code, out), (1, ""))
+        self.assertIn("no '## [3.0.0]' section", err)
+
+    def test_empty_section_fails_unless_allowed(self):
+        code, _, err = self.run_main("--version", "1.0.0")
+        self.assertEqual(code, 1)
+        self.assertIn("empty", err)
+        code, out, _ = self.run_main("--version", "1.0.0", "--allow-empty")
+        self.assertEqual((code, out), (0, "No changes are listed under 1.0.0 yet.\n"))
+        code, _, err = self.run_main("--version", "3.0.0", "--allow-empty")
+        self.assertEqual(code, 1)
         self.assertIn("no '## [3.0.0]' section", err)
 
     def test_max_chars_needs_url(self):
