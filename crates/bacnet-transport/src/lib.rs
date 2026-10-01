@@ -35,6 +35,8 @@ mod sc_limits;
 #[cfg(feature = "sc-tls")]
 pub mod sc_tls;
 #[cfg(feature = "sc-tls")]
+mod tcp_connect;
+#[cfg(feature = "sc-tls")]
 mod tls_reject;
 mod udp_metadata;
 

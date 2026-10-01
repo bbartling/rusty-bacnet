@@ -218,6 +218,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent there. Such sockets now set SO_EXCLUSIVEADDRUSE. Explicitly configured
   ports keep SO_REUSEADDR.
 
+- A BACnet/SC dial to a host name with several addresses no longer waits for
+  each address in turn (#950). It races them, RFC 8305 style: address
+  families alternate, starting with the first result's, and each attempt runs
+  alone for 250 ms or until it fails before the next starts; the first
+  connection wins. On Windows `localhost` resolves to `::1` first and a
+  refused loopback connect takes about 2 seconds, so every hub or direct dial
+  to `localhost` with an IPv4-only peer used to take that long. When every
+  address fails, the error names each one.
+
 - A peer that the BACnet/SC hub or a direct-connection listener refuses
   during the TLS handshake can now read the alert that says why (#950). The
   socket used to be dropped with the client's HTTP upgrade request unread,
