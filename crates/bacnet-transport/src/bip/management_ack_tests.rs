@@ -92,8 +92,7 @@ async fn read_bdt_ack_encodes_bdt_entries_as_n10_payload() {
             .payload
             .as_chunks::<{ bbmd::BDT_ENTRY_SIZE }>()
             .0
-            .iter()
-            .any(|chunk| *chunk == configured_wire),
+            .contains(&configured_wire),
         "Read-BDT-Ack must include configured BDT entry bytes"
     );
 
