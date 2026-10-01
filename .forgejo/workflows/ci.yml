@@ -3,8 +3,10 @@ name: CI
 # Runs on the self-hosted Forgejo runner (Linux amd64 Spot VM). Jobs run in the
 # prebuilt image from .forgejo/ci-image (the runner's act image plus the
 # toolchains, tools and apt packages), which the "CI image" job builds and pushes
-# to Forgejo's registry when its tag is missing (#904). macOS is checked locally
-# with scripts/ci/local-macos.sh; Windows is not currently tested. See docs/ci.md.
+# to Forgejo's registry when its tag is missing (#904). The test suites run
+# natively on macOS and Windows on GitHub-hosted runners, from the push mirror,
+# in .github/workflows/native-tests.yml (#950); macOS clippy and rustdoc are
+# checked locally with scripts/ci/local-macos.sh. See docs/ci.md.
 #
 #   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
 #           lint (fmt, file-size cap, no-secret scan, script regressions),

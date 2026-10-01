@@ -1,10 +1,26 @@
 # CI and merge evidence
 
+Forgejo is the primary forge. GitHub is its push mirror (sync on commit), so
+every branch and tag pushed to Forgejo reaches GitHub within a minute or so.
+Heavy work runs on Forgejo's fixed-cost runner VM; GitHub runs only what needs
+its native runners or its services.
+
+| Host | Runs |
+| --- | --- |
+| Forgejo (self-hosted Linux runner) | Linux CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml); website validation, [`docs.yml`](../.forgejo/workflows/docs.yml); releases and publishing to crates.io, PyPI and Forgejo, [`release.yml`](../.forgejo/workflows/release.yml) |
+| GitHub (hosted runners) | [Native macOS and Windows tests](#native-tests-github), [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml); the GitHub Pages docs deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); the GitHub release copy, which Forgejo's release workflow makes through GitHub's API |
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) is the
+legacy release workflow, kept manual-only until #951 removes it.
+
 | Platform | Where it is checked |
 | --- | --- |
-| Linux amd64 | CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml) |
-| macOS | Locally, [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh) |
-| Windows | Not currently tested |
+| Linux amd64 | Forgejo CI: lint, clippy, rustdoc, tests, Python bindings, MSRV, audit and deny |
+| macOS arm64 | GitHub, native tests: tests, doctests, Python bindings. Clippy and rustdoc locally, [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh) |
+| Windows x86_64 (MSVC) | GitHub, native tests: tests, doctests, Python bindings |
+
+A PR merges only when both are green on its head SHA: `CI OK` on Forgejo and
+both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 
 ## Pipeline
 
@@ -166,6 +182,88 @@ cache size. Optimization level, debug assertions, overflow checks and test
 selection keep their defaults, and there is no `RUSTFLAGS=-Dwarnings`: per-rule
 severity lives in `[workspace.lints]`.
 
+## Native tests (GitHub)
+
+[`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml)
+runs the test suites natively on two GitHub-hosted runners (#950), which the
+Linux-only Forgejo runner can't:
+
+- **Test (macOS arm64)**: `macos-latest`, Apple Silicon;
+- **Test (Windows x86_64)**: `windows-latest`, the MSVC toolchain.
+
+**Trigger.** Every push to any branch, and a manual dispatch. PRs live on
+Forgejo, so GitHub's `pull_request` event never fires; the push mirror brings
+every PR branch, and every merge to `dev`, to GitHub instead. Tag pushes don't
+run it. A newer push to a branch cancels that branch's running run.
+
+**Steps.** Each job runs, with `NATIVE_FEATURES` set to
+`bacnet-transport/ipv6,bacnet-transport/sc-tls` (serial and ethernet are
+Linux-only):
+
+```bash
+cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
+# Python 3.12 from actions/setup-python, in a fresh venv
+python -m pip install maturin==1.15.0
+maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
+python -m unittest discover -s crates/rusty-bacnet/tests
+# PYO3_PYTHON is setup-python's interpreter, not the venv's
+cargo nextest run -p rusty-bacnet --locked --profile ci
+```
+
+Every step runs even when an earlier one failed, so one run reports each
+failing suite.
+
+**Toolchain and tools.** Both runner images ship rustup, and
+`rustup toolchain install` with no arguments installs what
+`rust-toolchain.toml` pins, so the workflow has no toolchain version to keep in
+step. cargo-nextest is a prebuilt binary from `taiki-e/install-action`, and
+maturin comes from PyPI, both at the CI image's versions. aws-lc-sys, which
+`sc-tls` pulls in, builds with the images' own C tools: on Windows, MSVC with
+the NASM and CMake already on `PATH`. The SC tests make certificates with the
+runner image's `openssl`.
+
+**Efficiency.** The workflow can only read the repository
+(`permissions: contents: read`), and each job stops after 60 minutes.
+`Swatinem/rust-cache` keeps dependency builds, keyed per OS on the toolchain,
+`Cargo.lock`, the manifests and `NATIVE_FEATURES`, and saves even when a job
+fails. GitHub scopes caches to a branch, and a branch's run falls back to the
+default branch's (`dev`). A branch with `dev`'s `Cargo.lock` restores `dev`'s
+cache by its exact key and saves nothing, so only merges to `dev` and branches
+that change dependencies write caches. The cache holds dependencies only, so
+most of a run is compiling the workspace and its tests: in October 2026 a run
+took about 13 minutes on macOS and 20 on Windows cold, and 10 and 17 with a
+warm cache.
+
+**Portable tests.** What the first Windows and macOS runs showed (#950):
+
+- Text files check out with LF line endings on every OS (`.gitattributes`);
+  Windows checkouts would otherwise get CRLF from `core.autocrlf`.
+- Don't stand a loopback address in for a broadcast address. Windows reports
+  delivery to `127.0.0.1` as unicast, and B/IP then drops an
+  Original-Broadcast-NPDU. Drive a BBMD with what may arrive by unicast
+  (Distribute-Broadcast-To-Network, Forwarded-NPDU), or call the handler with
+  `Delivery::Broadcast`.
+- Don't rely on sending to `255.255.255.255`: GitHub's macOS runners refuse it
+  with `EHOSTUNREACH`.
+- Compare `io::ErrorKind`, or the error the OS gives for the same call, not
+  Unix error text.
+- An ephemeral B/IP or B/IPv6 port is exclusive on every OS. On Windows that
+  takes `SO_EXCLUSIVEADDRUSE`: by default another socket may bind
+  `127.0.0.1:P` beside a wildcard `0.0.0.0:P`.
+- `localhost` resolves to `::1` first on Windows, and a refused loopback
+  connect takes about 2 seconds there, so dialing `localhost` against an
+  IPv4-only listener is slow.
+
+**Reading a run.** The run for a push appears once the mirror has the commit:
+
+```bash
+gh api repos/jscott3201/rusty-bacnet/branches/<branch> --jq .commit.sha
+gh run list -R jscott3201/rusty-bacnet --workflow native-tests.yml --branch <branch>
+gh run view -R jscott3201/rusty-bacnet <run id> --log-failed
+gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # re-run by hand
+```
+
 ## Local checks
 
 Use Rust 1.97.1 from `rust-toolchain.toml`. Before asking for review on changes
@@ -232,7 +330,9 @@ CI runs it on PRs to `main`; on a Mac, rely on that job.
 
 Before merging a PR:
 
-- `CI OK` is green for the exact head being merged;
+- `CI OK` is green on Forgejo for the exact head being merged;
+- both jobs of the [native tests](#native-tests-github) are green on GitHub
+  for the same head SHA;
 - when the change can affect macOS, a `local-macos.sh` pass on that head, or
   on an earlier head with a stated reason the intervening diff cannot affect
   it, is recorded in the PR with the revision, toolchain and macOS version it
@@ -247,7 +347,7 @@ merge comes from that PR's run, not an older one.
 
 [`.forgejo/workflows/release.yml`](../.forgejo/workflows/release.yml) builds,
 tests and publishes a release from Forgejo (#943). It took over while GitHub
-Actions is disabled on the mirror (#905). It builds the Linux artifacts only,
+Actions was disabled on the mirror (#905). It builds the Linux artifacts only,
 and no release is tagged until it also builds macOS and Windows (#944).
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) now runs
@@ -255,8 +355,7 @@ only when dispatched by hand, so re-enabling Actions can't publish a tag twice.
 It is not a way to add macOS or Windows assets to a tag Forgejo already
 released: it has no skip logic, and GitHub releases here are immutable once
 published. GitHub Pages publication remains the manual
-[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch, which needs
-GitHub Actions, and Actions is disabled on the mirror.
+[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch on GitHub.
 
 ### Trigger and dry run
 

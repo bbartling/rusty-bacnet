@@ -188,6 +188,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
   CPython 3.14 wheels ship once the release pipeline publishes (#943).
 
+- The test suites also run natively on macOS (Apple Silicon) and Windows
+  (x86_64, MSVC): a GitHub Actions workflow on the mirror runs the tests,
+  doctests, Python suite and PyO3 crate tests for every pushed branch
+  (`.github/workflows/native-tests.yml`). Linux CI, releases and publishing
+  stay on Forgejo, and a PR merges only when Forgejo CI and both native jobs
+  are green on its head. Text files now check out with LF line endings on
+  every OS (`.gitattributes`), so Windows checkouts match the repository
+  (#950).
+
 - `bacnet_server::schedule::tick_schedules` drops its unused UTC-offset argument;
   evaluation already used the database clock frame. It only evaluates schedules.
   A running server evaluates them itself and fans COV out for the objects they
@@ -201,6 +210,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unchanged (#873).
 
 ### Fixed
+
+- On Windows, a B/IP or B/IPv6 transport on an ephemeral port now owns the
+  port, as on Unix (#950). It binds the wildcard address without
+  SO_REUSEADDR, and Windows still let another socket bind a more specific
+  address on the same port (127.0.0.1 beside 0.0.0.0) and take the unicast
+  sent there. Such sockets now set SO_EXCLUSIVEADDRUSE. Explicitly configured
+  ports keep SO_REUSEADDR.
+
+- A peer that the BACnet/SC hub or a direct-connection listener refuses
+  during the TLS handshake can now read the alert that says why (#950). The
+  socket used to be dropped with the client's HTTP upgrade request unread,
+  which resets the connection, and a Windows client then discarded the alert
+  and saw only "connection reset". The listener now sends FIN after the alert
+  and drains what the peer still sends until it closes, for at most 500 ms
+  and within the handshake deadline.
 
 - A B/IP BBMD now forwards its own broadcasts (#937). Before, `send_broadcast`
   in BBMD mode sent only the local Original-Broadcast-NPDU, so the BBMD's own

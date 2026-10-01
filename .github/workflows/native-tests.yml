@@ -61,7 +61,8 @@ jobs:
           persist-credentials: false
       # The runner images ship rustup. With no arguments it installs the
       # toolchain rust-toolchain.toml pins, so there is no version to keep in
-      # sync here.
+      # sync here. aws-lc-sys (sc-tls) builds with the images' own C tools: on
+      # Windows, MSVC plus the NASM and CMake already on PATH.
       - name: Install the pinned Rust toolchain
         run: |
           rustup toolchain install

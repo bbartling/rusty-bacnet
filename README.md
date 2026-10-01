@@ -59,8 +59,8 @@ It isn't BTL certified; [Conformance](#conformance) explains what is covered.
 
 ## Install
 
-CI tests on Linux. macOS is checked locally. Windows builds are published but
-not currently tested.
+CI runs the test suites on Linux, and natively on macOS (Apple Silicon) and
+Windows (x86_64).
 
 ### Python
 
