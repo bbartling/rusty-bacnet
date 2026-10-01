@@ -33,7 +33,6 @@ pub struct CalendarObject {
     name: String,
     description: String,
     present_value: bool,
-    status_flags: StatusFlags,
     date_list: Vec<BACnetCalendarEntry>,
 }
 
@@ -46,7 +45,6 @@ impl CalendarObject {
             name: name.into(),
             description: String::new(),
             present_value: false,
-            status_flags: StatusFlags::empty(),
             date_list: Vec::new(),
         })
     }
@@ -102,10 +100,12 @@ impl BACnetObject for CalendarObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Boolean(self.present_value))
             }
-            // Calendar has no Reliability and a fixed FALSE Out_Of_Service, so
-            // only the stored OVERRIDDEN bit can ever be set.
+            // Status_Flags is a non-standard extension on Calendar (Table 12-11
+            // lists none) and always reads all FALSE: there is no Reliability,
+            // Out_Of_Service is fixed FALSE and nothing can override it. #984
+            // tracks whether Calendar should expose it at all.
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
-                self.status_flags,
+                StatusFlags::empty(),
                 Reliability::NO_FAULT_DETECTED,
                 false,
                 EventState::NORMAL,

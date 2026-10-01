@@ -1,9 +1,9 @@
 //! A Loop's computed Status_Flags reaches COV subscribers (#978).
 //!
 //! Loop used to report a Status_Flags fixed at construction, so a subscriber
-//! never heard of a fault or of Out_Of_Service. Each WriteProperty below
-//! changes only Status_Flags, and must produce one notification carrying the
-//! new flags.
+//! never heard of a fault or of Out_Of_Service. Each Out_Of_Service or
+//! Reliability write below changes only Status_Flags and must produce one
+//! notification carrying the new flags; a Setpoint write must produce none.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::loop_obj::LoopObject;
@@ -61,6 +61,29 @@ async fn write_loop(h: &mut Harness, property: PropertyIdentifier, value: Proper
         .await;
 }
 
+/// Wait for the SimpleACK answering the last request sent, and take it.
+async fn wait_for_ack(h: &Harness, service_choice: ConfirmedServiceChoice) {
+    let invoke_id = h.invoke_id;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let acked = {
+                let mut frames = h.frames.lock().unwrap();
+                let at = frames.iter().position(|apdu| {
+                    matches!(apdu, Apdu::SimpleAck(ack)
+                        if ack.invoke_id == invoke_id && ack.service_choice == service_choice)
+                });
+                at.map(|at| frames.remove(at)).is_some()
+            };
+            if acked {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("SimpleACK for the last request");
+}
+
 #[tokio::test]
 async fn loop_fault_and_out_of_service_notify_cov_subscribers() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
@@ -101,12 +124,27 @@ async fn loop_fault_and_out_of_service_notify_cov_subscribers() {
     assert_eq!(cov_flags(&h.cov_notification().await), 0);
 
     // A write that leaves Present_Value and Status_Flags alone reports nothing.
+    // Wait for its SimpleACK, then make a flags-changing write: the next
+    // notification must be that one's, so a stray Setpoint report can't slip
+    // past unseen however slowly it is sent.
     write_loop(
         &mut h,
         PropertyIdentifier::SETPOINT,
         PropertyValue::Real(21.0),
     )
     .await;
+    wait_for_ack(&h, ConfirmedServiceChoice::WRITE_PROPERTY).await;
+    write_loop(
+        &mut h,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .await;
+    assert_eq!(
+        cov_flags(&h.cov_notification().await),
+        OUT_OF_SERVICE,
+        "the Setpoint write must not have produced a notification"
+    );
     h.no_notification().await;
     h.server.stop().await.unwrap();
 }

@@ -4,7 +4,9 @@
 //! These objects used to return a Status_Flags fixed at construction, so FAULT
 //! and OUT_OF_SERVICE never moved. Each step below checks the four bits against
 //! the object's own Reliability, Out_Of_Service and Event_State readbacks, then
-//! pins the expected bits outright.
+//! pins the expected bits outright. The two log objects fix OUT_OF_SERVICE and
+//! OVERRIDDEN at FALSE (Clauses 12.25.30 and 12.30.5), so for them only FAULT
+//! and IN_ALARM may move.
 
 use crate::loop_obj::LoopObject;
 use crate::schedule::{CalendarObject, ScheduleObject};
@@ -29,9 +31,19 @@ fn status_flags(object: &dyn BACnetObject) -> StatusFlags {
     }
 }
 
+/// How an object's OUT_OF_SERVICE and OVERRIDDEN bits behave.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// OUT_OF_SERVICE follows the Out_Of_Service property.
+    FollowsOutOfService,
+    /// OUT_OF_SERVICE and OVERRIDDEN are always FALSE, whatever an
+    /// Out_Of_Service property says (Trend Log and Trend Log Multiple).
+    LogFixedFalse,
+}
+
 /// Assert the flags agree with the object's readable state, then that they
 /// equal `expected`.
-fn assert_flags(object: &dyn BACnetObject, expected: StatusFlags) {
+fn assert_flags(object: &dyn BACnetObject, kind: Kind, expected: StatusFlags) {
     let flags = status_flags(object);
     let reliability = match read(object, PropertyIdentifier::RELIABILITY) {
         PropertyValue::Enumerated(raw) => Reliability::from_raw(raw),
@@ -42,11 +54,17 @@ fn assert_flags(object: &dyn BACnetObject, expected: StatusFlags) {
         reliability != Reliability::NO_FAULT_DETECTED,
         "FAULT must follow Reliability ({reliability})"
     );
-    assert_eq!(
-        flags.contains(StatusFlags::OUT_OF_SERVICE),
-        read(object, PropertyIdentifier::OUT_OF_SERVICE) == PropertyValue::Boolean(true),
-        "OUT_OF_SERVICE must follow Out_Of_Service"
-    );
+    match kind {
+        Kind::FollowsOutOfService => assert_eq!(
+            flags.contains(StatusFlags::OUT_OF_SERVICE),
+            read(object, PropertyIdentifier::OUT_OF_SERVICE) == PropertyValue::Boolean(true),
+            "OUT_OF_SERVICE must follow Out_Of_Service"
+        ),
+        Kind::LogFixedFalse => assert!(
+            !flags.intersects(StatusFlags::OUT_OF_SERVICE | StatusFlags::OVERRIDDEN),
+            "a log object's OUT_OF_SERVICE and OVERRIDDEN must stay FALSE"
+        ),
+    }
     assert_eq!(
         flags.contains(StatusFlags::IN_ALARM),
         read(object, PropertyIdentifier::EVENT_STATE)
@@ -73,38 +91,50 @@ fn set_out_of_service(object: &mut dyn BACnetObject, value: bool) {
 /// Loop and Schedule own Reliability in service and let a client simulate it
 /// while Out_Of_Service is TRUE; the evaluated value comes back on return.
 fn assert_simulation_and_evaluation_drive_flags(object: &mut dyn BACnetObject) {
-    assert_flags(object, StatusFlags::empty());
+    assert_flags(object, Kind::FollowsOutOfService, StatusFlags::empty());
 
     object
         .set_reliability_internal(Reliability::CONFIGURATION_ERROR)
         .unwrap();
-    assert_flags(object, StatusFlags::FAULT);
+    assert_flags(object, Kind::FollowsOutOfService, StatusFlags::FAULT);
 
     set_out_of_service(object, true);
-    assert_flags(object, StatusFlags::FAULT | StatusFlags::OUT_OF_SERVICE);
+    assert_flags(
+        object,
+        Kind::FollowsOutOfService,
+        StatusFlags::FAULT | StatusFlags::OUT_OF_SERVICE,
+    );
 
     write(
         object,
         PropertyIdentifier::RELIABILITY,
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
     );
-    assert_flags(object, StatusFlags::OUT_OF_SERVICE);
+    assert_flags(
+        object,
+        Kind::FollowsOutOfService,
+        StatusFlags::OUT_OF_SERVICE,
+    );
 
     write(
         object,
         PropertyIdentifier::RELIABILITY,
         PropertyValue::Enumerated(Reliability::OPEN_LOOP.to_raw()),
     );
-    assert_flags(object, StatusFlags::FAULT | StatusFlags::OUT_OF_SERVICE);
+    assert_flags(
+        object,
+        Kind::FollowsOutOfService,
+        StatusFlags::FAULT | StatusFlags::OUT_OF_SERVICE,
+    );
 
     // Leaving Out_Of_Service restores the evaluated CONFIGURATION_ERROR.
     set_out_of_service(object, false);
-    assert_flags(object, StatusFlags::FAULT);
+    assert_flags(object, Kind::FollowsOutOfService, StatusFlags::FAULT);
 
     object
         .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .unwrap();
-    assert_flags(object, StatusFlags::empty());
+    assert_flags(object, Kind::FollowsOutOfService, StatusFlags::empty());
 }
 
 #[test]
@@ -120,13 +150,33 @@ fn schedule_status_flags_follow_reliability_and_out_of_service() {
 }
 
 #[test]
-fn trend_log_out_of_service_sets_its_status_flag() {
+fn trend_log_status_flags_ignore_its_out_of_service_property() {
+    // Trend Log keeps a non-standard writable Out_Of_Service for
+    // compatibility; it must never reach Status_Flags. Its Reliability can't
+    // change yet (writes are refused and there is no internal route), so
+    // FAULT stays FALSE and agrees with the NO_FAULT_DETECTED readback.
     let mut log = TrendLogObject::new(1, "TL-1", 10).unwrap();
-    assert_flags(&log, StatusFlags::empty());
+    assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
     set_out_of_service(&mut log, true);
-    assert_flags(&log, StatusFlags::OUT_OF_SERVICE);
+    assert_eq!(
+        read(&log, PropertyIdentifier::OUT_OF_SERVICE),
+        PropertyValue::Boolean(true)
+    );
+    assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
+    assert!(log
+        .write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::OPEN_LOOP.to_raw()),
+            None,
+        )
+        .is_err());
+    assert!(log
+        .set_reliability_internal(Reliability::OPEN_LOOP)
+        .is_err());
+    assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
     set_out_of_service(&mut log, false);
-    assert_flags(&log, StatusFlags::empty());
+    assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
 }
 
 #[test]
@@ -141,6 +191,7 @@ fn calendar_and_trend_log_multiple_flags_match_their_fixed_state() {
     );
     assert_flags(
         &TrendLogMultipleObject::new(1, "TLM-1", 10).unwrap(),
+        Kind::LogFixedFalse,
         StatusFlags::empty(),
     );
 }
