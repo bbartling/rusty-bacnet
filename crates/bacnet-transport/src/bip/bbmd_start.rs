@@ -15,14 +15,22 @@
 //! - with none, the address the host uses toward its default route, but only
 //!   when that is a local, non-loopback address; otherwise `start()` fails.
 //!
-//! Where the host's addresses cannot be listed (currently Windows), no row can
-//! be confirmed as local, so a non-loopback default-route address is used, with
-//! a warning recommending an explicit interface.
+//! Where the host's addresses cannot be listed (currently Windows), a row's IP
+//! is local when a throwaway UDP socket can bind to it, and the same rules
+//! apply, except that with no local row any non-loopback default-route address
+//! is used, with a warning recommending an explicit interface.
 //!
-//! Every start repeats the choice, so a restart follows address changes.
+//! The BDT is the persisted one when it loads, else the configured one. A
+//! persisted BDT that loads is authoritative: when no own address can be
+//! chosen from it, `start()` fails rather than retrying with the configured
+//! BDT. Only a self row that would overflow the persisted BDT still falls back
+//! to the configured BDT, with a warning.
+//!
+//! Every start of a wildcard-bound BBMD repeats the choice, so a restart
+//! follows address changes.
 
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 
 use tracing::{debug, warn};
@@ -58,14 +66,39 @@ impl fmt::Display for BdtSource<'_> {
     }
 }
 
+/// How a wildcard-bound BBMD tells whether an IPv4 address is the host's.
+#[derive(Clone, Copy)]
+pub(super) enum HostAddresses<'a> {
+    /// The host's IPv4 addresses, as listed.
+    Listed(&'a [Ipv4Addr]),
+    /// The addresses cannot be listed (currently Windows); the probe says
+    /// whether an address is local. `start()` passes [`bind_probe`].
+    Probed(&'a (dyn Fn(Ipv4Addr) -> bool + Sync)),
+}
+
+impl HostAddresses<'_> {
+    fn contains(self, ip: Ipv4Addr) -> bool {
+        match self {
+            Self::Listed(ips) => ips.contains(&ip),
+            Self::Probed(probe) => probe(ip),
+        }
+    }
+}
+
+/// Whether `ip` is one of this host's addresses: a throwaway UDP socket can
+/// bind to it, as `start()` already checks for an explicit interface.
+pub(super) fn bind_probe(ip: Ipv4Addr) -> bool {
+    std::net::UdpSocket::bind(SocketAddrV4::new(ip, 0)).is_ok()
+}
+
 /// What `start()` knows about the local addresses once the socket is bound.
 pub(super) struct OwnAddressContext<'a> {
     /// The configured interface; `0.0.0.0` for a wildcard bind.
     pub(super) interface: Ipv4Addr,
     /// The bound UDP port.
     pub(super) port: u16,
-    /// IPv4 addresses on the host's interfaces (wildcard bind only).
-    pub(super) local_unicast_ips: &'a [Ipv4Addr],
+    /// The host's IPv4 addresses (wildcard bind only).
+    pub(super) host: HostAddresses<'a>,
     /// The local address toward the default route, if any (wildcard bind only).
     pub(super) route_ip: Option<Ipv4Addr>,
 }
@@ -73,13 +106,7 @@ pub(super) struct OwnAddressContext<'a> {
 impl OwnAddressContext<'_> {
     fn own_ip(&self, rows: &[BdtEntry], source: BdtSource<'_>) -> Result<Ipv4Addr, Error> {
         if self.interface.is_unspecified() {
-            select_wildcard_bbmd_ip(
-                rows,
-                self.port,
-                self.local_unicast_ips,
-                self.route_ip,
-                source,
-            )
+            select_wildcard_bbmd_ip(rows, self.port, self.host, self.route_ip, source)
         } else {
             Ok(self.interface)
         }
@@ -93,12 +120,17 @@ fn own_address_error(message: String) -> Error {
     ))
 }
 
+fn route_text(route_ip: Option<Ipv4Addr>) -> String {
+    route_ip.map_or_else(|| "none".to_owned(), |ip| ip.to_string())
+}
+
 /// The own IP of a BBMD bound to `0.0.0.0` at `port` (rules in the module
-/// docs). `rows` must already be canonical.
+/// docs). `rows` must already be canonical. Only rows at `port` are checked
+/// against `host`.
 pub(super) fn select_wildcard_bbmd_ip(
     rows: &[BdtEntry],
     port: u16,
-    local_unicast_ips: &[Ipv4Addr],
+    host: HostAddresses<'_>,
     route_ip: Option<Ipv4Addr>,
     source: BdtSource<'_>,
 ) -> Result<Ipv4Addr, Error> {
@@ -106,42 +138,45 @@ pub(super) fn select_wildcard_bbmd_ip(
         .iter()
         .filter(|row| row.port == port)
         .map(|row| Ipv4Addr::from(row.ip))
-        .filter(|ip| local_unicast_ips.contains(ip))
+        .filter(|ip| host.contains(*ip))
         .collect();
     own.sort_unstable();
     own.dedup();
-    match own.as_slice() {
-        [ip] => Ok(*ip),
-        [] if local_unicast_ips.is_empty() => route_ip
+    match (own.as_slice(), host) {
+        ([ip], _) => Ok(*ip),
+        ([], HostAddresses::Probed(_)) => route_ip
             .filter(|ip| !ip.is_loopback())
             .inspect(|ip| {
                 warn!(
                     own_ip = %ip,
-                    "BBMD bound to 0.0.0.0 on a host whose addresses cannot be listed: \
-                     using the default-route address as its own B/IP address; bind an \
-                     explicit interface address to choose it"
+                    "BBMD bound to 0.0.0.0 on a host whose addresses cannot be listed, with \
+                     no BDT row at the bound port for an address this host can bind: using \
+                     the default-route address as its own B/IP address; bind an explicit \
+                     interface address or add this BBMD's own row to the BDT"
                 );
             })
             .ok_or_else(|| {
-                let route = route_ip.map_or_else(|| "none".to_owned(), |ip| ip.to_string());
                 own_address_error(format!(
                     "BBMD bound to 0.0.0.0 cannot determine its own B/IP address: the host's \
-                     addresses cannot be listed and the default-route address ({route}) is \
-                     not a non-loopback address; bind an explicit interface address"
+                     addresses cannot be listed, {source} has no row at port {port} for an \
+                     address this host can bind, and the default-route address ({}) is not \
+                     a non-loopback address; bind an explicit interface address or add this \
+                     BBMD's own row to the BDT",
+                    route_text(route_ip)
                 ))
             }),
-        [] => route_ip
-            .filter(|ip| !ip.is_loopback() && local_unicast_ips.contains(ip))
+        ([], HostAddresses::Listed(ips)) => route_ip
+            .filter(|ip| !ip.is_loopback() && ips.contains(ip))
             .ok_or_else(|| {
-                let route = route_ip.map_or_else(|| "none".to_owned(), |ip| ip.to_string());
                 own_address_error(format!(
                     "BBMD bound to 0.0.0.0 cannot determine its own B/IP address: {source} \
                      has no row for a local IPv4 address at port {port}, and the \
-                     default-route address ({route}) is not a local non-loopback address; \
-                     bind an explicit interface address or add this BBMD's own row to the BDT"
+                     default-route address ({}) is not a local non-loopback address; \
+                     bind an explicit interface address or add this BBMD's own row to the BDT",
+                    route_text(route_ip)
                 ))
             }),
-        several => {
+        (several, _) => {
             let rows: Vec<String> = several.iter().map(|ip| format!("{ip}:{port}")).collect();
             Err(own_address_error(format!(
                 "BBMD bound to 0.0.0.0 cannot choose its own B/IP address: {source} has \
@@ -151,6 +186,33 @@ pub(super) fn select_wildcard_bbmd_ip(
             )))
         }
     }
+}
+
+/// Warn, and return `true`, when a BBMD bound to `0.0.0.0` with own address
+/// `own_ip` broadcasts to 255.255.255.255 and `own_ip` is not the
+/// default-route address. The kernel may then send each broadcast from
+/// another interface, so its echo comes back from an address that is not the
+/// BBMD's own and is forwarded again.
+pub(super) fn warn_if_broadcast_may_leave_another_interface(
+    ctx: &OwnAddressContext<'_>,
+    own_ip: Ipv4Addr,
+    broadcast: Ipv4Addr,
+) -> bool {
+    let risky = ctx.interface.is_unspecified()
+        && broadcast == Ipv4Addr::BROADCAST
+        && ctx.route_ip != Some(own_ip);
+    if risky {
+        warn!(
+            %own_ip,
+            route_ip = %route_text(ctx.route_ip),
+            "BBMD bound to 0.0.0.0 broadcasts to 255.255.255.255, but its own B/IP address \
+             is not the default-route address: the kernel may send these broadcasts from \
+             another interface, so their echo is not recognised as the BBMD's own and can \
+             be forwarded again; bind an explicit interface address and use that subnet's \
+             broadcast address"
+        );
+    }
+    risky
 }
 
 /// Read and validate the persisted BDT. `None`, after a warning when the file
@@ -176,6 +238,8 @@ fn load_persisted_bdt(path: &Path) -> Option<Vec<BdtEntry>> {
 /// The BBMD state for a first start: the persisted BDT when it loads, else the
 /// configured one, and this BBMD's own address chosen with that BDT. An
 /// invalid configured BDT or an undeterminable own address fails the start.
+/// An own address that cannot be chosen from a loaded persisted BDT fails it
+/// too, without trying the configured BDT.
 pub(super) fn initial_bbmd_state(
     config: &BbmdConfig,
     persist_path: Option<&Path>,
@@ -215,13 +279,22 @@ pub(super) fn initial_bbmd_state(
     Ok(state)
 }
 
-/// Choose the own address again on a restart, from the BDT without the self
-/// row it appended. The BDT and FDT are kept; an appended self row follows the
-/// new address. On error the state is unchanged.
+/// Choose the own address of a wildcard-bound BBMD again on a restart, from
+/// the BDT without the self row it appended. The BDT and FDT are kept; an
+/// appended self row follows the new address. On error the state is unchanged.
 pub(super) fn refresh_own_address(
     state: &mut BbmdState,
     ctx: &OwnAddressContext<'_>,
 ) -> Result<(), Error> {
     let ip = ctx.own_ip(state.configured_bdt(), BdtSource::Current)?;
-    state.set_local_address(ip.octets(), ctx.port)
+    let (old_ip, old_port) = state.local_address();
+    state.set_local_address(ip.octets(), ctx.port).map_err(|e| {
+        Error::Encoding(format!(
+            "BBMD restart moved its own B/IP address from {}:{old_port} to {ip}:{}, and a \
+             self row for the new address would exceed the BDT limit of {} entries: {e}",
+            Ipv4Addr::from(old_ip),
+            ctx.port,
+            BbmdState::MAX_BDT_ENTRIES
+        ))
+    })
 }

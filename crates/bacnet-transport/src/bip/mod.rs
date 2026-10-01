@@ -26,7 +26,10 @@ mod bbmd_start;
 mod bvlc_response;
 mod fanout;
 mod socket;
-use bbmd_start::{initial_bbmd_state, refresh_own_address, BbmdConfig, OwnAddressContext};
+use bbmd_start::{
+    bind_probe, initial_bbmd_state, refresh_own_address,
+    warn_if_broadcast_may_leave_another_interface, BbmdConfig, HostAddresses, OwnAddressContext,
+};
 use bvlc_response::{
     bvlc_result_error, decode_bvlc_result_code, expect_bvlc_function, BvlcResponseKind,
     PendingBvlcResponse,
@@ -170,14 +173,21 @@ impl BipTransport {
     ///
     /// The BBMD's own B/IP address is the interface address and bound port.
     /// With a `0.0.0.0` interface, `start()` takes it from the BDT it starts
-    /// with (the persisted BDT when that loads): the one row whose IP is a
-    /// local IPv4 address and whose port is the bound port. With no such row
-    /// it uses the local address toward the default route if that is not
-    /// loopback. Several such rows, or no usable address, fail `start()`. On
-    /// platforms where local addresses cannot be listed (Windows) it uses a
-    /// non-loopback default-route address and logs a warning, so an explicit
-    /// interface is the reliable choice there. Each start repeats the choice,
-    /// and the self row the BBMD appended follows it.
+    /// with: the one row whose IP is a local IPv4 address and whose port is
+    /// the bound port. With no such row it uses the local address toward the
+    /// default route, if that is one of the host's addresses and not loopback.
+    /// Several such rows, or no usable address, fail `start()`. A persisted
+    /// BDT that loads is the one used, and a failure to choose from it fails
+    /// `start()` without trying the configured BDT. On platforms where local
+    /// addresses cannot be listed (Windows), a row is local when a socket can
+    /// bind to its IP; with no such row, any non-loopback default-route
+    /// address is used with a warning, so an explicit interface is the
+    /// reliable choice there. Each start of a `0.0.0.0` BBMD repeats the
+    /// choice, and the self row the BBMD appended follows it. With
+    /// broadcast address 255.255.255.255 and an own address that is not the
+    /// default-route address, `start()` warns that the kernel may send
+    /// broadcasts from another interface; bind an explicit interface and its
+    /// subnet's broadcast address instead.
     pub fn enable_bbmd(&mut self, bdt: Vec<BdtEntry>) {
         self.bbmd_config = Some(BbmdConfig {
             initial_bdt: bdt,
@@ -232,8 +242,8 @@ impl BipTransport {
     /// Get the BBMD state (if BBMD mode is enabled).
     ///
     /// Do not hold its guard across [`send_broadcast`](TransportPort::send_broadcast)
-    /// or `start()`: in BBMD mode both lock this mutex, so the call would
-    /// deadlock.
+    /// or a restart of a `0.0.0.0`-bound BBMD: both lock this mutex, so the
+    /// call would deadlock.
     pub fn bbmd_state(&self) -> Option<&Arc<Mutex<BbmdState>>> {
         self.bbmd.as_ref()
     }
@@ -573,13 +583,17 @@ impl TransportPort for BipTransport {
 
         let local_port = socket.local_addr().map_err(Error::Transport)?.port();
 
-        // A BBMD's own address can come from its BDT (bbmd_start.rs), on every
-        // start. This runs before `self` changes, so a failed start keeps the
-        // BBMD configuration for a retry.
+        // A wildcard BBMD's own address comes from its BDT (bbmd_start.rs), on
+        // every start. This runs before `self` changes, so a failed start
+        // keeps the BBMD configuration for a retry.
         let own_address = OwnAddressContext {
             interface: self.interface,
             port: local_port,
-            local_unicast_ips: &local_unicast_ips,
+            host: if local_unicast_ips.is_empty() {
+                HostAddresses::Probed(&bind_probe)
+            } else {
+                HostAddresses::Listed(&local_unicast_ips)
+            },
             route_ip,
         };
         let bbmd_ip = if let Some(config) = &self.bbmd_config {
@@ -588,13 +602,21 @@ impl TransportPort for BipTransport {
             self.bbmd_config = None;
             self.bbmd = Some(Arc::new(Mutex::new(state)));
             Some(ip)
-        } else if let Some(bbmd) = &self.bbmd {
+        } else if let Some(bbmd) = self.bbmd.as_ref().filter(|_| wildcard_bind) {
+            // An explicit interface keeps its IP and port across restarts.
             let mut state = bbmd.lock().await;
             refresh_own_address(&mut state, &own_address)?;
             Some(state.local_address().0)
         } else {
             None
         };
+        if let Some(ip) = bbmd_ip {
+            warn_if_broadcast_may_leave_another_interface(
+                &own_address,
+                Ipv4Addr::from(ip),
+                self.broadcast_address,
+            );
+        }
         let local_ip = match bbmd_ip {
             Some(ip) => Ipv4Addr::from(ip),
             None if wildcard_bind => route_ip.unwrap_or(Ipv4Addr::LOCALHOST),

@@ -272,19 +272,20 @@ impl BbmdState {
         self.counters
     }
 
-    /// This BBMD's own B/IP address (IP and UDP port), as given to [`Self::new`]
-    /// or [`Self::set_local_address`].
+    /// This BBMD's own B/IP address (IP and UDP port): the one given to
+    /// [`Self::new`], or the one a restart of a `0.0.0.0`-bound transport chose.
     pub fn local_address(&self) -> ([u8; 4], u16) {
         (self.local_ip, self.local_port)
     }
 
-    /// Change this BBMD's own B/IP address, keeping the BDT and FDT.
+    /// Change this BBMD's own B/IP address, keeping the BDT and FDT. Only the
+    /// B/IP transport's restart of a wildcard-bound BBMD calls this.
     ///
     /// A self row that [`Self::set_bdt`] appended for the old address moves to
     /// the new one. A row the BDT lists explicitly stays, and becomes an
     /// ordinary peer row once it no longer matches. Returns `Error::Encoding`,
     /// changing nothing, when the new self row would overflow the BDT.
-    pub fn set_local_address(&mut self, ip: [u8; 4], port: u16) -> Result<(), Error> {
+    pub(crate) fn set_local_address(&mut self, ip: [u8; 4], port: u16) -> Result<(), Error> {
         if (ip, port) == (self.local_ip, self.local_port) {
             return Ok(());
         }
