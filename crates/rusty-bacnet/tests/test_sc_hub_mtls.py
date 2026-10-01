@@ -681,9 +681,16 @@ class NodeIdentityMtlsTests(MtlsFixture):
             finally:
                 await self.stop_hub(hub)
             with socket.socket() as probe:
-                # Match Tokio's listener reuse policy; established TCP teardown
-                # may retain TIME_WAIT, which is not a live hub listener.
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if os.name == "nt":
+                    # On Windows SO_REUSEADDR would bind over a live listener,
+                    # proving nothing; exclusive use fails while anything
+                    # still holds the port.
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:
+                    # Match Tokio's listener reuse policy; established TCP
+                    # teardown may retain TIME_WAIT, which is not a live hub
+                    # listener.
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind(("127.0.0.1", int(address.rsplit(":", 1)[1])))
                 probe.listen()
 
