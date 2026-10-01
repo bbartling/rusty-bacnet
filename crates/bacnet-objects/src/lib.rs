@@ -62,6 +62,9 @@ mod reliability_inhibit_tests;
 mod typed_enum_storage_tests;
 
 #[cfg(test)]
+mod computed_status_flags_tests;
+
+#[cfg(test)]
 mod scalar_relinquishment_tests;
 
 #[cfg(test)]

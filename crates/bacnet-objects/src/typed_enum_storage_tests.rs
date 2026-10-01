@@ -84,28 +84,18 @@ fn assert_unchecked_enumerated_round_trip(
     );
 }
 
-/// Whether Status_Flags FAULT follows the stored Reliability. Loop and
-/// Schedule report a stored Status_Flags instead, which this change keeps.
-#[derive(Clone, Copy)]
-enum FaultFlag {
-    Derived,
-    Stored,
-}
-
-fn assert_fault_flag(object: &dyn BACnetObject, fault_flag: FaultFlag, expected: bool) {
-    if let FaultFlag::Derived = fault_flag {
-        assert_eq!(
-            status_flags_fault(object),
-            expected,
-            "FAULT is set exactly when Reliability is not NO_FAULT_DETECTED"
-        );
-    }
+fn assert_fault_flag(object: &dyn BACnetObject, expected: bool) {
+    assert_eq!(
+        status_flags_fault(object),
+        expected,
+        "FAULT is set exactly when Reliability is not NO_FAULT_DETECTED"
+    );
 }
 
 /// While Out_Of_Service is TRUE, a client Reliability write accepts the named
 /// set plus 64..=65535 and stores vendor values verbatim; a refused value
 /// leaves the stored value alone.
-fn assert_client_reliability_round_trip(object: &mut dyn BACnetObject, fault_flag: FaultFlag) {
+fn assert_client_reliability_round_trip(object: &mut dyn BACnetObject) {
     write(
         object,
         PropertyIdentifier::OUT_OF_SERVICE,
@@ -123,7 +113,7 @@ fn assert_client_reliability_round_trip(object: &mut dyn BACnetObject, fault_fla
             read(object, PropertyIdentifier::RELIABILITY),
             PropertyValue::Enumerated(vendor)
         );
-        assert_fault_flag(object, fault_flag, true);
+        assert_fault_flag(object, true);
     }
     for refused in [11, 26, 63, 65_536, u32::MAX] {
         assert_protocol_error(
@@ -193,7 +183,7 @@ fn assert_vendor_reliability_survives_out_of_service(object: &mut dyn BACnetObje
 
 /// In service, the internal route applies the same value domain as the
 /// client route.
-fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject, fault_flag: FaultFlag) {
+fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject) {
     object
         .set_reliability_internal(Reliability::from_raw(65_535))
         .expect("a vendor Reliability value must be accepted internally");
@@ -201,7 +191,7 @@ fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject, fault_f
         read(object, PropertyIdentifier::RELIABILITY),
         PropertyValue::Enumerated(65_535)
     );
-    assert_fault_flag(object, fault_flag, true);
+    assert_fault_flag(object, true);
     for refused in [11, 26, 63, 65_536, u32::MAX] {
         assert_protocol_error(
             object.set_reliability_internal(Reliability::from_raw(refused)),
@@ -216,7 +206,7 @@ fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject, fault_f
     object
         .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .unwrap();
-    assert_fault_flag(object, fault_flag, false);
+    assert_fault_flag(object, false);
 }
 
 fn staging() -> StagingObject {
@@ -249,18 +239,18 @@ fn reliability_vendor_values_round_trip_on_every_write_route() {
     // One carrier per distinct write arm: the shared inhibit route, Loop's,
     // Schedule's and Staging's own arms.
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-    assert_internal_reliability_round_trip(&mut ai, FaultFlag::Derived);
-    assert_client_reliability_round_trip(&mut ai, FaultFlag::Derived);
+    assert_internal_reliability_round_trip(&mut ai);
+    assert_client_reliability_round_trip(&mut ai);
 
     let mut lp = LoopObject::new(1, "LOOP-1", 62).unwrap();
-    assert_internal_reliability_round_trip(&mut lp, FaultFlag::Stored);
-    assert_client_reliability_round_trip(&mut lp, FaultFlag::Stored);
+    assert_internal_reliability_round_trip(&mut lp);
+    assert_client_reliability_round_trip(&mut lp);
 
     let mut schedule = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap();
-    assert_internal_reliability_round_trip(&mut schedule, FaultFlag::Stored);
-    assert_client_reliability_round_trip(&mut schedule, FaultFlag::Stored);
+    assert_internal_reliability_round_trip(&mut schedule);
+    assert_client_reliability_round_trip(&mut schedule);
 
-    assert_client_reliability_round_trip(&mut staging(), FaultFlag::Derived);
+    assert_client_reliability_round_trip(&mut staging());
 }
 
 #[test]

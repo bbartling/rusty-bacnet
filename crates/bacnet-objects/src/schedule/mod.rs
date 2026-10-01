@@ -33,7 +33,6 @@ pub struct CalendarObject {
     name: String,
     description: String,
     present_value: bool,
-    status_flags: StatusFlags,
     date_list: Vec<BACnetCalendarEntry>,
 }
 
@@ -46,7 +45,6 @@ impl CalendarObject {
             name: name.into(),
             description: String::new(),
             present_value: false,
-            status_flags: StatusFlags::empty(),
             date_list: Vec::new(),
         })
     }
@@ -102,10 +100,16 @@ impl BACnetObject for CalendarObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Boolean(self.present_value))
             }
-            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![self.status_flags.bits() << 4],
-            }),
+            // Status_Flags is a non-standard extension on Calendar (Table 12-11
+            // lists none) and always reads all FALSE: there is no Reliability,
+            // Out_Of_Service is fixed FALSE and nothing can override it. #984
+            // tracks whether Calendar should expose it at all.
+            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
+                StatusFlags::empty(),
+                Reliability::NO_FAULT_DETECTED,
+                false,
+                EventState::NORMAL,
+            )),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
@@ -343,10 +347,15 @@ impl BACnetObject for ScheduleObject {
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.present_value.clone()),
             p if p == PropertyIdentifier::SCHEDULE_DEFAULT => Ok(self.schedule_default.clone()),
-            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![self.status_flags.bits() << 4],
-            }),
+            // FAULT follows Reliability and OUT_OF_SERVICE follows
+            // Out_Of_Service; IN_ALARM follows the fixed NORMAL Event_State
+            // this object reports.
+            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                EventState::NORMAL,
+            )),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
