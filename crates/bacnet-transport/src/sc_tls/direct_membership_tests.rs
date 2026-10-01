@@ -249,9 +249,13 @@ mod direct_reservation_tests;
 #[tokio::test]
 async fn incumbent_plus_pending_reaches_physical_cap_and_connect_timeout_recovers() {
     let ca = TestCa::generate();
+    // The pending peer holds its slot for the connect timeout, which must
+    // outlast the refused dial to `localhost`. On Windows that dial takes at
+    // least the 250 ms attempt delay: `::1` is tried first, and the IPv4-only
+    // listener's refusal there is slow (#950).
     let (mut listener, mut rx) = start_listener(&ca, |c| {
         c.with_max_established_peers(1)
-            .with_connect_timeout(Duration::from_millis(200))
+            .with_connect_timeout(Duration::from_secs(1))
     })
     .await;
     let (old, _) = connect_claim(&listener, &ca, DIAL_VMAC, DIAL_UUID).await;
