@@ -164,7 +164,7 @@ impl SelectedSender {
         };
         let message = WSAMSG {
             name: destination.as_ptr().cast_mut().cast(),
-            namelen: destination.len() as i32,
+            namelen: destination.len(),
             lpBuffers: &mut data,
             dwBufferCount: 1,
             Control: WSABUF {

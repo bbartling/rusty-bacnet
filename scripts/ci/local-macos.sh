@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Local macOS checks. Forgejo CI covers Linux only, so run this on a Mac before
-# asking for review on changes that can affect macOS (transports, sockets, TLS,
-# platform cfg, build scripts, dependencies). Usage, from anywhere in the repo:
+# Local macOS checks, optional. The native-tests workflow on GitHub runs the
+# macOS tests, clippy and rustdoc for every pushed branch, and that is the merge
+# evidence (see docs/ci.md). Run this on a Mac for a quicker answer before
+# pushing changes that can affect macOS (transports, sockets, TLS, platform cfg,
+# build scripts, dependencies). Usage, from anywhere in the repo:
 #
 #   bash scripts/ci/local-macos.sh          # lint + clippy + macOS tests
 #   bash scripts/ci/local-macos.sh --quick  # skip the test suite
@@ -11,8 +13,8 @@
 # Clippy and rustdoc deny warnings, as CI does. Tests need cargo-nextest
 # 0.9.145 or later (`cargo install cargo-nextest --locked`). The PyO3 crate's
 # Rust tests link libpython from PYO3_PYTHON, the active venv, or `python` /
-# `python3` on PATH, in that order (#919). Record the result in the PR (see
-# docs/ci.md).
+# `python3` on PATH, in that order (#919). .github/workflows/native-tests.yml
+# reads the features= line below, so keep it a single line.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

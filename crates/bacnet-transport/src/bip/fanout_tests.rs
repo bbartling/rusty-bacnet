@@ -34,6 +34,32 @@ async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
     );
 }
 
+fn bvll_frame(function: BvlcFunction, payload: &[u8]) -> Bytes {
+    let mut buf = BytesMut::new();
+    encode_bvll(&mut buf, function, payload).unwrap();
+    buf.freeze()
+}
+
+/// Register `socket` as a foreign device of the BBMD at `bbmd`.
+async fn register_foreign_device(socket: &UdpSocket, bbmd: SocketAddrV4) {
+    let request = bvll_frame(BvlcFunction::REGISTER_FOREIGN_DEVICE, &60u16.to_be_bytes());
+    socket.send_to(&request, bbmd).await.unwrap();
+    let result = recv_bvll(socket).await;
+    assert_eq!(result.function, BvlcFunction::BVLC_RESULT);
+    assert_eq!(
+        crate::bip::decode_bvlc_result_code(&result).unwrap(),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+}
+
+// A test can't put a real broadcast on loopback on every OS: Windows reports a
+// datagram to 127.0.0.1 as unicast even when it is the configured broadcast
+// address, and the BBMD then rightly drops an Original-Broadcast-NPDU. So the
+// end-to-end fanout tests below drive the BBMD with what may arrive by
+// unicast: a registered foreign device's Distribute-Broadcast-To-Network, or a
+// BDT peer's Forwarded-NPDU. Both use the fanout path Original-Broadcast-NPDU
+// does (#950).
+
 #[test]
 fn fanout_rate_limiter_budgets_and_throttles() {
     let policy = FanoutPolicy {
@@ -99,47 +125,20 @@ async fn duplicate_bdt_and_fdt_entries_yield_exactly_one_send_per_destination() 
     let _bbmd_rx = bbmd.start().await.unwrap();
     let bbmd_mac = bbmd.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
+    let bbmd_dest = SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port);
 
-    // Register foreign device that also points to the same sink IP and port
-    let fd_reg = {
-        let mut buf = BytesMut::new();
-        encode_bvll(
-            &mut buf,
-            BvlcFunction::REGISTER_FOREIGN_DEVICE,
-            &60u16.to_be_bytes(),
-        )
-        .unwrap();
-        buf.freeze()
-    };
-    sink_socket
-        .send_to(
-            &fd_reg,
-            SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port),
-        )
-        .await
-        .unwrap();
-    let reg_result = recv_bvll(&sink_socket).await;
-    assert_eq!(reg_result.function, BvlcFunction::BVLC_RESULT);
+    // The sink is a foreign device as well as a BDT peer.
+    register_foreign_device(&sink_socket, bbmd_dest).await;
 
-    // Send Original-Broadcast-NPDU to the BBMD from a client
+    // A client foreign device distributes a broadcast, which goes to every
+    // BDT peer and every other foreign device: the sink twice over.
     let client_sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
+    register_foreign_device(&client_sock, bbmd_dest).await;
     let test_npdu = vec![0x01, 0x20, 0xCA, 0xFE];
-    let mut bcast_buf = BytesMut::new();
-    encode_bvll(
-        &mut bcast_buf,
-        BvlcFunction::ORIGINAL_BROADCAST_NPDU,
-        &test_npdu,
-    )
-    .unwrap();
-    client_sock
-        .send_to(
-            &bcast_buf,
-            SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port),
-        )
-        .await
-        .unwrap();
+    let dbtn = bvll_frame(BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK, &test_npdu);
+    client_sock.send_to(&dbtn, bbmd_dest).await.unwrap();
 
     // The sink must receive exactly ONE forwarded NPDU (not 2 copies)
     let frame = recv_bvll(&sink_socket).await;
@@ -158,15 +157,22 @@ async fn duplicate_bdt_and_fdt_entries_yield_exactly_one_send_per_destination() 
 #[tokio::test]
 async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
     let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
-    let mut bdt = Vec::new();
-    for i in 1..=8 {
-        bdt.push(BdtEntry {
-            ip: [192, 168, 1, i],
-            port: 47808,
-            broadcast_mask: [255, 255, 255, 255],
-        });
-    }
-    bbmd.enable_bbmd(bdt);
+    // The flood comes from a BDT peer whose mask says it reaches this subnet
+    // with its own directed broadcast, so the BBMD delivers each of its
+    // Forwarded-NPDUs locally and fans it out to the foreign devices, and
+    // sends nothing from the receive loop itself.
+    let flood_sock = Arc::new(super::BipSocket::new(
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap(),
+        None,
+    ));
+    bbmd.enable_bbmd(vec![BdtEntry {
+        ip: Ipv4Addr::LOCALHOST.octets(),
+        port: flood_sock.local_addr().unwrap().port(),
+        broadcast_mask: [255, 255, 255, 0],
+    }]);
+    bbmd.enable_foreign_device_registration(ForeignDevicePolicy::default());
     // Tight queue and rate limit
     bbmd.set_fanout_policy(FanoutPolicy {
         max_fanout_per_input: 8,
@@ -180,20 +186,25 @@ async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
     let bbmd_dest = SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port);
 
-    // Flood BBMD with continuous broadcast traffic in background
-    let flood_sock = Arc::new(super::BipSocket::new(
-        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+    // Eight fanout destinations for every flood frame.
+    let mut foreign_devices = Vec::new();
+    for _ in 0..8 {
+        let device = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
-            .unwrap(),
-        None,
-    ));
+            .unwrap();
+        register_foreign_device(&device, bbmd_dest).await;
+        foreign_devices.push(device);
+    }
+
+    // Flood BBMD with continuous broadcast traffic in background
     let stop_flood = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_flood_clone = Arc::clone(&stop_flood);
     let flood_handle = tokio::spawn(async move {
         let mut buf = BytesMut::new();
-        encode_bvll(
+        crate::bvll::encode_bvll_forwarded(
             &mut buf,
-            BvlcFunction::ORIGINAL_BROADCAST_NPDU,
+            [10, 1, 2, 3],
+            47808,
             &[0x01, 0x20, 0x11, 0x22],
         )
         .unwrap();
@@ -259,7 +270,11 @@ async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
 
 #[tokio::test]
 async fn fanout_semantics_for_original_forwarded_and_dbtn() {
-    let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    // The local rebroadcast goes back to the BBMD, which ignores its own
+    // frames. 255.255.255.255 would make the test depend on the host's routes:
+    // where the limited broadcast can't be sent, as on GitHub's macOS
+    // runners, the BBMD rightly NAKs the DBTN for its failed local delivery.
+    let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let peer_bdt = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -349,6 +364,7 @@ async fn fanout_counters_accurately_track_all_metrics() {
         port: port_a,
         broadcast_mask: [255, 255, 255, 255],
     }]);
+    bbmd.enable_foreign_device_registration(ForeignDevicePolicy::default());
     bbmd.set_fanout_policy(FanoutPolicy {
         max_fanout_per_input: 1,
         max_packets_per_sec_global: 10,
@@ -361,13 +377,13 @@ async fn fanout_counters_accurately_track_all_metrics() {
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
     let bbmd_dest = SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port);
 
+    // A foreign device distributes the broadcasts to the BDT peer.
     let client = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
+    register_foreign_device(&client, bbmd_dest).await;
     let npdu = vec![0x01, 0x20, 0x55, 0x66];
-    let mut buf = BytesMut::new();
-    encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu).unwrap();
-    let frame = buf.freeze();
+    let frame = bvll_frame(BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK, &npdu);
 
     // Send 1st broadcast: forwarded
     client.send_to(&frame, bbmd_dest).await.unwrap();

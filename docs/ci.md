@@ -1,10 +1,26 @@
 # CI and merge evidence
 
+Forgejo is the primary forge. GitHub is its push mirror (sync on commit), so
+every branch and tag pushed to Forgejo reaches GitHub within a minute or so.
+Heavy work runs on Forgejo's fixed-cost runner VM; GitHub runs only what needs
+its native runners or its services.
+
+| Host | Runs |
+| --- | --- |
+| Forgejo (self-hosted Linux runner) | Linux CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml); website validation, [`docs.yml`](../.forgejo/workflows/docs.yml); releases and publishing to crates.io, PyPI and Forgejo, [`release.yml`](../.forgejo/workflows/release.yml) |
+| GitHub (hosted runners) | [Native macOS and Windows tests](#native-tests-github), [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml); the GitHub Pages docs deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); the GitHub release copy, which Forgejo's release workflow makes through GitHub's API |
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) is the
+legacy release workflow, kept manual-only until #951 removes it.
+
 | Platform | Where it is checked |
 | --- | --- |
-| Linux amd64 | CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml) |
-| macOS | Locally, [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh) |
-| Windows | Not currently tested |
+| Linux amd64 | Forgejo CI: lint, clippy, rustdoc, tests, Python bindings, MSRV, audit and deny |
+| macOS arm64 | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings |
+| Windows x86_64 (MSVC) | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings |
+
+A PR merges only when both are green on its head SHA: `CI OK` on Forgejo and
+both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 
 ## Pipeline
 
@@ -171,11 +187,113 @@ cache size. Optimization level, debug assertions, overflow checks and test
 selection keep their defaults, and there is no `RUSTFLAGS=-Dwarnings`: per-rule
 severity lives in `[workspace.lints]`.
 
+## Native tests (GitHub)
+
+[`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml)
+runs the tests, clippy and rustdoc natively on two GitHub-hosted runners
+(#950), which the Linux-only Forgejo runner can't:
+
+- **Test (macOS arm64)**: `macos-latest`, Apple Silicon;
+- **Test (Windows x86_64)**: `windows-latest`, the MSVC toolchain.
+
+**Trigger.** Every push to any branch, and a manual dispatch. PRs live on
+Forgejo, so GitHub's `pull_request` event never fires; the push mirror brings
+every PR branch, and every merge to `dev`, to GitHub instead. Tag pushes don't
+run it. A newer push to a branch cancels that branch's running run.
+
+**Steps.** `NATIVE_FEATURES` is the `features=` list in
+[`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh), which the
+workflow reads: every optional feature except the Linux-only `serial` and
+`ethernet`, including per-crate ones such as `bacnet-endpoint/sc-tls`. Windows
+also leaves out `bacnet-cli/pcap`, which needs the Npcap SDK. Each job runs:
+
+```bash
+cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
+cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
+cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
+cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$NATIVE_FEATURES"
+# Python 3.12 from actions/setup-python, in a fresh venv
+python -m pip install maturin==1.15.0
+maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
+python -m unittest discover -s crates/rusty-bacnet/tests
+cargo nextest run -p rusty-bacnet --locked --profile ci
+```
+
+PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
+Every step runs even when an earlier one failed, so one run reports each
+failure. The per-crate default-feature checks
+(`scripts/ci/check-default-features.sh`) run on Linux only.
+
+**Toolchain and tools.** Both runner images ship rustup, and
+`rustup toolchain install` with no arguments installs what
+`rust-toolchain.toml` pins, so the workflow has no toolchain version to keep in
+step. cargo-nextest is a prebuilt binary from `taiki-e/install-action`, and
+maturin comes from PyPI, both at the CI image's versions. aws-lc-sys, which
+`sc-tls` pulls in, builds with the images' own C tools: on Windows, MSVC with
+the NASM and CMake already on `PATH`. The SC tests make certificates with the
+runner image's `openssl`.
+
+**Efficiency.** The workflow can only read the repository
+(`permissions: contents: read`), and each job stops after 60 minutes. A newer
+push to a branch cancels that branch's running run. On `dev` each commit gets
+its own concurrency group, keyed by its SHA, so no run is cancelled or
+replaced while pending and every merge gets its own result. `Swatinem/rust-cache` keeps
+dependency builds, keyed per OS on the toolchain, `Cargo.lock`, the manifests
+and `NATIVE_FEATURES`. Only `dev` saves it, and only from a successful job, so
+a failed or cancelled run never leaves a partial cache that later runs would
+restore by exact key. GitHub lets a branch's run restore the default branch's
+(`dev`) cache, so every branch starts from the last good `dev` build. The cache
+holds dependencies only, so most of a run is compiling the workspace, its
+tests, clippy and rustdoc: in October 2026 a run took about 16 minutes on
+macOS and 21 on Windows cold, and 13 and 16 with a warm cache.
+
+**Portable tests.** What the first Windows and macOS runs showed (#950):
+
+- Text files check out with LF line endings on every OS (`.gitattributes`);
+  Windows checkouts would otherwise get CRLF from `core.autocrlf`.
+- Don't stand a loopback address in for a broadcast address. Windows reports
+  delivery to `127.0.0.1` as unicast, and B/IP then drops an
+  Original-Broadcast-NPDU. Drive a BBMD with what may arrive by unicast
+  (Distribute-Broadcast-To-Network, Forwarded-NPDU), or call the handler with
+  `Delivery::Broadcast`.
+- Don't rely on sending to `255.255.255.255`: GitHub's macOS runners refuse it
+  with `EHOSTUNREACH`.
+- Compare `io::ErrorKind`, or the error the OS gives for the same call, not
+  Unix error text.
+- Stacks are smaller on Windows: the main thread gets 1 MiB (8 MiB on Linux
+  and macOS), so `#[tokio::main]` binaries box their large futures, as
+  `bacnet` does. Test threads get 2 MiB everywhere, and debug-build async
+  fixtures can fill that; box big fixture futures (`Box::pin`). Running a test
+  with `RUST_MIN_STACK=1048576` on macOS shows how close it is.
+- Another socket may bind `127.0.0.1:P` beside a wildcard `0.0.0.0:P` on
+  Windows unless the first socket set `SO_EXCLUSIVEADDRUSE`, which an
+  ephemeral B/IP or B/IPv6 socket now does. Linux refuses that bind. macOS
+  refuses a plain one, but not one from a socket that sets `SO_REUSEADDR`, and
+  has no option to prevent it.
+- `localhost` resolves to `::1` first on Windows, and a refused loopback
+  connect takes about 2 seconds there. The SC dialer races a host's
+  addresses (RFC 8305 style), so a dial to `localhost` against an IPv4-only
+  listener costs the 250 ms attempt delay rather than 2 seconds; a test whose
+  timing depends on a dial must allow for it.
+
+**Reading a run.** The run for a push appears once the mirror has the commit:
+
+```bash
+gh api repos/jscott3201/rusty-bacnet/branches/<branch> --jq .commit.sha
+gh run list -R jscott3201/rusty-bacnet --workflow native-tests.yml --branch <branch>
+gh run view -R jscott3201/rusty-bacnet <run id> --log-failed
+gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # re-run by hand
+```
+
 ## Local checks
 
-Use Rust 1.97.1 from `rust-toolchain.toml`. Before asking for review on changes
-that can affect macOS (transports, sockets, TLS, platform `cfg`, build scripts,
-dependencies), run on a Mac:
+Use Rust 1.97.1 from `rust-toolchain.toml`. The [native tests](#native-tests-github)
+now run the macOS tests, clippy and rustdoc on every push, so a local macOS run
+is optional: a quicker check before pushing changes that can affect macOS
+(transports, sockets, TLS, platform `cfg`, build scripts, dependencies). It
+isn't merge evidence.
 
 ```bash
 bash scripts/ci/local-macos.sh          # lint, clippy, rustdoc, macOS tests
@@ -183,7 +301,8 @@ bash scripts/ci/local-macos.sh --quick  # lint, clippy and rustdoc only
 ```
 
 `serial` and `ethernet` are Linux-only features, so macOS uses every other
-optional feature. That includes per-crate features such as
+optional feature. The native-tests workflow reads the same list from the
+script. That includes per-crate features such as
 `bacnet-endpoint/sc-tls` and `bacnet-cli/{sc-tls,pcap}`, which nothing else in
 the workspace turns on, so a transport-only list never built them (#906). CI's
 `LINUX_FEATURES` is the same list plus `bacnet-transport/{serial,serial-gpio,ethernet}`
@@ -237,12 +356,12 @@ CI runs it on PRs to `main`; on a Mac, rely on that job.
 
 Before merging a PR:
 
-- `CI OK` is green for the exact head being merged;
-- when the change can affect macOS, a `local-macos.sh` pass on that head, or
-  on an earlier head with a stated reason the intervening diff cannot affect
-  it, is recorded in the PR with the revision, toolchain and macOS version it
-  prints;
+- `CI OK` is green on Forgejo for the exact head being merged;
+- both jobs of the [native tests](#native-tests-github) are green on GitHub
+  for the same head SHA;
 - existing review and merge-authorization rules are met.
+
+A `local-macos.sh` pass is optional and isn't needed to merge.
 
 A check that was not run, failed or does not apply is never reported as passed.
 Audit and deny read mutable advisory databases, so their result for a `main`
@@ -262,8 +381,7 @@ only when dispatched by hand, so re-enabling Actions can't publish a tag twice.
 It is not a way to add macOS or Windows assets to a tag Forgejo already
 released: it has no skip logic, and GitHub releases here are immutable once
 published. GitHub Pages publication remains the manual
-[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch, which needs
-GitHub Actions, and Actions is disabled on the mirror.
+[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch on GitHub.
 
 ### Trigger and dry run
 

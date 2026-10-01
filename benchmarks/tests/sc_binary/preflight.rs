@@ -6,22 +6,27 @@ use std::process::Command;
 const HUB: &str = env!("CARGO_BIN_EXE_bacnet-sc-hub");
 const DEVICE: &str = env!("CARGO_BIN_EXE_bacnet-device");
 
-async fn failure(cmd: &mut Command, files: &Files, expected: &str) {
+/// Run a command that must fail, and return its stderr.
+async fn failed_stderr(cmd: &mut Command, files: &Files, expected: &str) -> String {
     let mut process = Process::start(cmd, files);
     assert!(!process.wait().await.success());
     let (stdout, stderr) = process.output();
     assert!(stdout.is_empty(), "diagnostics must use stderr: {stdout}");
     assert!(stderr.contains(expected), "expected {expected}: {stderr}");
-    if expected != "Address already in use" {
-        assert!(
-            !stderr.contains("Hub bind failed"),
-            "preflight reached bind: {stderr}"
-        );
-        assert!(
-            !stderr.contains("WebSocket"),
-            "preflight reached networking: {stderr}"
-        );
-    }
+    stderr
+}
+
+/// A preflight failure: reported before any bind or dial.
+async fn failure(cmd: &mut Command, files: &Files, expected: &str) {
+    let stderr = failed_stderr(cmd, files, expected).await;
+    assert!(
+        !stderr.contains("Hub bind failed"),
+        "preflight reached bind: {stderr}"
+    );
+    assert!(
+        !stderr.contains("WebSocket"),
+        "preflight reached networking: {stderr}"
+    );
 }
 
 #[tokio::test]
@@ -223,11 +228,14 @@ async fn files_der_ca_and_key_match_fail_before_bind_or_dial() {
         .await;
     }
     assert!(listener.accept().now_or_never().is_none());
-    // Valid hub reaches bind and reports the actually occupied address.
-    failure(
+    // Valid hub reaches bind and reports the actually occupied address, in
+    // the OS's own words for it (Windows doesn't say "Address already in use").
+    let in_use = std::net::TcpListener::bind(&address).unwrap_err();
+    assert_eq!(in_use.kind(), std::io::ErrorKind::AddrInUse);
+    failed_stderr(
         &mut replace(&files.secure_hub(), "--listen", &address),
         &files,
-        "Address already in use",
+        &format!("Hub bind failed: {in_use}"),
     )
     .await;
 }

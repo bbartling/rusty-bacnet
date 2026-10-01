@@ -452,8 +452,35 @@ async fn run<T: TransportPort + 'static>(
 mod interface;
 use interface::pick_interface;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+type CliResult = Result<(), Box<dyn std::error::Error>>;
+
+// The CLI's futures are polled on the main thread, whose stack is 1 MiB on
+// Windows (8 MiB on Linux and macOS), and a debug build overflowed it on its
+// first SC command (#950). So `cli_main`'s state lives on the heap. While it
+// runs, the main thread's stack holds the box pointer, block_on's frames, and
+// the poll frames of the futures and whatever they call. In a debug build the
+// largest of those is clap's derived parser in `Cli::parse()`: with a 1 MiB
+// main stack on macOS the CLI's tests pass, and with 768 KiB they overflow
+// inside it. This builds the runtime `#[tokio::main]` would (multi-thread,
+// every driver), without the attribute's temporary of the whole future in
+// main's own frame.
+fn main() -> CliResult {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+        .block_on(boxed_cli_main())
+}
+
+/// Create `cli_main`'s future and move it to the heap. The full-size temporary
+/// that creating it takes is in this frame, which returns before polling
+/// starts.
+#[inline(never)]
+fn boxed_cli_main() -> std::pin::Pin<Box<impl std::future::Future<Output = CliResult>>> {
+    Box::pin(cli_main())
+}
+
+async fn cli_main() -> CliResult {
     let cli = Cli::parse();
     setup_tracing(cli.verbose, cli.sc);
     let format = resolve_format(&cli);

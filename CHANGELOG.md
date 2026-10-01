@@ -197,6 +197,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
   CPython 3.14 wheels ship once the release pipeline publishes (#943).
 
+- The test suites also run natively on macOS (Apple Silicon) and Windows
+  (x86_64, MSVC): a GitHub Actions workflow on the mirror runs the tests,
+  doctests, clippy and rustdoc with every feature those platforms build, and
+  the Python suite and PyO3 crate tests, for every pushed branch
+  (`.github/workflows/native-tests.yml`). Linux CI, releases and publishing
+  stay on Forgejo. A PR merges only when Forgejo CI and both native jobs are
+  green on its head; `scripts/ci/local-macos.sh` is now optional. Text files
+  now check out with LF line endings on every OS (`.gitattributes`), so
+  Windows checkouts match the repository (#950).
+
 - `tokio-tungstenite` is built without TLS features. BACnet/SC already ran its
   own `tokio-rustls` handshake against the configured trust anchors and only
   wrapped the result for tungstenite, so nothing loads the operating system's
@@ -221,6 +231,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unchanged (#873).
 
 ### Fixed
+
+- On Windows, a B/IP or B/IPv6 transport on an ephemeral port now owns the
+  port (#950). It binds the wildcard address without SO_REUSEADDR, and
+  Windows still let another socket bind a more specific address on the same
+  port (127.0.0.1 beside 0.0.0.0) and take the unicast sent there. Such
+  sockets now set SO_EXCLUSIVEADDRUSE. Linux already refuses that bind. macOS
+  refuses it too unless the other socket sets SO_REUSEADDR, and has no option
+  to close that case. Explicitly configured ports keep SO_REUSEADDR.
+
+- `bacnet` (the CLI) no longer overflows the main thread's stack on Windows
+  (#950). `#[tokio::main]` polled its large command futures on the main
+  thread, whose stack is 1 MiB on Windows, and a debug build aborted on its
+  first BACnet/SC command. The command futures now live on the heap.
+
+- A BACnet/SC dial to a host name with several addresses no longer waits for
+  each address in turn (#950). It races them, RFC 8305 style: address
+  families alternate, starting with the first result's, and each attempt runs
+  alone for 250 ms or until it fails before the next starts; the first
+  connection wins. On Windows `localhost` resolves to `::1` first and a
+  refused loopback connect takes about 2 seconds, so every hub or direct dial
+  to `localhost` with an IPv4-only peer used to take that long. When every
+  address fails, the error names each one, and its kind is a refusal if any
+  attempt was refused, else a timeout if any timed out.
+
+- A peer that the BACnet/SC hub or a direct-connection listener refuses
+  during the TLS handshake can now read the alert that says why (#950). The
+  socket used to be dropped with the client's HTTP upgrade request unread,
+  which resets the connection, and a Windows client then discarded the alert
+  and saw only "connection reset". The listener now sends FIN after the alert
+  and drains what the peer still sends until it closes, for at most 500 ms
+  and 64 KiB, and within the handshake deadline.
 
 - A B/IP BBMD now forwards its own broadcasts (#937). Before, `send_broadcast`
   in BBMD mode sent only the local Original-Broadcast-NPDU, so the BBMD's own

@@ -29,12 +29,16 @@ impl Files {
             NEXT.fetch_add(1, Ordering::Relaxed),
             rand::random::<u64>()
         ));
-        let mut builder = fs::DirBuilder::new();
+        // Owner-only where the OS has Unix modes.
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         builder.create(&path).unwrap();
         Self(path)
     }

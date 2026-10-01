@@ -26,6 +26,7 @@ pub mod mstp_frame;
 #[cfg(feature = "serial")]
 pub mod mstp_serial;
 pub mod port;
+mod port_ownership;
 pub mod sc;
 pub mod sc_frame;
 #[cfg(feature = "sc-tls")]
@@ -33,6 +34,10 @@ pub mod sc_hub;
 mod sc_limits;
 #[cfg(feature = "sc-tls")]
 pub mod sc_tls;
+#[cfg(feature = "sc-tls")]
+mod tcp_connect;
+#[cfg(feature = "sc-tls")]
+mod tls_reject;
 mod udp_metadata;
 
 #[cfg(test)]

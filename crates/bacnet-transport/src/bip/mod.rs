@@ -64,7 +64,9 @@ pub struct ForeignDeviceConfig {
 /// The unbound B/IP socket. Linux gives an ephemeral port to an SO_REUSEADDR
 /// socket even while another SO_REUSEADDR socket owns it, and unicast to that
 /// port then reaches only one of them (#892). So only an explicitly requested
-/// port sets it, keeping the long-standing behavior for configured ports.
+/// port sets it, keeping the long-standing behavior for configured ports. Any
+/// other port claims exclusive use where the OS has a way to (`port_ownership`,
+/// #950).
 fn udp_socket(share_port: bool) -> std::io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV4,
@@ -73,6 +75,8 @@ fn udp_socket(share_port: bool) -> std::io::Result<socket2::Socket> {
     )?;
     if share_port {
         socket.set_reuse_address(true)?;
+    } else {
+        crate::port_ownership::claim_exclusive(&socket)?;
     }
     socket.set_broadcast(true)?;
     socket.set_nonblocking(true)?;

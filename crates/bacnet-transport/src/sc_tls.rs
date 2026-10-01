@@ -109,7 +109,7 @@ impl TlsWebSocket {
         let request = tokio_tungstenite::tungstenite::ClientRequestBuilder::new(uri)
             .with_sub_protocol(subprotocol);
 
-        let socket = TcpStream::connect(&addr).await.map_err(|e| {
+        let socket = crate::tcp_connect::connect(&addr).await.map_err(|e| {
             ScConnectError::WebSocket {
                 kind: ScWebSocketErrorKind::TcpDial,
                 message: format!("WebSocket TCP dial to {addr} failed: {e}"),

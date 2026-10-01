@@ -1,0 +1,159 @@
+name: Native tests
+
+# Runs the tests, clippy and rustdoc natively on macOS (Apple Silicon) and
+# Windows (x86_64 MSVC), on GitHub-hosted runners (#950). Linux CI, releases and publishing run
+# on Forgejo (.forgejo/workflows/); GitHub only runs what needs its native
+# runners or services. See docs/ci.md.
+#
+# PRs live on Forgejo, so pull_request never fires here. The push mirror syncs
+# every branch Forgejo receives, so a push trigger covers every PR head and
+# every merge to dev. A PR merges only when Forgejo CI and this workflow are
+# both green on its head SHA. Tag pushes don't run it: a branches filter
+# without a tags filter skips them.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a branch cancels that branch's superseded run. On dev each
+  # commit gets a group of its own, so no run is cancelled or replaced while
+  # pending, and every merge gets its own native result. (A shared group without
+  # cancel-in-progress would still let a newer pending run replace an older one.)
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/dev' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same build settings as Forgejo CI: no incremental state, and test binaries
+  # without native debug info (less codegen, linking and cache).
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # The versions the Forgejo CI image pins (.forgejo/ci-image/Dockerfile).
+  NEXTEST_VERSION: 0.9.146
+  MATURIN_VERSION: 1.15.0
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # Report both platforms even when one fails.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS arm64
+          - os: windows-latest
+            name: Windows x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The macOS feature list from scripts/ci/local-macos.sh: every optional
+      # feature except the Linux-only serial and ethernet. Windows also leaves
+      # out bacnet-cli/pcap, which needs the Npcap SDK.
+      - name: Feature set
+        run: |
+          features=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh)
+          [ -n "$features" ] || { echo "::error::no features= line in scripts/ci/local-macos.sh"; exit 1; }
+          if [ "$RUNNER_OS" = Windows ]; then
+            features=$(tr , '\n' <<<"$features" | grep -vx bacnet-cli/pcap | paste -sd , -)
+          fi
+          # Only feature names reach GITHUB_ENV.
+          [[ $features =~ ^[A-Za-z0-9_/,-]+$ ]] || { echo "::error::unexpected characters in the feature list"; exit 1; }
+          echo "NATIVE_FEATURES=$features" | tee -a "$GITHUB_ENV"
+      # The runner images ship rustup. With no arguments it installs the
+      # toolchain rust-toolchain.toml pins, so there is no version to keep in
+      # sync here. aws-lc-sys (sc-tls) builds with the images' own C tools: on
+      # Windows, MSVC plus the NASM and CMake already on PATH.
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc -vV
+      # Only dev saves the cache, and only from a successful job, so a failed or
+      # cancelled first run can't leave a partial cache that later runs restore
+      # by exact key. Other branches restore dev's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          env-vars: NATIVE_FEATURES
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      # Every PyO3 build below links this interpreter (#919): PYO3_PYTHON is
+      # set to it, not to the venv that the maturin step makes.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Point PyO3 at that interpreter
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "PYO3_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+
+      # nextest runs each test in its own process (.config/nextest.toml); it
+      # does not run doctests, so cargo test --doc covers those. Every later
+      # step runs even when an earlier one failed, to report each failure.
+      - name: Tests
+        run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+      - name: Doctests
+        if: ${{ !cancelled() }}
+        run: cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
+      # Tests that exist only with a feature off (the CLI's rebuild advice for
+      # sc-tls and pcap), which the feature set compiles out.
+      - name: bacnet-cli tests (default features)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p bacnet-cli --locked --profile ci
+      # Warnings are errors for workspace code only, as in Forgejo CI.
+      - name: Clippy (every native feature)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
+      - name: Clippy (PyO3 bindings)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      - name: Rustdoc (every native feature)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$NATIVE_FEATURES"
+
+      # A debug extension builds faster, and the suite doesn't need release speed.
+      - name: Build the extension (maturin develop)
+        if: ${{ !cancelled() }}
+        # Later steps get the venv through GITHUB_ENV and GITHUB_PATH. On
+        # Windows the paths use the D:/a/... form, which both bash and native
+        # programs accept.
+        run: |
+          venv=$RUNNER_TEMP/venv
+          bin=$venv/bin
+          if [ "$RUNNER_OS" = Windows ]; then venv=$(cygpath -m "$venv"); bin=$venv/Scripts; fi
+          python -m venv "$venv"
+          echo "VIRTUAL_ENV=$venv" >> "$GITHUB_ENV"
+          echo "$bin" >> "$GITHUB_PATH"
+          export VIRTUAL_ENV=$venv
+          "$bin/python" --version
+          "$bin/python" -m pip install --disable-pip-version-check "maturin==$MATURIN_VERSION"
+          "$bin/maturin" develop -m crates/rusty-bacnet/Cargo.toml --locked
+      # The SC tests make certificates with the openssl CLI.
+      - name: Python tests
+        if: ${{ !cancelled() }}
+        run: |
+          openssl version
+          python -m unittest discover -s crates/rusty-bacnet/tests
+      # The crate's lib unit tests and integration tests, linked against the
+      # setup-python interpreter's libpython (#919), not the venv's.
+      - name: PyO3 crate Rust tests
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p rusty-bacnet --locked --profile ci

@@ -8,7 +8,7 @@ Use local Codebase Memory as the first structural code-intelligence layer. The c
 
 - `origin` is the project's self-hosted Forgejo instance: the primary host for branches, pull requests, CI and development tracking. Push branches and open PRs there, targeting `dev` (or `main` for releases).
 - [GitHub](https://github.com/jscott3201/rusty-bacnet) is the public face: Forgejo push-mirrors every branch and tag to it, and public issues are tracked there alongside Forgejo. Never push to GitHub directly; the next mirror sync overwrites it. Keep public-facing links (README, docs, website) pointed at GitHub.
-- Forgejo CI covers Linux; macOS is checked locally with `scripts/ci/local-macos.sh`; Windows is not currently tested. Before merge, follow [the merge-evidence policy](docs/ci.md): `CI OK` green for the exact head, plus a recorded local macOS pass when the change can affect macOS. Existing review and merge-authorization rules still apply.
+- Forgejo CI covers Linux. GitHub Actions on the mirror runs the tests, clippy and rustdoc natively on macOS and Windows for every pushed branch (`.github/workflows/native-tests.yml`). Before merge, follow [the merge-evidence policy](docs/ci.md): `CI OK` on Forgejo and both native-test jobs on GitHub green for the exact head SHA. `scripts/ci/local-macos.sh` is optional local verification before pushing, not merge evidence. Existing review and merge-authorization rules still apply.
 - Run tests with cargo-nextest 0.9.145 or later (`cargo nextest run`, configured in `.config/nextest.toml`) plus `cargo test --doc` for doctests, which nextest skips; see [docs/ci.md](docs/ci.md).
 - Historical `GitLab #NNN` references in docs and evidence refer to the retired GitLab tracker.
 
