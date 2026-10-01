@@ -821,6 +821,45 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists. A zero-element propertyValue is admitted only for Fault_Signals; the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it. Energy_Meter_Ref, Reliability simulation, structured references, intrinsic reporting, physical-device arbitration, and the Escalator object's other missing properties remain outside this row, which is not a complete Escalator-object conformance claim."
   },
   {
+   "id": "BACNET-12-ELEVATOR-GROUP-LANDING-CALLS",
+   "standard_anchor": "Clause 12.58, Table 12-76 and 12.58.9-12.58.10; Clause 21 BACnetLandingCallStatus and BACnetLiftCarDirection; Clause 23.1 Table 23-1; Clause 15.9.1.3",
+   "priority": "P1",
+   "requirement_summary": "The Elevator Group object's Landing_Call_Control holds one BACnetLandingCallStatus and its Landing_Calls a BACnetLIST of them. Each value is a floor number [0] (Unsigned8), then the untagged command CHOICE of direction [1] (BACnetLiftCarDirection) or destination [2] (Unsigned8), then an optional floor-text [3]; there is no frame, and the list is the plain concatenation of its elements. Landing_Call_Control is writable, as 12.58.10 requires when the property is present. A write that isn't this constructed type is refused with PROPERTY / INVALID_DATA_TYPE, bytes that don't decode as exactly one value with INVALID_DATA_ENCODING, and a direction outside the named values and the 1024..=65535 proprietary range with VALUE_OUT_OF_RANGE, all without changing the stored value. Landing_Calls is read-only over the network; Table 12-76 gives it no write requirement.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/lift.rs",
+    "crates/bacnet-encoding/src/constructed/landing_call_status.rs",
+    "crates/bacnet-objects/src/elevator/landing_calls.rs",
+    "crates/bacnet-objects/src/elevator.rs::ElevatorGroupObject"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/landing_call_status.rs::landing_call_status_golden_vectors_encode_and_round_trip",
+    "crates/bacnet-encoding/src/constructed/tests/landing_call_status.rs::landing_call_status_decodes_at_an_offset_and_stops_before_the_next_element",
+    "crates/bacnet-encoding/src/constructed/tests/landing_call_status.rs::landing_call_status_list_round_trips_and_concatenates_elements",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_call_control_starts_as_the_unknown_placeholder",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_call_control_accepts_whole_and_split_member_shapes",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_call_control_accepts_named_and_proprietary_directions",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_calls_serve_the_application_list_and_refuse_reserved_directions",
+    "crates/bacnet-server/src/handlers/tests/elevator_landing_calls.rs::landing_call_control_writes_over_wp_and_reads_back_over_rp",
+    "crates/bacnet-server/src/handlers/tests/elevator_landing_calls.rs::landing_calls_read_as_a_list_and_refuse_writes",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_elevator_group_indexed_reads_and_bytes_are_unchanged"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/landing_call_status.rs::landing_call_status_rejects_malformed_members",
+    "crates/bacnet-encoding/src/constructed/tests/landing_call_status.rs::landing_call_status_leaves_trailing_members_to_the_caller",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_call_control_rejects_reserved_and_oversized_directions_atomically",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_call_control_rejects_wrong_datatypes_atomically",
+    "crates/bacnet-objects/src/elevator/tests/landing_calls.rs::landing_call_control_rejects_malformed_encodings_atomically",
+    "crates/bacnet-server/src/handlers/tests/elevator_landing_calls.rs::landing_call_control_wp_refusals_preserve_the_last_call",
+    "crates/bacnet-server/src/handlers/tests/elevator_landing_calls.rs::landing_call_control_wpm_keeps_the_committed_prefix"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #980"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#980). Breaking pre-1.0 retype: Landing_Call_Control was a raw Enumerated and Landing_Calls an Unsigned count. Local policies: before any write Landing_Call_Control reads a placeholder of floor 0 with direction UNKNOWN, because the datatype has no empty form; the application owns Landing_Calls through set_landing_calls, and a Landing_Call_Control write doesn't add to it, since only the supervisory controller knows when a call becomes active or is served; an Unsigned8 member above 255 is treated as an encoding that doesn't decode to this type (INVALID_DATA_ENCODING), matching the repository's other constructed decoders. The object accepts the write either as one ApplicationData or as the service decoder's one-element-per-member List, as the Loop reference properties do. Not covered here: the object's other Table 12-76 gaps (Machine_Room_ID is absent, Group_ID isn't range-checked to Unsigned8, and Status_Flags, Out_Of_Service and Reliability are served though the table lists none of them), the footnote that limits Group_Mode and both landing-call properties to groups of lifts, and any dispatching behavior."
+  },
+  {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
    "standard_anchor": "Clause 12.11, Table 12-13",
    "priority": "P1",
