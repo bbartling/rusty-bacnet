@@ -454,6 +454,14 @@ use interface::pick_interface;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The command futures are large, and `#[tokio::main]` polls this one on
+    // the main thread, whose stack is 1 MiB on Windows (8 MiB on Linux and
+    // macOS): a debug build overflowed it on its first SC command (#950).
+    // Boxing keeps their state on the heap.
+    Box::pin(cli_main()).await
+}
+
+async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     setup_tracing(cli.verbose, cli.sc);
     let format = resolve_format(&cli);
