@@ -10,14 +10,15 @@
 //!
 //! Changes are normally reported as soon as they are captured. A change stays
 //! queued when its notification fails or is held back: a failed send, an
-//! unanswered or busy confirmed report, DISABLE_INITIATION, an exhausted
-//! budget. The context's Max_Notification_Delay then bounds the wait, measured
-//! from its earliest queued change (§13.1, §13.16.1.1.4), and
-//! [`TimedStore::next_due`] hands the server each context whose deadline has
-//! passed. Local policy: this backstop acts no sooner than one second after
-//! the earliest change, and while a context stays blocked it tries again at
-//! most once per delay (one second at least), so a persistent failure cannot
-//! spin.
+//! unanswered confirmed report, DISABLE_INITIATION, an exhausted budget. The
+//! context's Max_Notification_Delay then bounds the wait, measured from its
+//! earliest queued change (§13.1, §13.16.1.1.4): [`TimedStore::next_due`]
+//! hands the server each context whose deadline has passed, and the server
+//! fans it out again. A confirmed report still outstanding, or communication
+//! still disabled, holds the context until the first attempt after that ends.
+//! Local policy: this backstop acts no sooner than one second after the
+//! earliest change, and while a context stays blocked it tries again at most
+//! once per delay (one second at least), so a persistent failure cannot spin.
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what one notification APDU of the local maximum

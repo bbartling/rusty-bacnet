@@ -2173,14 +2173,15 @@ rather than delivered as stale state. These drops increment
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
 the bound (the full server uses its configured capacity).
 
-Changes are reported as soon as they happen. `Max_Notification_Delay` bounds how
-long a context's timestamped changes stay queued after their notification failed
-or was held back (a failed send, an unacknowledged or outstanding confirmed report,
-DISABLE_INITIATION, an exhausted budget): once the delay has passed since the
-earliest queued change, the context is fanned out again without waiting for
-another change (§13.1, §13.16.1.1.4). As local policy that backstop acts no sooner
-than one second after the change, and while a context stays blocked it retries at
-most once per delay (one second at least). A change no producer captured, such as
+Changes are reported as soon as they happen. When their notification fails or is
+held back (a failed send, a confirmed report that went unacknowledged,
+DISABLE_INITIATION, an exhausted budget), `Max_Notification_Delay` bounds the
+wait: once the delay has passed since the earliest queued change, the context is
+fanned out again without waiting for another change (§13.1, §13.16.1.1.4). A
+context whose confirmed report is still outstanding, or whose communication is
+still disabled, sends at the first attempt after that ends. As local policy the
+backstop acts no sooner than one second after the change, and retries a blocked
+context at most once per delay (one second at least). A change no producer captured, such as
 a raw database mutation, still reports through the builder's current-state
 fallback, stamped when the notification is prepared.
 
