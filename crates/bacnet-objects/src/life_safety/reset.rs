@@ -171,7 +171,7 @@ impl LifeSafetyPointObject {
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
-        if !is_reset_operation(operation) || self.operation_expected != operation.to_raw() {
+        if !is_reset_operation(operation) || self.operation_expected != operation {
             return Err(invalid_operation_error());
         }
         let executor = self
@@ -181,10 +181,10 @@ impl LifeSafetyPointObject {
         let context = LifeSafetyPointResetContext {
             object_identifier: self.oid,
             operation,
-            present_value: LifeSafetyState::from_raw(self.present_value),
-            tracking_value: LifeSafetyState::from_raw(self.tracking_value),
-            silenced: SilencedState::from_raw(self.silenced),
-            operation_expected: LifeSafetyOperation::from_raw(self.operation_expected),
+            present_value: self.present_value,
+            tracking_value: self.tracking_value,
+            silenced: self.silenced,
+            operation_expected: self.operation_expected,
         };
         let result = match catch_unwind(AssertUnwindSafe(|| executor(&context))) {
             Ok(result) => result,
@@ -206,15 +206,15 @@ impl LifeSafetyPointObject {
         }
 
         if let Some(value) = commit.present_value {
-            self.present_value = value.to_raw();
+            self.present_value = value;
         }
         if let Some(value) = commit.tracking_value {
-            self.tracking_value = value.to_raw();
+            self.tracking_value = value;
         }
         if let Some(value) = commit.silenced {
-            self.silenced = value.to_raw();
+            self.silenced = value;
         }
-        self.operation_expected = LifeSafetyOperation::NONE.to_raw();
+        self.operation_expected = LifeSafetyOperation::NONE;
         Ok(LifeSafetyOperationEffect::Applied)
     }
 }
@@ -224,7 +224,7 @@ impl LifeSafetyZoneObject {
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
-        if !is_reset_operation(operation) || self.operation_expected != operation.to_raw() {
+        if !is_reset_operation(operation) || self.operation_expected != operation {
             return Err(invalid_operation_error());
         }
         let executor = self
@@ -234,9 +234,9 @@ impl LifeSafetyZoneObject {
         let context = LifeSafetyZoneResetContext {
             object_identifier: self.oid,
             operation,
-            present_value: LifeSafetyState::from_raw(self.present_value),
-            silenced: SilencedState::from_raw(self.silenced),
-            operation_expected: LifeSafetyOperation::from_raw(self.operation_expected),
+            present_value: self.present_value,
+            silenced: self.silenced,
+            operation_expected: self.operation_expected,
         };
         let result = match catch_unwind(AssertUnwindSafe(|| executor(&context))) {
             Ok(result) => result,
@@ -255,12 +255,12 @@ impl LifeSafetyZoneObject {
         }
 
         if let Some(value) = commit.present_value {
-            self.present_value = value.to_raw();
+            self.present_value = value;
         }
         if let Some(value) = commit.silenced {
-            self.silenced = value.to_raw();
+            self.silenced = value;
         }
-        self.operation_expected = LifeSafetyOperation::NONE.to_raw();
+        self.operation_expected = LifeSafetyOperation::NONE;
         Ok(LifeSafetyOperationEffect::Applied)
     }
 }

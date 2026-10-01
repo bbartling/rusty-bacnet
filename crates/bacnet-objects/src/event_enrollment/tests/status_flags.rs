@@ -26,7 +26,7 @@ fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_fal
     );
 
     enrollment.set_event_state(EventState::NORMAL);
-    enrollment.reliability = Reliability::NO_SENSOR.to_raw();
+    enrollment.reliability = Reliability::NO_SENSOR;
     assert_eq!(
         enrollment
             .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -37,7 +37,7 @@ fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_fal
         }
     );
 
-    enrollment.reliability = Reliability::NO_FAULT_DETECTED.to_raw();
+    enrollment.reliability = Reliability::NO_FAULT_DETECTED;
     assert_eq!(
         enrollment
             .read_property(PropertyIdentifier::STATUS_FLAGS, None)

@@ -26,10 +26,10 @@ pub(crate) enum OwnedRangeFault {
 }
 
 impl OwnedRangeFault {
-    fn reliability(self) -> u32 {
+    fn reliability(self) -> Reliability {
         match self {
-            Self::UnderRange => Reliability::UNDER_RANGE.to_raw(),
-            Self::OverRange => Reliability::OVER_RANGE.to_raw(),
+            Self::UnderRange => Reliability::UNDER_RANGE,
+            Self::OverRange => Reliability::OVER_RANGE,
         }
     }
 }
@@ -67,7 +67,7 @@ impl FaultOutOfRangeState {
     fn evaluate(
         &mut self,
         monitored_value: f32,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
     ) -> Result<ReliabilityEvaluation, Error> {
         let Some(limits) = self.limits else {
             return Ok(ReliabilityEvaluation::Unchanged);
@@ -87,10 +87,10 @@ impl FaultOutOfRangeState {
             (
                 observed_fault
                     .map(OwnedRangeFault::reliability)
-                    .unwrap_or_else(|| Reliability::NO_FAULT_DETECTED.to_raw()),
+                    .unwrap_or(Reliability::NO_FAULT_DETECTED),
                 observed_fault,
             )
-        } else if *reliability == Reliability::NO_FAULT_DETECTED.to_raw() {
+        } else if *reliability == Reliability::NO_FAULT_DETECTED {
             let Some(fault) = observed_fault else {
                 return Ok(ReliabilityEvaluation::Unchanged);
             };

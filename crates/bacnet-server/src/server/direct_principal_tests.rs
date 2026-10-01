@@ -251,7 +251,7 @@ fn database(executions: Arc<AtomicUsize>) -> ObjectDatabase {
     ))
     .unwrap();
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(move |_| {
         executions.fetch_add(1, Ordering::AcqRel);

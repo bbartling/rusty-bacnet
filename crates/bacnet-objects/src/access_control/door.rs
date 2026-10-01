@@ -12,17 +12,17 @@ pub struct AccessDoorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32,    // BACnetDoorValue: 0=lock, 1=unlock
-    door_status: u32,      // DoorStatus enumeration
-    lock_status: u32,      // LockStatus enumeration
-    secured_status: u32,   // DoorSecuredStatus enumeration
-    door_alarm_state: u32, // DoorAlarmState enumeration
+    present_value: u32, // BACnetDoorValue: 0=lock, 1=unlock
+    door_status: DoorStatus,
+    lock_status: LockStatus,
+    secured_status: DoorSecuredStatus,
+    door_alarm_state: DoorAlarmState,
     door_members: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
     /// Event_State.
     event_state: EventState,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// 16-level priority array for commandable Present_Value.
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
@@ -37,15 +37,15 @@ impl AccessDoorObject {
             name: name.into(),
             description: String::new(),
             present_value: 0, // lock
-            door_status: 0,   // closed
-            lock_status: 0,
-            secured_status: 0,
-            door_alarm_state: 0,
+            door_status: DoorStatus::CLOSED,
+            lock_status: LockStatus::LOCKED,
+            secured_status: DoorSecuredStatus::SECURED,
+            door_alarm_state: DoorAlarmState::NORMAL,
             door_members: Vec::new(),
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: Default::default(),
             relinquish_default: 0, // lock
         })
@@ -107,16 +107,16 @@ impl BACnetObject for AccessDoorObject {
                 Ok(PropertyValue::Enumerated(self.present_value))
             }
             p if p == PropertyIdentifier::DOOR_STATUS => {
-                Ok(PropertyValue::Enumerated(self.door_status))
+                Ok(PropertyValue::Enumerated(self.door_status.to_raw()))
             }
             p if p == PropertyIdentifier::LOCK_STATUS => {
-                Ok(PropertyValue::Enumerated(self.lock_status))
+                Ok(PropertyValue::Enumerated(self.lock_status.to_raw()))
             }
             p if p == PropertyIdentifier::SECURED_STATUS => {
-                Ok(PropertyValue::Enumerated(self.secured_status))
+                Ok(PropertyValue::Enumerated(self.secured_status.to_raw()))
             }
             p if p == PropertyIdentifier::DOOR_ALARM_STATE => {
-                Ok(PropertyValue::Enumerated(self.door_alarm_state))
+                Ok(PropertyValue::Enumerated(self.door_alarm_state.to_raw()))
             }
             p if p == PropertyIdentifier::DOOR_MEMBERS => Ok(PropertyValue::List(
                 self.door_members

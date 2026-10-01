@@ -39,6 +39,8 @@ mod tcp_connect;
 #[cfg(feature = "sc-tls")]
 mod tls_reject;
 mod udp_metadata;
+#[cfg(windows)]
+mod windows_adapters;
 
 #[cfg(test)]
 #[path = "rb07_provenance_tests.rs"]

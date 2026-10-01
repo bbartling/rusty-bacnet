@@ -62,6 +62,24 @@ fn original_function_must_match_actual_ipv4_destination() {
         true,
         Some(true),
     ));
+    // A wildcard bind takes unicast only to a listed address, on every OS
+    // (#952). Windows flagging the datagram as unicast delivery is not
+    // enough on its own any more.
+    for (destination, accepted) in [(local, true), (Ipv4Addr::new(192, 0, 2, 12), false)] {
+        assert_eq!(
+            original_destination_matches(
+                BvlcFunction::ORIGINAL_UNICAST_NPDU,
+                destination.into(),
+                local,
+                broadcast,
+                &[local],
+                true,
+                Some(false),
+            ),
+            accepted,
+            "{destination}"
+        );
+    }
 
     for function in [
         BvlcFunction::BVLC_RESULT,

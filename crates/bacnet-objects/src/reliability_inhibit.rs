@@ -50,7 +50,7 @@ impl ReliabilityInhibitState {
     #[inline]
     pub(crate) fn write_inhibit(
         &mut self,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
         out_of_service: bool,
         property: PropertyIdentifier,
         value: &PropertyValue,
@@ -64,7 +64,7 @@ impl ReliabilityInhibitState {
 
         self.enabled = *enabled;
         if self.enabled && !(out_of_service && self.oos_client_reliability_override) {
-            *reliability = Reliability::NO_FAULT_DETECTED.to_raw();
+            *reliability = Reliability::NO_FAULT_DETECTED;
         }
         Some(Ok(()))
     }
@@ -75,8 +75,8 @@ impl ReliabilityInhibitState {
     pub(crate) fn write_out_of_service(
         &mut self,
         out_of_service: &mut bool,
-        reliability: &mut u32,
-        saved_reliability: &mut Option<u32>,
+        reliability: &mut Reliability,
+        saved_reliability: &mut Option<Reliability>,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<Result<OutOfServiceWrite, Error>> {
@@ -94,15 +94,15 @@ impl ReliabilityInhibitState {
             *saved_reliability = Some(*reliability);
             self.oos_client_reliability_override = false;
             if self.enabled {
-                *reliability = Reliability::NO_FAULT_DETECTED.to_raw();
+                *reliability = Reliability::NO_FAULT_DETECTED;
             }
         } else if *out_of_service && !*enabled {
             self.oos_client_reliability_override = false;
             let saved = saved_reliability.take();
             *reliability = if self.enabled {
-                Reliability::NO_FAULT_DETECTED.to_raw()
+                Reliability::NO_FAULT_DETECTED
             } else {
-                saved.unwrap_or(Reliability::NO_FAULT_DETECTED.to_raw())
+                saved.unwrap_or(Reliability::NO_FAULT_DETECTED)
             };
         }
         *out_of_service = *enabled;
@@ -115,7 +115,7 @@ impl ReliabilityInhibitState {
     pub(crate) fn write_client_reliability(
         &mut self,
         out_of_service: bool,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
@@ -125,14 +125,15 @@ impl ReliabilityInhibitState {
         if !out_of_service {
             return Some(Err(write_access_denied_error()));
         }
-        let PropertyValue::Enumerated(new_reliability) = value else {
+        let PropertyValue::Enumerated(raw) = value else {
             return Some(Err(invalid_data_type_error()));
         };
-        if !is_reliability_value_valid(*new_reliability) {
+        let new_reliability = Reliability::from_raw(*raw);
+        if !is_reliability_value_valid(new_reliability) {
             return Some(Err(value_out_of_range_error()));
         }
 
-        *reliability = *new_reliability;
+        *reliability = new_reliability;
         self.oos_client_reliability_override = true;
         Some(Ok(()))
     }

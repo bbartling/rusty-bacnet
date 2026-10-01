@@ -393,12 +393,12 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
 #[test]
 fn multistate_evaluator_recovers_only_faults_it_owns() {
     let mut msi = MultiStateInputObject::new(1, "MSI-owner", 2).unwrap();
-    msi.set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+    msi.set_reliability_internal(Reliability::NO_SENSOR)
         .unwrap();
     msi.set_present_value(3);
     assert_eq!(read_reliability(&msi), Reliability::NO_SENSOR.to_raw());
 
-    msi.set_reliability_internal(Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw())
+    msi.set_reliability_internal(Reliability::MULTI_STATE_OUT_OF_RANGE)
         .unwrap();
     msi.set_present_value(3);
     msi.set_present_value(1);
@@ -408,7 +408,7 @@ fn multistate_evaluator_recovers_only_faults_it_owns() {
         "an equal numeric Reliability without ownership must not be claimed or cleared"
     );
 
-    msi.set_reliability_internal(Reliability::NO_FAULT_DETECTED.to_raw())
+    msi.set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .unwrap();
     msi.set_present_value(3);
     assert_eq!(

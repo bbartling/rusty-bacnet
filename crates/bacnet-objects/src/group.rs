@@ -5,7 +5,7 @@
 //! - StructuredViewObject (type 29) — Clause 12.29
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -30,7 +30,7 @@ pub struct GroupObject {
     description: String,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// The list of group member object identifiers.
     pub list_of_group_members: Vec<ObjectIdentifier>,
     /// The last read results for each member (populated externally).
@@ -47,7 +47,7 @@ impl GroupObject {
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             list_of_group_members: Vec::new(),
             present_value: Vec::new(),
         })
@@ -145,7 +145,7 @@ pub struct GlobalGroupObject {
     description: String,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// The group member references (device, object, property).
     pub group_members: Vec<BACnetDeviceObjectPropertyReference>,
     /// The last read results for each member (populated externally).
@@ -164,7 +164,7 @@ impl GlobalGroupObject {
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             group_members: Vec::new(),
             present_value: Vec::new(),
             group_member_names: Vec::new(),
@@ -271,7 +271,7 @@ pub struct StructuredViewObject {
     description: String,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// Node type enumeration value (per BACnetNodeType).
     pub node_type: u32,
     /// Node subtype — optional character string.
@@ -292,7 +292,7 @@ impl StructuredViewObject {
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             node_type: 0,
             node_subtype: String::new(),
             subordinate_list: Vec::new(),

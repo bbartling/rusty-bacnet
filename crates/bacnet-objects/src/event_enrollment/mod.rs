@@ -6,6 +6,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, EventType, NotifyType, ObjectType, PropertyIdentifier,
+    Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
@@ -51,7 +52,7 @@ pub struct EventEnrollmentObject {
     fault_parameters: Option<FaultParameters>,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): the
     /// pTimeDelayNormal parameter for the object's event algorithm (Clause
     /// 12.12). `None` is the not-configured case and takes on the
@@ -102,7 +103,7 @@ impl EventEnrollmentObject {
             fault_parameters: None,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             // Absent so the delay behavior equals the normative pTimeDelay
             // fallback until a client writes the property — never an error,
             // never a zero.

@@ -15,10 +15,9 @@
 //! - with none, the address the host uses toward its default route, but only
 //!   when that is a local, non-loopback address; otherwise `start()` fails.
 //!
-//! Where the host's addresses cannot be listed (currently Windows), a row's IP
-//! is local when a throwaway UDP socket can bind to it, and the same rules
-//! apply, except that with no local row any non-loopback default-route address
-//! is used, with a warning recommending an explicit interface.
+//! The local IPv4 addresses are the ones `local_addresses` lists, on every OS;
+//! when they cannot be listed or none is usable, a wildcard `start()` fails
+//! before it gets here.
 //!
 //! The BDT is the persisted one when it loads, else the configured one. A
 //! persisted BDT that loads is authoritative: when no own address can be
@@ -30,7 +29,7 @@
 //! follows address changes.
 
 use std::fmt;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use std::path::Path;
 
 use tracing::{debug, warn};
@@ -66,31 +65,6 @@ impl fmt::Display for BdtSource<'_> {
     }
 }
 
-/// How a wildcard-bound BBMD tells whether an IPv4 address is the host's.
-#[derive(Clone, Copy)]
-pub(super) enum HostAddresses<'a> {
-    /// The host's IPv4 addresses, as listed.
-    Listed(&'a [Ipv4Addr]),
-    /// The addresses cannot be listed (currently Windows); the probe says
-    /// whether an address is local. `start()` passes [`bind_probe`].
-    Probed(&'a (dyn Fn(Ipv4Addr) -> bool + Sync)),
-}
-
-impl HostAddresses<'_> {
-    fn contains(self, ip: Ipv4Addr) -> bool {
-        match self {
-            Self::Listed(ips) => ips.contains(&ip),
-            Self::Probed(probe) => probe(ip),
-        }
-    }
-}
-
-/// Whether `ip` is one of this host's addresses: a throwaway UDP socket can
-/// bind to it, as `start()` already checks for an explicit interface.
-pub(super) fn bind_probe(ip: Ipv4Addr) -> bool {
-    std::net::UdpSocket::bind(SocketAddrV4::new(ip, 0)).is_ok()
-}
-
 /// What `start()` knows about the local addresses once the socket is bound.
 pub(super) struct OwnAddressContext<'a> {
     /// The configured interface; `0.0.0.0` for a wildcard bind.
@@ -98,7 +72,7 @@ pub(super) struct OwnAddressContext<'a> {
     /// The bound UDP port.
     pub(super) port: u16,
     /// The host's IPv4 addresses (wildcard bind only).
-    pub(super) host: HostAddresses<'a>,
+    pub(super) host: &'a [Ipv4Addr],
     /// The local address toward the default route, if any (wildcard bind only).
     pub(super) route_ip: Option<Ipv4Addr>,
 }
@@ -130,7 +104,7 @@ fn route_text(route_ip: Option<Ipv4Addr>) -> String {
 pub(super) fn select_wildcard_bbmd_ip(
     rows: &[BdtEntry],
     port: u16,
-    host: HostAddresses<'_>,
+    host: &[Ipv4Addr],
     route_ip: Option<Ipv4Addr>,
     source: BdtSource<'_>,
 ) -> Result<Ipv4Addr, Error> {
@@ -138,35 +112,14 @@ pub(super) fn select_wildcard_bbmd_ip(
         .iter()
         .filter(|row| row.port == port)
         .map(|row| Ipv4Addr::from(row.ip))
-        .filter(|ip| host.contains(*ip))
+        .filter(|ip| host.contains(ip))
         .collect();
     own.sort_unstable();
     own.dedup();
-    match (own.as_slice(), host) {
-        ([ip], _) => Ok(*ip),
-        ([], HostAddresses::Probed(_)) => route_ip
-            .filter(|ip| !ip.is_loopback())
-            .inspect(|ip| {
-                warn!(
-                    own_ip = %ip,
-                    "BBMD bound to 0.0.0.0 on a host whose addresses cannot be listed, with \
-                     no BDT row at the bound port for an address this host can bind: using \
-                     the default-route address as its own B/IP address; bind an explicit \
-                     interface address or add this BBMD's own row to the BDT"
-                );
-            })
-            .ok_or_else(|| {
-                own_address_error(format!(
-                    "BBMD bound to 0.0.0.0 cannot determine its own B/IP address: the host's \
-                     addresses cannot be listed, {source} has no row at port {port} for an \
-                     address this host can bind, and the default-route address ({}) is not \
-                     a non-loopback address; bind an explicit interface address or add this \
-                     BBMD's own row to the BDT",
-                    route_text(route_ip)
-                ))
-            }),
-        ([], HostAddresses::Listed(ips)) => route_ip
-            .filter(|ip| !ip.is_loopback() && ips.contains(ip))
+    match own.as_slice() {
+        [ip] => Ok(*ip),
+        [] => route_ip
+            .filter(|ip| !ip.is_loopback() && host.contains(ip))
             .ok_or_else(|| {
                 own_address_error(format!(
                     "BBMD bound to 0.0.0.0 cannot determine its own B/IP address: {source} \
@@ -176,7 +129,7 @@ pub(super) fn select_wildcard_bbmd_ip(
                     route_text(route_ip)
                 ))
             }),
-        (several, _) => {
+        several => {
             let rows: Vec<String> = several.iter().map(|ip| format!("{ip}:{port}")).collect();
             Err(own_address_error(format!(
                 "BBMD bound to 0.0.0.0 cannot choose its own B/IP address: {source} has \

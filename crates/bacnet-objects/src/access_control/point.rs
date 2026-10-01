@@ -11,15 +11,15 @@ pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // AccessEvent enumeration
-    access_event: u32,
+    present_value: AccessEvent,
+    access_event: AccessEvent,
     access_event_tag: u64,
     access_event_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
     access_doors: Vec<ObjectIdentifier>,
     event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl AccessPointObject {
@@ -30,15 +30,15 @@ impl AccessPointObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,
-            access_event: 0,
+            present_value: AccessEvent::NONE,
+            access_event: AccessEvent::NONE,
             access_event_tag: 0,
             access_event_time: ([0xFF, 0xFF, 0xFF, 0xFF], [0xFF, 0xFF, 0xFF, 0xFF]),
             access_doors: Vec::new(),
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 }
@@ -65,10 +65,10 @@ impl BACnetObject for AccessPointObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_POINT.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::ACCESS_EVENT => {
-                Ok(PropertyValue::Enumerated(self.access_event))
+                Ok(PropertyValue::Enumerated(self.access_event.to_raw()))
             }
             p if p == PropertyIdentifier::ACCESS_EVENT_TAG => {
                 Ok(PropertyValue::Unsigned(self.access_event_tag))
@@ -121,7 +121,7 @@ impl BACnetObject for AccessPointObject {
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = v;
+                    self.present_value = AccessEvent::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())

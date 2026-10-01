@@ -11,7 +11,7 @@ use std::time::Duration;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
+    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
@@ -67,9 +67,9 @@ pub enum ReliabilityEvaluation {
     /// The object successfully mutated its `Reliability` value.
     Changed {
         /// Reliability before the successful mutation.
-        old_reliability: u32,
+        old_reliability: Reliability,
         /// Reliability after the successful mutation.
-        new_reliability: u32,
+        new_reliability: Reliability,
     },
 }
 
@@ -772,7 +772,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// The default rejects the operation, so object types without an internal
     /// reliability-evaluation process remain unaffected.
-    fn set_reliability_internal(&mut self, _reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, _reliability: Reliability) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

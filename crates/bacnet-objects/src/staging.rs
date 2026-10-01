@@ -88,7 +88,7 @@ pub struct StagingObject {
     units: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     generation: u64,
     pending_plan: Option<StagingWritePlan>,
 }
@@ -125,7 +125,7 @@ impl StagingObject {
             units: config.units,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+            reliability: Reliability::NO_FAULT_DETECTED,
             generation: 0,
             pending_plan: None,
         })
@@ -476,9 +476,10 @@ impl BACnetObject for StagingObject {
                 if !self.out_of_service {
                     return Err(common::write_access_denied_error());
                 }
-                let PropertyValue::Enumerated(value) = value else {
+                let PropertyValue::Enumerated(raw) = value else {
                     return Err(common::invalid_data_type_error());
                 };
+                let value = Reliability::from_raw(raw);
                 if !common::is_reliability_value_valid(value) {
                     return Err(common::value_out_of_range_error());
                 }
@@ -548,9 +549,9 @@ impl BACnetObject for StagingObject {
             return false;
         }
         let reliability = if success {
-            Reliability::NO_FAULT_DETECTED.to_raw()
+            Reliability::NO_FAULT_DETECTED
         } else {
-            Reliability::UNRELIABLE_OTHER.to_raw()
+            Reliability::UNRELIABLE_OTHER
         };
         if reliability == self.reliability {
             return false;
