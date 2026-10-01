@@ -175,12 +175,12 @@ impl Fixture {
         // Build awaits SC ConnectAccept; subsequent CLI ReadProperty is the
         // application readiness barrier. Distinct hub/server/CLI VMACs AND UUIDs.
         self.server = Some(
-            bounded(
+            bounded(Box::pin(
                 BACnetServer::generic_builder()
                     .transport(transport)
                     .database(db)
                     .build(),
-            )
+            ))
             .await
             .unwrap(),
         );
@@ -221,7 +221,10 @@ impl Fixture {
 
 pub async fn with_fixture(test: impl AsyncFnOnce(&mut Fixture)) {
     let mut fixture = Fixture::default();
-    let result = AssertUnwindSafe(bounded(test(&mut fixture)))
+    // `#[tokio::test]` polls on the test thread's 2 MiB stack, and unboxed,
+    // these debug-build futures took about 2 MB of it on macOS and overflowed
+    // it on Windows (#950). Boxed, a test needs about 0.6 MB.
+    let result = AssertUnwindSafe(Box::pin(bounded(test(&mut fixture))))
         .catch_unwind()
         .await;
     let errors = fixture.stop().await;
