@@ -6,7 +6,7 @@
 //! - analogValue:2   commandable (priority array)
 //! - binaryValue:2   commandable (priority array)
 //!
-//! Bind UDP on 0.0.0.0 (rusty-bacnet-mcp style) with a directed broadcast so
+//! Bind UDP on 0.0.0.0 with a directed broadcast so
 //! subnet Who-Is reaches the socket on Linux; advertise the NIC IP in I-Am.
 
 use std::env;

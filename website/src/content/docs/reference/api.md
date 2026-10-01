@@ -36,7 +36,3 @@ The release Python transport summary omits MS/TP; use the versioned mini-device 
 | `device_management.py` | Management services and errors | Control-changing operations |
 
 Browse [current examples](https://github.com/jscott3201/rusty-bacnet/tree/dev/examples/python) or [v0.11 examples](https://github.com/jscott3201/rusty-bacnet/tree/v0.11.0/examples/python). The site's [local lab](/rusty-bacnet/start/local-lab/) keeps its tested release source and download together.
-
-## Companion projects
-
-The HTTP/MCP gateway and external test harness are separate projects. Their authentication, APIs, deployment and qualification belong to their own documentation; they are not installed by this site. A successful core example does not establish a companion project's operational readiness.

@@ -38,12 +38,6 @@ are excluded from default builds: the CLI pulls in heavier application
 dependencies, and the Python extension needs its native Python build context.
 They remain workspace members and can be selected explicitly.
 
-The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
-- [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
-- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — BTL Test Plan 26.1-oriented test harness
-
-Both consume the published `bacnet-*` crates from this workspace.
-
 ## Packet Flow
 
 ### Inbound (receiving a BACnet request)
@@ -116,7 +110,7 @@ pub trait TransportPort: Send + Sync {
 }
 ```
 
-`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. The public `bacnet-endpoint` crate composes sibling requester and bounded responder roles on that private foundation. One `EndpointSession` owns one B/IP, SC or MS/TP transport; this is not a multi-link router or full `bacnet-server` responder replacement. See [endpoint scope](rust-api.md#bacnet-endpoint-forward-path-rb-18).
+`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. The public `bacnet-endpoint` crate composes sibling requester and bounded responder roles on that private foundation. One `EndpointSession` owns one B/IP, SC or MS/TP transport; this is not a multi-link router or full `bacnet-server` responder replacement. See [endpoint scope](rust-api.md#bacnet-endpoint).
 
 Local nonrouter Number controls take a separate bounded path: one serial state owner per standalone client, full server or shared endpoint consumes eligible parsed controls without blocking independent APDU dispatch. Raw network controls remain available for other consumers, including routed Reject correlation. A client or unregistered owner starts UNKNOWN on an opted-in transport. Only an explicitly registered NORMAL B/IP receiving-port object supplies configured number authority; an unrelated database declaration cannot supply it. The capability is separate from registration metadata and from multiport/router behavior. See [Number controls and lifecycle](rust-api.md#local-network-number-controls).
 
@@ -232,10 +226,3 @@ ReinitializeDevice is decoded and password-validated, then refused with
 surface exists. The server performs no reinitialization and never sends a
 SimpleACK for this service. Password failures and malformed-request errors retain
 their existing responses before refusal.
-
-## Companion projects
-
-The HTTP/MCP gateway and BTL compliance test harness live in separate repositories that consume this workspace's published crates:
-
-- **[`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp)** — HTTP REST API (Axum) and MCP server (rmcp) on top of `BACnetClient` + `BACnetServer`. Single shared `GatewayState` handles both surfaces — no duplicated BACnet logic.
-- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — external BTL Test Plan 26.1 harness project. Formal support status is tracked separately in the conformance ledger.
