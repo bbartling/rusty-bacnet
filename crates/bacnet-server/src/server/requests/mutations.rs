@@ -148,7 +148,14 @@ impl Request<'_> {
                 |oid| BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid)),
             );
             if let Ok(oid) = &result {
-                let capture = cov_table.read().await.timed_capture(*oid);
+                let capture = {
+                    let table = cov_table.read().await;
+                    if crate::life_safety_cov::is_life_safety_object(*oid) {
+                        table.timed_capture_exact(&changes)
+                    } else {
+                        table.timed_capture(*oid)
+                    }
+                };
                 capture.run(&db);
             }
             (result, changes, plans)
@@ -171,6 +178,7 @@ impl Request<'_> {
     pub(super) async fn write_property_multiple<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         effects: &mut MutationEffects,
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
@@ -182,17 +190,21 @@ impl Request<'_> {
         } = effects;
         let (outcome, exact_changes, plans) = {
             let mut db = db.write().await;
+            // Lock order: database, then a short table read. Each attempt is
+            // captured as it commits, under this guard (#856).
+            let capture = cov_table.read().await.timed_capture_all();
             let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
             let authorize = |attempt: &bacnet_services::wpm::WritePropertyAttempt| {
                 self.authorize(|| Ok(MutationTarget::WritePropertyMultiple(attempt.clone())))
             };
             let source = audit.write_source();
+            let mut observer = crate::cov::TimedWriteCapture::new(capture, Some(audit));
             let outcome = handlers::handle_write_property_multiple_observed(
                 &mut db,
                 &self.req.service_request,
                 &mut snapshots,
                 Some(&authorize),
-                Some(audit),
+                Some(&mut observer),
                 Some(&source),
                 self.command_origin,
             );
@@ -204,6 +216,7 @@ impl Request<'_> {
                 handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
             };
             let changes = snapshots.changes(&db, committed_oids);
+            coarse_cov_oids.extend(observer.life_safety_without_exact_change(&changes));
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
             (outcome, changes, plans)
         };

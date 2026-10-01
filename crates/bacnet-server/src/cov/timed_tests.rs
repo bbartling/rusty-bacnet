@@ -346,3 +346,104 @@ fn a_returned_older_change_waits_for_its_in_flight_successor() {
     drop(fourth);
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [3, 4]);
 }
+
+fn sorted(mut keys: Vec<CovSubscriptionKey>) -> Vec<CovSubscriptionKey> {
+    keys.sort_by_key(|key| key.object().instance_number());
+    keys
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
+    let (mut h, _) = histories(8, 4);
+    let (a, b, other) = (key(1, 1), key(1, 2), key(2, 1));
+    for k in [&a, &b, &other] {
+        h.reset(k, 1);
+    }
+    h.set_delay(&context(1), 10);
+    h.set_delay(&context(2), 10);
+    let start = Instant::now();
+    h.push(&a, 1, change(1, 4));
+    tokio::time::advance(Duration::from_secs(4)).await;
+    h.push(&b, 1, change(2, 4));
+    h.push(&other, 1, change(3, 4));
+    let (due, next) = h.take_due(Instant::now());
+    assert!(due.is_empty());
+    assert_eq!(
+        next,
+        Some(start + Duration::from_secs(10)),
+        "from the earliest"
+    );
+    tokio::time::advance(Duration::from_secs(6)).await;
+    let (due, next) = h.take_due(Instant::now());
+    assert_eq!(
+        sorted(due),
+        [a, b],
+        "every pending reference of the context"
+    );
+    assert_eq!(
+        next,
+        Some(start + Duration::from_secs(14)),
+        "the other context"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_blocked_context_comes_back_only_after_its_spacing() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1);
+    h.set_delay(&context(1), 0);
+    let start = Instant::now();
+    h.push(&k, 1, change(1, 4));
+    // A zero delay still waits out the floor, leaving the producer's own
+    // fanout to report the change.
+    let (due, next) = h.take_due(start);
+    assert!(due.is_empty());
+    assert_eq!(next, Some(start + DEADLINE_FLOOR));
+    tokio::time::advance(DEADLINE_FLOOR).await;
+    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    // Still pending: not handed out again until the spacing has passed.
+    let (due, next) = h.take_due(Instant::now());
+    assert!(due.is_empty());
+    assert_eq!(next, Some(start + DEADLINE_FLOOR * 2));
+    tokio::time::advance(DEADLINE_FLOOR).await;
+    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    // Conveyed: nothing is owed and the spacing is forgotten.
+    h.drain(&k, 1);
+    assert_eq!(h.take_due(Instant::now()), (Vec::new(), None));
+    assert!(h.attempted.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_latest_admitted_delay_applies_until_the_context_goes() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1);
+    h.set_delay(&context(1), 30);
+    h.set_delay(&context(1), 3); // a renewal changes the delay
+    let start = Instant::now();
+    h.push(&k, 1, change(1, 4));
+    assert_eq!(h.take_due(start).1, Some(start + Duration::from_secs(3)));
+    h.remove(&k);
+    assert!(
+        h.delays.is_empty(),
+        "the last reference took its context's delay"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_queued_change_wakes_the_deadline_wait() {
+    let (store, _) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1);
+    store.lock().set_delay(&context(1), 2);
+    let waiter = tokio::spawn({
+        let store = store.clone();
+        async move { store.next_due().await }
+    });
+    tokio::task::yield_now().await;
+    let start = Instant::now();
+    store.lock().push(&k, 1, change(1, 4));
+    assert_eq!(waiter.await.unwrap(), [k]);
+    assert_eq!(start.elapsed(), Duration::from_secs(2));
+}

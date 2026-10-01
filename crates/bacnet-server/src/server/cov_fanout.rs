@@ -99,12 +99,22 @@ impl<T: TransportPort + 'static> CovFanout<T> {
 
     /// Fan out again each reference whose confirmed report was acknowledged,
     /// so changes held back while it was outstanding reach the subscriber
-    /// (#896). Runs until the server aborts it.
+    /// (#896), and each context whose queued timestamped changes reached
+    /// their Max_Notification_Delay deadline (#856). Runs until the server
+    /// aborts it.
     pub(super) async fn run_revisits(self) {
         use futures_util::FutureExt;
-        let revisits = Arc::clone(self.cov_table.read().await.revisits());
+        let (revisits, timed) = {
+            let table = self.cov_table.read().await;
+            (Arc::clone(table.revisits()), table.timed().clone())
+        };
         loop {
-            let keys = revisits.next().await;
+            // Neither wait loses work when the other wins: revisits stay
+            // queued, and a due context comes back after its spacing.
+            let keys = tokio::select! {
+                keys = revisits.next() => keys,
+                keys = timed.next_due() => keys,
+            };
             let ctx = self.notify_context();
             let batch = BACnetServer::<T>::fire_cov_revisits(&ctx, &keys);
             // A panic ends only this batch; later acknowledgments still follow up.

@@ -30,6 +30,7 @@ pub(crate) mod multiple_reads;
 pub(crate) mod prepare;
 pub(crate) mod timed;
 mod timed_capture;
+pub(crate) use timed_capture::TimedWriteCapture;
 pub(crate) mod value_source;
 pub use lifetime::CovTimeRemaining;
 

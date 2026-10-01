@@ -234,7 +234,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
                 mutation
-                    .write_property_multiple::<T>(db, &mut effects, &mut audit)
+                    .write_property_multiple::<T>(db, cov_table, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
@@ -449,7 +449,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     ))
                                 } else {
                                     let mut db = db.write().await;
-                                    handlers::handle_life_safety_operation(&mut db, &request)
+                                    let result =
+                                        handlers::handle_life_safety_operation(&mut db, &request);
+                                    // Timestamped references capture the
+                                    // exact changes under this guard (#856).
+                                    if let Ok(changes) = &result {
+                                        let capture =
+                                            cov_table.read().await.timed_capture_exact(changes);
+                                        capture.run(&db);
+                                    }
+                                    result
                                 }
                             }
                         };

@@ -226,8 +226,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     };
                     // Captured changes carry their own commit times. The current
                     // state is conveyed as well only when it differs from the last
-                    // captured or conveyed observation (a producer without capture),
-                    // stamped with this preparation's clock.
+                    // captured or conveyed observation (a change no producer
+                    // captured, such as a raw database mutation), stamped with
+                    // this preparation's clock.
                     let mut timed = store.lock();
                     let (incarnation, mut changes) = timed.drain(sub.key(), sub.generation());
                     // The store baseline is the newest captured or conveyed state;
