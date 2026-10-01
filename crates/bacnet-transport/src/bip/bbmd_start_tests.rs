@@ -1,7 +1,6 @@
 //! A BBMD's own B/IP address with a wildcard bind, at start and restart (#937).
 
 use std::path::PathBuf;
-use std::sync::Mutex as SyncMutex;
 
 use super::bbmd_start::{select_wildcard_bbmd_ip, BdtSource};
 use super::own_broadcast_tests::{
@@ -23,20 +22,12 @@ fn row(ip: Ipv4Addr, port: u16) -> BdtEntry {
     }
 }
 
-fn select_with(
-    rows: &[BdtEntry],
-    host: HostAddresses<'_>,
-    route: Option<Ipv4Addr>,
-) -> Result<Ipv4Addr, Error> {
-    select_wildcard_bbmd_ip(rows, PORT, host, route, BdtSource::Configured)
-}
-
 fn select(
     rows: &[BdtEntry],
     local: &[Ipv4Addr],
     route: Option<Ipv4Addr>,
 ) -> Result<Ipv4Addr, Error> {
-    select_with(rows, HostAddresses::Listed(local), route)
+    select_wildcard_bbmd_ip(rows, PORT, local, route, BdtSource::Configured)
 }
 
 /// A UDP port that was free a moment ago, for the tests whose BDT must name
@@ -58,7 +49,7 @@ fn wildcard_bbmd(
 ) -> BipTransport {
     let mut transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, port, Ipv4Addr::LOCALHOST);
     transport.enable_bbmd(bdt);
-    transport.local_ipv4_for_test = local;
+    transport.local_ipv4_for_test = local.map(Ok);
     transport
 }
 
@@ -128,63 +119,12 @@ fn wildcard_selection_without_own_row_needs_a_local_non_loopback_route() {
 }
 
 #[test]
-fn wildcard_selection_probes_bdt_rows_when_addresses_cannot_be_listed() {
-    // Windows: no address list, so each row at the bound port is probed.
-    let probed = SyncMutex::new(Vec::new());
-    let probe = |ip: Ipv4Addr| {
-        probed.lock().unwrap().push(ip);
-        [LAN, OTHER_LAN].contains(&ip)
-    };
-    let host = HostAddresses::Probed(&probe);
-    // The one row the host can bind wins over the route, as with a list, and
-    // a local address at another port is not probed.
-    let rows = [
-        row(REMOTE_PEER, PORT),
-        row(OTHER_LAN, PORT + 1),
-        row(LAN, PORT),
-    ];
-    assert_eq!(select_with(&rows, host, Some(OTHER_LAN)).unwrap(), LAN);
-    assert_eq!(*probed.lock().unwrap(), [REMOTE_PEER, LAN]);
-    // Several rows the host can bind fail start, as with a list.
-    let several = [row(LAN, PORT), row(OTHER_LAN, PORT)];
-    let text = select_with(&several, host, Some(LAN))
-        .unwrap_err()
-        .to_string();
-    assert!(
-        text.contains("rows for several local IPv4 addresses at port 47808")
-            && text.contains("bind an explicit interface address"),
-        "{text}"
-    );
-    // The production probe: loopback binds, a documentation address does not.
-    assert!(bind_probe(Ipv4Addr::LOCALHOST));
-    assert!(!bind_probe(REMOTE_PEER));
-}
-
-#[test]
-fn wildcard_selection_trusts_a_non_loopback_route_when_addresses_cannot_be_listed() {
-    // Windows, and no row the host can bind: the route decides.
-    let nothing_local = |_: Ipv4Addr| false;
-    let host = HostAddresses::Probed(&nothing_local);
-    let rows = [row(LAN, PORT), row(REMOTE_PEER, PORT)];
-    assert_eq!(select_with(&rows, host, Some(LAN)).unwrap(), LAN);
-    for route in [None, Some(Ipv4Addr::LOCALHOST)] {
-        let text = select_with(&rows, host, route).unwrap_err().to_string();
-        assert!(
-            text.contains("the host's addresses cannot be listed")
-                && text.contains("has no row at port 47808 for an address this host can bind")
-                && text.contains("bind an explicit interface address"),
-            "{route:?}: {text}"
-        );
-    }
-}
-
-#[test]
 fn limited_broadcast_off_the_default_route_warns_for_a_wildcard_bbmd() {
     let warns = |interface: Ipv4Addr, own: Ipv4Addr, route_ip, broadcast| {
         let ctx = OwnAddressContext {
             interface,
             port: PORT,
-            host: HostAddresses::Listed(&[]),
+            host: &[],
             route_ip,
         };
         warn_if_broadcast_may_leave_another_interface(&ctx, own, broadcast)
@@ -200,7 +140,6 @@ fn limited_broadcast_off_the_default_route_warns_for_a_wildcard_bbmd() {
     assert!(!warns(LAN, LAN, Some(OTHER_LAN), Ipv4Addr::BROADCAST));
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn wildcard_bbmd_uses_its_own_bdt_row_as_origin_and_local_mac() {
     let bdt_peer = udp().await;
@@ -270,7 +209,7 @@ async fn wildcard_bbmd_with_several_own_rows_fails_start_and_keeps_its_config() 
         std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
             .expect("a failed start releases its port"),
     );
-    bbmd.local_ipv4_for_test = Some((vec![Ipv4Addr::LOCALHOST], Some(LAN)));
+    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
     let _rx = bbmd.start().await.unwrap();
     assert_eq!(
         bbmd.local_mac(),
@@ -294,6 +233,52 @@ async fn wildcard_bbmd_without_own_row_or_usable_route_fails_start() {
             "{route:?}: {text}"
         );
         assert!(bbmd.bbmd.is_none() && bbmd.bbmd_config.is_some());
+    }
+}
+
+#[tokio::test]
+async fn wildcard_start_without_a_listed_address_fails_with_or_without_a_bbmd() {
+    // Every OS lists its addresses, with no bind-probe fallback: a failed
+    // listing keeps its error kind, and an empty one is AddrNotAvailable.
+    for listing_fails in [true, false] {
+        let (kind, reason) = if listing_fails {
+            (
+                std::io::ErrorKind::Unsupported,
+                "could not list the host's IPv4 addresses (no listing here)",
+            )
+        } else {
+            (
+                std::io::ErrorKind::AddrNotAvailable,
+                "found no usable IPv4 address on this host",
+            )
+        };
+        for bbmd in [false, true] {
+            let mut transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, 0, Ipv4Addr::LOCALHOST);
+            if bbmd {
+                transport.enable_bbmd(vec![row(Ipv4Addr::LOCALHOST, PORT)]);
+            }
+            transport.local_ipv4_for_test = Some(if listing_fails {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "no listing here",
+                ))
+            } else {
+                Ok((Vec::new(), Some(LAN)))
+            });
+            let Err(Error::Transport(err)) = transport.start().await else {
+                panic!("bbmd {bbmd}: start must fail with a transport error");
+            };
+            let text = err.to_string();
+            assert_eq!(err.kind(), kind, "bbmd {bbmd}: {text}");
+            assert!(
+                text.starts_with("a B/IP transport bound to 0.0.0.0 ")
+                    && text.contains(reason)
+                    && text.ends_with("; bind an explicit interface address instead"),
+                "bbmd {bbmd}: {text}"
+            );
+            assert!(transport.socket.is_none() && transport.recv_task.is_none());
+            assert_eq!(transport.bbmd_config.is_some(), bbmd);
+        }
     }
 }
 
@@ -393,7 +378,7 @@ async fn restart_chooses_the_bbmd_address_again_and_drops_the_stale_self_row() {
     bbmd.stop().await.unwrap();
 
     // Restart: now 127.0.0.1 is local, so its row is the BBMD's own.
-    bbmd.local_ipv4_for_test = Some((vec![Ipv4Addr::LOCALHOST, LAN], Some(LAN)));
+    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST, LAN], Some(LAN))));
     let mut rx = bbmd.start().await.unwrap();
     let own = (Ipv4Addr::LOCALHOST.octets(), port);
     assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
@@ -440,7 +425,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
     bbmd.stop().await.unwrap();
 
     // Both listed rows at the bound port are now local: no choice is possible.
-    bbmd.local_ipv4_for_test = Some((vec![Ipv4Addr::LOCALHOST, OTHER_LAN], Some(LAN)));
+    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST, OTHER_LAN], Some(LAN))));
     let text = bbmd.start().await.unwrap_err().to_string();
     assert!(
         text.contains("the BDT has rows for several local IPv4 addresses"),
@@ -456,7 +441,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
 
     // With one of them local again, the same transport restarts with it, and
     // the self row appended for LAN goes.
-    bbmd.local_ipv4_for_test = Some((vec![Ipv4Addr::LOCALHOST], Some(LAN)));
+    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
     let _rx = bbmd.start().await.unwrap();
     let state = bbmd.bbmd_state().unwrap().lock().await;
     assert_eq!(state.local_address(), (Ipv4Addr::LOCALHOST.octets(), port));
@@ -483,7 +468,7 @@ async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_st
 
     // LAN is gone and the route now leaves from OTHER_LAN, whose self row
     // does not fit.
-    bbmd.local_ipv4_for_test = Some((vec![OTHER_LAN], Some(OTHER_LAN)));
+    bbmd.local_ipv4_for_test = Some(Ok((vec![OTHER_LAN], Some(OTHER_LAN))));
     let err = bbmd.start().await.unwrap_err();
 
     assert!(matches!(err, Error::Encoding(_)), "{err:?}");
