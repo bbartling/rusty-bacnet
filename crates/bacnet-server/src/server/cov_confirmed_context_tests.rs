@@ -13,6 +13,7 @@ use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::Time;
 
+const INACTIVE: u32 = 0;
 const ACTIVE: u32 = 1;
 
 fn bv1() -> ObjectIdentifier {
@@ -174,6 +175,45 @@ async fn a_resubscription_during_a_flight_reports_without_waiting_and_keeps_the_
         h.ack().await;
     }
     assert_eq!(kept, vec![(enumerated(ACTIVE), None)]);
+    h.settle().await;
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_kept_reference_back_at_its_baseline_after_a_fenced_report_is_reported() {
+    let mut h = start(3000).await;
+    subscribe(&mut h, false).await;
+    write_bv1(&h, ACTIVE).await;
+    let report = h.notification().await;
+    assert_eq!(pv(&report, bv1()), vec![(enumerated(ACTIVE), None)]);
+    let fenced = h.take_confirmed();
+    // BV-1 goes back to its acknowledged value while that report is
+    // outstanding, so the change is held. Going back before the fence means no
+    // report after it can carry active, whichever of the fence follow-up and
+    // the initial report goes first.
+    write_bv1(&h, INACTIVE).await;
+    h.no_notification().await;
+    // Re-subscribing to AV-1 alone fences the report and keeps BV-1. The
+    // subscriber did receive that report, but its Ack is discarded.
+    h.subscribe_specs(true, vec![(av1(), vec![(PV, false)])])
+        .await;
+    let next = h.notification().await;
+    let mut kept = pv(&next, bv1());
+    let new = h.take_confirmed();
+    h.ack_request(fenced).await;
+    h.settle().await;
+    h.no_notification().await;
+    // The subscriber was last told active, while BV-1 is back at the value its
+    // old baseline holds (#923). BV-1 is reported by now, or after the Ack of
+    // AV-1's report.
+    h.ack_request(new).await;
+    if kept.is_empty() {
+        let follow_up = h.notification().await;
+        kept = pv(&follow_up, bv1());
+        h.ack().await;
+    }
+    assert_eq!(kept, vec![(enumerated(INACTIVE), None)]);
     h.settle().await;
     h.no_notification().await;
     h.server.stop().await.unwrap();

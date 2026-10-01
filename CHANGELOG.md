@@ -230,8 +230,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A context whose report is replaced while outstanding or owed re-evaluates
     all its references, so a held change still reaches a new route, and newly
     listed references still get their first report. Such a follow-up can repeat
-    changes the replaced report already delivered; a value that returns to the
-    old baseline in between is not re-sent (#923).
+    changes the replaced report already delivered, and it reports the current
+    value of each kept untimestamped reference the replaced report carried, since
+    that report may have reached the subscriber and a value that went back to
+    the old baseline would otherwise never be re-sent (#923). If a failed report
+    did arrive without being replaced, a value that goes back during the hold-off
+    is still not re-sent; that gap is accepted.
   Peer and global in-flight limits, event budgets and the unconfirmed path are
   unchanged. Re-reporting after the standard's retries end is local policy.
 

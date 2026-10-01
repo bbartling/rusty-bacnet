@@ -217,6 +217,7 @@ fn a_route_change_fences_the_report_and_revisits_its_references() {
     refresh(&mut table, &a, &a.endpoint(), vec![]);
     assert!(table.revisits().queued().is_empty());
     assert!(table.complete_observation(&a, report, value(1.0)));
+    assert_eq!(baseline(&table, &a), Some(value(1.0)));
     let mut route = a.endpoint();
     route.mac = MacAddr::from_slice(&[2]);
     refresh(&mut table, &a, &route, vec![]);
@@ -235,7 +236,9 @@ fn a_route_change_fences_the_report_and_revisits_its_references() {
         "the new route starts unmarked"
     );
     drop(flight);
-    assert_eq!(baseline(&table, &a), Some(value(1.0)));
+    // The report was still outstanding, so the moved untimestamped references
+    // report afresh on the new route (#923).
+    assert_eq!(baseline(&table, &a), None);
     assert_eq!(baseline(&table, &b), None);
 }
 
@@ -275,18 +278,89 @@ fn a_busy_context_resubscription_fences_the_report() {
     drop(flight);
 }
 
+#[test]
+fn a_fence_while_owed_forgets_only_carried_kept_untimestamped_baselines() {
+    let mut table = CovSubscriptionTable::new();
+    let kept = table
+        .admit_for_test(reference(PropertyIdentifier::PRESENT_VALUE), 0)
+        .unwrap();
+    let uncarried = table
+        .admit_for_test(reference(PropertyIdentifier::RELIABILITY), 0)
+        .unwrap();
+    let mut proposal = reference(PropertyIdentifier::STATUS_FLAGS);
+    proposal.timestamped = true;
+    let stamped = table.admit_for_test(proposal, 0).unwrap();
+    let relisted = table
+        .admit_for_test(reference(PropertyIdentifier::OUT_OF_SERVICE), 0)
+        .unwrap();
+    let report = ticket(&kept);
+    let flight = table
+        .begin_confirmed(report, [&kept, &uncarried, &stamped, &relisted])
+        .unwrap();
+    for (sub, v) in [
+        (&kept, 1.0),
+        (&uncarried, 5.0),
+        (&stamped, 2.0),
+        (&relisted, 3.0),
+    ] {
+        assert!(table.complete_observation(sub, report, value(v)));
+    }
+    drop(flight);
+    let baselines = |table: &CovSubscriptionTable| {
+        [&kept, &uncarried, &stamped, &relisted].map(|sub| baseline(table, sub))
+    };
+    let acknowledged = [
+        Some(value(1.0)),
+        Some(value(5.0)),
+        Some(value(2.0)),
+        Some(value(3.0)),
+    ];
+
+    // A route change while the context is idle: the Ack settled every baseline.
+    let home = kept.endpoint();
+    let mut away = home.clone();
+    away.mac = MacAddr::from_slice(&[2]);
+    refresh(&mut table, &kept, &away, vec![]);
+    assert_eq!(
+        baselines(&table),
+        acknowledged,
+        "an idle fence clears nothing"
+    );
+    assert!(table.revisits().queued().is_empty());
+
+    // Back home, listing one reference, while a report is outstanding. The
+    // subscriber may hold what that report carried, ahead of the baselines.
+    let moved = live(&table, &kept);
+    let flight = table.begin_confirmed(ticket(&moved), [&moved]).unwrap();
+    let mut relisting = reference(PropertyIdentifier::OUT_OF_SERVICE);
+    relisting.last_notified_observation = Some(value(4.0));
+    refresh(&mut table, &kept, &home, vec![relisting]);
+    assert_eq!(
+        baselines(&table),
+        [None, Some(value(5.0)), Some(value(2.0)), Some(value(4.0))],
+        "the carried kept untimestamped reference reports afresh; one the report \
+         did not carry keeps its acknowledged baseline, the timestamped one \
+         queues its changes, and the relisted one is what its request admitted"
+    );
+    assert_eq!(table.revisits().queued().len(), 4);
+    drop(flight);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_resubscription_during_a_hold_off_starts_unmarked() {
     let mut table = CovSubscriptionTable::new();
-    let (a, _) = context(&mut table);
+    let (a, b) = context(&mut table);
+    assert!(table.complete_for_test(&b, value(2.0)));
+    let acknowledged = live(&table, &b);
     table
-        .begin_confirmed(ticket(&a), [&a])
+        .begin_confirmed(ticket(&a), [&a, &acknowledged])
         .unwrap()
         .failed(Duration::from_secs(60));
     let context = a.key().multiple_context().unwrap().clone();
     // An empty renewal keeps the hold-off.
     refresh(&mut table, &a, &a.endpoint(), vec![]);
     assert!(!table.context_idle(&context, &[]));
+    assert_eq!(baseline(&table, &b), Some(value(2.0)));
     refresh(
         &mut table,
         &a,
@@ -298,6 +372,11 @@ async fn a_resubscription_during_a_hold_off_starts_unmarked() {
         table.revisits().queued().len(),
         2,
         "the failed report's owed follow-up moves to the fresh marker"
+    );
+    assert_eq!(
+        baseline(&table, &b),
+        None,
+        "the failed report may have been delivered, so the kept reference reports afresh"
     );
 }
 
