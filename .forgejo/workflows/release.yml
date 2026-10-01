@@ -5,9 +5,10 @@ name: Release
 # builds, so this workflow builds the Linux artifacts. No release is tagged
 # until it also builds macOS and Windows (#944). See docs/ci.md, "Release".
 #
-#   v* tag pushed     validate (and wait for CI on the tag), build, test the
-#                     artifacts, then publish in order: crates.io, PyPI, the
-#                     Forgejo release, the GitHub release copy
+#   v* tag pushed     validate (preflight both release hosts, wait for CI on
+#                     the tag), build, test the artifacts, then publish in
+#                     order: crates.io, PyPI, the Forgejo release, the GitHub
+#                     release copy
 #   manual dispatch   dry_run (default true) builds and tests everything, runs
 #                     the release API calls read only, and publishes nothing.
 #                     dry_run=false is accepted only on a v* tag, and runs that
@@ -32,7 +33,8 @@ on:
 
 # Least privilege for the job token, for when Forgejo honours `permissions`.
 # Forgejo currently ignores the key and gives every job the same token, which
-# can write to this repository. Only the Forgejo release job needs to write.
+# can write to this repository. Only Validate (the preflight's disposable
+# draft) and the Forgejo release job need to write.
 permissions:
   contents: read
   statuses: read
@@ -80,15 +82,19 @@ jobs:
           docker pull -q "$CI_IMAGE" \
             || { echo "::error::cannot pull $CI_IMAGE; ci.yml's image job builds it, so run CI on this commit first"; exit 1; }
 
-  # Everything a release needs before anything is built. On a tag it also waits
-  # for the tag's own CI run, so allow for that.
+  # Everything a release needs before anything is built. On a tag it also
+  # waits up to 15 minutes for the mirror's tag and up to 60 for the tag's own
+  # CI run, so allow for that.
   validate:
     name: Validate
     needs: image
     runs-on: ubuntu-latest
     container:
       image: ${{ env.CI_IMAGE }}
-    timeout-minutes: 75
+    timeout-minutes: 95
+    permissions:
+      contents: write
+      statuses: read
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
@@ -150,6 +156,26 @@ jobs:
           else
             echo "::warning::a release would stop here: ${missing[*]} not set (not needed for a dry run)"
           fi
+      # Before any build, prove that both hosts will take this release: GitHub
+      # has the tag at this commit, each token lists releases (drafts
+      # included), and each host accepts a disposable draft with files named
+      # like the assets, which is deleted again. A dry run does the read-only
+      # part for v<version>, and on GitHub only the tag check while
+      # GH_RELEASE_TOKEN isn't set. See docs/ci.md, "Preflight".
+      - name: Release preflight
+        env:
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          FORGEJO_TOKEN: ${{ github.token }}
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+        run: |
+          mode=()
+          if [ "$PUBLISH" != true ]; then mode=(--dry-run); TAG=v$VERSION; fi
+          python3 scripts/release/release_api.py forgejo --preflight --tag "$TAG" --commit "$COMMIT" "${mode[@]}"
+          python3 scripts/release/release_api.py github --preflight --tag "$TAG" --commit "$COMMIT" \
+            --wait-tag 900 "${mode[@]}"
       - name: Release notes from CHANGELOG.md
         env:
           TAG: ${{ steps.release.outputs.tag }}
@@ -392,7 +418,7 @@ jobs:
   release-api:
     name: Release API (dry run)
     needs: [validate, verify]
-    if: needs.validate.outputs.publish != 'true'
+    if: success() && needs.validate.outputs.publish != 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ env.CI_IMAGE }}
@@ -432,11 +458,12 @@ jobs:
             --notes notes/notes-github.md --assets release --wait-tag 900
 
   # Publishing: tag runs only, after every build and test passed, one step at a
-  # time so a failure stops everything after it.
+  # time so a failure stops everything after it. Each `if:` states success()
+  # because Forgejo leaves the implicit one to the runner.
   crates-io:
     name: Publish to crates.io
     needs: [validate, verify]
-    if: needs.validate.outputs.publish == 'true'
+    if: success() && needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ env.CI_IMAGE }}
@@ -453,7 +480,7 @@ jobs:
   pypi:
     name: Publish to PyPI
     needs: [validate, crates-io]
-    if: needs.validate.outputs.publish == 'true'
+    if: success() && needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ env.CI_IMAGE }}
@@ -471,7 +498,7 @@ jobs:
   forgejo-release:
     name: Forgejo release
     needs: [validate, pypi]
-    if: needs.validate.outputs.publish == 'true'
+    if: success() && needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ env.CI_IMAGE }}
@@ -502,7 +529,7 @@ jobs:
   github-release:
     name: GitHub release copy
     needs: [validate, forgejo-release]
-    if: needs.validate.outputs.publish == 'true'
+    if: success() && needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ env.CI_IMAGE }}
@@ -519,8 +546,9 @@ jobs:
         with:
           name: release-notes
           path: notes
-      # Waits up to 15 minutes for the push mirror to bring the tag over, checks
-      # that it points at the release commit, then drafts, uploads and publishes.
+      # Checks again that the mirror's tag points at the release commit (the
+      # preflight waited for it), then drafts, uploads, checks every asset's
+      # digest and publishes.
       - name: Draft, upload, publish
         env:
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
