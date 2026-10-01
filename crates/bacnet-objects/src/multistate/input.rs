@@ -19,7 +19,7 @@ pub struct MultiStateInputObject {
     number_of_states: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,

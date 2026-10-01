@@ -167,7 +167,7 @@ pub struct BinaryInputObject {
     status_flags: StatusFlags,
     /// Polarity: 0 = normal, 1 = reverse.
     polarity: u32,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,

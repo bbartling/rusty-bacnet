@@ -33,7 +33,7 @@ pub struct LightingOutputObject {
     egress_active: bool,
     out_of_service: bool,
     status_flags: StatusFlags,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,

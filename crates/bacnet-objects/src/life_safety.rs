@@ -77,7 +77,7 @@ fn apply_silenced_operation(
 ) -> Result<LifeSafetyOperationEffect, Error> {
     // The four standard SilencedState values form a two-bit audible/visible
     // set, so the partial operations are bit operations on the wire value. A
-    // proprietary state has no such decomposition and is refused.
+    // reserved or proprietary state has no such decomposition and is refused.
     let current = silenced.to_raw();
     if current > SilencedState::ALL_SILENCED.to_raw() {
         return Err(life_safety_error(
@@ -180,7 +180,7 @@ pub struct LifeSafetyPointObject {
     event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
-    /// Reliability (0 = NO_FAULT_DETECTED).
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyPointResetExecutor>,
@@ -446,7 +446,7 @@ pub struct LifeSafetyZoneObject {
     event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
-    /// Reliability (0 = NO_FAULT_DETECTED).
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyZoneResetExecutor>,

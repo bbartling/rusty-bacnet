@@ -23,7 +23,7 @@ pub struct MultiStateOutputObject {
     status_flags: StatusFlags,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,

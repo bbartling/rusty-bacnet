@@ -149,6 +149,46 @@ fn assert_client_reliability_round_trip(object: &mut dyn BACnetObject, fault_fla
         ErrorClass::PROPERTY,
         ErrorCode::INVALID_DATA_TYPE,
     );
+    assert_eq!(
+        read(object, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(65_535),
+        "a wrong-datatype write must leave the stored value alone"
+    );
+}
+
+/// A vendor value from evaluation is saved on entering Out_Of_Service and
+/// restored on leaving it, replacing the client's simulated vendor value.
+fn assert_vendor_reliability_survives_out_of_service(object: &mut dyn BACnetObject) {
+    object
+        .set_reliability_internal(Reliability::from_raw(65_535))
+        .expect("a vendor Reliability value must be accepted internally");
+    write(
+        object,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .unwrap();
+    write(
+        object,
+        PropertyIdentifier::RELIABILITY,
+        PropertyValue::Enumerated(1_000),
+    )
+    .expect("a vendor Reliability value must be accepted from a client");
+    assert_eq!(
+        read(object, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(1_000)
+    );
+    write(
+        object,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(false),
+    )
+    .unwrap();
+    assert_eq!(
+        read(object, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(65_535),
+        "leaving Out_Of_Service must restore the saved vendor value"
+    );
 }
 
 /// In service, the internal route applies the same value domain as the
@@ -224,6 +264,21 @@ fn reliability_vendor_values_round_trip_on_every_write_route() {
 }
 
 #[test]
+fn vendor_reliability_is_saved_and_restored_across_out_of_service() {
+    // The shared inhibit route, and the common save/restore helper that Loop
+    // and Schedule use.
+    assert_vendor_reliability_survives_out_of_service(
+        &mut AnalogInputObject::new(1, "AI-1", 62).unwrap(),
+    );
+    assert_vendor_reliability_survives_out_of_service(
+        &mut LoopObject::new(1, "LOOP-1", 62).unwrap(),
+    );
+    assert_vendor_reliability_survives_out_of_service(
+        &mut ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap(),
+    );
+}
+
+#[test]
 fn life_safety_mode_write_stores_any_enumerated() {
     assert_unchecked_enumerated_round_trip(
         &mut LifeSafetyPointObject::new(1, "LSP-1").unwrap(),
@@ -264,28 +319,32 @@ fn life_safety_proprietary_states_read_back_verbatim() {
 }
 
 #[test]
-fn silence_operation_refuses_a_proprietary_silenced_state_and_keeps_it() {
-    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    point.set_silenced(SilencedState::from_raw(4));
-    point.set_operation_expected(LifeSafetyOperation::SILENCE_AUDIBLE);
-    match point.apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE) {
-        Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
-            assert_eq!(
-                code,
-                ErrorCode::INVALID_OPERATION_IN_THIS_STATE.to_raw() as u32
-            );
+fn silence_operation_refuses_a_reserved_or_proprietary_silenced_state_and_keeps_it() {
+    // 4 is the first reserved BACnetSilencedState value and 64 the first
+    // proprietary one; neither decomposes into audible/visible bits.
+    for raw in [4, 64] {
+        let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+        point.set_silenced(SilencedState::from_raw(raw));
+        point.set_operation_expected(LifeSafetyOperation::SILENCE_AUDIBLE);
+        match point.apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE) {
+            Err(Error::Protocol { class, code }) => {
+                assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
+                assert_eq!(
+                    code,
+                    ErrorCode::INVALID_OPERATION_IN_THIS_STATE.to_raw() as u32
+                );
+            }
+            other => panic!("expected OBJECT / INVALID_OPERATION_IN_THIS_STATE, got {other:?}"),
         }
-        other => panic!("expected OBJECT / INVALID_OPERATION_IN_THIS_STATE, got {other:?}"),
+        assert_eq!(
+            read(&point, PropertyIdentifier::SILENCED),
+            PropertyValue::Enumerated(raw)
+        );
+        assert_eq!(
+            read(&point, PropertyIdentifier::OPERATION_EXPECTED),
+            PropertyValue::Enumerated(LifeSafetyOperation::SILENCE_AUDIBLE.to_raw())
+        );
     }
-    assert_eq!(
-        read(&point, PropertyIdentifier::SILENCED),
-        PropertyValue::Enumerated(4)
-    );
-    assert_eq!(
-        read(&point, PropertyIdentifier::OPERATION_EXPECTED),
-        PropertyValue::Enumerated(LifeSafetyOperation::SILENCE_AUDIBLE.to_raw())
-    );
 }
 
 #[test]

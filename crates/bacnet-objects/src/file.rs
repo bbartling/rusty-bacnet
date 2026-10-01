@@ -233,7 +233,7 @@ pub struct FileObject {
     records: Vec<Vec<u8>>,
     status_flags: StatusFlags,
     out_of_service: bool,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     /// Growth cap in octets for network writes; not a BACnet property.
     max_file_size: u64,

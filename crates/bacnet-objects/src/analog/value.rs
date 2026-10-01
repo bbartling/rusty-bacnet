@@ -36,7 +36,7 @@ pub struct AnalogValueObject {
     /// Event_Detection_Enable (Clause 12.4). A FALSE value suspends
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
