@@ -312,11 +312,13 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         .iter()
         .flat_map(|spec| &spec.list_of_cov_references)
         .any(|cov_ref| cov_ref.timestamped);
-    if timestamped
-        && !db
-            .clock_frame()
-            .is_some_and(|frame| frame.is_valid_actual_datetime())
-    {
+    // One clock sample both admits timestamped references and stamps their
+    // initial report, so a clock turning invalid in between cannot cost it.
+    let admission_clock = timestamped
+        .then(|| db.clock_frame())
+        .flatten()
+        .filter(|frame| frame.is_valid_actual_datetime());
+    if timestamped && admission_clock.is_none() {
         return Err(Error::Protocol {
             class: ErrorClass::SERVICES.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
@@ -386,6 +388,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         max_notification_delay,
         subscriptions,
     )?;
-    table.initial_timed_capture(&accepted).run(db);
+    if let Some(frame) = admission_clock {
+        table.initial_timed_capture(&accepted, frame).run(db);
+    }
     Ok(accepted)
 }

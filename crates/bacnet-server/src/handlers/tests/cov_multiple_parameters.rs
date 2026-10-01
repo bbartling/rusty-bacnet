@@ -245,3 +245,91 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
     assert!(initial.is_empty());
     assert!(table.is_empty(), "clockless cancellation remains usable");
 }
+
+/// Valid for the first read, then present but invalid.
+struct ClockTurningInvalid {
+    reads: std::sync::atomic::AtomicUsize,
+    valid: bacnet_objects::clock::ClockFrame,
+}
+
+impl bacnet_objects::clock::ClockReader for ClockTurningInvalid {
+    fn read_clock(&self) -> Option<bacnet_objects::clock::ClockFrame> {
+        let first = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+        let mut frame = self.valid;
+        if !first {
+            frame.local_time.hour = 24;
+        }
+        Some(frame)
+    }
+}
+
+#[test]
+fn timestamped_admission_captures_the_initial_report_with_the_clock_it_validated() {
+    use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
+    use bacnet_types::primitives::{Date, Time};
+
+    let valid = bacnet_objects::clock::ClockFrame {
+        local_date: Date {
+            year: 126,
+            month: 9,
+            day: 29,
+            day_of_week: 2,
+        },
+        local_time: Time {
+            hour: 15,
+            minute: 0,
+            second: 7,
+            hundredths: 0,
+        },
+        utc_offset: 0,
+        daylight_savings_status: false,
+    };
+    let mut db = make_db_with_ai();
+    db.set_clock_reader(Some(std::sync::Arc::new(ClockTurningInvalid {
+        reads: std::sync::atomic::AtomicUsize::new(0),
+        valid,
+    })));
+    let mut table = CovSubscriptionTable::new();
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let mut buf = BytesMut::new();
+    SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: false,
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: oid,
+            list_of_cov_references: vec![COVReference {
+                monitored_property: PropertyReference {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                },
+                cov_increment: Some(0.5),
+                timestamped: true,
+            }],
+        }],
+    }
+    .encode(&mut buf)
+    .unwrap();
+    let accepted = handle_subscribe_cov_property_multiple_with_initial(
+        &mut table,
+        &db,
+        &[192, 168, 1, 1, 0xBA, 0xC0],
+        &buf,
+    )
+    .unwrap();
+    assert_eq!(accepted.len(), 1);
+    // The clock the admission check validated stamps the initial report; a
+    // second read would find it invalid and capture nothing.
+    let (_, initial) = table
+        .timed()
+        .lock()
+        .drain(accepted[0].key(), accepted[0].generation());
+    assert_eq!(
+        initial
+            .iter()
+            .map(|change| change.frame())
+            .collect::<Vec<_>>(),
+        vec![valid]
+    );
+}

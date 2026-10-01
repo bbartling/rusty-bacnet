@@ -209,6 +209,10 @@ also leaves out `bacnet-cli/pcap`, which needs the Npcap SDK. Each job runs:
 
 ```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+# stack guard (#953): STACK_GUARD_TESTS again with 1 MiB thread stacks, after
+# `ulimit -s 1024` on macOS so the CLI tests' `bacnet` processes get a 1 MiB
+# main thread, as on Windows
+RUST_MIN_STACK=1048576 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci -E "$STACK_GUARD_TESTS"
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
 cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
@@ -223,7 +227,11 @@ cargo nextest run -p rusty-bacnet --locked --profile ci
 
 PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
 Every step runs even when an earlier one failed, so one run reports each
-failure. The per-crate default-feature checks
+failure. `STACK_GUARD_TESTS` (in the workflow's `env`) selects every server,
+client, endpoint, integration and CLI test, the benchmark SC mTLS tests and
+bacnet-transport's BACnet/SC tests; the guard step runs `--no-run` first
+because rustc reads `RUST_MIN_STACK` too, and adds a minute or two to each
+job. The per-crate default-feature checks
 (`scripts/ci/check-default-features.sh`) run on Linux only.
 
 **Toolchain and tools.** Both runner images ship rustup, and
@@ -265,8 +273,16 @@ macOS and 21 on Windows cold, and 13 and 16 with a warm cache.
 - Stacks are smaller on Windows: the main thread gets 1 MiB (8 MiB on Linux
   and macOS), so `#[tokio::main]` binaries box their large futures, as
   `bacnet` does. Test threads get 2 MiB everywhere, and debug-build async
-  fixtures can fill that; box big fixture futures (`Box::pin`). Running a test
-  with `RUST_MIN_STACK=1048576` on macOS shows how close it is.
+  fixtures can fill that. A debug build gives every future an async fn awaits
+  at least one stack slot of its own, sized to the whole future, in that fn's
+  poll frame, so a fixture or startup path that awaits many large futures has
+  a large frame. Create such a future in a helper that boxes it
+  (`boxed(|| step()).await`, as the server, SC and fixture code does since
+  #953); `Box::pin(step())` in the caller still builds the full-size temporary
+  in the caller's frame. The stack guard step catches regressions; to see how
+  close a test is, bisect `RUST_MIN_STACK` (or `ulimit -s` for a binary's main
+  thread). On nightly, `-Zprint-type-sizes` gives future sizes, and
+  `-Cremark=prologepilog` gives each function's frame size.
 - Another socket may bind `127.0.0.1:P` beside a wildcard `0.0.0.0:P` on
   Windows unless the first socket set `SO_EXCLUSIVEADDRUSE`, which an
   ephemeral B/IP or B/IPv6 socket now does. Linux refuses that bind. macOS

@@ -397,11 +397,19 @@ impl<T: TransportPort> TargetAudit<T> {
     }
 }
 
-pub(super) fn spawn_owned(
+/// Spawn the long-lived task `make` creates, holding `owner` until it ends.
+///
+/// The task's future is created and boxed here rather than in the caller's
+/// poll frame (#953).
+pub(super) fn spawn_owned<F>(
     owner: Option<Arc<bacnet_objects::database::AuditOwnership>>,
-    future: impl std::future::Future<Output = ()> + Send + 'static,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    make: impl FnOnce() -> F,
+) -> JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let future = make();
+    super::heap_futures::spawn_boxed(move || async move {
         let _owner = owner;
         future.await;
     })

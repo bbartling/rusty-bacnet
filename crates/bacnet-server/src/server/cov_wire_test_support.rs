@@ -69,7 +69,7 @@ pub(super) type Frames = Arc<StdMutex<Vec<Apdu>>>;
 struct ClockLink {
     frames: Frames,
     clock: SharedClock,
-    /// Device time once a SimpleACK has been sent.
+    /// Device time once a SimpleACK or Error response has been sent.
     after_ack: Arc<StdMutex<Option<ClockFrame>>>,
     /// Device time once a broadcast (an event notification) has been sent.
     after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
@@ -86,7 +86,7 @@ impl ClockLink {
         }
         let apdu = frame.apdu();
         match &apdu {
-            Apdu::SimpleAck(_) => {
+            Apdu::SimpleAck(_) | Apdu::Error(_) => {
                 if let Some(next) = self.after_ack.lock().unwrap().take() {
                     *self.clock.0.lock().unwrap() = next;
                 }
@@ -241,12 +241,44 @@ impl Harness {
         confirmed: bool,
         specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
     ) {
+        self.subscribe_with_delay(confirmed, specs, 10).await;
+    }
+
+    /// [`Self::subscribe_specs`] with a chosen Max_Notification_Delay.
+    pub(super) async fn subscribe_with_delay(
+        &mut self,
+        confirmed: bool,
+        specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
+        max_notification_delay: u32,
+    ) {
+        self.subscribe_process(856, confirmed, specs, Some(max_notification_delay))
+            .await;
+    }
+
+    /// Cancel `specs` of the harness's usual context.
+    pub(super) async fn cancel_specs(
+        &mut self,
+        confirmed: bool,
+        specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
+    ) {
+        self.subscribe_process(856, confirmed, specs, None).await;
+    }
+
+    /// SubscribeCOVPropertyMultiple for `process`: a 300 s subscription with
+    /// `max_notification_delay`, or a cancellation when it is `None`.
+    pub(super) async fn subscribe_process(
+        &mut self,
+        process: u32,
+        confirmed: bool,
+        specs: Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, bool)>)>,
+        max_notification_delay: Option<u32>,
+    ) {
         let mut body = BytesMut::new();
         SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 856,
+            subscriber_process_identifier: process,
             issue_confirmed_notifications: confirmed,
-            lifetime: Some(300),
-            max_notification_delay: Some(10),
+            lifetime: max_notification_delay.map(|_| 300),
+            max_notification_delay,
             list_of_cov_subscription_specifications: specs
                 .into_iter()
                 .map(|(object, references)| COVSubscriptionSpecification {
@@ -272,6 +304,25 @@ impl Harness {
             body,
         )
         .await;
+    }
+
+    /// DeviceCommunicationControl without a password, for a server configured
+    /// with the legacy permissive DCC policy.
+    pub(super) async fn dcc(
+        &mut self,
+        enable_disable: bacnet_types::enums::EnableDisable,
+        minutes: Option<u16>,
+    ) {
+        let mut body = BytesMut::new();
+        bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
+            time_duration: minutes,
+            enable_disable,
+            password: None,
+        }
+        .encode(&mut body)
+        .unwrap();
+        self.request(ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL, body)
+            .await;
     }
 
     /// WriteProperty PV at priority 8; the clock moves to `after_ack` when the

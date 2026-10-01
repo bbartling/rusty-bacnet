@@ -25,6 +25,10 @@ pub(crate) trait WriteCommitObserver: Send {
     fn committed(&mut self, db: &mut ObjectDatabase);
     /// Execution returned an error after `before`; never called for authorization denial.
     fn failed(&mut self, db: &mut ObjectDatabase, error: &Error);
+    /// A write attempt on `oid` succeeded and its effects are in `db`. Called
+    /// after `committed`, and also for the Device-owned recipient write that
+    /// bypasses `before` and `committed`.
+    fn applied(&mut self, _db: &ObjectDatabase, _oid: ObjectIdentifier) {}
 }
 
 /// Validate database-owned Object_Name uniqueness before mutation.
@@ -193,6 +197,9 @@ pub(crate) fn handle_write_property_multiple_observed(
                     ) {
                         return semantic_failure(error, reference, committed_oids);
                     }
+                    if let Some(observer) = observer.as_deref_mut() {
+                        observer.applied(db, oid);
+                    }
                     if !committed_oids.contains(&oid) {
                         committed_oids.push(oid);
                     }
@@ -236,6 +243,7 @@ pub(crate) fn handle_write_property_multiple_observed(
         }
         if let Some(observer) = observer.as_deref_mut() {
             observer.committed(db);
+            observer.applied(db, oid);
         }
         if !committed_oids.contains(&oid) {
             committed_oids.push(oid);
@@ -473,6 +481,9 @@ pub(crate) fn handle_write_property_observed(
                     request.priority,
                     source,
                 )?;
+                if let Some(observer) = observer {
+                    observer.applied(db, oid);
+                }
                 return Ok(oid);
             }
         }
@@ -512,6 +523,7 @@ pub(crate) fn handle_write_property_observed(
     }
     if let Some(observer) = observer {
         observer.committed(db);
+        observer.applied(db, oid);
     }
     Ok(oid)
 }

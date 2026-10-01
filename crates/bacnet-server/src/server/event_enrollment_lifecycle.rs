@@ -31,7 +31,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
     } = task;
     let evaluation_interval_secs = period.as_secs().max(1);
     let owner = notification_transactions.audit_owner_lease();
-    tokio::spawn(async move {
+    super::heap_futures::spawn_boxed(move || async move {
         let _owner = owner;
         let mut interval = tokio::time::interval(period);
         // A stalled runtime must not fire a burst of catch-up passes; the

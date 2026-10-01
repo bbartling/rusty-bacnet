@@ -153,6 +153,7 @@ mod audit_recipient_routes;
 mod audit_reporter;
 mod audit_reporter_changes;
 mod audit_send_now;
+mod heap_futures;
 pub use audit_reporter::{valid_bip_audit_address, AuditReportersConfig};
 #[cfg(test)]
 mod audit_reporter_tests;
@@ -666,7 +667,11 @@ mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;
 #[cfg(test)]
+mod cov_timed_deadline_tests;
+#[cfg(test)]
 mod cov_timed_multiple_tests;
+#[cfg(test)]
+mod cov_timed_producer_tests;
 #[cfg(test)]
 mod cov_wire_test_support;
 #[cfg(test)]

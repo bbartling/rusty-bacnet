@@ -115,6 +115,14 @@ impl FlightMarker {
         state.ticket == 0 && state.hold_until.is_none_or(|until| now >= until)
     }
 
+    /// End of a hold-off still in force at `now`, with no report outstanding.
+    fn holding_until(&self, now: Instant) -> Option<Instant> {
+        let state = self.state();
+        state
+            .hold_until
+            .filter(|until| state.ticket == 0 && now < *until)
+    }
+
     /// Clear a hold-off that has passed, reporting whether there was one.
     fn take_owed(&self, now: Instant) -> bool {
         let mut state = self.state();
@@ -252,6 +260,17 @@ impl CovSubscriptionTable {
             && snapshots
                 .iter()
                 .all(|snapshot| self.confirmed_idle_at(snapshot, now))
+    }
+
+    /// End of the hold-off a failed report put on a confirmed context, while
+    /// it is in force. The timestamped backstop retries the context then.
+    pub(crate) fn context_hold_until(&self, context: &MultipleContextKey) -> Option<Instant> {
+        if !context.confirmed {
+            return None;
+        }
+        self.multiple_context_references(context)
+            .next()
+            .and_then(|entry| entry.flight.holding_until(Instant::now()))
     }
 
     /// Whether an idle context still owes the follow-up of a failed report,
