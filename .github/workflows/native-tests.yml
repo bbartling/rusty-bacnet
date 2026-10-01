@@ -1,7 +1,7 @@
 name: Native tests
 
-# Runs the test suites natively on macOS (Apple Silicon) and Windows (x86_64
-# MSVC), on GitHub-hosted runners (#950). Linux CI, releases and publishing run
+# Runs the tests, clippy and rustdoc natively on macOS (Apple Silicon) and
+# Windows (x86_64 MSVC), on GitHub-hosted runners (#950). Linux CI, releases and publishing run
 # on Forgejo (.forgejo/workflows/); GitHub only runs what needs its native
 # runners or services. See docs/ci.md.
 #
@@ -31,8 +31,6 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
-  # serial and ethernet are Linux-only features.
-  NATIVE_FEATURES: bacnet-transport/ipv6,bacnet-transport/sc-tls
   # The versions the Forgejo CI image pins (.forgejo/ci-image/Dockerfile).
   NEXTEST_VERSION: 0.9.146
   MATURIN_VERSION: 1.15.0
@@ -59,6 +57,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The macOS feature list from scripts/ci/local-macos.sh: every optional
+      # feature except the Linux-only serial and ethernet. Windows also leaves
+      # out bacnet-cli/pcap, which needs the Npcap SDK.
+      - name: Feature set
+        run: |
+          features=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh)
+          [ -n "$features" ] || { echo "::error::no features= line in scripts/ci/local-macos.sh"; exit 1; }
+          if [ "$RUNNER_OS" = Windows ]; then
+            features=$(tr , '\n' <<<"$features" | grep -vx bacnet-cli/pcap | paste -sd , -)
+          fi
+          echo "NATIVE_FEATURES=$features" | tee -a "$GITHUB_ENV"
       # The runner images ship rustup. With no arguments it installs the
       # toolchain rust-toolchain.toml pins, so there is no version to keep in
       # sync here. aws-lc-sys (sc-tls) builds with the images' own C tools: on
@@ -75,19 +84,43 @@ jobs:
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      # Every PyO3 build below links this interpreter (#919): PYO3_PYTHON is
+      # set to it, not to the venv that the maturin step makes.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Point PyO3 at that interpreter
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "PYO3_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+
       # nextest runs each test in its own process (.config/nextest.toml); it
-      # does not run doctests, so cargo test --doc covers those.
+      # does not run doctests, so cargo test --doc covers those. Every later
+      # step runs even when an earlier one failed, to report each failure.
       - name: Tests
         run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
       - name: Doctests
         if: ${{ !cancelled() }}
         run: cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        id: python
+      # Tests that exist only with a feature off (the CLI's rebuild advice for
+      # sc-tls and pcap), which the feature set compiles out.
+      - name: bacnet-cli tests (default features)
         if: ${{ !cancelled() }}
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+        run: cargo nextest run -p bacnet-cli --locked --profile ci
+      # Warnings are errors for workspace code only, as in Forgejo CI.
+      - name: Clippy (every native feature)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
+      - name: Clippy (PyO3 bindings)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      - name: Rustdoc (every native feature)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$NATIVE_FEATURES"
+
       # A debug extension builds faster, and the suite doesn't need release speed.
       - name: Build the extension (maturin develop)
         if: ${{ !cancelled() }}
@@ -115,6 +148,4 @@ jobs:
       # setup-python interpreter's libpython (#919), not the venv's.
       - name: PyO3 crate Rust tests
         if: ${{ !cancelled() }}
-        env:
-          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
         run: cargo nextest run -p rusty-bacnet --locked --profile ci
