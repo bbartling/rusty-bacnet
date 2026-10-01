@@ -1,47 +1,60 @@
 #!/usr/bin/env python3
-"""Unit tests for check_artifacts.py (no ELF files): python3 -m unittest discover -s scripts/release"""
+"""Unit tests for check_artifacts.py (no binaries): python3 -m unittest discover -s scripts/release"""
 
 import tarfile
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 import check_artifacts as checks
+
+LINUX = ["manylinux_2_17_x86_64.manylinux2014_x86_64", "manylinux_2_17_aarch64.manylinux2014_aarch64"]
+OTHERS = ["macosx_10_12_x86_64", "macosx_11_0_arm64", "win_amd64"]
 
 
 class WheelSetTests(unittest.TestCase):
     PY = ["3.11", "3.12"]
-    ARCH = ["x86_64", "aarch64"]
 
-    def names(self, version="1.2.0"):
+    def names(self, version="1.2.0", platforms=LINUX):
         out = [f"rusty_bacnet-{version}.tar.gz"]
         for py in ("cp311", "cp312"):
-            for arch in self.ARCH:
-                out.append(f"rusty_bacnet-{version}-{py}-{py}-manylinux_2_17_{arch}.manylinux2014_{arch}.whl")
+            for plat in platforms:
+                out.append(f"rusty_bacnet-{version}-{py}-{py}-{plat}.whl")
         return out
 
     def test_complete_set(self):
-        errors, wheels = checks.check_wheel_set(self.names(), self.PY, self.ARCH, "1.2.0")
+        errors, wheels = checks.check_wheel_set(self.names(), self.PY, LINUX, "1.2.0")
         self.assertEqual((errors, len(wheels)), ([], 4))
+        everything = LINUX + OTHERS
+        errors, wheels = checks.check_wheel_set(self.names(platforms=everything), self.PY, everything, "1.2.0")
+        self.assertEqual((errors, len(wheels)), ([], 10))
 
     def test_missing_and_unexpected_wheels(self):
         names = self.names()[:-1] + ["rusty_bacnet-1.2.0-cp312-cp312-manylinux_2_39_x86_64.whl"]
-        errors, _ = checks.check_wheel_set(names, self.PY, self.ARCH, "1.2.0")
+        errors, _ = checks.check_wheel_set(names, self.PY, LINUX, "1.2.0")
         self.assertTrue(any("missing wheel for tag cp312-cp312-manylinux_2_17_aarch64" in e for e in errors))
         self.assertTrue(any("unexpected wheel" in e and "2_39" in e for e in errors))
+
+    def test_macos_tag_must_match_exactly(self):
+        names = self.names(platforms=["macosx_11_0_arm64"])
+        names[-1] = names[-1].replace("macosx_11_0", "macosx_13_0")
+        errors, _ = checks.check_wheel_set(names, self.PY, ["macosx_11_0_arm64"], "1.2.0")
+        self.assertIn("missing wheel for tag cp312-cp312-macosx_11_0_arm64", errors)
+        self.assertTrue(any("unexpected wheel" in e and "macosx_13_0" in e for e in errors))
 
     def test_version_mismatch_and_missing_sdist(self):
         names = self.names()[1:] + ["rusty_bacnet-1.3.0.tar.gz"]
         names[0] = names[0].replace("1.2.0", "1.1.0")
-        errors, _ = checks.check_wheel_set(names, self.PY, self.ARCH, "1.2.0")
+        errors, _ = checks.check_wheel_set(names, self.PY, LINUX, "1.2.0")
         self.assertTrue(any("has version 1.1.0, the release 1.2.0" in e for e in errors))
         self.assertTrue(any("rusty_bacnet-1.3.0.tar.gz has version 1.3.0, the release 1.2.0" in e for e in errors))
-        errors, _ = checks.check_wheel_set(self.names()[1:], self.PY, self.ARCH, "1.2.0")
+        errors, _ = checks.check_wheel_set(self.names()[1:], self.PY, LINUX, "1.2.0")
         self.assertIn("expected one rusty_bacnet sdist, found 0", errors)
 
     def test_pre_release_wheels_use_the_pep440_version(self):
-        errors, _ = checks.check_wheel_set(self.names("1.2.0rc1"), self.PY, self.ARCH, checks.pep440("1.2.0-rc.1"))
+        errors, _ = checks.check_wheel_set(self.names("1.2.0rc1"), self.PY, LINUX, checks.pep440("1.2.0-rc.1"))
         self.assertEqual(errors, [])
 
     def test_pep440(self):
@@ -72,8 +85,29 @@ class WheelSetTests(unittest.TestCase):
         self.assertTrue(any(bad in e and "differs" in e for e in errors))
         self.assertTrue(any(missing in e and "lacks" in e for e in errors))
 
+
+class PlatformTests(unittest.TestCase):
+    def test_parse_platform(self):
+        cases = {
+            "manylinux_2_17_x86_64.manylinux2014_x86_64": ("linux", "x86_64", None),
+            "manylinux_2_17_aarch64": ("linux", "aarch64", None),
+            "linux_aarch64": ("linux", "aarch64", None),
+            "macosx_10_12_x86_64": ("macos", "x86_64", (10, 12)),
+            "macosx_11_0_arm64": ("macos", "aarch64", (11, 0)),
+            "win_amd64": ("windows", "x86_64", None),
+        }
+        for tag, want in cases.items():
+            with self.subTest(tag=tag):
+                self.assertEqual(checks.parse_platform(tag), want)
+        for bad in ("linux_riscv64", "macosx_11_0_universal2", "win32", "x86_64"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                checks.parse_platform(bad)
+
     def test_extension_suffix(self):
-        self.assertEqual(checks.extension_suffix("cp314", "aarch64"), ".cpython-314-aarch64-linux-gnu.so")
+        self.assertEqual(checks.extension_suffix("cp314", "manylinux_2_17_aarch64.manylinux2014_aarch64"),
+                         ".cpython-314-aarch64-linux-gnu.so")
+        self.assertEqual(checks.extension_suffix("cp311", "macosx_10_12_x86_64"), ".cpython-311-darwin.so")
+        self.assertEqual(checks.extension_suffix("cp312", "win_amd64"), ".cp312-win_amd64.pyd")
 
 
 class ElfParsingTests(unittest.TestCase):
@@ -97,6 +131,131 @@ class ElfParsingTests(unittest.TestCase):
             " 0x000000000000000c (INIT)               0x1000\n"
         )
         self.assertEqual(checks.needed_libraries(dynamic), ["libm.so.6", "libpcap.so.0.8"])
+
+
+def load_dylib(n, name):
+    return (f"Load command {n}\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n"
+            f"         name {name} (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n"
+            "      current version 1.0.0\ncompatibility version 1.0.0\n")
+
+
+def macho_text(cpu="ARM64", version_cmd=None, dylibs=checks.MACOS_SYSTEM, extra=""):
+    version_cmd = version_cmd or ("Load command 1\n       cmd LC_BUILD_VERSION\n   cmdsize 32\n  platform macos\n"
+                                  "       sdk 26.4\n     minos 11.0\n    ntools 1\n      tool 0x000005\n"
+                                  "   version 0.0\n")
+    return ("x.so:\nMach header\n      magic cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags\n"
+            f"MH_MAGIC_64   {cpu}        ALL  0x00       DYLIB    20       2464 DYLDLINK TWOLEVEL\n"
+            "Load command 0\n      cmd LC_SEGMENT_64\n  cmdsize 712\n  segname __TEXT\nSection\n  sectname __text\n"
+            + version_cmd + "".join(load_dylib(n, d) for n, d in enumerate(sorted(dylibs), 2)) + extra)
+
+
+BIND = (
+    "x.so:\n\nBind table:\n"
+    "segment  section            address    type       addend dylib            symbol\n"
+    "__DATA_CONST __got              0x01314000 pointer         0 flat-namespace   _PyExc_BaseException\n"
+    "__DATA_CONST __got              0x01314020 pointer         0 flat-namespace   __Py_NoneStruct\n"
+    "__DATA_CONST __got              0x01314040 pointer         0 flat-namespace   _kCFBooleanTrue\n"
+    "__DATA_CONST __got              0x01314048 pointer         0 libSystem        _free\n"
+    "\nLazy bind table:\nsegment  section            address     dylib            symbol\n"
+    "__DATA   __la_symbol_ptr    0x01334000 flat-namespace   _IOServiceMatching\n"
+    "__DATA   __la_symbol_ptr    0x01334008 libSystem        _malloc\n"
+)
+
+
+class MachoTests(unittest.TestCase):
+    def test_build_version_and_dylibs(self):
+        info = checks.macho_headers(macho_text())
+        self.assertEqual((info["cpu"], info["platform"], info["minos"], info["chained"]),
+                         ("ARM64", "macos", "11.0", False))
+        self.assertEqual(info["dylibs"], sorted(checks.MACOS_SYSTEM))
+
+    def test_version_min_macosx(self):
+        cmd = "Load command 1\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version 10.12\n      sdk 26.4\n"
+        info = checks.macho_headers(macho_text("X86_64", cmd))
+        self.assertEqual((info["cpu"], info["platform"], info["minos"]), ("X86_64", "macos", "10.12"))
+
+    def test_flat_lookups(self):
+        self.assertEqual(checks.flat_lookups(BIND),
+                         ["_IOServiceMatching", "_PyExc_BaseException", "__Py_NoneStruct", "_kCFBooleanTrue"])
+
+    def check(self, headers, bind, arch="aarch64", minos=(11, 0), extension=True):
+        outputs = {"--private-headers": headers, "--bind": bind}
+        with mock.patch.object(checks, "run", lambda _tool, _path, *flags: outputs[flags[1]]), \
+                mock.patch("builtins.print"):
+            return checks.check_macho(Path("x.so"), "x.so", arch, minos, extension)
+
+    def test_extension_passes(self):
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | checks.MACOS_FRAMEWORKS)
+        self.assertEqual(self.check(headers, BIND), [])
+
+    def test_wrong_arch_minimum_and_extra_dylib(self):
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | {"/usr/lib/libz.1.dylib"})
+        errors = self.check(headers, BIND, arch="x86_64", minos=(10, 12))
+        self.assertEqual(len(errors), 3, errors)
+        self.assertTrue(any("ARM64 Mach-O, not x86_64" in e for e in errors))
+        self.assertTrue(any("needs macOS 11.0, its platform tag says 10.12" in e for e in errors))
+        self.assertTrue(any("libz.1.dylib" in e for e in errors))
+
+    def test_cli_loads_no_framework_and_leaves_no_flat_lookup(self):
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | checks.MACOS_FRAMEWORKS)
+        errors = self.check(headers, BIND, extension=False)
+        self.assertEqual(len(errors), 3, errors)
+        self.assertTrue(any("flat lookup" in e and "(4)" in e for e in errors))
+
+    def test_unexpected_flat_lookup_and_chained_fixups(self):
+        bind = BIND + "__DATA   __la_symbol_ptr    0x01334010 flat-namespace   _SSLRead\n"
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | checks.MACOS_FRAMEWORKS)
+        self.assertEqual(self.check(headers, bind), [
+            "x.so leaves symbols to a flat lookup that neither Python nor the expected frameworks provide (1): _SSLRead"])
+        chained = headers + "Load command 9\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n"
+        self.assertTrue(any("chained fixups" in e for e in self.check(chained, BIND)))
+
+
+def pe_text(machine="IMAGE_FILE_MACHINE_AMD64", dll=False, subsystem="IMAGE_SUBSYSTEM_WINDOWS_CUI", imports=()):
+    flags = "    IMAGE_FILE_DLL (0x2000)\n" if dll else ""
+    out = (f"File: x\nFormat: COFF-x86-64\nImageFileHeader {{\n  Machine: {machine} (0x8664)\n"
+           f"  Characteristics [ (0x22)\n{flags}    IMAGE_FILE_EXECUTABLE_IMAGE (0x2)\n  ]\n}}\n"
+           f"ImageOptionalHeader {{\n  Subsystem: {subsystem} (0x3)\n}}\n")
+    for name in imports:
+        out += f"Import {{\n  Name: {name}\n  ImportLookupTableRVA: 0x1\n  Symbol: X (0)\n}}\n"
+    return out
+
+
+SYSTEM = ["KERNEL32.dll", "kernel32.dll", "ntdll.dll", "ws2_32.dll", "api-ms-win-core-synch-l1-2-0.dll"]
+CRT = ["VCRUNTIME140.dll", "api-ms-win-crt-runtime-l1-1-0.dll"]
+
+
+class PeTests(unittest.TestCase):
+    def check(self, text, python_dll=None, arch="x86_64"):
+        with mock.patch.object(checks, "run", return_value=text), mock.patch("builtins.print"):
+            return checks.check_pe(Path("x"), "x", arch, python_dll)
+
+    def test_parse(self):
+        text = pe_text(dll=True, imports=SYSTEM) + "DelayImport {\n  Name: user32.dll\n}\n"
+        info = checks.pe_headers(text)
+        self.assertEqual((info["machine"], info["dll"], info["subsystem"]),
+                         ("IMAGE_FILE_MACHINE_AMD64", True, "IMAGE_SUBSYSTEM_WINDOWS_CUI"))
+        self.assertEqual(info["imports"], SYSTEM + ["user32.dll"])
+
+    def test_static_crt_cli_passes(self):
+        self.assertEqual(self.check(pe_text(imports=SYSTEM)), [])
+
+    def test_cli_with_crt_dll_or_python_fails(self):
+        errors = self.check(pe_text(imports=SYSTEM + CRT + ["python312.dll"]))
+        self.assertEqual(len(errors), 3, errors)
+        self.assertEqual(sum("links the CRT statically" in e for e in errors), 2)
+
+    def test_extension(self):
+        good = pe_text(dll=True, subsystem="IMAGE_SUBSYSTEM_WINDOWS_GUI", imports=SYSTEM + CRT + ["python312.dll"])
+        self.assertEqual(self.check(good, "python312.dll"), [])
+        errors = self.check(good, "python313.dll")
+        self.assertEqual(errors, ["x imports ['python312.dll'], expected python313.dll"])
+
+    def test_wrong_machine_kind_and_unexpected_dll(self):
+        errors = self.check(pe_text(machine="IMAGE_FILE_MACHINE_ARM64", dll=True, imports=SYSTEM + ["libssl-3.dll"]))
+        self.assertEqual(len(errors), 3, errors)
+        self.assertTrue(any("not a console program" in e for e in errors))
+        self.assertTrue(any("libssl-3.dll" in e for e in errors))
 
 
 if __name__ == "__main__":

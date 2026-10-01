@@ -1,9 +1,9 @@
 name: Release
 
-# Releases from Forgejo (#943) while GitHub Actions is disabled on the mirror
-# (#905). The jobs run on the Linux amd64 runner in the CI image, which ci.yml
-# builds, so this workflow builds the Linux artifacts. No release is tagged
-# until it also builds macOS and Windows (#944). See docs/ci.md, "Release".
+# Releases from Forgejo (#943). The jobs run on the Linux amd64 runner in the CI
+# image, which ci.yml builds, and cross-compile every artifact there: Linux and
+# macOS with zig, Windows with xwin's MSVC CRT and SDK (#944). See docs/ci.md,
+# "Release".
 #
 #   v* tag pushed     validate (preflight both release hosts, wait for CI on
 #                     the tag), build, test the artifacts, then publish in
@@ -48,7 +48,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   # The same tag as ci.yml; its "CI image" job fails if they differ.
-  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:7fee32139ba3
+  CI_IMAGE: forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:11520c0607e5
   # The newest glibc any artifact may need: manylinux2014 for the wheels, and
   # RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later for the CLI. The image's
   # static libpcap targets the same version.
@@ -273,8 +273,11 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # The minimum macOS versions here, in the CLI matrix and in the artifact test's
+  # platform tags are those of the 0.11.0 wheels and Rust's defaults: 10.12 on
+  # x86_64, 11.0 on arm64. The artifact test fails if a binary disagrees with its tag.
   wheels:
-    name: Wheels (${{ matrix.arch }})
+    name: Wheels (${{ matrix.name }})
     needs: validate
     runs-on: ubuntu-latest
     container:
@@ -282,7 +285,26 @@ jobs:
     timeout-minutes: 45
     strategy:
       matrix:
-        arch: [x86_64, aarch64]
+        include:
+          # zig links against glibc 2.17.
+          - name: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            maturin: --zig --compatibility manylinux2014
+          - name: linux-aarch64
+            target: aarch64-unknown-linux-gnu
+            maturin: --zig --compatibility manylinux2014
+          - name: macos-x86_64
+            target: x86_64-apple-darwin
+            maturin: --zig
+            macos: "10.12"
+          - name: macos-arm64
+            target: aarch64-apple-darwin
+            maturin: --zig
+            macos: "11.0"
+          # maturin's built-in xwin, with the image's MSVC CRT and Windows SDK.
+          - name: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            maturin: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -292,25 +314,42 @@ jobs:
         with:
           name: notices
           path: crates/rusty-bacnet
-      # zig links against glibc 2.17. The image has only Python 3.12; for the
-      # other versions maturin uses its bundled sysconfig. SOURCE_DATE_EPOCH
-      # pins the wheels' timestamps, so a rebuild matches.
+      # The image has only Python 3.12; for the other versions, and for macOS
+      # and Windows, maturin uses its bundled sysconfig. SOURCE_DATE_EPOCH pins
+      # the wheels' timestamps, so a rebuild matches.
       - name: maturin build
+        env:
+          TARGET: ${{ matrix.target }}
+          MATURIN_ARGS: ${{ matrix.maturin }}
+          MACOS: ${{ matrix.macos }}
         run: |
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           export SOURCE_DATE_EPOCH
-          # shellcheck disable=SC2086 # PYTHONS is a list.
-          maturin build --release --locked --zig --compatibility manylinux2014 \
-            --target "${{ matrix.arch }}-unknown-linux-gnu" -i $PYTHONS \
+          if [ -n "$MACOS" ]; then
+            # maturin's wheel tag and zig's target (zig-macos.sh) both take the
+            # minimum macOS from this.
+            export MACOSX_DEPLOYMENT_TARGET=$MACOS
+            export CARGO_ZIGBUILD_ZIG_PATH=$PWD/scripts/release/zig-macos.sh
+            # Link stubs for IOKit and CoreFoundation, which serialport (MS/TP)
+            # uses: zig has no Apple frameworks, and there's no SDK here.
+            export RUSTFLAGS="-C link-arg=-F$PWD/scripts/release/macos-frameworks"
+          fi
+          case "$TARGET" in
+            # No PDB, and a timestamp that hashes the output, as for the CLI.
+            *-windows-msvc) export RUSTFLAGS="-C link-arg=/DEBUG:NONE -C link-arg=/Brepro" ;;
+          esac
+          # shellcheck disable=SC2086 # MATURIN_ARGS and PYTHONS are lists.
+          maturin build --release --locked $MATURIN_ARGS --target "$TARGET" -i $PYTHONS \
             -m crates/rusty-bacnet/Cargo.toml --out dist
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
         with:
-          name: wheels-${{ matrix.arch }}
+          name: wheels-${{ matrix.name }}
           path: dist/
           if-no-files-found: error
 
+  # Packet capture (pcap) only on Linux, as in 0.11.0.
   cli:
-    name: CLI (${{ matrix.arch }})
+    name: CLI (${{ matrix.name }})
     needs: validate
     runs-on: ubuntu-latest
     container:
@@ -319,33 +358,66 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: amd64
+          - name: linux-amd64
             target: x86_64-unknown-linux-gnu
             libpcap: x86_64
-          - arch: arm64
+          - name: linux-arm64
             target: aarch64-unknown-linux-gnu
             libpcap: aarch64
+          - name: macos-amd64
+            target: x86_64-apple-darwin
+            macos: "10.12"
+          - name: macos-arm64
+            target: aarch64-apple-darwin
+            macos: "11.0"
+          - name: windows-amd64
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: cargo zigbuild
+      - name: Build
         env:
-          # The image's static libpcap (.forgejo/ci-image/Dockerfile).
-          LIBPCAP_LIBDIR: /opt/libpcap/${{ matrix.libpcap }}/lib
-          # Its version, stated: the pcap crate's build script would otherwise
-          # try to load libpcap.so to ask, and that is the linker-script shim.
+          NAME: ${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
+          MACOS: ${{ matrix.macos }}
+          LIBPCAP: ${{ matrix.libpcap }}
+          # The image's static libpcap's version, stated: the pcap crate's build
+          # script would otherwise try to load libpcap.so to ask, and that is the
+          # linker-script shim.
           LIBPCAP_VER: "1.10.7"
         run: |
-          [ "$(cat /opt/libpcap/VERSION)" = "$LIBPCAP_VER" ] \
-            || { echo "::error::the image has libpcap $(cat /opt/libpcap/VERSION); set LIBPCAP_VER to it"; exit 1; }
-          cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap \
-            --target "${{ matrix.target }}.$GLIBC"
+          bin=bacnet asset=bacnet-$NAME
+          case "$TARGET" in
+            *-linux-gnu)
+              [ "$(cat /opt/libpcap/VERSION)" = "$LIBPCAP_VER" ] \
+                || { echo "::error::the image has libpcap $(cat /opt/libpcap/VERSION); set LIBPCAP_VER to it"; exit 1; }
+              # The image's static libpcap (.forgejo/ci-image/Dockerfile).
+              LIBPCAP_LIBDIR=/opt/libpcap/$LIBPCAP/lib LIBPCAP_VER=$LIBPCAP_VER \
+                cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap --target "$TARGET.$GLIBC"
+              ;;
+            *-apple-darwin)
+              # zig-macos.sh gives zig the minimum macOS (see the wheels job).
+              MACOSX_DEPLOYMENT_TARGET=$MACOS CARGO_ZIGBUILD_ZIG_PATH=$PWD/scripts/release/zig-macos.sh \
+                cargo zigbuild --release --locked -p bacnet-cli --features sc-tls --target "$TARGET"
+              ;;
+            *-windows-msvc)
+              # The C runtime linked statically, so the CLI doesn't need the
+              # Visual C++ Redistributable (VCRUNTIME140.dll). No PDB, whose
+              # temporary paths would change the build ID on every build, and
+              # lld-link's /Brepro, which puts a hash of the output where the
+              # timestamps go, so a rebuild matches.
+              RUSTFLAGS="-C target-feature=+crt-static -C link-arg=/DEBUG:NONE -C link-arg=/Brepro" \
+                cargo xwin build --release --locked -p bacnet-cli --features sc-tls --target "$TARGET"
+              bin=bacnet.exe asset=bacnet-$NAME.exe
+              ;;
+            *) echo "::error::no build for $TARGET"; exit 1 ;;
+          esac
           mkdir out
-          cp "target/${{ matrix.target }}/release/bacnet" "out/bacnet-linux-${{ matrix.arch }}"
+          cp "target/$TARGET/release/$bin" "out/$asset"
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
         with:
-          name: cli-${{ matrix.arch }}
+          name: cli-${{ matrix.name }}
           path: out/
           if-no-files-found: error
 
@@ -368,17 +440,24 @@ jobs:
         run: |
           mkdir release
           cp artifacts/cli-*/* artifacts/wheels-*/* artifacts/sdist/* artifacts/notices/THIRD-PARTY-NOTICES release/
-          chmod +x release/bacnet-linux-*
+          chmod +x release/bacnet-*
           ls -l release
           (cd release && sha256sum -- *)
-      - name: Versions, wheel tags, notices, glibc and CLI linkage
+      # Static checks of every file, the macOS and Windows ones included: nothing
+      # here can run those (docs/ci.md, "What is and isn't tested").
+      - name: Versions, wheel tags, notices, architectures and linkage
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           # shellcheck disable=SC2086 # PYTHONS is a list.
           python3 scripts/release/check_artifacts.py release --release-version "$VERSION" --glibc "$GLIBC" \
-            --python $PYTHONS --wheel-arch x86_64 aarch64 \
-            --cli bacnet-linux-amd64=x86_64 bacnet-linux-arm64=aarch64 --notices release/THIRD-PARTY-NOTICES
+            --python $PYTHONS \
+            --wheel-platform manylinux_2_17_x86_64.manylinux2014_x86_64 \
+              manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_10_12_x86_64 macosx_11_0_arm64 win_amd64 \
+            --cli bacnet-linux-amd64=linux_x86_64 bacnet-linux-arm64=linux_aarch64 \
+              bacnet-macos-amd64=macosx_10_12_x86_64 bacnet-macos-arm64=macosx_11_0_arm64 \
+              bacnet-windows-amd64.exe=win_amd64 \
+            --notices release/THIRD-PARTY-NOTICES
       - name: Python suite against the installed x86_64 cp312 wheel
         run: |
           python3 -m venv /tmp/venv
@@ -401,8 +480,8 @@ jobs:
             echo "== $("/tmp/venv-$tag/bin/python" --version)"
             bash scripts/release/cli_smoke.sh "release/bacnet-linux-amd64" "/tmp/venv-$tag/bin/python"
           done
-      # The aarch64 wheels are only checked by check_artifacts.py: their tags,
-      # module names, ELF machine and glibc symbols.
+      # The aarch64, macOS and Windows wheels are only checked by
+      # check_artifacts.py: their tags, module names, architecture and linkage.
       - name: CLI smoke test (arm64, under qemu-user)
         env:
           CLI_WRAPPER: qemu-aarch64-static -L /usr/aarch64-linux-gnu
