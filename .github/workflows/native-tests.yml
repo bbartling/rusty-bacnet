@@ -1,0 +1,119 @@
+name: Native tests
+
+# Runs the test suites natively on macOS (Apple Silicon) and Windows (x86_64
+# MSVC), on GitHub-hosted runners (#950). Linux CI, releases and publishing run
+# on Forgejo (.forgejo/workflows/); GitHub only runs what needs its native
+# runners or services. See docs/ci.md.
+#
+# PRs live on Forgejo, so pull_request never fires here. The push mirror syncs
+# every branch Forgejo receives, so a push trigger covers every PR head and
+# every merge to dev. A PR merges only when Forgejo CI and this workflow are
+# both green on its head SHA. Tag pushes don't run it: a branches filter
+# without a tags filter skips them.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a branch cancels that branch's superseded run.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same build settings as Forgejo CI: no incremental state, and test binaries
+  # without native debug info (less codegen, linking and cache).
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # serial and ethernet are Linux-only features.
+  NATIVE_FEATURES: bacnet-transport/ipv6,bacnet-transport/sc-tls
+  # The versions the Forgejo CI image pins (.forgejo/ci-image/Dockerfile).
+  NEXTEST_VERSION: 0.9.146
+  MATURIN_VERSION: 1.15.0
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # Report both platforms even when one fails.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS arm64
+          - os: windows-latest
+            name: Windows x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner images ship rustup. With no arguments it installs the
+      # toolchain rust-toolchain.toml pins, so there is no version to keep in
+      # sync here.
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc -vV
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          cache-on-failure: true
+          env-vars: NATIVE_FEATURES
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      # nextest runs each test in its own process (.config/nextest.toml); it
+      # does not run doctests, so cargo test --doc covers those.
+      - name: Tests
+        run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+      - name: Doctests
+        if: ${{ !cancelled() }}
+        run: cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        if: ${{ !cancelled() }}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # A debug extension builds faster, and the suite doesn't need release speed.
+      - name: Build the extension (maturin develop)
+        if: ${{ !cancelled() }}
+        # Later steps get the venv through GITHUB_ENV and GITHUB_PATH. On
+        # Windows the paths use the D:/a/... form, which both bash and native
+        # programs accept.
+        run: |
+          venv=$RUNNER_TEMP/venv
+          bin=$venv/bin
+          if [ "$RUNNER_OS" = Windows ]; then venv=$(cygpath -m "$venv"); bin=$venv/Scripts; fi
+          python -m venv "$venv"
+          echo "VIRTUAL_ENV=$venv" >> "$GITHUB_ENV"
+          echo "$bin" >> "$GITHUB_PATH"
+          export VIRTUAL_ENV=$venv
+          "$bin/python" --version
+          "$bin/python" -m pip install --disable-pip-version-check "maturin==$MATURIN_VERSION"
+          "$bin/maturin" develop -m crates/rusty-bacnet/Cargo.toml --locked
+      # The SC tests make certificates with the openssl CLI.
+      - name: Python tests
+        if: ${{ !cancelled() }}
+        run: |
+          openssl version
+          python -m unittest discover -s crates/rusty-bacnet/tests
+      # The crate's lib unit tests and integration tests, linked against the
+      # setup-python interpreter's libpython (#919), not the venv's.
+      - name: PyO3 crate Rust tests
+        if: ${{ !cancelled() }}
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: cargo nextest run -p rusty-bacnet --locked --profile ci
