@@ -251,10 +251,11 @@ merge comes from that PR's run, not an older one.
 ## Release
 
 [`.forgejo/workflows/release.yml`](../.forgejo/workflows/release.yml) builds,
-tests and publishes a release from Forgejo (#943). It took over while GitHub
-Actions was disabled on the mirror (#905). The Linux runner cross-compiles every
-artifact: Linux and macOS with zig, Windows for the MSVC target with cargo-xwin
-(#944).
+tests and publishes a release from Forgejo (#943), which keeps the heavy work
+on the fixed-cost runner VM; GitHub only receives a copy of each release. The
+Linux runner cross-compiles every artifact: Linux and macOS with zig, Windows
+for the MSVC target with cargo-xwin (#944). A GitHub-hosted smoke gate for the
+macOS and Windows artifacts is #951.
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) now runs
 only when dispatched by hand, so re-enabling Actions can't publish a tag twice.
@@ -609,7 +610,7 @@ maturin's built-in xwin, the same cargo-xwin 0.23.1, for the wheels.
   Universal CRT (`api-ms-win-crt-*`) is part of Windows 10 and later. The
   artifact test enforces both.
 - **No PDB.** Both link with `/DEBUG:NONE` and `/Brepro`: the release ships
-  no PDB, and without one the CLI rebuilds identically (see
+  no PDB, and without one the Windows files rebuild identically (see
   [Re-running a partial release](#re-running-a-partial-release)).
 
 ### Third-party notices
@@ -678,14 +679,11 @@ nothing enforces it. If a rebuild ever differed, PyPI would keep the files it
 already has, a published release wouldn't change, and `SHA256SUMS` would
 still list exactly what each release holds.
 
-The macOS and Windows builds were checked the same way on the runner VM, two
-clean builds of one commit with the same paths (#944). The macOS CLI and wheel
-matched. The Windows CLI matched once it was linked without a PDB and with
-lld-link's `/Brepro` (`-C link-arg=/DEBUG:NONE -C link-arg=/Brepro`); before,
-its timestamps and PDB build ID changed on every build. The Windows wheels get
-the same flags but still differ between two `maturin build` runs, in most of
-the `.pyd`'s code, although two `cargo xwin build` runs of the same library
-match. The cause, somewhere in maturin's xwin build, is not known yet.
+With the macOS and Windows builds (#944), two dry runs of `2e393fe4` (runs 89
+and 90, 2026-10-01) again produced the same SHA-256 for all 27
+`release-assets` files. The Windows files need two linker flags for that,
+`-C link-arg=/DEBUG:NONE -C link-arg=/Brepro`: without them, the PE timestamps
+and the PDB build ID changed on every build.
 
 ### Secrets
 

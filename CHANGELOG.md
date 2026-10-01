@@ -177,11 +177,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flagged unrelated passing tests as leaky (#751).
 
 - Releases are built, tested and published from Forgejo
-  (`.forgejo/workflows/release.yml`) while GitHub Actions is disabled on the
-  mirror, and each one is copied to GitHub Releases. A manual dispatch is a dry
-  run that publishes nothing. The Linux runner cross-compiles every artifact:
-  the Linux and macOS ones with zig, and the Windows ones for the MSVC target
-  with cargo-xwin and the Microsoft CRT and Windows SDK in the CI image. That
+  (`.forgejo/workflows/release.yml`), which keeps the heavy work on the
+  project's fixed-cost runner VM, and each one is copied to GitHub Releases.
+  A manual dispatch is a dry run that publishes nothing. The Linux runner
+  cross-compiles every artifact: the Linux and macOS ones with zig, and the
+  Windows ones for the MSVC target with cargo-xwin and the Microsoft CRT and
+  Windows SDK in the CI image. That
   includes the macOS (x86_64, arm64) and Windows (x64) wheels and CLI binaries
   that 0.11.0 built on GitHub's runners, under the same names, with the same
   minimum macOS (10.12 on x86_64, 11.0 on arm64). The Windows CLI now links the

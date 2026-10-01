@@ -1,9 +1,11 @@
 name: Release
 
-# Releases from Forgejo (#943). The jobs run on the Linux amd64 runner in the CI
-# image, which ci.yml builds, and cross-compile every artifact there: Linux and
-# macOS with zig, Windows with xwin's MSVC CRT and SDK (#944). See docs/ci.md,
-# "Release".
+# Releases run on Forgejo (#943), so the heavy work stays on the fixed-cost
+# runner VM; GitHub only receives a copy of each release. The jobs run on the
+# Linux amd64 runner in the CI image, which ci.yml builds, and cross-compile
+# every artifact there: Linux and macOS with zig, Windows with xwin's MSVC CRT
+# and SDK (#944). Running the macOS and Windows artifacts on real hosts is for a
+# GitHub-hosted smoke gate (#951). See docs/ci.md, "Release".
 #
 #   v* tag pushed     validate (preflight both release hosts, wait for CI on
 #                     the tag), build, test the artifacts, then publish in
