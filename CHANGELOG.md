@@ -81,6 +81,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is an `EventTransitionBits` instead of `[bool; 3]`, and Ack_Required reads
   return the same octet as before (#930).
 
+- GetEnrollmentSummary and the stored Event_State are typed as well.
+  `GetEnrollmentSummaryRequest.acknowledgment_filter` is an
+  `enums::AcknowledgmentFilter` (`ALL`, `ACKED`, `NOT_ACKED`) instead of a `u32`.
+  `try_encode` still refuses an undefined value and decode still rejects one. The
+  `bacnet-server` GetEnrollmentSummary handler reads Acked_Transitions into an
+  `EventTransitionBits`, and its Event Enrollment evaluator carries the
+  Event_Type it reads as an `EventType`. In `bacnet-objects`, every object that
+  stores Event_State holds an `EventState` rather than a `u32`: Event and Alert
+  Enrollment, Access Door, Access Point, Accumulator, Pulse Converter, Color,
+  Color Temperature, Event Log, Life Safety Point and Zone, Load Control and
+  Timer. Event Enrollment stores Event_Type as an `EventType`, so
+  `EventEnrollmentObject::new` takes an `EventType` and `set_event_state` an
+  `EventState`. The Python `BACnetServer.add_event_enrollment` takes an
+  `EventType`, defaulting to `EventType.CHANGE_OF_BITSTRING`, instead of an int.
+  The Python `get_enrollment_summary` keeps its int `acknowledgment_filter`.
+  Property reads return the same enumerated values (#930).
+
 - Optional dependencies are no longer published as features. Feature lists now
   enable them with `dep:`, so Cargo stops creating an implicit feature for each
   one, such as `bacnet-transport/rustls` or `bacnet-cli/tokio-rustls`, none of

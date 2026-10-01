@@ -124,7 +124,7 @@ fn alert_enrollment_event_detection_enable() {
 #[test]
 fn alert_enrollment_write_event_detection_enable() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
-    ae.event_state = EventState::OFFNORMAL.to_raw();
+    ae.event_state = EventState::OFFNORMAL;
     ae.acked_transitions = EventTransitionBits::empty();
     ae.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -155,7 +155,7 @@ fn alert_enrollment_write_event_detection_enable() {
 #[test]
 fn alert_enrollment_public_detection_flag_projects_disabled_initial_state() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
-    ae.event_state = EventState::OFFNORMAL.to_raw();
+    ae.event_state = EventState::OFFNORMAL;
     ae.acked_transitions = EventTransitionBits::empty();
 
     ae.event_detection_enable = false;
@@ -178,7 +178,7 @@ fn alert_enrollment_public_detection_flag_projects_disabled_initial_state() {
 #[test]
 fn alert_enrollment_setter_resets_state_after_direct_disable() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
-    ae.event_state = EventState::OFFNORMAL.to_raw();
+    ae.event_state = EventState::OFFNORMAL;
     ae.acked_transitions = EventTransitionBits::empty();
     ae.event_detection_enable = false;
 

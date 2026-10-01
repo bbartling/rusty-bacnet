@@ -6,7 +6,7 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -65,7 +65,9 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
         (
             "Event Enrollment",
             ObjectType::EVENT_ENROLLMENT,
-            Box::new(EventEnrollmentObject::new(1, "EE-1", 0).unwrap()),
+            Box::new(
+                EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap(),
+            ),
         ),
         (
             "Alert Enrollment",

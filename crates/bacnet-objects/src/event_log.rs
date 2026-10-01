@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
@@ -32,7 +32,7 @@ pub struct EventLogObject {
     buffer_size: u32,
     log_buffer: LogRecordBuffer,
     status_flags: StatusFlags,
-    event_state: u32,
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
     clock: Option<Arc<dyn ClockReader>>,
@@ -52,7 +52,7 @@ impl EventLogObject {
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             status_flags: StatusFlags::empty(),
-            event_state: 0,
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
             clock: None,
@@ -135,7 +135,7 @@ impl BACnetObject for EventLogObject {
                 self.log_buffer.total_record_count() as u64,
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }

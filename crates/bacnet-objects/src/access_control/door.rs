@@ -19,8 +19,8 @@ pub struct AccessDoorObject {
     door_alarm_state: u32, // DoorAlarmState enumeration
     door_members: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
-    /// Event_State: 0 = NORMAL.
-    event_state: u32,
+    /// Event_State.
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
     /// 16-level priority array for commandable Present_Value.
@@ -43,7 +43,7 @@ impl AccessDoorObject {
             door_alarm_state: 0,
             door_members: Vec::new(),
             status_flags: StatusFlags::empty(),
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
             priority_array: Default::default(),
@@ -125,7 +125,7 @@ impl BACnetObject for AccessDoorObject {
                     .collect(),
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Enumerated)

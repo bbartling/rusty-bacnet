@@ -401,7 +401,7 @@ fn multistate_event_property_writes_are_validated_over_write_property() {
 #[test]
 fn event_enrollment_writes_are_validated_over_write_property() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

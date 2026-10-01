@@ -9,13 +9,15 @@ use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStat
 use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let mut enrollment = EventEnrollmentObject::new(1, "EE", 5).unwrap();
+    let mut enrollment = EventEnrollmentObject::new(1, "EE", EventType::OUT_OF_RANGE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
         object_identifier: source,
         property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),

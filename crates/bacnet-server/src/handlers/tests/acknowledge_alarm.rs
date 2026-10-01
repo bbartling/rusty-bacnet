@@ -112,8 +112,7 @@ fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
 }
 
 fn configured_event_enrollment() -> EventEnrollmentObject {
-    let mut object =
-        EventEnrollmentObject::new(1, "EE-ack", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut object = EventEnrollmentObject::new(1, "EE-ack", EventType::OUT_OF_RANGE).unwrap();
     object.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap(),
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -533,7 +532,8 @@ fn unknown_uninitialized_and_unsupported_objects_fail_closed() {
     assert_protocol(error, ErrorClass::SERVICES, ErrorCode::INVALID_TIME_STAMP);
     assert_eq!(snapshot(&db, oid), before);
 
-    let unconfigured = EventEnrollmentObject::new(8, "EE-unconfigured", 0).unwrap();
+    let unconfigured =
+        EventEnrollmentObject::new(8, "EE-unconfigured", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = unconfigured.object_identifier();
     db.add(Box::new(unconfigured)).unwrap();
     let before = acked(&db, oid);

@@ -89,7 +89,7 @@ fn write_object_name_rename_refreshes_index() {
 #[test]
 fn event_enrollment_name_write_refreshes_index_and_rejects_duplicate() {
     let mut db = ObjectDatabase::new();
-    let enrollment = EventEnrollmentObject::new(1, "EE-A", 0).unwrap();
+    let enrollment = EventEnrollmentObject::new(1, "EE-A", EventType::CHANGE_OF_BITSTRING).unwrap();
     let occupied = BinaryValueObject::new(1, "Occupied").unwrap();
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();

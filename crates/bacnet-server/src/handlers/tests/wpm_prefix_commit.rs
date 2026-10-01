@@ -71,7 +71,7 @@ fn assert_reference(
 #[test]
 fn event_enrollment_prefix_commits_before_read_only_first_failure() {
     let mut db = ObjectDatabase::new();
-    let object = EventEnrollmentObject::new(1, "EE-1", 5).unwrap();
+    let object = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE).unwrap();
     let oid = object.object_identifier();
     db.add(Box::new(object)).unwrap();
     let request = encode_request(
@@ -132,7 +132,7 @@ fn acked_transitions_objects() -> Vec<Box<dyn BACnetObject>> {
         Box::new(MultiStateInputObject::new(1, "MSI", 3).unwrap()),
         Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
         Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
-        Box::new(EventEnrollmentObject::new(1, "EE", 5).unwrap()),
+        Box::new(EventEnrollmentObject::new(1, "EE", EventType::OUT_OF_RANGE).unwrap()),
         Box::new(AlertEnrollmentObject::new(1, "Alert", source).unwrap()),
     ]
 }

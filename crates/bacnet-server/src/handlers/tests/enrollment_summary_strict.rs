@@ -1,7 +1,7 @@
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
-use bacnet_types::enums::EventType;
+use bacnet_types::enums::{AcknowledgmentFilter, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 use super::enrollment_summary_support::*;
@@ -387,7 +387,7 @@ fn empty_candidate_set_returns_positive_zero_length_ack() {
 #[test]
 fn malformed_request_is_rejected_before_response_bytes_are_written() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         ..request()
     };
     let mut encoded = BytesMut::new();

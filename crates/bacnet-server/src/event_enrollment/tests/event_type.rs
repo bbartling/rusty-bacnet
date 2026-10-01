@@ -99,12 +99,8 @@ fn fault_entry_reentry_and_recovery_select_change_of_reliability() {
 #[test]
 fn malformed_reference_and_normal_transition_select_their_model_event_types() {
     let mut db = ObjectDatabase::new();
-    let mut enrollment = EventEnrollmentObject::new(
-        319,
-        "EE-malformed-reference",
-        EventType::OUT_OF_RANGE.to_raw(),
-    )
-    .unwrap();
+    let mut enrollment =
+        EventEnrollmentObject::new(319, "EE-malformed-reference", EventType::OUT_OF_RANGE).unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,

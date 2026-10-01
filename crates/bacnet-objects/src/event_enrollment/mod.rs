@@ -5,7 +5,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, NotifyType, ObjectType, PropertyIdentifier,
+    ErrorClass, ErrorCode, EventState, EventType, NotifyType, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
@@ -38,11 +38,11 @@ pub struct EventEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    event_type: u32,
+    event_type: EventType,
     notify_type: NotifyType,
     event_parameters: BACnetEventParameter,
     object_property_reference: Option<BACnetDeviceObjectPropertyReference>,
-    event_state: u32,
+    event_state: EventState,
     event_enable: EventTransitionBits,
     acked_transitions: EventTransitionBits,
     event_history: EventHistory,
@@ -71,10 +71,12 @@ pub struct EventEnrollmentObject {
 }
 
 impl EventEnrollmentObject {
-    /// Create a new EventEnrollment object.
-    ///
-    /// `event_type` is the BACnet EventType enumeration value.
-    pub fn new(instance: u32, name: impl Into<String>, event_type: u32) -> Result<Self, Error> {
+    /// Create a new EventEnrollment object whose Event_Type is `event_type`.
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        event_type: EventType,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, instance)?;
         Ok(Self {
             oid,
@@ -87,7 +89,7 @@ impl EventEnrollmentObject {
                 data: Vec::new(),
             },
             object_property_reference: None,
-            event_state: 0,
+            event_state: EventState::NORMAL,
             event_enable: EventTransitionBits::all(),
             // Clause 12.12 requires a TRUE flag for an event type that has
             // never occurred on the object. That all-TRUE initial value
@@ -133,7 +135,7 @@ impl EventEnrollmentObject {
     /// Clause 13.3.3 assigns it; clearing is consistent with the first-sample
     /// policy.
     fn apply_detection_disabled_reset(&mut self) {
-        self.event_state = EventState::NORMAL.to_raw();
+        self.event_state = EventState::NORMAL;
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
         self.event_history.reset();
         self.pending = None;
@@ -167,7 +169,7 @@ impl EventEnrollmentObject {
         self.fault_parameters = fp;
     }
 
-    /// Set the event state (raw u32).
+    /// Set the event state.
     ///
     /// A configuration/seeding helper, not a lifecycle path — the evaluator
     /// uses [`BACnetObject::set_event_state_internal`]. It honors the same
@@ -175,8 +177,8 @@ impl EventEnrollmentObject {
     /// must read NORMAL, so a non-NORMAL seed is ignored rather than silently
     /// breaking the invariant. Without this the public API would offer a way
     /// around a guard the rest of the object enforces.
-    pub fn set_event_state(&mut self, state: u32) {
-        if !self.event_detection_enable && state != EventState::NORMAL.to_raw() {
+    pub fn set_event_state(&mut self, state: EventState) {
+        if !self.event_detection_enable && state != EventState::NORMAL {
             return;
         }
         self.event_state = state;
@@ -247,7 +249,7 @@ impl BACnetObject for EventEnrollmentObject {
         );
         (self.object_property_reference.is_some() && supported_parameters).then_some(
             EnrollmentSummaryCapability {
-                event_type: bacnet_types::enums::EventType::from_raw(self.event_type),
+                event_type: self.event_type,
                 last_transition: self.event_history.last_transition(),
             },
         )
@@ -280,7 +282,7 @@ impl BACnetObject for EventEnrollmentObject {
                 ObjectType::EVENT_ENROLLMENT.to_raw(),
             )),
             p if p == PropertyIdentifier::EVENT_TYPE => {
-                Ok(PropertyValue::Enumerated(self.event_type))
+                Ok(PropertyValue::Enumerated(self.event_type.to_raw()))
             }
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
                 Ok(PropertyValue::Enumerated(self.notify_type.to_raw()))
@@ -311,7 +313,7 @@ impl BACnetObject for EventEnrollmentObject {
                 }
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
@@ -467,7 +469,7 @@ impl BACnetObject for EventEnrollmentObject {
         if !self.event_detection_enable && state != EventState::NORMAL {
             return Err(common::write_access_denied_error());
         }
-        self.event_state = state.to_raw();
+        self.event_state = state;
         Ok(())
     }
 

@@ -707,9 +707,21 @@ impl BACnetServer {
     }
 
     /// Add an Event Enrollment object to the server (before starting).
-    #[pyo3(signature = (instance, name, event_type=0))]
-    fn add_event_enrollment(&self, instance: u32, name: &str, event_type: u32) -> PyResult<()> {
-        let obj = EventEnrollmentObject::new(instance, name, event_type).map_err(to_py_err)?;
+    ///
+    /// `event_type` defaults to `EventType.CHANGE_OF_BITSTRING`.
+    #[pyo3(signature = (
+        instance,
+        name,
+        event_type=PyEventType { inner: EventType::CHANGE_OF_BITSTRING }
+    ))]
+    fn add_event_enrollment(
+        &self,
+        instance: u32,
+        name: &str,
+        event_type: PyEventType,
+    ) -> PyResult<()> {
+        let obj =
+            EventEnrollmentObject::new(instance, name, event_type.to_rust()).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 

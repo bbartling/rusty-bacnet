@@ -47,7 +47,7 @@ impl BACnetClient {
                 })?)
             };
             let req = GetEnrollmentSummaryRequest {
-                acknowledgment_filter,
+                acknowledgment_filter: AcknowledgmentFilter::from_raw(acknowledgment_filter),
                 enrollment_filter: None, // not exposed in Python API
                 event_state_filter: es,
                 event_type_filter: et,

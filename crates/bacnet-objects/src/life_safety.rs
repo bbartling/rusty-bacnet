@@ -44,7 +44,8 @@
 //! reset or COV path fabricates one.
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType, PropertyIdentifier, SilencedState,
+    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
+    SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -172,8 +173,8 @@ pub struct LifeSafetyPointObject {
     direct_reading: f32,
     /// Whether maintenance is required.
     maintenance_required: bool,
-    /// Event state (0 = NORMAL).
-    event_state: u32,
+    /// Event_State.
+    event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
     /// Reliability (0 = NO_FAULT_DETECTED).
@@ -201,7 +202,7 @@ impl LifeSafetyPointObject {
             member_of: Vec::new(),
             direct_reading: 0.0,
             maintenance_required: false,
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
@@ -309,7 +310,7 @@ impl BACnetObject for LifeSafetyPointObject {
                 Ok(PropertyValue::Boolean(self.maintenance_required))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -436,8 +437,8 @@ pub struct LifeSafetyZoneObject {
     operation_expected: u32,
     /// Points belonging to this zone.
     zone_members: Vec<ObjectIdentifier>,
-    /// Event state (0 = NORMAL).
-    event_state: u32,
+    /// Event_State.
+    event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
     /// Reliability (0 = NO_FAULT_DETECTED).
@@ -462,7 +463,7 @@ impl LifeSafetyZoneObject {
             silenced: 0,           // UNSILENCED
             operation_expected: 0, // NONE
             zone_members: Vec::new(),
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
@@ -551,7 +552,7 @@ impl BACnetObject for LifeSafetyZoneObject {
                     .collect(),
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }

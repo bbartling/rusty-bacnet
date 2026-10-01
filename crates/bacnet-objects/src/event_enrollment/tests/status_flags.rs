@@ -3,7 +3,8 @@ use bacnet_types::enums::Reliability;
 
 #[test]
 fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_false() {
-    let mut enrollment = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut enrollment =
+        EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     enrollment
         .write_property(
             PropertyIdentifier::OUT_OF_SERVICE,
@@ -12,7 +13,7 @@ fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_fal
             None,
         )
         .unwrap();
-    enrollment.set_event_state(EventState::HIGH_LIMIT.to_raw());
+    enrollment.set_event_state(EventState::HIGH_LIMIT);
 
     assert_eq!(
         enrollment
@@ -24,7 +25,7 @@ fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_fal
         }
     );
 
-    enrollment.set_event_state(EventState::NORMAL.to_raw());
+    enrollment.set_event_state(EventState::NORMAL);
     enrollment.reliability = Reliability::NO_SENSOR.to_raw();
     assert_eq!(
         enrollment

@@ -6,7 +6,7 @@
 //! Color Temperature objects represent correlated color temperature in Kelvin.
 //! Both support fade transitions via Color_Command.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -47,7 +47,7 @@ pub struct ColorObject {
     /// In_Progress: 0=idle, 1=fade-active.
     in_progress: u32,
     status_flags: StatusFlags,
-    event_state: u32,
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
 }
@@ -71,7 +71,7 @@ impl ColorObject {
             transition: 0,  // NONE
             in_progress: 0, // idle
             status_flags: StatusFlags::empty(),
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
         })
@@ -135,7 +135,7 @@ impl BACnetObject for ColorObject {
                 Ok(PropertyValue::Enumerated(self.in_progress))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
@@ -234,7 +234,7 @@ pub struct ColorTemperatureObject {
     min_pres_value: Option<u32>,
     max_pres_value: Option<u32>,
     status_flags: StatusFlags,
-    event_state: u32,
+    event_state: EventState,
     out_of_service: bool,
     reliability: u32,
 }
@@ -259,7 +259,7 @@ impl ColorTemperatureObject {
             min_pres_value: Some(1000),
             max_pres_value: Some(30000),
             status_flags: StatusFlags::empty(),
-            event_state: 0,
+            event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: 0,
         })
@@ -335,7 +335,7 @@ impl BACnetObject for ColorTemperatureObject {
                 None => Err(common::unknown_property_error()),
             },
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)

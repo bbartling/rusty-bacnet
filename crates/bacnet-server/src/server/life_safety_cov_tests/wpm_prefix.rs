@@ -3,6 +3,7 @@ use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::wpm::WritePropertyMultipleError;
+use bacnet_types::enums::EventType;
 
 fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description: &str) -> BytesMut {
     let mut encoded_description = BytesMut::new();
@@ -38,7 +39,7 @@ fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description:
 #[tokio::test]
 async fn event_enrollment_prefix_commit_returns_exact_error_through_server_dispatch() {
     let mut db = clocked_test_database();
-    let object = EventEnrollmentObject::new(7, "dispatch-ee", 5).unwrap();
+    let object = EventEnrollmentObject::new(7, "dispatch-ee", EventType::OUT_OF_RANGE).unwrap();
     let oid = object.object_identifier();
     db.add(Box::new(object)).unwrap();
     let fixture = DispatchFixture::new(db, std::iter::empty()).await;

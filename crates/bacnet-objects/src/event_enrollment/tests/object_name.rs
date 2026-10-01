@@ -2,7 +2,8 @@ use super::super::*;
 
 #[test]
 fn event_enrollment_object_name_writability_matches_dispatch() {
-    let mut enrollment = EventEnrollmentObject::new(1, "EE-A", 0).unwrap();
+    let mut enrollment =
+        EventEnrollmentObject::new(1, "EE-A", EventType::CHANGE_OF_BITSTRING).unwrap();
 
     assert!(enrollment.is_writable_property(PropertyIdentifier::OBJECT_NAME));
     enrollment

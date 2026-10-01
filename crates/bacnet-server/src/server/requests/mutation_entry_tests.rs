@@ -28,7 +28,7 @@ use bacnet_services::read_range::ReadRangeRequest;
 use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
-use bacnet_types::enums::EnableDisable;
+use bacnet_types::enums::{AcknowledgmentFilter, EnableDisable};
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "sc-tls")]
 use std::sync::Mutex as StdMutex;
@@ -428,7 +428,7 @@ async fn read_only_controls_unaffected_under_deny_all() {
 
     let mut enrollment = BytesMut::new();
     GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: None,
         event_state_filter: None,
         event_type_filter: None,

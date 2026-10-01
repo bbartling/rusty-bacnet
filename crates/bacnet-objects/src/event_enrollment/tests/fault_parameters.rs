@@ -30,7 +30,7 @@ fn read_fault_type(ee: &EventEnrollmentObject) -> u32 {
 
 #[test]
 fn fault_parameters_default_to_none_choice() {
-    let ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
@@ -95,7 +95,7 @@ fn fault_type_tracks_each_fault_parameters_alternative() {
             FaultType::FAULT_LISTED,
         ),
     ];
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
 
     for (parameters, expected) in cases {
         ee.set_fault_parameters(Some(parameters));
@@ -105,7 +105,7 @@ fn fault_type_tracks_each_fault_parameters_alternative() {
 
 #[test]
 fn fault_parameters_none_variant() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultNone;
     ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
@@ -116,7 +116,7 @@ fn fault_parameters_none_variant() {
 
 #[test]
 fn fault_parameters_character_string() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultCharacterString {
         fault_values: vec!["alarm".to_string(), "critical".to_string()],
     };
@@ -129,7 +129,7 @@ fn fault_parameters_character_string() {
 
 #[test]
 fn fault_parameters_extended() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultExtended {
         vendor_id: 42,
         extended_fault_type: 7,
@@ -144,7 +144,7 @@ fn fault_parameters_extended() {
 
 #[test]
 fn fault_parameters_life_safety() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let fp = FaultParameters::FaultLifeSafety {
         fault_values: vec![
@@ -169,7 +169,7 @@ fn fault_parameters_life_safety() {
 #[test]
 fn fault_parameters_state() {
     use bacnet_types::constructed::BACnetPropertyStates;
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultState {
         fault_values: vec![BACnetPropertyStates::BooleanValue(true)],
     };
@@ -182,7 +182,7 @@ fn fault_parameters_state() {
 
 #[test]
 fn fault_parameters_status_flags() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let fp = FaultParameters::FaultStatusFlags {
         reference: BACnetDeviceObjectPropertyReference {
@@ -201,7 +201,7 @@ fn fault_parameters_status_flags() {
 
 #[test]
 fn fault_parameters_out_of_range() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultOutOfRange {
         min_normal: 0.0,
         max_normal: 100.0,
@@ -215,7 +215,7 @@ fn fault_parameters_out_of_range() {
 
 #[test]
 fn fault_parameters_listed() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let fp = FaultParameters::FaultListed {
         reference: BACnetDeviceObjectPropertyReference {
@@ -234,7 +234,7 @@ fn fault_parameters_listed() {
 
 #[test]
 fn fault_properties_are_advertised_together() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let props = ee.property_list();
     assert!(props.contains(&PropertyIdentifier::FAULT_TYPE));
     assert!(props.contains(&PropertyIdentifier::FAULT_PARAMETERS));
@@ -251,7 +251,7 @@ fn fault_properties_are_advertised_together() {
 
 #[test]
 fn fault_parameters_write_round_trip() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultOutOfRange {
         min_normal: -5.0,
         max_normal: 55.0,
@@ -273,7 +273,7 @@ fn fault_parameters_write_round_trip() {
 fn fault_parameters_flat_malformed_proprietary_body_rejected() {
     use bacnet_types::constructed::{BACnetPropertyStates, BACnetProprietaryPropertyState};
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let before = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
@@ -300,7 +300,7 @@ fn fault_parameters_flat_malformed_proprietary_body_rejected() {
 
 #[test]
 fn fault_parameters_flat_life_safety_overflow_rejected() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let before = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
@@ -334,7 +334,7 @@ fn fault_parameters_flat_life_safety_overflow_rejected() {
 fn fault_parameters_framed_write_round_trip() {
     // Framed wire form write: exactly what a conformant peer sends, and the
     // read arm's bytes come back byte-identical.
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     let fp = FaultParameters::FaultOutOfRange {
         min_normal: -5.0,
         max_normal: 55.0,
@@ -367,7 +367,8 @@ fn fault_parameters_framed_trailing_garbage_rejected() {
     let mut good = bytes::BytesMut::new();
     bacnet_encoding::constructed::encode_fault_parameters(&mut good, &fp).unwrap();
     for extra in 1..=4usize {
-        let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+        let mut ee =
+            EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
         let mut bytes = good.to_vec();
         bytes.extend_from_slice(&vec![0x55; extra]);
         let result = ee.write_property(
@@ -387,7 +388,7 @@ fn fault_parameters_framed_trailing_garbage_rejected() {
 
 #[test]
 fn fault_parameters_framed_malformed_rejected() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     // opening [6] with no closing.
     let result = ee.write_property(
         PropertyIdentifier::FAULT_PARAMETERS,
@@ -400,7 +401,7 @@ fn fault_parameters_framed_malformed_rejected() {
 
 #[test]
 fn fault_parameters_write_clear_to_null() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_fault_parameters(Some(FaultParameters::FaultNone));
     ee.write_property(
         PropertyIdentifier::FAULT_PARAMETERS,
@@ -418,7 +419,7 @@ fn fault_parameters_write_clear_to_null() {
 
 #[test]
 fn fault_parameters_clear() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_fault_parameters(Some(FaultParameters::FaultNone));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)

@@ -16,7 +16,7 @@ use super::super::*;
 /// `AlertEnrollmentObject`.
 #[test]
 fn event_detection_enable_defaults_true() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
             .unwrap(),
@@ -26,7 +26,7 @@ fn event_detection_enable_defaults_true() {
 
 #[test]
 fn event_detection_enable_appears_in_property_list() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert!(
         ee.property_list()
             .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE),
@@ -36,7 +36,7 @@ fn event_detection_enable_appears_in_property_list() {
 
 #[test]
 fn event_detection_enable_is_writable() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -53,7 +53,7 @@ fn event_detection_enable_is_writable() {
 
 #[test]
 fn event_detection_enable_rejects_wrong_type() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert!(
         ee.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -80,8 +80,8 @@ fn event_detection_enable_rejects_wrong_type() {
 /// the reset happens on the write and not on some later evaluation pass.
 #[test]
 fn disabling_detection_resets_event_state_to_normal() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    ee.set_event_state(EventState::HIGH_LIMIT.to_raw());
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    ee.set_event_state(EventState::HIGH_LIMIT);
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
@@ -116,7 +116,7 @@ fn disabling_detection_resets_event_state_to_normal() {
 /// a mutator the expected post-reset value is already written down.
 #[test]
 fn disabled_detection_reports_initial_acked_transitions() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -141,7 +141,7 @@ fn disabled_detection_reports_initial_acked_transitions() {
 /// cannot violate the invariant.
 #[test]
 fn disabled_detection_refuses_non_normal_internal_state() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -166,7 +166,7 @@ fn disabled_detection_refuses_non_normal_internal_state() {
 /// the value the disabled condition requires, so setting it must stay legal.
 #[test]
 fn disabled_detection_still_permits_normal_internal_state() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -183,8 +183,8 @@ fn disabled_detection_still_permits_normal_internal_state() {
 /// is derived afresh from the monitored value.
 #[test]
 fn re_enabling_detection_resumes_from_normal() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    ee.set_event_state(EventState::LOW_LIMIT.to_raw());
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    ee.set_event_state(EventState::LOW_LIMIT);
 
     for enabled in [false, true] {
         ee.write_property(
@@ -215,7 +215,7 @@ fn re_enabling_detection_resumes_from_normal() {
 /// false.
 #[test]
 fn disabled_detection_ignores_non_normal_seed() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -224,7 +224,7 @@ fn disabled_detection_ignores_non_normal_seed() {
     )
     .unwrap();
 
-    ee.set_event_state(EventState::HIGH_LIMIT.to_raw());
+    ee.set_event_state(EventState::HIGH_LIMIT);
 
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_STATE, None)
@@ -238,8 +238,8 @@ fn disabled_detection_ignores_non_normal_seed() {
 /// a blanket disable of the setter.
 #[test]
 fn enabled_detection_accepts_seed() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    ee.set_event_state(EventState::HIGH_LIMIT.to_raw());
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    ee.set_event_state(EventState::HIGH_LIMIT);
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),

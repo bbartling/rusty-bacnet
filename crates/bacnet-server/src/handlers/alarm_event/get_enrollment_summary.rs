@@ -7,7 +7,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::enrollment_summary::{
     EnrollmentSummaryEntry, GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
 };
-use bacnet_types::enums::EnrollmentSummaryEventStateFilter;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::{AcknowledgmentFilter, EnrollmentSummaryEventStateFilter};
 
 /// Handle the deprecated GetEnrollmentSummary interoperability service.
 ///
@@ -161,13 +162,13 @@ fn visit_entries<E: From<Error>>(
 fn latest_transition(
     capability: EnrollmentSummaryCapability,
     event_state: EventState,
-    acknowledged_transitions: u8,
+    acknowledged_transitions: EventTransitionBits,
     object_identifier: ObjectIdentifier,
 ) -> Result<EventTransition, Error> {
     if let Some(transition) = capability.last_transition {
         return Ok(transition);
     }
-    if event_state == EventState::NORMAL && acknowledged_transitions == 0b111 {
+    if event_state == EventState::NORMAL && acknowledged_transitions.is_all() {
         return Ok(EventTransition::ToNormal);
     }
     Err(operational_problem(
@@ -176,11 +177,14 @@ fn latest_transition(
     ))
 }
 
-fn acknowledgment_matches(filter: u32, acknowledged_transitions: u8) -> bool {
+fn acknowledgment_matches(
+    filter: AcknowledgmentFilter,
+    acknowledged_transitions: EventTransitionBits,
+) -> bool {
     match filter {
-        0 => true,
-        1 => acknowledged_transitions == 0b111,
-        2 => acknowledged_transitions != 0b111,
+        AcknowledgmentFilter::ALL => true,
+        AcknowledgmentFilter::ACKED => acknowledged_transitions.is_all(),
+        AcknowledgmentFilter::NOT_ACKED => !acknowledged_transitions.is_all(),
         _ => unreachable!("request decoder rejects undefined acknowledgment filters"),
     }
 }
@@ -237,7 +241,7 @@ fn read_event_state(
 fn read_acknowledged_transitions(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
-) -> Result<u8, Error> {
+) -> Result<EventTransitionBits, Error> {
     match read_required(
         object,
         object_identifier,
@@ -246,7 +250,7 @@ fn read_acknowledged_transitions(
         PropertyValue::BitString { unused_bits, data }
             if unused_bits == 5 && data.len() == 1 && data[0] & 0x1f == 0 =>
         {
-            Ok(bacnet_types::bitstring::unpack_octet(&data, 3))
+            Ok(EventTransitionBits::from_bacnet(&data))
         }
         _ => Err(operational_problem(
             object_identifier,

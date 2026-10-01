@@ -1449,6 +1449,8 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 #### Schedule & Notification
 
 ```python
+from rusty_bacnet import EventType
+
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
@@ -1457,7 +1459,11 @@ server.add_alert_enrollment(
     name="Alert",
     initial_source=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
 )
-server.add_event_enrollment(instance=1, name="Event", event_type=0)
+server.add_event_enrollment(
+    instance=1,
+    name="Event",
+    event_type=EventType.OUT_OF_RANGE,  # default: EventType.CHANGE_OF_BITSTRING
+)
 ```
 
 `initial_source` is required and becomes the Alert Enrollment object's

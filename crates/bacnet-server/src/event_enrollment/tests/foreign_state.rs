@@ -47,7 +47,7 @@ fn setup_on_notification_class(
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", event_type.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", event_type).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::NOTIFICATION_CLASS.to_raw(),
@@ -65,7 +65,8 @@ fn rewrite_params(
     ee_oid: &ObjectIdentifier,
     params: BACnetEventParameter,
 ) {
-    let mut scratch = EventEnrollmentObject::new(1, "scratch", 0).unwrap();
+    let mut scratch =
+        EventEnrollmentObject::new(1, "scratch", EventType::CHANGE_OF_BITSTRING).unwrap();
     scratch.set_event_parameters(params);
     let reframed = scratch
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
@@ -250,13 +251,12 @@ fn foreign_high_limit_recovers_under_cobs_params() {
 
     // Target exposing a bitstring property: EVENT_ENABLE = all three
     // transitions → wire 0xE0.
-    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE.to_raw()).unwrap();
+    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE).unwrap();
     target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(97, "EE-cobs", EventType::CHANGE_OF_BITSTRING.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(97, "EE-cobs", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
@@ -292,11 +292,10 @@ fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
     let mut db = ObjectDatabase::new();
 
     let mut ee =
-        EventEnrollmentObject::new(97, "EE-cobs-w", EventType::CHANGE_OF_BITSTRING.to_raw())
-            .unwrap();
+        EventEnrollmentObject::new(97, "EE-cobs-w", EventType::CHANGE_OF_BITSTRING).unwrap();
     // Monitor a 1-byte bitstring (EVENT_ENABLE of a target with internal
     // 0x00 → wire 0x00).
-    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE.to_raw()).unwrap();
+    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE).unwrap();
     target.set_event_enable(EventTransitionBits::empty());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();

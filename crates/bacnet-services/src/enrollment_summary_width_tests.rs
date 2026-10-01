@@ -76,7 +76,10 @@ fn request_values_must_fit_public_field_widths() {
         true,
     ))
     .unwrap();
-    assert_eq!(decoded.acknowledgment_filter, 2);
+    assert_eq!(
+        decoded.acknowledgment_filter,
+        AcknowledgmentFilter::NOT_ACKED
+    );
     assert_eq!(
         decoded.enrollment_filter.unwrap().process_identifier,
         u32::MAX
@@ -116,7 +119,7 @@ fn request_values_must_fit_public_field_widths() {
 fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     let device = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: Some(RecipientProcess {
             recipient: BACnetRecipient::Device(device),
             process_identifier: 7,
@@ -156,7 +159,7 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
 #[test]
 fn request_enrollment_filter_address_choice_golden_and_round_trip() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 1,
+        acknowledgment_filter: AcknowledgmentFilter::ACKED,
         enrollment_filter: Some(RecipientProcess {
             recipient: BACnetRecipient::Address(BACnetAddress {
                 network_number: 5,
@@ -218,7 +221,7 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
 #[test]
 fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 3,
+        acknowledgment_filter: AcknowledgmentFilter::from_raw(3),
         enrollment_filter: None,
         event_state_filter: None,
         event_type_filter: None,
@@ -230,7 +233,7 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     assert!(encoded.is_empty());
 
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         priority_filter: Some(PriorityFilter {
             min_priority: 10,
             max_priority: 9,
@@ -239,6 +242,31 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     };
     assert!(request.try_encode(&mut encoded).is_err());
     assert!(encoded.is_empty());
+}
+
+#[test]
+fn request_acknowledgment_filter_constants_encode_their_production_values() {
+    for (filter, raw) in [
+        (AcknowledgmentFilter::ALL, 0),
+        (AcknowledgmentFilter::ACKED, 1),
+        (AcknowledgmentFilter::NOT_ACKED, 2),
+    ] {
+        let request = GetEnrollmentSummaryRequest {
+            acknowledgment_filter: filter,
+            enrollment_filter: None,
+            event_state_filter: None,
+            event_type_filter: None,
+            priority_filter: None,
+            notification_class_filter: None,
+        };
+        let mut encoded = BytesMut::new();
+        request.try_encode(&mut encoded).unwrap();
+        assert_eq!(&encoded[..], &[0x09, raw]);
+        assert_eq!(
+            GetEnrollmentSummaryRequest::decode(&encoded).unwrap(),
+            request
+        );
+    }
 }
 
 #[test]
@@ -446,7 +474,7 @@ fn request_rejects_undefined_event_state_filter() {
     }
 
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: None,
         event_state_filter: Some(EnrollmentSummaryEventStateFilter::from_raw(5)),
         event_type_filter: None,

@@ -35,8 +35,10 @@ fn make_metadata_db() -> ObjectDatabase {
         .unwrap();
     db.add(Box::new(BinaryInputObject::new(1, "BI-1").unwrap()))
         .unwrap();
-    db.add(Box::new(EventEnrollmentObject::new(1, "EE-1", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap(),
+    ))
+    .unwrap();
     let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     db.add(Box::new(
         AlertEnrollmentObject::new(1, "AE-1", alert_source).unwrap(),

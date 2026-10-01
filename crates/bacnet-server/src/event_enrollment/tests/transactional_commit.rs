@@ -152,7 +152,7 @@ fn same_state_transition_still_commits_ack_and_history() {
     db.add(Box::new(monitored)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(31, "EE-COV", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+        EventEnrollmentObject::new(31, "EE-COV", EventType::CHANGE_OF_VALUE).unwrap();
     enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         monitored_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),

@@ -199,7 +199,7 @@ fn get_enrollment_summary_excludes_detection_disabled_object() {
 
     let count = |db: &ObjectDatabase| {
         let request = GetEnrollmentSummaryRequest {
-            acknowledgment_filter: 0, // all
+            acknowledgment_filter: bacnet_types::enums::AcknowledgmentFilter::ALL,
             enrollment_filter: None,
             event_state_filter: None,
             event_type_filter: None,

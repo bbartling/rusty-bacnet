@@ -6,7 +6,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::EventType;
+use bacnet_types::enums::{AcknowledgmentFilter, EventType};
 use bacnet_types::primitives::Time;
 
 use super::*;
@@ -192,7 +192,7 @@ pub(super) fn destination(
 
 pub(super) fn request() -> GetEnrollmentSummaryRequest {
     GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: None,
         event_state_filter: None,
         event_type_filter: None,

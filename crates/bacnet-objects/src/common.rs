@@ -6,7 +6,7 @@
 
 /// Compute StatusFlags with all four bits dynamically set.
 ///
-/// IN_ALARM: TRUE when event_state != NORMAL (0).
+/// IN_ALARM: TRUE when event_state is not NORMAL.
 /// FAULT: TRUE when reliability != NO_FAULT_DETECTED (0).
 /// OUT_OF_SERVICE: from the object's out_of_service flag.
 /// OVERRIDDEN: always FALSE for software-only (callers can set in base_flags).
@@ -14,10 +14,10 @@ pub fn compute_status_flags(
     base_flags: bacnet_types::primitives::StatusFlags,
     reliability: u32,
     out_of_service: bool,
-    event_state: u32,
+    event_state: bacnet_types::enums::EventState,
 ) -> bacnet_types::primitives::PropertyValue {
     let mut flags = base_flags;
-    if event_state != 0 {
+    if event_state != bacnet_types::enums::EventState::NORMAL {
         flags |= bacnet_types::primitives::StatusFlags::IN_ALARM;
     } else {
         flags -= bacnet_types::primitives::StatusFlags::IN_ALARM;
@@ -137,12 +137,13 @@ macro_rules! read_common_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS => {
                 // Compute StatusFlags dynamically. Objects with event detection
                 // should handle STATUS_FLAGS before calling this macro to include
-                // IN_ALARM from their event_state; this default uses event_state=0.
+                // IN_ALARM from their event_state; this default uses NORMAL.
                 Some(Ok(common::compute_status_flags(
                     $self.status_flags,
                     $self.reliability,
                     $self.out_of_service,
-                    0, // default: no IN_ALARM (non-event objects)
+                    // default: no IN_ALARM (non-event objects)
+                    bacnet_types::enums::EventState::NORMAL,
                 )))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE => Some(Ok(

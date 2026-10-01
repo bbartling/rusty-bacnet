@@ -1,7 +1,7 @@
 use bacnet_objects::event::EventTransition;
 use bacnet_services::enrollment_summary::{PriorityFilter, RecipientProcess};
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::enums::{EnrollmentSummaryEventStateFilter, EventType};
+use bacnet_types::enums::{AcknowledgmentFilter, EnrollmentSummaryEventStateFilter, EventType};
 
 use super::enrollment_summary_support::*;
 use super::*;
@@ -37,7 +37,11 @@ fn acknowledgment_filter_has_independent_positive_and_negative_cases() {
     let all_acked = database(candidate(EventState::OFFNORMAL, 0b111));
     let one_unacked = database(candidate(EventState::OFFNORMAL, 0b110));
 
-    for (filter, acked_count, unacked_count) in [(0, 1, 1), (1, 1, 0), (2, 0, 1)] {
+    for (filter, acked_count, unacked_count) in [
+        (AcknowledgmentFilter::ALL, 1, 1),
+        (AcknowledgmentFilter::ACKED, 1, 0),
+        (AcknowledgmentFilter::NOT_ACKED, 0, 1),
+    ] {
         let request = bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest {
             acknowledgment_filter: filter,
             ..request()
@@ -194,7 +198,7 @@ fn all_explicit_filters_are_conjunctive() {
     )))
     .unwrap();
     let matching = bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 2,
+        acknowledgment_filter: AcknowledgmentFilter::NOT_ACKED,
         enrollment_filter: Some(RecipientProcess {
             recipient,
             process_identifier: 8,
