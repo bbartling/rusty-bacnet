@@ -194,13 +194,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in BBMD mode sent only the local Original-Broadcast-NPDU, so the BBMD's own
   Who-Is, I-Am and Network-Number-Is, and broadcasts it routed, never reached
   remote subnets or foreign devices, and they could not discover its device by
-  broadcast. It now also sends a Forwarded-NPDU, with its own B/IP address as
-  the originating address, to every BDT entry except its own (directed
-  broadcast or unicast, by the entry's mask) and to every registered foreign
-  device (Annex J.4.5). This fanout goes through the same `FanoutPolicy` queue,
-  budgets and `fanout_counters()` as forwarded input. A throttled or failed
-  forward is counted and logged and does not fail the local broadcast. Plain and
-  foreign-device modes are unchanged. `BbmdState::local_address` is new.
+  broadcast. It now also queues a Forwarded-NPDU, with its own B/IP address as
+  the originating address, for every BDT entry except its own (directed
+  broadcast or unicast, by the entry's mask) and for its registered foreign
+  devices (Annex J.4.5), at most `ForeignDevicePolicy::max_fdt_fanout` of them
+  (default 32) and `FanoutPolicy::max_fanout_per_input` targets in all
+  (default 64). This fanout goes through the same `FanoutPolicy` queue and rate
+  limits, and `fanout_counters()`, as forwarded input. The per-origin limit is
+  keyed on IP, so the BBMD's own broadcasts, routed ones included, share one
+  budget of 128 forwarded packets per second by default: about 128/T complete
+  broadcasts per second with T targets, after which foreign devices are cut
+  first. Throttled targets, queue overflow and failed sends are counted and
+  logged, and none of them fail the local broadcast; in BBMD mode an `Err` from
+  `send_broadcast` can follow a forward that was already queued. Plain and
+  foreign-device modes are unchanged.
+
+  A BBMD bound to `0.0.0.0` now reads its own address from the BDT it starts
+  with: the one row at a local IPv4 address and the bound port, or else the
+  local address toward the default route if that is not loopback. `start()`
+  fails, asking for an explicit interface, when several rows qualify or no
+  usable address is found. Before, it took the default-route address or
+  127.0.0.1, so a multihomed or offline BBMD forwarded with the wrong origin
+  and could forward to itself. Each start chooses again, moving the self row
+  the BBMD appended, and a failed start keeps the BBMD configuration.
+  `BbmdState::local_address` and `BbmdState::set_local_address` are new.
 
 - The PICS generator's `CharacterSet` now offers exactly the six character sets
   in Annex A's "Character Sets Supported" section, each printed with its Annex A
@@ -1313,6 +1330,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and recovery peer quotas replace the former inclusive confirmed peer ceiling.
   Python additions remain keyword-only. Service budget documents linked above
   describe new `ServerConfig` fields and limits that large requests may need raised.
+
+- A B/IP BBMD bound to `0.0.0.0` now fails `start()` unless exactly one BDT row
+  names a local address at the bound port, or, with no such row, the host has a
+  non-loopback default-route address. On Windows, where local addresses cannot
+  be listed, it always fails. Binding the BBMD's interface address avoids all of
+  this (#937); see the [BBMD section](docs/rust-api.md#bbmd) of the Rust API
+  guide.
 
 ## [0.11.0] - 2026-09-06
 

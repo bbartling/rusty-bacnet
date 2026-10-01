@@ -1292,17 +1292,27 @@ use std::path::PathBuf;
 use bacnet_transport::bbmd::BdtEntry;
 use bacnet_transport::bip::{BipTransport, DEFAULT_BACNET_PORT};
 
+// Bind the BBMD's own interface address and its subnet's broadcast address.
 let mut transport = BipTransport::new(
-    Ipv4Addr::UNSPECIFIED,
+    Ipv4Addr::new(192, 168, 1, 10),
     DEFAULT_BACNET_PORT,
-    Ipv4Addr::BROADCAST,
+    Ipv4Addr::new(192, 168, 1, 255),
 );
 
-transport.enable_bbmd(vec![BdtEntry {
-    ip: [192, 168, 1, 10],
-    port: DEFAULT_BACNET_PORT,
-    broadcast_mask: [255, 255, 255, 255],
-}]);
+transport.enable_bbmd(vec![
+    // This BBMD's own row (added automatically when it is missing).
+    BdtEntry {
+        ip: [192, 168, 1, 10],
+        port: DEFAULT_BACNET_PORT,
+        broadcast_mask: [255, 255, 255, 255],
+    },
+    // A peer BBMD on another subnet, reached by unicast.
+    BdtEntry {
+        ip: [10, 0, 5, 2],
+        port: DEFAULT_BACNET_PORT,
+        broadcast_mask: [255, 255, 255, 255],
+    },
+]);
 
 // Optional: load a BDT saved in this file at startup, falling back to the
 // configured table if the file is missing or invalid. Write-BDT from the
@@ -1314,15 +1324,51 @@ transport.set_bdt_persist_path(PathBuf::from("/var/lib/rusty-bacnet/bdt.bin"));
 transport.set_bbmd_management_acl(vec![[192, 168, 1, 100]]);
 ```
 
+The BBMD's own B/IP address is the originating address of the broadcasts it
+forwards for itself, the BDT row it never forwards to, and the source it drops
+as the echo of its own broadcasts. With an interface address, it is that
+address and the bound port. Bound to `0.0.0.0`, the BBMD reads it from the BDT
+it starts with (the persisted BDT when that loads, otherwise the configured
+one):
+
+- the one row whose IP is a local IPv4 address of the host and whose port is
+  the bound port;
+- if several rows qualify, `start()` fails and asks for an explicit interface;
+- if none does, the host's local address toward its default route, but only
+  when it is not loopback; otherwise `start()` fails and asks for an explicit
+  interface or the BBMD's own row in the BDT.
+
+Each `start()` repeats this, so a restart follows a changed address. The self
+row the BBMD appended moves with it, and rows listed in the BDT stay. A failed
+`start()` keeps the BBMD configuration. Where the transport cannot list local
+addresses (currently Windows), a wildcard BBMD needs an explicit interface. On
+a multihomed host, prefer an explicit interface and that subnet's broadcast
+address, so the echo of each broadcast comes back from the BBMD's own address.
+
 A BBMD forwards its own broadcasts as well as those of other devices on its
-subnet (Annex J.4.5). Each `send_broadcast` in BBMD mode sends the local
-Original-Broadcast-NPDU and queues a Forwarded-NPDU, with the BBMD's own B/IP
-address as the originating address, to every BDT entry except its own and to
-every registered foreign device. So remote devices and foreign devices hear the
-BBMD's own Who-Is, I-Am and Network-Number-Is, and the broadcasts it routes.
-This fanout shares the `FanoutPolicy` budgets and `fanout_counters()` with
-forwarded input. A throttled or failed forward is counted and logged, and does
-not fail the local broadcast.
+subnet (Annex J.4.5). Each `send_broadcast` in BBMD mode queues a
+Forwarded-NPDU, with the BBMD's own B/IP address as the originating address,
+for every BDT entry except its own and for its registered foreign devices, then
+sends the local Original-Broadcast-NPDU. At most
+`ForeignDevicePolicy::max_fdt_fanout` foreign devices (default 32) and
+`FanoutPolicy::max_fanout_per_input` targets in all (default 64) receive each
+broadcast. So remote devices and foreign devices hear the BBMD's own Who-Is,
+I-Am and Network-Number-Is, and the broadcasts it routes.
+
+This fanout uses the same `FanoutPolicy` queue and rate limits as forwarded
+input and shows in `fanout_counters()`. The per-origin limit is keyed on the
+origin's IP only. The BBMD's own broadcasts, including those it routes, share
+that one budget with everything else it forwards with its own IP as origin:
+`max_packets_per_sec_per_origin`, 128 forwarded packets per second by default,
+or about 128/T complete broadcasts per second with T targets. Past that, a
+broadcast reaches only some of its targets: BDT targets come first, so foreign
+devices are cut first. The global packet and byte limits also apply.
+
+Throttled targets, a full queue and failed sends are counted in
+`fanout_counters()` and logged; a stopped fanout worker or an encoding failure
+is only logged. None of them fail the local broadcast. The forward is queued
+before the local send and does not depend on it, so in BBMD mode an `Err` from
+`send_broadcast` can follow a forward that was already queued.
 
 ---
 
