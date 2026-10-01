@@ -1,6 +1,8 @@
 use super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::NotifyType;
 use bacnet_types::primitives::{Date, Time};
 
 struct EventSummaryFixture {
@@ -232,7 +234,7 @@ fn get_event_information_empty() {
 
 #[test]
 fn get_event_information_reports_non_normal_objects() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
 
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
@@ -263,7 +265,7 @@ fn get_event_information_reports_non_normal_objects() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -299,7 +301,7 @@ fn get_event_information_reports_non_normal_objects() {
 
 #[test]
 fn get_event_information_reads_event_enable_notify_type_and_priorities() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     ai.write_property(
@@ -328,7 +330,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -380,8 +382,11 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     handle_get_event_information(&db, &buf, &mut ack_buf).unwrap();
     let ack = GetEventInformationAck::decode(&ack_buf).unwrap();
     let summary = &ack.list_of_event_summaries[0];
-    assert_eq!(summary.event_enable, 0x05);
-    assert_eq!(summary.notify_type, 1);
+    assert_eq!(
+        summary.event_enable,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
+    assert_eq!(summary.notify_type, NotifyType::EVENT);
     assert_eq!(summary.event_priorities, [100, 150, 200]);
 }
 

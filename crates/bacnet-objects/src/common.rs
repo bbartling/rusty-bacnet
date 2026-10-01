@@ -463,14 +463,12 @@ macro_rules! read_generic_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![bacnet_types::bitstring::pack_octet(
-                        $self.event_detector.event_enable,
-                    )],
+                    data: vec![$self.event_detector.event_enable.to_bacnet()],
                 }))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::Enumerated(
-                    $self.event_detector.notify_type,
+                    $self.event_detector.notify_type.to_raw(),
                 )))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS => {
@@ -498,9 +496,7 @@ macro_rules! read_generic_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![bacnet_types::bitstring::pack_octet(
-                        $self.event_detector.acked_transitions,
-                    )],
+                    data: vec![$self.event_detector.acked_transitions.to_bacnet()],
                 }))
             }
             _ => None,
@@ -528,7 +524,7 @@ macro_rules! read_analog_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 6,
-                    data: vec![$self.event_detector.limit_enable.to_bits()],
+                    data: vec![$self.event_detector.limit_enable.to_bacnet()],
                 }))
             }
             _ => None,
@@ -598,7 +594,7 @@ macro_rules! write_analog_event_properties {
                     match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 2) {
                         Ok(byte) => {
                             $self.event_detector.limit_enable =
-                                $crate::event::LimitEnable::from_bits(byte);
+                                bacnet_types::bitstring::LimitEnable::from_bacnet(&[byte]);
                             Some(Ok(()))
                         }
                         Err(e) => Some(Err(e)),
@@ -626,7 +622,7 @@ macro_rules! write_generic_event_properties {
                     match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 3) {
                         Ok(byte) => {
                             $self.event_detector.event_enable =
-                                bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                                bacnet_types::bitstring::EventTransitionBits::from_bacnet(&[byte]);
                             Some(Ok(()))
                         }
                         Err(e) => Some(Err(e)),
@@ -654,13 +650,14 @@ macro_rules! write_generic_event_properties {
                 // derived from NotifyType::ALL_NAMED so a future addendum
                 // constant widens the gate without a second edit.
                 if let bacnet_types::primitives::PropertyValue::Enumerated(v) = $value {
+                    let notify_type = bacnet_types::enums::NotifyType::from_raw(v);
                     let named = bacnet_types::enums::NotifyType::ALL_NAMED
                         .iter()
-                        .any(|&(_, n)| n.to_raw() == v);
+                        .any(|&(_, n)| n == notify_type);
                     if !named {
                         Some(Err($crate::common::value_out_of_range_error()))
                     } else {
-                        $self.event_detector.notify_type = v;
+                        $self.event_detector.notify_type = notify_type;
                         Some(Ok(()))
                     }
                 } else {

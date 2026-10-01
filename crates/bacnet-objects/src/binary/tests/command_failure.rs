@@ -301,7 +301,7 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
         bo.evaluate_intrinsic_reporting().unwrap().change.to,
         EventState::OFFNORMAL
     );
-    bo.event_detector.acked_transitions = 0;
+    bo.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
     set_detection_enabled(&mut bo, false);
 
     assert_eq!(

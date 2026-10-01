@@ -3,6 +3,7 @@
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_encoding::tags::{app_tag, TagClass};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::EventState;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -15,17 +16,14 @@ use crate::common::MAX_DECODED_ITEMS;
 // ---------------------------------------------------------------------------
 
 /// One entry in the GetAlarmSummary-ACK sequence.
-///
-/// `acknowledged_transitions` is a 3-bit bitstring encoded as
-/// `(unused_bits, data)`. Bits represent: to-offnormal, to-fault, to-normal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlarmSummaryEntry {
     /// Object that is in an alarm condition.
     pub object_identifier: ObjectIdentifier,
     /// Event state the object currently holds.
     pub alarm_state: EventState,
-    /// Raw bitstring: (unused_bits, data bytes).
-    pub acknowledged_transitions: (u8, Vec<u8>),
+    /// The object's `Acked_Transitions`.
+    pub acknowledged_transitions: EventTransitionBits,
 }
 
 /// GetAlarmSummary-ACK: a sequence of alarm summary entries.
@@ -45,8 +43,8 @@ impl GetAlarmSummaryAck {
             primitives::encode_app_enumerated(buf, entry.alarm_state.to_raw());
             primitives::encode_app_bit_string(
                 buf,
-                entry.acknowledged_transitions.0,
-                &entry.acknowledged_transitions.1,
+                5,
+                &[entry.acknowledged_transitions.to_bacnet()],
             );
         }
     }
@@ -124,16 +122,14 @@ impl GetAlarmSummaryAck {
                     "AlarmSummaryAck truncated at acknowledgedTransitions",
                 ));
             }
-            let acknowledged_transitions = primitives::decode_bit_string(&data[pos..end])?;
-            if acknowledged_transitions.0 != 5
-                || acknowledged_transitions.1.len() != 1
-                || acknowledged_transitions.1[0] & 0x1F != 0
-            {
+            let (unused_bits, transitions) = primitives::decode_bit_string(&data[pos..end])?;
+            if unused_bits != 5 || transitions.len() != 1 || transitions[0] & 0x1F != 0 {
                 return Err(Error::decoding(
                     pos,
                     "AlarmSummaryAck acknowledgedTransitions must contain three bits with zero padding",
                 ));
             }
+            let acknowledged_transitions = EventTransitionBits::from_bacnet(&transitions);
             offset = end;
 
             entries.push(AlarmSummaryEntry {
@@ -178,13 +174,13 @@ mod tests {
                 AlarmSummaryEntry {
                     object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
                     alarm_state: EventState::HIGH_LIMIT,
-                    // 3 bits used (5 unused): to-offnormal=1, to-fault=0, to-normal=1
-                    acknowledged_transitions: (5, vec![0b10100000]),
+                    acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
+                        | EventTransitionBits::TO_NORMAL,
                 },
                 AlarmSummaryEntry {
                     object_identifier: ObjectIdentifier::new(ObjectType::BINARY_INPUT, 10).unwrap(),
                     alarm_state: EventState::OFFNORMAL,
-                    acknowledged_transitions: (5, vec![0b11100000]),
+                    acknowledged_transitions: EventTransitionBits::all(),
                 },
             ],
         };
@@ -209,7 +205,7 @@ mod tests {
             entries: vec![AlarmSummaryEntry {
                 object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 42).unwrap(),
                 alarm_state: EventState::FAULT,
-                acknowledged_transitions: (5, vec![0b01000000]),
+                acknowledged_transitions: EventTransitionBits::TO_FAULT,
             }],
         };
         let mut buf = BytesMut::new();
@@ -277,6 +273,21 @@ mod tests {
     }
 
     #[test]
+    fn acknowledged_transitions_keep_wire_bit_order() {
+        // TO_OFFNORMAL rides the most significant bit of the content octet, then
+        // TO_FAULT. The vector is asymmetric, so reversing the order fails it.
+        let encoded = ack_with_fields(&[0], 5, &[0b1100_0000]);
+        let decoded = GetAlarmSummaryAck::decode(&encoded).unwrap();
+        assert_eq!(
+            decoded.entries[0].acknowledged_transitions,
+            EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT
+        );
+        let mut reencoded = BytesMut::new();
+        decoded.encode(&mut reencoded);
+        assert_eq!(reencoded, encoded);
+    }
+
+    #[test]
     fn acknowledged_transitions_must_contain_three_bits() {
         for (unused_bits, transitions) in [
             (5, &[][..]),
@@ -302,7 +313,8 @@ mod tests {
             entries: vec![AlarmSummaryEntry {
                 object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
                 alarm_state: EventState::HIGH_LIMIT,
-                acknowledged_transitions: (5, vec![0b10100000]),
+                acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
+                    | EventTransitionBits::TO_NORMAL,
             }],
         };
         let mut buf = BytesMut::new();
@@ -316,7 +328,8 @@ mod tests {
             entries: vec![AlarmSummaryEntry {
                 object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
                 alarm_state: EventState::HIGH_LIMIT,
-                acknowledged_transitions: (5, vec![0b10100000]),
+                acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
+                    | EventTransitionBits::TO_NORMAL,
             }],
         };
         let mut buf = BytesMut::new();

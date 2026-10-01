@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::event::LimitEnable;
+use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
 
 // --- AnalogValue ---
@@ -345,7 +345,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -415,7 +415,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )

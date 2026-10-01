@@ -8,35 +8,37 @@
 
 use super::*;
 
-const NO_FAULT: u32 = Reliability::NO_FAULT_DETECTED.to_raw();
-const OVER_RANGE: u32 = Reliability::OVER_RANGE.to_raw();
-const NO_SENSOR: u32 = Reliability::NO_SENSOR.to_raw();
-const SHORTED_LOOP: u32 = Reliability::SHORTED_LOOP.to_raw();
+const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
+const OVER_RANGE: Reliability = Reliability::OVER_RANGE;
+const NO_SENSOR: Reliability = Reliability::NO_SENSOR;
+const SHORTED_LOOP: Reliability = Reliability::SHORTED_LOOP;
+
+const TO_OFFNORMAL: EventTransitionBits = EventTransitionBits::TO_OFFNORMAL;
+const TO_FAULT: EventTransitionBits = EventTransitionBits::TO_FAULT;
+const TO_NORMAL: EventTransitionBits = EventTransitionBits::TO_NORMAL;
 
 #[test]
 fn event_transition_classifier_covers_every_event_state_and_bit() {
     let cases = [
-        (EventState::NORMAL, EventTransition::ToNormal, 0x04),
-        (EventState::FAULT, EventTransition::ToFault, 0x02),
-        (EventState::OFFNORMAL, EventTransition::ToOffnormal, 0x01),
-        (EventState::HIGH_LIMIT, EventTransition::ToOffnormal, 0x01),
-        (EventState::LOW_LIMIT, EventTransition::ToOffnormal, 0x01),
-        (
-            EventState::LIFE_SAFETY_ALARM,
-            EventTransition::ToOffnormal,
-            0x01,
-        ),
+        (EventState::NORMAL, EventTransition::ToNormal),
+        (EventState::FAULT, EventTransition::ToFault),
+        (EventState::OFFNORMAL, EventTransition::ToOffnormal),
+        (EventState::HIGH_LIMIT, EventTransition::ToOffnormal),
+        (EventState::LOW_LIMIT, EventTransition::ToOffnormal),
+        (EventState::LIFE_SAFETY_ALARM, EventTransition::ToOffnormal),
     ];
-
-    for (state, expected_transition, expected_bit) in cases {
+    for (state, expected_transition) in cases {
         let transition = EventTransition::for_target_state(state);
         assert_eq!(transition, expected_transition, "state {}", state.to_raw());
-        assert_eq!(
-            transition.bit_mask(),
-            expected_bit,
-            "state {}",
-            state.to_raw()
-        );
+    }
+
+    let bits = [
+        (EventTransition::ToOffnormal, TO_OFFNORMAL),
+        (EventTransition::ToFault, TO_FAULT),
+        (EventTransition::ToNormal, TO_NORMAL),
+    ];
+    for (transition, expected_bit) in bits {
+        assert_eq!(transition.bit_mask(), expected_bit, "{transition:?}");
     }
 }
 
@@ -46,14 +48,14 @@ fn detector() -> OutOfRangeDetector {
         high_limit: 80.0,
         low_limit: 20.0,
         deadband: 2.0,
-        limit_enable: LimitEnable::BOTH,
+        limit_enable: LimitEnable::all(),
         notification_class: 1,
-        notify_type: 0,
-        event_enable: 0x07,
+        notify_type: NotifyType::ALARM,
+        event_enable: EventTransitionBits::all(),
         time_delay: 0,
         time_delay_normal: None,
         event_state: EventState::NORMAL,
-        acked_transitions: 0b111,
+        acked_transitions: EventTransitionBits::all(),
         pending: None,
         fault_reliability: None,
     }
@@ -111,7 +113,7 @@ fn fault_precedence_truth_table() {
 fn any_non_zero_reliability_faults_not_just_a_known_one() {
     // Clause 13.2.2 tests inequality with NO_FAULT_DETECTED, not
     // membership in a list, so an unmodeled value must fault too.
-    for reliability in [OVER_RANGE, SHORTED_LOOP, 9999] {
+    for reliability in [OVER_RANGE, SHORTED_LOOP, Reliability::from_raw(9999)] {
         let mut det = detector();
         assert_eq!(
             det.probe(50.0, reliability).unwrap().change.to,
@@ -192,7 +194,7 @@ fn holding_fault_blocks_a_state_independent_algorithm() {
     // asserting the hold only against that detector would prove nothing.
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 0,
         event_state: EventState::NORMAL,
         ..Default::default()
@@ -269,7 +271,7 @@ fn out_of_range_reenters_fault_only_when_reliability_changes() {
 fn change_of_state_reenters_fault_only_when_reliability_changes() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
 
@@ -307,7 +309,7 @@ fn change_of_state_reenters_fault_only_when_reliability_changes() {
 #[test]
 fn command_failure_reenters_fault_only_when_reliability_changes() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
 
@@ -435,7 +437,7 @@ fn fault_override_wins_in_both_directions_for_every_detector_algorithm() {
 
     let mut change_of_state = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     let into = change_of_state.probe(0, OVER_RANGE).unwrap();
@@ -444,7 +446,7 @@ fn fault_override_wins_in_both_directions_for_every_detector_algorithm() {
     assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
 
     let mut command_failure = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     let into = command_failure.probe(0, 0, OVER_RANGE).unwrap();
@@ -464,7 +466,7 @@ fn out_of_range_detector_reports_its_algorithm_for_non_fault_transition() {
 fn change_of_state_detector_reports_its_algorithm_for_non_fault_transition() {
     let mut detector = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     let outcome = detector.probe(1, NO_FAULT).unwrap();
@@ -475,7 +477,7 @@ fn change_of_state_detector_reports_its_algorithm_for_non_fault_transition() {
 #[test]
 fn command_failure_offnormal_reports_command_failure_not_change_of_state() {
     let mut detector = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     let outcome = detector.probe(1, 0, NO_FAULT).unwrap();
@@ -488,11 +490,11 @@ fn fault_distribution_honors_the_to_fault_event_enable_bit() {
     // Clause 13.2.5: Event_Enable scopes distribution, never detection. The
     // transition is reported either way; only `distribute` changes.
     let mut det = detector();
-    det.event_enable = 0x02; // TO_FAULT only
+    det.event_enable = TO_FAULT;
     assert!(det.probe(50.0, OVER_RANGE).unwrap().distribute);
 
     let mut det = detector();
-    det.event_enable = 0x05; // TO_OFFNORMAL | TO_NORMAL, no TO_FAULT
+    det.event_enable = TO_OFFNORMAL | TO_NORMAL;
     let outcome = det.probe(50.0, OVER_RANGE).expect("still detected");
     assert!(!outcome.distribute);
     assert_eq!(
@@ -504,32 +506,32 @@ fn fault_distribution_honors_the_to_fault_event_enable_bit() {
 
 #[test]
 fn out_of_range_distribution_selects_the_to_normal_bit() {
-    for (event_enable, expected) in [(0x04, true), (0x03, false)] {
+    for (event_enable, expected) in [(TO_NORMAL, true), (TO_OFFNORMAL | TO_FAULT, false)] {
         let mut det = detector();
         det.event_state = EventState::HIGH_LIMIT;
         det.event_enable = event_enable;
 
         let outcome = det.probe(50.0, NO_FAULT).expect("TO_NORMAL transition");
         assert_eq!(outcome.change.to, EventState::NORMAL);
-        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+        assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
 }
 
 #[test]
 fn out_of_range_distribution_selects_the_to_offnormal_bit() {
-    for (event_enable, expected) in [(0x01, true), (0x06, false)] {
+    for (event_enable, expected) in [(TO_OFFNORMAL, true), (TO_FAULT | TO_NORMAL, false)] {
         let mut det = detector();
         det.event_enable = event_enable;
 
         let outcome = det.probe(90.0, NO_FAULT).expect("TO_OFFNORMAL transition");
         assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
-        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+        assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
 }
 
 #[test]
 fn change_of_state_distribution_selects_the_to_normal_bit() {
-    for (event_enable, expected) in [(0x04, true), (0x03, false)] {
+    for (event_enable, expected) in [(TO_NORMAL, true), (TO_OFFNORMAL | TO_FAULT, false)] {
         let mut det = ChangeOfStateDetector {
             alarm_values: vec![1],
             event_enable,
@@ -539,13 +541,13 @@ fn change_of_state_distribution_selects_the_to_normal_bit() {
 
         let outcome = det.probe(0, NO_FAULT).expect("TO_NORMAL transition");
         assert_eq!(outcome.change.to, EventState::NORMAL);
-        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+        assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
 }
 
 #[test]
 fn change_of_state_distribution_selects_the_to_offnormal_bit() {
-    for (event_enable, expected) in [(0x01, true), (0x06, false)] {
+    for (event_enable, expected) in [(TO_OFFNORMAL, true), (TO_FAULT | TO_NORMAL, false)] {
         let mut det = ChangeOfStateDetector {
             alarm_values: vec![1],
             event_enable,
@@ -554,13 +556,13 @@ fn change_of_state_distribution_selects_the_to_offnormal_bit() {
 
         let outcome = det.probe(1, NO_FAULT).expect("TO_OFFNORMAL transition");
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
-        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+        assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
 }
 
 #[test]
 fn command_failure_distribution_selects_the_to_normal_bit() {
-    for (event_enable, expected) in [(0x04, true), (0x03, false)] {
+    for (event_enable, expected) in [(TO_NORMAL, true), (TO_OFFNORMAL | TO_FAULT, false)] {
         let mut det = CommandFailureDetector {
             event_enable,
             event_state: EventState::OFFNORMAL,
@@ -569,13 +571,13 @@ fn command_failure_distribution_selects_the_to_normal_bit() {
 
         let outcome = det.probe(1, 1, NO_FAULT).expect("TO_NORMAL transition");
         assert_eq!(outcome.change.to, EventState::NORMAL);
-        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+        assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
 }
 
 #[test]
 fn command_failure_distribution_selects_the_to_offnormal_bit() {
-    for (event_enable, expected) in [(0x01, true), (0x06, false)] {
+    for (event_enable, expected) in [(TO_OFFNORMAL, true), (TO_FAULT | TO_NORMAL, false)] {
         let mut det = CommandFailureDetector {
             event_enable,
             ..Default::default()
@@ -583,7 +585,7 @@ fn command_failure_distribution_selects_the_to_offnormal_bit() {
 
         let outcome = det.probe(1, 0, NO_FAULT).expect("TO_OFFNORMAL transition");
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
-        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+        assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
 }
 
@@ -593,7 +595,7 @@ fn command_failure_distribution_selects_the_to_offnormal_bit() {
 fn change_of_state_detector_applies_fault_precedence() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 0,
         event_state: EventState::NORMAL,
         ..Default::default()
@@ -612,7 +614,7 @@ fn change_of_state_detector_applies_fault_precedence() {
 #[test]
 fn command_failure_detector_applies_fault_precedence() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 0,
         event_state: EventState::NORMAL,
         ..Default::default()
@@ -629,7 +631,7 @@ fn change_of_state_fault_entry_discards_an_in_flight_countdown() {
     // seeded before FAULT must not resume after recovery.
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 2,
         event_state: EventState::NORMAL,
         ..Default::default()
@@ -654,7 +656,7 @@ fn change_of_state_fault_entry_discards_an_in_flight_countdown() {
 fn command_failure_holds_fault_while_reliability_remains_bad() {
     // Matching values make the algorithm answer NORMAL, pinning HoldFault.
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         event_state: EventState::NORMAL,
         ..Default::default()
     };
@@ -670,7 +672,7 @@ fn command_failure_holds_fault_while_reliability_remains_bad() {
 #[test]
 fn command_failure_recovers_to_normal_before_rerunning_its_algorithm() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         event_state: EventState::NORMAL,
         ..Default::default()
     };
@@ -692,7 +694,7 @@ fn command_failure_recovers_to_normal_before_rerunning_its_algorithm() {
 #[test]
 fn command_failure_fault_entry_discards_an_in_flight_countdown() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 2,
         event_state: EventState::NORMAL,
         ..Default::default()
@@ -736,7 +738,7 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
     ai.write_property(
         PropertyIdentifier::RELIABILITY,
         None,
-        PropertyValue::Enumerated(OVER_RANGE),
+        PropertyValue::Enumerated(OVER_RANGE.to_raw()),
         None,
     )
     .expect("reliability is writable");
@@ -770,7 +772,7 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
     ai.write_property(
         PropertyIdentifier::RELIABILITY,
         None,
-        PropertyValue::Enumerated(OVER_RANGE),
+        PropertyValue::Enumerated(OVER_RANGE.to_raw()),
         None,
     )
     .expect("reliability is writable");
@@ -783,7 +785,7 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
     ai.write_property(
         PropertyIdentifier::RELIABILITY,
         None,
-        PropertyValue::Enumerated(NO_FAULT),
+        PropertyValue::Enumerated(NO_FAULT.to_raw()),
         None,
     )
     .expect("reliability is writable");
@@ -809,7 +811,7 @@ fn faulted_object_reports_both_fault_and_in_alarm_status_flags() {
     use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
     let mut ai = AnalogInputObject::new(2, "ai-2", 62).expect("construct");
-    ai.set_reliability_internal(OVER_RANGE)
+    ai.set_reliability_internal(OVER_RANGE.to_raw())
         .expect("in-service reliability evaluation is supported");
     let proposal = ai
         .evaluate_intrinsic_reporting()
@@ -840,7 +842,7 @@ fn command_failure_to_fault_distribution_is_no_longer_hardcoded_off() {
     // #200: this detector's `fire` returned `distribute: false` for FAULT
     // unconditionally, which was unobservable while FAULT was unreachable.
     let mut det = CommandFailureDetector {
-        event_enable: 0x02, // TO_FAULT set
+        event_enable: TO_FAULT,
         time_delay: 0,
         event_state: EventState::NORMAL,
         ..Default::default()
@@ -851,7 +853,7 @@ fn command_failure_to_fault_distribution_is_no_longer_hardcoded_off() {
     );
 
     let mut det = CommandFailureDetector {
-        event_enable: 0x05, // TO_FAULT clear
+        event_enable: TO_OFFNORMAL | TO_NORMAL,
         time_delay: 0,
         event_state: EventState::NORMAL,
         ..Default::default()

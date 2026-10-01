@@ -45,7 +45,7 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
 
     let mut db = ObjectDatabase::new();
@@ -145,7 +145,7 @@ async fn default_interval_server(
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
 
     let mut db = ObjectDatabase::new();

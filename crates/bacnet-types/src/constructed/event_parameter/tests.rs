@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::constructed::FaultParameters;
+use crate::enums::LifeSafetyState;
 use crate::primitives::ObjectIdentifier;
 
 /// Build a local BACnetDeviceObjectPropertyReference for tests.
@@ -297,8 +298,8 @@ fn flat_references_reject_overflow_and_extra_members() {
 #[test]
 fn flat_fault_life_safety_values_reject_u32_overflow() {
     let PropertyValue::List(mut items) = (FaultParameters::FaultLifeSafety {
-        fault_values: vec![1],
-        mode_for_reference: dopr(1),
+        fault_values: vec![LifeSafetyState::PRE_ALARM],
+        mode_property_reference: dopr(1),
     })
     .encode_property_value() else {
         unreachable!();
@@ -357,8 +358,8 @@ fn fault_parameters_legacy_alternatives_require_exact_members() {
             parameters: vec![0x21, 0x03],
         },
         FaultParameters::FaultLifeSafety {
-            fault_values: vec![1],
-            mode_for_reference: reference.clone(),
+            fault_values: vec![LifeSafetyState::PRE_ALARM],
+            mode_property_reference: reference.clone(),
         },
         FaultParameters::FaultState {
             fault_values: vec![BACnetPropertyStates::BooleanValue(true)],

@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import rusty_bacnet
-from rusty_bacnet import BACnetClient, BACnetTimeStamp, ObjectIdentifier, ObjectType
+from rusty_bacnet import (
+    BACnetClient,
+    BACnetTimeStamp,
+    EventState,
+    ObjectIdentifier,
+    ObjectType,
+)
 
 
 def stub_classes() -> dict[str, ast.ClassDef]:
@@ -130,6 +136,9 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
         client_method = method(classes["BACnetClient"], "acknowledge_alarm_request")
         stub_args = [*client_method.args.posonlyargs, *client_method.args.args]
         self.assertEqual([arg.arg for arg in stub_args], expected)
+        event_state_annotation = stub_args[4].annotation
+        assert event_state_annotation is not None
+        self.assertEqual(ast.unparse(event_state_annotation), "EventState")
         timestamp_annotation = stub_args[5].annotation
         acknowledgment_annotation = stub_args[7].annotation
         self.assertIsNotNone(timestamp_annotation)
@@ -145,13 +154,13 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
         timestamp = BACnetTimeStamp.sequence_number(1)
         call: Any = client.acknowledge_alarm_request
         with self.assertRaises(TypeError):
-            call("127.0.0.1:47808", 7, oid, 1, timestamp, "operator")
+            call("127.0.0.1:47808", 7, oid, EventState.FAULT, timestamp, "operator")
         with self.assertRaises(TypeError):
             call(
                 "127.0.0.1:47808",
                 7,
                 oid,
-                1,
+                EventState.FAULT,
                 0,
                 "operator",
                 timestamp,
@@ -176,7 +185,7 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
                 warnings.simplefilter("always")
                 with self.assertRaisesRegex(RuntimeError, "client not started"):
                     await client.acknowledge_alarm(
-                        "127.0.0.1:47808", 7, oid, 1, "legacy-operator"
+                        "127.0.0.1:47808", 7, oid, EventState.FAULT, "legacy-operator"
                     )
                 self.assertEqual(len(caught), 1)
                 self.assertIs(caught[0].category, DeprecationWarning)

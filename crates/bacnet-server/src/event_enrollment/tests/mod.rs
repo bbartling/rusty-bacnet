@@ -52,7 +52,7 @@ fn setup_out_of_range(
         high_limit,
         deadband,
     });
-    ee.set_event_enable(0x07); // all transitions
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -99,7 +99,7 @@ fn setup_floating_limit(
         high_diff_limit: high_diff,
         deadband,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -131,7 +131,7 @@ fn setup_change_of_state(
             .map(|v| BACnetPropertyStates::BinaryValue(*v))
             .collect(),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

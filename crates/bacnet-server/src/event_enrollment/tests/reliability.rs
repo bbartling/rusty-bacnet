@@ -7,7 +7,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     FaultParameters,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyState, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 use std::borrow::Cow;
 use std::sync::atomic::Ordering;
@@ -100,7 +100,7 @@ fn setup(
         deadband: 2.0,
     });
     enrollment.set_fault_parameters(Some(fault_parameters));
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     (db, enrollment_oid, target_oid)
@@ -285,8 +285,8 @@ fn every_deferred_fault_alternative_commits_configuration_error() {
             parameters: vec![0x21, 0x03],
         },
         FaultParameters::FaultLifeSafety {
-            fault_values: vec![1],
-            mode_for_reference: reference.clone(),
+            fault_values: vec![LifeSafetyState::PRE_ALARM],
+            mode_property_reference: reference.clone(),
         },
         FaultParameters::FaultState {
             fault_values: vec![BACnetPropertyStates::BooleanValue(true)],

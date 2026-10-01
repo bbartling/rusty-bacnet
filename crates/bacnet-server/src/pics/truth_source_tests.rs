@@ -35,7 +35,7 @@ use crate::server::ServerConfig;
 /// objects are pre-flipped where needed.
 #[test]
 fn is_writable_property_matches_write_property_on_all_core_types() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
 
     // A read-only property every type rejects — used as a universal negative.
     const READ_ONLY: PropertyIdentifier = PropertyIdentifier::STATUS_FLAGS;
@@ -140,7 +140,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyIdentifier::LIMIT_ENABLE,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         "AI",
     );

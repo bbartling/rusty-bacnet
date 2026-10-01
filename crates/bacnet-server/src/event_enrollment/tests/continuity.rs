@@ -154,7 +154,7 @@ fn add_out_of_range_enrollment(
         high_limit: 80.0,
         deadband: 2.0,
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     oid
@@ -291,7 +291,7 @@ fn change_of_state_does_not_reuse_pre_gap_last_offnormal_identity() {
             BACnetPropertyStates::BinaryValue(0),
         ],
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);

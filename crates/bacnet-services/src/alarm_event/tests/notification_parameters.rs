@@ -8,12 +8,12 @@ fn make_event_req(event_values: Option<NotificationParameters>) -> EventNotifica
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values,
     }
 }
@@ -22,7 +22,7 @@ fn make_event_req(event_values: Option<NotificationParameters>) -> EventNotifica
 fn notification_params_out_of_range_round_trip() {
     let params = NotificationParameters::OutOfRange {
         exceeding_value: 85.5,
-        status_flags: 0b1000, // IN_ALARM
+        status_flags: StatusFlags::IN_ALARM,
         deadband: 1.0,
         exceeded_limit: 80.0,
     };
@@ -39,7 +39,7 @@ fn notification_params_out_of_range_round_trip() {
             exceeded_limit,
         } => {
             assert_eq!(exceeding_value, 85.5);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(deadband, 1.0);
             assert_eq!(exceeded_limit, 80.0);
         }
@@ -51,7 +51,7 @@ fn notification_params_out_of_range_round_trip() {
 fn notification_params_change_of_state_boolean_round_trip() {
     let params = NotificationParameters::ChangeOfState {
         new_state: BACnetPropertyStates::BooleanValue(true),
-        status_flags: 0b1100, // IN_ALARM + FAULT
+        status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -64,7 +64,7 @@ fn notification_params_change_of_state_boolean_round_trip() {
             status_flags,
         } => {
             assert_eq!(new_state, BACnetPropertyStates::BooleanValue(true));
-            assert_eq!(status_flags, 0b1100);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM | StatusFlags::FAULT);
         }
         other => panic!("expected ChangeOfState, got {:?}", other),
     }
@@ -74,7 +74,7 @@ fn notification_params_change_of_state_boolean_round_trip() {
 fn notification_params_change_of_state_enumerated_round_trip() {
     let params = NotificationParameters::ChangeOfState {
         new_state: BACnetPropertyStates::State(3), // HIGH_LIMIT
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -87,7 +87,7 @@ fn notification_params_change_of_state_enumerated_round_trip() {
             status_flags,
         } => {
             assert_eq!(new_state, BACnetPropertyStates::State(3));
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
         }
         other => panic!("expected ChangeOfState, got {:?}", other),
     }
@@ -97,7 +97,7 @@ fn notification_params_change_of_state_enumerated_round_trip() {
 fn notification_params_change_of_value_real_round_trip() {
     let params = NotificationParameters::ChangeOfValue {
         new_value: ChangeOfValueChoice::ChangedValue(72.5),
-        status_flags: 0b0100,
+        status_flags: StatusFlags::FAULT,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -110,7 +110,7 @@ fn notification_params_change_of_value_real_round_trip() {
             status_flags,
         } => {
             assert_eq!(new_value, ChangeOfValueChoice::ChangedValue(72.5));
-            assert_eq!(status_flags, 0b0100);
+            assert_eq!(status_flags, StatusFlags::FAULT);
         }
         other => panic!("expected ChangeOfValue, got {:?}", other),
     }
@@ -150,7 +150,7 @@ fn notification_params_buffer_ready_round_trip() {
 fn notification_params_unsigned_range_round_trip() {
     let params = NotificationParameters::UnsignedRange {
         exceeding_value: 500,
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
         exceeded_limit: 400,
     };
     let req = make_event_req(Some(params));
@@ -165,7 +165,7 @@ fn notification_params_unsigned_range_round_trip() {
             exceeded_limit,
         } => {
             assert_eq!(exceeding_value, 500);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(exceeded_limit, 400);
         }
         other => panic!("expected UnsignedRange, got {:?}", other),
@@ -181,7 +181,7 @@ fn event_notification_no_event_values_backward_compatible() {
     let decoded = EventNotificationRequest::decode(&buf).unwrap();
     assert!(decoded.event_values.is_none());
     assert_eq!(decoded.process_identifier, 1);
-    assert_eq!(decoded.to_state, 3);
+    assert_eq!(decoded.to_state, EventState::HIGH_LIMIT);
 }
 
 #[test]
@@ -189,17 +189,17 @@ fn get_event_information_ack_round_trip() {
     let ack = GetEventInformationAck {
         list_of_event_summaries: vec![EventSummary {
             object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            event_state: 3,
-            acknowledged_transitions: 0b101,
+            event_state: EventState::HIGH_LIMIT,
+            acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
+                | EventTransitionBits::TO_NORMAL,
             event_timestamps: [
                 BACnetTimeStamp::SequenceNumber(42),
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(100),
             ],
-            notify_type: 0,
-            event_enable: 0b111,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::all(),
             event_priorities: [3, 3, 3],
-            notification_class: 0,
         }],
         more_events: true,
     };
@@ -220,11 +220,14 @@ fn get_event_information_ack_round_trip() {
         s.object_identifier,
         ack.list_of_event_summaries[0].object_identifier
     );
-    assert_eq!(s.event_state, 3);
-    assert_eq!(s.acknowledged_transitions, 0b101);
+    assert_eq!(s.event_state, EventState::HIGH_LIMIT);
+    assert_eq!(
+        s.acknowledged_transitions,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
     assert_eq!(s.event_timestamps[0], BACnetTimeStamp::SequenceNumber(42));
-    assert_eq!(s.notify_type, 0);
-    assert_eq!(s.event_enable, 0b111);
+    assert_eq!(s.notify_type, NotifyType::ALARM);
+    assert_eq!(s.event_enable, EventTransitionBits::all());
     assert_eq!(s.event_priorities, [3, 3, 3]);
 }
 
@@ -232,7 +235,7 @@ fn get_event_information_ack_round_trip() {
 fn notification_params_change_of_bitstring_round_trip() {
     let params = NotificationParameters::ChangeOfBitstring {
         referenced_bitstring: (2, vec![0xA0]),
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -245,7 +248,7 @@ fn notification_params_change_of_bitstring_round_trip() {
             status_flags,
         } => {
             assert_eq!(referenced_bitstring, (2, vec![0xA0]));
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
         }
         other => panic!("expected ChangeOfBitstring, got {:?}", other),
     }
@@ -255,7 +258,7 @@ fn notification_params_change_of_bitstring_round_trip() {
 fn notification_params_command_failure_round_trip() {
     let params = NotificationParameters::CommandFailure {
         command_value: vec![0x91, 0x01],
-        status_flags: 0b1100,
+        status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
         feedback_value: vec![0x91, 0x02],
     };
     let req = make_event_req(Some(params));
@@ -270,7 +273,7 @@ fn notification_params_command_failure_round_trip() {
             feedback_value,
         } => {
             assert_eq!(command_value, vec![0x91, 0x01]);
-            assert_eq!(status_flags, 0b1100);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM | StatusFlags::FAULT);
             assert_eq!(feedback_value, vec![0x91, 0x02]);
         }
         other => panic!("expected CommandFailure, got {:?}", other),
@@ -281,7 +284,7 @@ fn notification_params_command_failure_round_trip() {
 fn notification_params_floating_limit_round_trip() {
     let params = NotificationParameters::FloatingLimit {
         reference_value: 50.0,
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
         setpoint_value: 45.0,
         error_limit: 2.0,
     };
@@ -298,7 +301,7 @@ fn notification_params_floating_limit_round_trip() {
             error_limit,
         } => {
             assert_eq!(reference_value, 50.0);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(setpoint_value, 45.0);
             assert_eq!(error_limit, 2.0);
         }
@@ -309,10 +312,10 @@ fn notification_params_floating_limit_round_trip() {
 #[test]
 fn notification_params_change_of_life_safety_round_trip() {
     let params = NotificationParameters::ChangeOfLifeSafety {
-        new_state: 3,
-        new_mode: 1,
-        status_flags: 0b1000,
-        operation_expected: 2,
+        new_state: LifeSafetyState::FAULT,
+        new_mode: LifeSafetyMode::ON,
+        status_flags: StatusFlags::IN_ALARM,
+        operation_expected: LifeSafetyOperation::SILENCE_AUDIBLE,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -326,10 +329,10 @@ fn notification_params_change_of_life_safety_round_trip() {
             status_flags,
             operation_expected,
         } => {
-            assert_eq!(new_state, 3);
-            assert_eq!(new_mode, 1);
-            assert_eq!(status_flags, 0b1000);
-            assert_eq!(operation_expected, 2);
+            assert_eq!(new_state, LifeSafetyState::FAULT);
+            assert_eq!(new_mode, LifeSafetyMode::ON);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
+            assert_eq!(operation_expected, LifeSafetyOperation::SILENCE_AUDIBLE);
         }
         other => panic!("expected ChangeOfLifeSafety, got {:?}", other),
     }
@@ -370,8 +373,8 @@ fn notification_params_access_event_round_trip() {
         object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
     };
     let params = NotificationParameters::AccessEvent {
-        access_event: 5,
-        status_flags: 0b1000,
+        access_event: AccessEvent::TRACE,
+        status_flags: StatusFlags::IN_ALARM,
         access_event_tag: 10,
         access_event_time: (
             Date {
@@ -404,8 +407,8 @@ fn notification_params_access_event_round_trip() {
             access_credential,
             authentication_factor,
         } => {
-            assert_eq!(access_event, 5);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(access_event, AccessEvent::TRACE);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(access_event_tag, 10);
             assert_eq!(access_event_time.0.year, 124);
             assert_eq!(access_event_time.1.hour, 10);
@@ -423,7 +426,7 @@ fn notification_params_access_event_round_trip() {
 fn notification_params_double_out_of_range_round_trip() {
     let params = NotificationParameters::DoubleOutOfRange {
         exceeding_value: 100.5,
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
         deadband: 0.5,
         exceeded_limit: 100.0,
     };
@@ -440,7 +443,7 @@ fn notification_params_double_out_of_range_round_trip() {
             exceeded_limit,
         } => {
             assert_eq!(exceeding_value, 100.5);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(deadband, 0.5);
             assert_eq!(exceeded_limit, 100.0);
         }
@@ -452,7 +455,7 @@ fn notification_params_double_out_of_range_round_trip() {
 fn notification_params_signed_out_of_range_round_trip() {
     let params = NotificationParameters::SignedOutOfRange {
         exceeding_value: -10,
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
         deadband: 5,
         exceeded_limit: -5,
     };
@@ -469,7 +472,7 @@ fn notification_params_signed_out_of_range_round_trip() {
             exceeded_limit,
         } => {
             assert_eq!(exceeding_value, -10);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(deadband, 5);
             assert_eq!(exceeded_limit, -5);
         }
@@ -481,7 +484,7 @@ fn notification_params_signed_out_of_range_round_trip() {
 fn notification_params_unsigned_out_of_range_round_trip() {
     let params = NotificationParameters::UnsignedOutOfRange {
         exceeding_value: 200,
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
         deadband: 10,
         exceeded_limit: 190,
     };
@@ -498,7 +501,7 @@ fn notification_params_unsigned_out_of_range_round_trip() {
             exceeded_limit,
         } => {
             assert_eq!(exceeding_value, 200);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(deadband, 10);
             assert_eq!(exceeded_limit, 190);
         }
@@ -510,7 +513,7 @@ fn notification_params_unsigned_out_of_range_round_trip() {
 fn notification_params_change_of_characterstring_round_trip() {
     let params = NotificationParameters::ChangeOfCharacterstring {
         changed_value: "hello".to_string(),
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
         alarm_value: "alarm".to_string(),
     };
     let req = make_event_req(Some(params));
@@ -525,7 +528,7 @@ fn notification_params_change_of_characterstring_round_trip() {
             alarm_value,
         } => {
             assert_eq!(changed_value, "hello");
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(alarm_value, "alarm");
         }
         other => panic!("expected ChangeOfCharacterstring, got {:?}", other),
@@ -536,7 +539,7 @@ fn notification_params_change_of_characterstring_round_trip() {
 fn notification_params_change_of_status_flags_round_trip() {
     let params = NotificationParameters::ChangeOfStatusFlags {
         present_value: Some(vec![0x91, 0x03]),
-        referenced_flags: 0b1010,
+        referenced_flags: StatusFlags::IN_ALARM | StatusFlags::OVERRIDDEN,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -549,7 +552,10 @@ fn notification_params_change_of_status_flags_round_trip() {
             referenced_flags,
         } => {
             assert_eq!(present_value, Some(vec![0x91, 0x03]));
-            assert_eq!(referenced_flags, 0b1010);
+            assert_eq!(
+                referenced_flags,
+                StatusFlags::IN_ALARM | StatusFlags::OVERRIDDEN
+            );
         }
         other => panic!("expected ChangeOfStatusFlags, got {:?}", other),
     }
@@ -558,8 +564,8 @@ fn notification_params_change_of_status_flags_round_trip() {
 #[test]
 fn notification_params_change_of_reliability_round_trip() {
     let params = NotificationParameters::ChangeOfReliability {
-        reliability: 7,
-        status_flags: 0b0100,
+        reliability: Reliability::UNRELIABLE_OTHER,
+        status_flags: StatusFlags::FAULT,
         property_values: vec![0x21, 0x02],
     };
     let req = make_event_req(Some(params));
@@ -573,8 +579,8 @@ fn notification_params_change_of_reliability_round_trip() {
             status_flags,
             property_values,
         } => {
-            assert_eq!(reliability, 7);
-            assert_eq!(status_flags, 0b0100);
+            assert_eq!(reliability, Reliability::UNRELIABLE_OTHER);
+            assert_eq!(status_flags, StatusFlags::FAULT);
             assert_eq!(property_values, vec![0x21, 0x02]);
         }
         other => panic!("expected ChangeOfReliability, got {:?}", other),
@@ -585,7 +591,7 @@ fn notification_params_change_of_reliability_round_trip() {
 fn notification_params_change_of_discrete_value_round_trip() {
     let params = NotificationParameters::ChangeOfDiscreteValue {
         new_value: vec![0x91, 0x05],
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -598,7 +604,7 @@ fn notification_params_change_of_discrete_value_round_trip() {
             status_flags,
         } => {
             assert_eq!(new_value, vec![0x91, 0x05]);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
         }
         other => panic!("expected ChangeOfDiscreteValue, got {:?}", other),
     }
@@ -609,8 +615,8 @@ fn notification_params_change_of_timer_round_trip() {
     use bacnet_types::primitives::{Date, Time};
 
     let params = NotificationParameters::ChangeOfTimer {
-        new_state: 1,
-        status_flags: 0b1000,
+        new_state: TimerState::RUNNING,
+        status_flags: StatusFlags::IN_ALARM,
         update_time: (
             Date {
                 year: 124,
@@ -625,7 +631,7 @@ fn notification_params_change_of_timer_round_trip() {
                 hundredths: 0,
             },
         ),
-        last_state_change: Some(0),
+        last_state_change: Some(TimerTransition::NONE),
         initial_timeout: Some(300),
         expiration_time: Some((
             Date {
@@ -656,11 +662,11 @@ fn notification_params_change_of_timer_round_trip() {
             initial_timeout,
             expiration_time,
         } => {
-            assert_eq!(new_state, 1);
-            assert_eq!(status_flags, 0b1000);
+            assert_eq!(new_state, TimerState::RUNNING);
+            assert_eq!(status_flags, StatusFlags::IN_ALARM);
             assert_eq!(update_time.0.year, 124);
             assert_eq!(update_time.1.hour, 8);
-            assert_eq!(last_state_change, Some(0));
+            assert_eq!(last_state_change, Some(TimerTransition::NONE));
             assert_eq!(initial_timeout, Some(300));
             let expiration_time = expiration_time.unwrap();
             assert_eq!(expiration_time.0.year, 124);

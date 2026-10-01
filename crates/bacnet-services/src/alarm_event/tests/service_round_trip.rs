@@ -52,7 +52,7 @@ fn acknowledge_alarm_round_trip() {
     let req = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 1,
         event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-        event_state_acknowledged: 3, // high-limit
+        event_state_acknowledged: EventState::HIGH_LIMIT,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
@@ -62,7 +62,7 @@ fn acknowledge_alarm_round_trip() {
     let decoded = AcknowledgeAlarmRequest::decode(&buf).unwrap();
     assert_eq!(decoded.acknowledging_process_identifier, 1);
     assert_eq!(decoded.event_object_identifier, req.event_object_identifier);
-    assert_eq!(decoded.event_state_acknowledged, 3);
+    assert_eq!(decoded.event_state_acknowledged, EventState::HIGH_LIMIT);
     assert_eq!(decoded.timestamp, BACnetTimeStamp::SequenceNumber(42));
     assert_eq!(decoded.acknowledgment_source, "operator");
 }
@@ -77,7 +77,10 @@ fn acknowledge_alarm_values_must_fit_u32() {
     ))
     .unwrap();
     assert_eq!(decoded.acknowledging_process_identifier, u32::MAX);
-    assert_eq!(decoded.event_state_acknowledged, u32::MAX);
+    assert_eq!(
+        decoded.event_state_acknowledged,
+        EventState::from_raw(u32::MAX)
+    );
 
     let too_wide = [1, 0, 0, 0, 0];
     assert!(AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm(
@@ -179,12 +182,12 @@ fn event_notification_round_trip() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5, // OUT_OF_RANGE
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0, // ALARM
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0, // NORMAL
-        to_state: 3,   // HIGH_LIMIT
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut buf = BytesMut::new();
@@ -197,11 +200,11 @@ fn event_notification_round_trip() {
     assert_eq!(decoded.timestamp, BACnetTimeStamp::SequenceNumber(7));
     assert_eq!(decoded.notification_class, 5);
     assert_eq!(decoded.priority, 100);
-    assert_eq!(decoded.event_type, 5);
-    assert_eq!(decoded.notify_type, 0);
+    assert_eq!(decoded.event_type, EventType::OUT_OF_RANGE);
+    assert_eq!(decoded.notify_type, NotifyType::ALARM);
     assert!(decoded.ack_required);
-    assert_eq!(decoded.from_state, 0);
-    assert_eq!(decoded.to_state, 3);
+    assert_eq!(decoded.from_state, EventState::NORMAL);
+    assert_eq!(decoded.to_state, EventState::HIGH_LIMIT);
     assert!(decoded.event_values.is_none());
 }
 
@@ -234,12 +237,12 @@ fn event_notification_datetime_timestamp_round_trip() {
         timestamp: ts.clone(),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut buf = BytesMut::new();
@@ -270,12 +273,12 @@ fn event_notification_time_timestamp_round_trip() {
         timestamp: ts.clone(),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut buf = BytesMut::new();
@@ -299,7 +302,7 @@ fn test_decode_acknowledge_alarm_truncated_1_byte() {
     let req = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 1,
         event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-        event_state_acknowledged: 3,
+        event_state_acknowledged: EventState::HIGH_LIMIT,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
@@ -314,7 +317,7 @@ fn test_decode_acknowledge_alarm_truncated_3_bytes() {
     let req = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 1,
         event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-        event_state_acknowledged: 3,
+        event_state_acknowledged: EventState::HIGH_LIMIT,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
@@ -329,7 +332,7 @@ fn test_decode_acknowledge_alarm_truncated_half() {
     let req = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 1,
         event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-        event_state_acknowledged: 3,
+        event_state_acknowledged: EventState::HIGH_LIMIT,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
@@ -361,12 +364,12 @@ fn test_decode_event_notification_truncated_1_byte() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut buf = BytesMut::new();
@@ -385,12 +388,12 @@ fn test_decode_event_notification_truncated_3_bytes() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut buf = BytesMut::new();
@@ -409,12 +412,12 @@ fn test_decode_event_notification_truncated_half() {
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 5,
+        event_type: EventType::OUT_OF_RANGE,
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values: None,
     };
     let mut buf = BytesMut::new();

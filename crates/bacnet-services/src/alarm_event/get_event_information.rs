@@ -1,12 +1,13 @@
 use super::*;
-use crate::common::{decode_context, decode_context_bool, decode_context_u32};
+use crate::common::{decode_context, decode_context_bool, decode_context_enum};
+use bacnet_types::bitstring::EventTransitionBits;
 
 fn decode_event_transition_bits(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
     field: &str,
-) -> Result<(u8, usize), Error> {
+) -> Result<(EventTransitionBits, usize), Error> {
     let (content, end) = decode_context(data, offset, expected_tag, field)?;
     if content.len() != 2 || content[0] != 5 || content[1] & 0x1f != 0 {
         return Err(Error::decoding(
@@ -14,7 +15,7 @@ fn decode_event_transition_bits(
             format!("{field} must contain three bits with zero padding"),
         ));
     }
-    Ok((bacnet_types::bitstring::unpack_octet(&content[1..], 3), end))
+    Ok((EventTransitionBits::from_bacnet(&content[1..]), end))
 }
 
 fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {
@@ -81,7 +82,7 @@ impl GetEventInformationRequest {
     }
 }
 
-/// GetEventInformation-ACK service parameters (simplified).
+/// GetEventInformation-ACK service parameters (Clause 13.12.1.2).
 #[derive(Debug, Clone)]
 pub struct GetEventInformationAck {
     /// Objects with a non-normal event state or unacknowledged transitions.
@@ -95,21 +96,18 @@ pub struct GetEventInformationAck {
 pub struct EventSummary {
     /// Object these event details describe.
     pub object_identifier: ObjectIdentifier,
-    /// BACnetEventState value (raw enumeration) currently held by the object.
-    pub event_state: u32,
-    /// 3-bit bitstring: TO_OFFNORMAL, TO_FAULT, TO_NORMAL
-    pub acknowledged_transitions: u8,
+    /// The object's `Event_State`.
+    pub event_state: EventState,
+    /// The object's `Acked_Transitions`.
+    pub acknowledged_transitions: EventTransitionBits,
     /// Timestamps for TO_OFFNORMAL, TO_FAULT, TO_NORMAL
     pub event_timestamps: [BACnetTimeStamp; 3],
-    /// Notify type: ALARM(0), EVENT(1), ACK_NOTIFICATION(2)
-    pub notify_type: u32,
-    /// 3-bit bitstring: TO_OFFNORMAL, TO_FAULT, TO_NORMAL
-    pub event_enable: u8,
+    /// The object's `Notify_Type`.
+    pub notify_type: NotifyType,
+    /// The object's `Event_Enable`.
+    pub event_enable: EventTransitionBits,
     /// Priorities for TO_OFFNORMAL, TO_FAULT, TO_NORMAL
     pub event_priorities: [u32; 3],
-    /// Not part of the GetEventInformation wire format: encode ignores it and decode always
-    /// sets 0.
-    pub notification_class: u32,
 }
 
 impl GetEventInformationAck {
@@ -142,8 +140,13 @@ impl GetEventInformationAck {
             let object_identifier = ObjectIdentifier::decode(content)?;
             offset = end;
 
-            let (event_state, end) =
-                decode_context_u32(data, offset, 1, "GetEventInformation ACK event-state")?;
+            let (event_state, end) = decode_context_enum(
+                data,
+                offset,
+                1,
+                "GetEventInformation ACK event-state",
+                EventState::from_raw,
+            )?;
             offset = end;
 
             let (acknowledged_transitions, end) = decode_event_transition_bits(
@@ -181,8 +184,13 @@ impl GetEventInformationAck {
             }
             offset = next;
 
-            let (notify_type, end) =
-                decode_context_u32(data, offset, 4, "GetEventInformation ACK notify-type")?;
+            let (notify_type, end) = decode_context_enum(
+                data,
+                offset,
+                4,
+                "GetEventInformation ACK notify-type",
+                NotifyType::from_raw,
+            )?;
             offset = end;
 
             let (event_enable, end) = decode_event_transition_bits(
@@ -225,7 +233,6 @@ impl GetEventInformationAck {
                 notify_type,
                 event_enable,
                 event_priorities,
-                notification_class: 0, // not present in the wire format
             });
         }
 
@@ -252,15 +259,13 @@ impl GetEventInformationAck {
             // [0] objectIdentifier
             primitives::encode_ctx_object_id(buf, 0, &summary.object_identifier);
             // [1] eventState
-            primitives::encode_ctx_enumerated(buf, 1, summary.event_state);
+            primitives::encode_ctx_enumerated(buf, 1, summary.event_state.to_raw());
             // [2] acknowledgedTransitions (3-bit bitstring)
             primitives::encode_ctx_bit_string(
                 buf,
                 2,
                 5,
-                &[bacnet_types::bitstring::pack_octet(
-                    summary.acknowledged_transitions,
-                )],
+                &[summary.acknowledged_transitions.to_bacnet()],
             );
             // [3] eventTimeStamps (SEQUENCE OF 3 BACnetTimeStamp)
             tags::encode_opening_tag(buf, 3);
@@ -273,14 +278,9 @@ impl GetEventInformationAck {
             }
             tags::encode_closing_tag(buf, 3);
             // [4] notifyType
-            primitives::encode_ctx_enumerated(buf, 4, summary.notify_type);
+            primitives::encode_ctx_enumerated(buf, 4, summary.notify_type.to_raw());
             // [5] eventEnable (3-bit bitstring)
-            primitives::encode_ctx_bit_string(
-                buf,
-                5,
-                5,
-                &[bacnet_types::bitstring::pack_octet(summary.event_enable)],
-            );
+            primitives::encode_ctx_bit_string(buf, 5, 5, &[summary.event_enable.to_bacnet()]);
             // [6] eventPriorities (SEQUENCE OF 3 Unsigned)
             tags::encode_opening_tag(buf, 6);
             for &p in &summary.event_priorities {

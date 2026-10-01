@@ -328,7 +328,7 @@ async fn make_acknowledge_alarm_server() -> BACnetServer<BipTransport> {
 #[tokio::test]
 async fn acknowledge_alarm_returns_simple_ack() {
     use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
-    use bacnet_types::enums::ConfirmedServiceChoice;
+    use bacnet_types::enums::{ConfirmedServiceChoice, EventState};
     use bacnet_types::primitives::BACnetTimeStamp;
 
     let mut server = make_acknowledge_alarm_server().await;
@@ -340,7 +340,7 @@ async fn acknowledge_alarm_returns_simple_ack() {
     let request = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 1,
         event_object_identifier: ai_oid,
-        event_state_acknowledged: 3,
+        event_state_acknowledged: EventState::HIGH_LIMIT,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),

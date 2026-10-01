@@ -4,6 +4,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
@@ -57,7 +58,7 @@ pub(super) fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
 pub(super) fn ack_required_for_transition(
     db: &ObjectDatabase,
     enrollment: &dyn BACnetObject,
-    transition_bit: u8,
+    transition_bit: EventTransitionBits,
 ) -> bool {
     let Ok(PropertyValue::Unsigned(instance)) =
         enrollment.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
@@ -75,7 +76,7 @@ pub(super) fn ack_required_for_transition(
     };
     match notification_class.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
         Ok(PropertyValue::BitString { data, .. }) => {
-            bacnet_types::bitstring::unpack_octet(&data, 3) & transition_bit != 0
+            EventTransitionBits::from_bacnet(&data).intersects(transition_bit)
         }
         _ => false,
     }
@@ -164,7 +165,7 @@ pub(super) struct ReliabilitySubject<'a> {
     pub(super) enrollment_oid: ObjectIdentifier,
     pub(super) previous: Reliability,
     pub(super) current_state: EventState,
-    pub(super) event_enable: u8,
+    pub(super) event_enable: EventTransitionBits,
 }
 
 pub(super) fn queue_reliability_transition(
@@ -201,7 +202,7 @@ pub(super) fn queue_reliability_transition(
             desired,
             from: current_state,
             to: target,
-            distribute: event_enable & transition_bit != 0,
+            distribute: event_enable.contains(transition_bit),
             ack_required: ack_required_for_transition(db, enrollment, transition_bit),
             cause,
             referenced_value,

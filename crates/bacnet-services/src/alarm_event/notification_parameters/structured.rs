@@ -1,6 +1,6 @@
 use super::decode_helpers::{decode_context_status_flags, finish_variant};
 use super::*;
-use crate::common::{decode_context, decode_context_u32};
+use crate::common::{decode_context, decode_context_enum, decode_context_u32};
 use bacnet_encoding::constructed::validate_tlv_sequence;
 
 pub(super) fn validate_authentication_factor(data: &[u8]) -> Result<(), Error> {
@@ -105,7 +105,13 @@ pub(super) fn decode_access_event(
     inner_start: usize,
     variant_body_end: usize,
 ) -> Result<NotificationParameters, Error> {
-    let (access_event, pos) = decode_context_u32(data, inner_start, 0, "AccessEvent access-event")?;
+    let (access_event, pos) = decode_context_enum(
+        data,
+        inner_start,
+        0,
+        "AccessEvent access-event",
+        AccessEvent::from_raw,
+    )?;
     let (status_flags, pos) =
         decode_context_status_flags(data, pos, 1, "AccessEvent status-flags")?;
     let (access_event_tag, pos) = decode_context_u32(data, pos, 2, "AccessEvent access-event-tag")?;

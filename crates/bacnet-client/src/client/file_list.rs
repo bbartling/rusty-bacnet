@@ -101,7 +101,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         destination_mac: &[u8],
         acknowledging_process_identifier: u32,
         event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
-        event_state_acknowledged: u32,
+        event_state_acknowledged: bacnet_types::enums::EventState,
         acknowledgment_source: &str,
     ) -> Result<(), Error> {
         use bacnet_services::alarm_event::AcknowledgeAlarmRequest;

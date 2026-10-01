@@ -668,7 +668,7 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
     let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(
         notif.event_type,
-        EventType::OUT_OF_RANGE.to_raw(),
+        EventType::OUT_OF_RANGE,
         "the periodic path must preserve the detector's OUT_OF_RANGE type"
     );
 }

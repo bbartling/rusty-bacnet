@@ -66,8 +66,8 @@ fn access_credential(remote: bool) -> BACnetDeviceObjectReference {
 
 fn access_event(remote: bool, authentication_factor: Option<Vec<u8>>) -> NotificationParameters {
     NotificationParameters::AccessEvent {
-        access_event: 5,
-        status_flags: 0b1000,
+        access_event: AccessEvent::TRACE,
+        status_flags: StatusFlags::IN_ALARM,
         access_event_tag: 10,
         access_event_time: date_time(),
         access_credential: access_credential(remote),
@@ -93,10 +93,10 @@ fn raw_access_event(credential_fields: &[u8], authentication_factor: Option<&[u8
 
 fn timer(mask: u8) -> NotificationParameters {
     NotificationParameters::ChangeOfTimer {
-        new_state: 1,
-        status_flags: 0b1000,
+        new_state: TimerState::RUNNING,
+        status_flags: StatusFlags::IN_ALARM,
         update_time: date_time(),
-        last_state_change: (mask & 1 != 0).then_some(2),
+        last_state_change: (mask & 1 != 0).then_some(TimerTransition::RUNNING_TO_IDLE),
         initial_timeout: (mask & 2 != 0).then_some(3),
         expiration_time: (mask & 4 != 0).then_some(date_time()),
     }
@@ -430,12 +430,12 @@ fn event_request(event_values: Option<NotificationParameters>) -> EventNotificat
         timestamp: BACnetTimeStamp::SequenceNumber(7),
         notification_class: 5,
         priority: 100,
-        event_type: 6,
+        event_type: EventType::from_raw(6),
         message_text: None,
-        notify_type: 0,
+        notify_type: NotifyType::ALARM,
         ack_required: true,
-        from_state: 0,
-        to_state: 3,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
         event_values,
     }
 }

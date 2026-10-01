@@ -1,5 +1,6 @@
 use super::*;
 
+use bacnet_types::enums::EventState;
 use bacnet_types::primitives::BACnetTimeStamp;
 
 const ACK_ALARM_USAGE: &str = "Usage: ack-alarm <target> <object> --state N \
@@ -109,7 +110,7 @@ pub(super) async fn handle_ack_alarm<T: TransportPort + 'static>(
         commands::device::AcknowledgeAlarmArgs {
             object_type,
             instance,
-            event_state: arguments.state,
+            event_state: EventState::from_raw(arguments.state),
             source: &arguments.source,
             timestamp: arguments.timestamp,
             time_of_acknowledgment: arguments.time_of_acknowledgment,

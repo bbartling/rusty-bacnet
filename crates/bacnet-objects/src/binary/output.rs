@@ -277,7 +277,8 @@ impl BACnetObject for BinaryOutputObject {
                 self.event_detection_enable = v;
                 if !v {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.acked_transitions =
+                        bacnet_types::bitstring::EventTransitionBits::all();
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
                     self.event_history.reset();

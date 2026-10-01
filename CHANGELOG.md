@@ -19,6 +19,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Alarm and event service types use the enumerations and bit strings that
+  `bacnet-types` already provides instead of raw integers. In `bacnet-services`,
+  every `NotificationParameters` variant's `status_flags`, and
+  `ChangeOfStatusFlags.referenced_flags`, is a `StatusFlags`. `ChangeOfLifeSafety`
+  carries a `LifeSafetyState`, `LifeSafetyMode` and `LifeSafetyOperation`,
+  `ChangeOfReliability` a `Reliability`, `ChangeOfTimer` a `TimerState` and an
+  `Option<TimerTransition>`, and `AccessEvent` an `AccessEvent`.
+  `AcknowledgeAlarmRequest.event_state_acknowledged` is an `EventState`, and
+  `EventNotificationRequest` types `event_type`, `notify_type`, `from_state` and
+  `to_state`. GetEventInformation's `EventSummary` types `event_state` and
+  `notify_type`, holds `acknowledged_transitions` and `event_enable` as
+  `bitstring::EventTransitionBits`, and drops `notification_class`: the ACK has
+  no such member, so encode ignored it and decode always set 0.
+  `AlarmSummaryEntry.acknowledged_transitions` is an `EventTransitionBits`
+  rather than an `(unused_bits, data)` pair, so `GetAlarmSummaryAck::encode`
+  always writes the canonical three-bit string. Decode already accepted only that
+  form. In `bacnet-types`,
+  `FaultParameters::FaultLifeSafety.fault_values` is a `Vec<LifeSafetyState>`,
+  and `mode_for_reference` becomes `mode_property_reference`, after the
+  production's field name. The unused bit-position enum
+  `enums::EventTransitionBits` is removed, so a glob import can no longer pick it
+  over the bitflags type of the same name. The wire encoding is unchanged, and
+  unknown or proprietary values still round-trip. The deprecated
+  `BACnetClient::acknowledge_alarm` now takes an `EventState`, and so do the
+  Python `acknowledge_alarm_request` and `acknowledge_alarm`, which took an int
+  (#914).
+
+- The `bacnet-objects` event detectors use typed values too.
+  `OutOfRangeDetector`, `ChangeOfStateDetector` and `CommandFailureDetector` hold
+  `event_enable` and `acked_transitions` as `bitstring::EventTransitionBits`
+  instead of raw `u8` masks, `notify_type` as a `NotifyType` and
+  `fault_reliability` as an `Option<Reliability>`. Their `evaluate`, `probe` and
+  `tick` take a `Reliability`, and `EventTransition::bit_mask` returns an
+  `EventTransitionBits`. `bacnet_objects::event::LimitEnable` is removed in favour
+  of the `bacnet_types::bitstring::LimitEnable` bitflags it duplicated: `BOTH` and
+  `NONE` become `all()` and `empty()`, `to_bits()`/`from_bits(u8)` become
+  `to_bacnet()`/`from_bacnet(&[u8])`, which takes the bit string's content
+  octets, and the two bools become the `LOW_LIMIT_ENABLE` and
+  `HIGH_LIMIT_ENABLE` flags. `BACnetObject::acknowledge_alarm` and
+  `set_acked_transitions_internal` take the transition as an
+  `EventTransitionBits`, and so does `EventEnrollmentObject::set_event_enable`.
+  Event Enrollment and Alert Enrollment store Event_Enable, Acked_Transitions and
+  Notify_Type typed as well, so `AlertEnrollmentObject.event_enable` is an
+  `EventTransitionBits`. Property reads and writes put the same bytes on the wire
+  (#914).
+
 - Optional dependencies are no longer published as features. Feature lists now
   enable them with `dep:`, so Cargo stops creating an implicit feature for each
   one, such as `bacnet-transport/rustls` or `bacnet-cli/tokio-rustls`, none of

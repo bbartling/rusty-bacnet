@@ -324,15 +324,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .unwrap_or(0);
 
             let notify_type = match construction {
-                NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION.to_raw(),
+                NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION,
                 NotificationConstruction::Event => object
                     .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
                     .ok()
                     .and_then(|v| match v {
-                        PropertyValue::Enumerated(n) => Some(n),
+                        PropertyValue::Enumerated(n) => Some(NotifyType::from_raw(n)),
                         _ => None,
                     })
-                    .unwrap_or(NotifyType::ALARM.to_raw()),
+                    .unwrap_or(NotifyType::ALARM),
             };
 
             let transition = change.transition();
@@ -366,21 +366,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 timestamp,
                 notification_class,
                 priority,
-                event_type: event_type.to_raw(),
+                event_type,
                 message_text,
                 notify_type,
                 // ack_required is only meaningful for ALARM/EVENT notify types
                 // (ACK_NOTIFICATION omits the field on the wire). Per §13.2.1 the
                 // value is the NotificationClass's per-transition Ack_Required,
                 // not a function of Notify_Type alone.
-                ack_required: if notify_type == NotifyType::ACK_NOTIFICATION.to_raw() {
+                ack_required: if notify_type == NotifyType::ACK_NOTIFICATION {
                     false
                 } else {
                     ack_required
                 },
-                from_state: change.from.to_raw(),
-                to_state: change.to.to_raw(),
-                event_values: if notify_type == NotifyType::ACK_NOTIFICATION.to_raw() {
+                from_state: change.from,
+                to_state: change.to,
+                event_values: if notify_type == NotifyType::ACK_NOTIFICATION {
                     None
                 } else {
                     event_values.map(CommittedNotificationPayload::into_parameters)

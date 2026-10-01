@@ -35,7 +35,7 @@ fn setup_integer_change_of_state(
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::IntegerValue(alarm_value)],
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(enrollment)).unwrap();
     (db, value_oid)
 }
@@ -117,7 +117,7 @@ fn change_of_state_large_unsigned_is_a_delayed_nonmatch() {
         list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
     });
     enrollment.set_time_delay_normal(Some(2));
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(enrollment)).unwrap();
 
     assert_eq!(

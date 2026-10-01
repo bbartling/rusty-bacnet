@@ -267,7 +267,8 @@ impl BACnetObject for MultiStateInputObject {
                 self.event_detection_enable = v;
                 if !v {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.acked_transitions =
+                        bacnet_types::bitstring::EventTransitionBits::all();
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
                     self.event_history.reset();
@@ -385,8 +386,9 @@ mod detection_enable_tests {
         assert!(msi.event_detector.pending.is_some());
 
         msi.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
-        msi.event_detector.acked_transitions = 0;
-        msi.event_detector.fault_reliability = Some(1);
+        msi.event_detector.acked_transitions =
+            bacnet_types::bitstring::EventTransitionBits::empty();
+        msi.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         msi.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             None,

@@ -210,7 +210,7 @@ impl Harness {
         let request = AcknowledgeAlarmRequest {
             acknowledging_process_identifier: 71,
             event_object_identifier: self.oid,
-            event_state_acknowledged: self.acknowledged_state.to_raw(),
+            event_state_acknowledged: self.acknowledged_state,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
             time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(77),
@@ -332,11 +332,8 @@ async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
     assert!(!confirmed);
     assert_eq!(invoke_id, None);
     assert_eq!(notification.process_identifier, 101);
-    assert_eq!(
-        notification.notify_type,
-        NotifyType::ACK_NOTIFICATION.to_raw()
-    );
-    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
+    assert_eq!(notification.notify_type, NotifyType::ACK_NOTIFICATION);
+    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(notification.priority, 11);
     assert_eq!(notification.message_text, None);
     assert_eq!(
@@ -358,8 +355,8 @@ async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
     );
     assert_ne!(notification.timestamp, BACnetTimeStamp::SequenceNumber(42));
     assert!(!notification.ack_required);
-    assert_eq!(notification.from_state, 0);
-    assert_eq!(notification.to_state, EventState::HIGH_LIMIT.to_raw());
+    assert_eq!(notification.from_state, EventState::NORMAL);
+    assert_eq!(notification.to_state, EventState::HIGH_LIMIT);
     assert!(notification.event_values.is_none());
     assert!(harness.acknowledged().await);
 }

@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::event::LimitEnable;
+use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
 
 // --- AnalogInput ---
@@ -138,7 +138,7 @@ fn ai_deadband_reject_negative() {
 #[test]
 fn ai_read_write_limit_enable() {
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-    let enable_both = LimitEnable::BOTH.to_bits();
+    let enable_both = LimitEnable::all().to_bacnet();
     ai.write_property(
         PropertyIdentifier::LIMIT_ENABLE,
         None,
@@ -153,9 +153,7 @@ fn ai_read_write_limit_enable() {
         .read_property(PropertyIdentifier::LIMIT_ENABLE, None)
         .unwrap();
     if let PropertyValue::BitString { data, .. } = val {
-        let le = LimitEnable::from_bits(data[0]);
-        assert!(le.low_limit_enable);
-        assert!(le.high_limit_enable);
+        assert_eq!(LimitEnable::from_bacnet(&data), LimitEnable::all());
     } else {
         panic!("Expected BitString");
     }
@@ -191,7 +189,7 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -507,7 +505,7 @@ fn ai_limit_enable_rejects_noncanonical_bit_strings() {
             .unwrap(),
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         }
     );
 }
@@ -673,7 +671,7 @@ fn ai_time_delay_normal_gates_the_return_to_normal() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )

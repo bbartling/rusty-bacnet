@@ -45,7 +45,7 @@ fn setup_cov(
         time_delay,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(increment),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

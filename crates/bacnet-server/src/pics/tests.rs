@@ -743,8 +743,8 @@ fn pics_writability_matches_runtime_write_property() {
     // Cross-check: PICS reports LIMIT_ENABLE writable on AnalogInput AND
     // write_property actually accepts it. The old heuristic reported it
     // non-writable (false-negative); the trait override fixes both.
-    use bacnet_objects::event::LimitEnable;
     use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::bitstring::LimitEnable;
 
     let mut ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
     // PICS (via the trait method) must report it writable.
@@ -753,7 +753,7 @@ fn pics_writability_matches_runtime_write_property() {
         "is_writable_property must report LIMIT_ENABLE writable on AnalogInput"
     );
     // And the runtime write_property must accept it.
-    let bits = LimitEnable::BOTH.to_bits();
+    let bits = LimitEnable::all().to_bacnet();
     let result = ai.write_property(
         PropertyIdentifier::LIMIT_ENABLE,
         None,

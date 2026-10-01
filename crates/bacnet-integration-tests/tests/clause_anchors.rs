@@ -12,7 +12,6 @@ const SCHEDULE_CODECS: &str = include_str!("../../../crates/bacnet-services/src/
 const ACCESS_ENUMS: &str = include_str!("../../../crates/bacnet-types/src/enums/access.rs");
 const NOTIFICATION_CLASS: &str =
     include_str!("../../../crates/bacnet-objects/src/notification_class/mod.rs");
-const MISC_ENUMS: &str = include_str!("../../../crates/bacnet-types/src/enums/misc.rs");
 const COLOR_OBJ: &str = include_str!("../../../crates/bacnet-objects/src/color/mod.rs");
 const LIFE_SAFETY_ENUMS: &str =
     include_str!("../../../crates/bacnet-types/src/enums/life_safety.rs");
@@ -133,16 +132,6 @@ fn notification_class_priority_ack_clause() {
         NOTIFICATION_CLASS,
         &["Clause 13.2.1"],
         &["Per ASHRAE 135-2020 Clause 12.21"],
-    );
-}
-
-#[test]
-fn event_transition_bits_production() {
-    assert_anchors(
-        "crates/bacnet-types/src/enums/misc.rs",
-        MISC_ENUMS,
-        &["(Clause 12.11)"],
-        &["transition bit positions (Clause 21.6"],
     );
 }
 

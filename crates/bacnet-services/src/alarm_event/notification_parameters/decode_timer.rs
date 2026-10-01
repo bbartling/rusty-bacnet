@@ -1,6 +1,6 @@
 use super::decode_helpers::decode_context_status_flags;
 use super::*;
-use crate::common::decode_context_u32;
+use crate::common::{decode_context_enum, decode_context_u32};
 
 fn decode_date_time(
     data: &[u8],
@@ -70,22 +70,33 @@ pub(super) fn decode_change_of_timer(
     variant_body_end: usize,
 ) -> Result<NotificationParameters, Error> {
     // [0] new-state
-    let (new_state, pos) = decode_context_u32(data, inner_start, 0, "ChangeOfTimer new-state")?;
+    let (new_state, pos) = decode_context_enum(
+        data,
+        inner_start,
+        0,
+        "ChangeOfTimer new-state",
+        TimerState::from_raw,
+    )?;
     // [1] status-flags
     let (status_flags, pos) =
         decode_context_status_flags(data, pos, 1, "ChangeOfTimer status-flags")?;
     // [2] update-time: BACnetDateTime — opening/closing [2]
     let (update_time, pos) = decode_date_time(data, pos, 2, "ChangeOfTimer update-time")?;
     let mut pos = pos;
-    let last_state_change = if pos < variant_body_end
-        && tags::decode_tag(data, pos)?.0.is_context(3)
-    {
-        let (value, next) = decode_context_u32(data, pos, 3, "ChangeOfTimer last-state-change")?;
-        pos = next;
-        Some(value)
-    } else {
-        None
-    };
+    let last_state_change =
+        if pos < variant_body_end && tags::decode_tag(data, pos)?.0.is_context(3) {
+            let (value, next) = decode_context_enum(
+                data,
+                pos,
+                3,
+                "ChangeOfTimer last-state-change",
+                TimerTransition::from_raw,
+            )?;
+            pos = next;
+            Some(value)
+        } else {
+            None
+        };
     let initial_timeout = if pos < variant_body_end && tags::decode_tag(data, pos)?.0.is_context(4)
     {
         let (value, next) = decode_context_u32(data, pos, 4, "ChangeOfTimer initial-timeout")?;

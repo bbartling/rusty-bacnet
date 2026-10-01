@@ -5,7 +5,7 @@ fn encode_change_of_state(state: BACnetPropertyStates) -> BytesMut {
     let mut encoded = BytesMut::new();
     NotificationParameters::ChangeOfState {
         new_state: state,
-        status_flags: 0b1000,
+        status_flags: StatusFlags::IN_ALARM,
     }
     .encode(&mut encoded)
     .unwrap();
@@ -54,7 +54,7 @@ fn change_of_state_uses_clause_21_property_state_tags() {
             NotificationParameters::decode(&encoded, 0).unwrap(),
             NotificationParameters::ChangeOfState {
                 new_state: state,
-                status_flags: 0b1000,
+                status_flags: StatusFlags::IN_ALARM,
             }
         );
     }
@@ -128,7 +128,7 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
         new_state: BACnetPropertyStates::Other(
             BACnetProprietaryPropertyState::constructed(64, vec![0xde]).unwrap(),
         ),
-        status_flags: 0,
+        status_flags: StatusFlags::empty(),
     };
     let mut untouched = BytesMut::from(&[0xaa][..]);
     assert!(malformed.encode(&mut untouched).is_err());
@@ -144,7 +144,7 @@ fn change_of_state_encoder_accounts_for_outer_nesting_atomically() {
         new_state: BACnetPropertyStates::Other(
             BACnetProprietaryPropertyState::constructed(64, accepted_body).unwrap(),
         ),
-        status_flags: 0,
+        status_flags: StatusFlags::empty(),
     };
     let mut encoded = BytesMut::new();
     accepted.encode(&mut encoded).unwrap();
@@ -160,7 +160,7 @@ fn change_of_state_encoder_accounts_for_outer_nesting_atomically() {
         BACnetPropertyStates::Other(BACnetProprietaryPropertyState::constructed(64, body).unwrap());
     let value = NotificationParameters::ChangeOfState {
         new_state: too_deep_state.clone(),
-        status_flags: 0,
+        status_flags: StatusFlags::empty(),
     };
 
     let mut untouched = BytesMut::from(&[0xaa][..]);

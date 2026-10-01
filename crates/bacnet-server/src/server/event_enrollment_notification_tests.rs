@@ -11,7 +11,7 @@ use bacnet_types::constructed::{
     ChangeOfValueCriteria, FaultParameters,
 };
 use bacnet_types::enums::{EventState, EventType, Reliability};
-use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::primitives::{BACnetTimeStamp, StatusFlags};
 
 #[path = "event_enrollment_notification_test_support.rs"]
 mod support;
@@ -143,7 +143,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 EventType::OUT_OF_RANGE,
                 NotificationParameters::OutOfRange {
                     exceeding_value: 85.0,
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                     deadband: 2.0,
                     exceeded_limit: 80.0,
                 },
@@ -152,7 +152,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 EventType::FLOATING_LIMIT,
                 NotificationParameters::FloatingLimit {
                     reference_value: 65.0,
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                     setpoint_value: 50.0,
                     error_limit: 10.0,
                 },
@@ -161,20 +161,20 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 EventType::CHANGE_OF_STATE,
                 NotificationParameters::ChangeOfState {
                     new_state: BACnetPropertyStates::BinaryValue(1),
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                 },
             ),
             (
                 EventType::CHANGE_OF_BITSTRING,
                 NotificationParameters::ChangeOfBitstring {
                     referenced_bitstring: (5, vec![0xe0]),
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                 },
             ),
         ])
         .enumerate()
     {
-        assert_eq!(notification.event_type, expected_type.to_raw());
+        assert_eq!(notification.event_type, expected_type);
         assert_eq!(
             notification.timestamp,
             BACnetTimeStamp::SequenceNumber(index as u16)
@@ -188,7 +188,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
             history_timestamp(
                 &db,
                 notification.event_object_identifier,
-                EventState::from_raw(notification.to_state),
+                notification.to_state,
             ),
             "wire time must be the committed transition coordinate"
         );
@@ -227,16 +227,16 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
     let cov = drain_notifications(&sent);
     assert_eq!(cov.len(), 2, "both CHANGE_OF_VALUE choices deliver");
     for notification in &cov {
-        assert_eq!(notification.event_type, EventType::CHANGE_OF_VALUE.to_raw());
-        assert_eq!(notification.from_state, EventState::NORMAL.to_raw());
-        assert_eq!(notification.to_state, EventState::NORMAL.to_raw());
+        assert_eq!(notification.event_type, EventType::CHANGE_OF_VALUE);
+        assert_eq!(notification.from_state, EventState::NORMAL);
+        assert_eq!(notification.to_state, EventState::NORMAL);
     }
     assert_eq!(cov[0].timestamp, BACnetTimeStamp::SequenceNumber(4));
     assert_eq!(
         cov[0].event_values,
         Some(NotificationParameters::ChangeOfValue {
             new_value: ChangeOfValueChoice::ChangedValue(8.0),
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
         })
     );
     assert_eq!(cov[1].timestamp, BACnetTimeStamp::SequenceNumber(5));
@@ -247,7 +247,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 unused_bits: 5,
                 data: vec![0xa0],
             },
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
         })
     );
 
@@ -349,7 +349,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
         notifications[0].event_values,
         Some(NotificationParameters::OutOfRange {
             exceeding_value: 85.0,
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
             deadband: 2.0,
             exceeded_limit: 80.0,
         }),
@@ -618,7 +618,7 @@ async fn local_suppression_paths_commit_only_the_applicable_transitions() {
         Some(suppressed_target_oid),
         out_of_range_parameters(0),
     );
-    event_enable_suppressed.set_event_enable(0);
+    event_enable_suppressed.set_event_enable(bacnet_types::bitstring::EventTransitionBits::empty());
     let event_enable_oid = event_enable_suppressed.object_identifier();
     db.add(Box::new(event_enable_suppressed)).unwrap();
 

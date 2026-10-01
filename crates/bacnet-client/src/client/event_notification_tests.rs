@@ -5,8 +5,8 @@ use bacnet_encoding::tags::{encode_tag, TagClass};
 use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
-use bacnet_types::enums::ObjectType;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
+use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, StatusFlags};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 // Independent wire fixture: process 42, device 100, analog input 7, sequence 5,
@@ -219,17 +219,17 @@ fn assert_notification(
     assert_eq!(notification.timestamp, BACnetTimeStamp::SequenceNumber(5));
     assert_eq!(notification.notification_class, 2);
     assert_eq!(notification.priority, 16);
-    assert_eq!(notification.event_type, 5);
+    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(notification.message_text.as_deref(), text);
-    assert_eq!(notification.notify_type, 0);
+    assert_eq!(notification.notify_type, NotifyType::ALARM);
     assert!(notification.ack_required);
-    assert_eq!(notification.from_state, 0);
-    assert_eq!(notification.to_state, 3);
+    assert_eq!(notification.from_state, EventState::NORMAL);
+    assert_eq!(notification.to_state, EventState::HIGH_LIMIT);
     assert_eq!(
         notification.event_values,
         Some(NotificationParameters::OutOfRange {
             exceeding_value: 50.0,
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
             deadband: 1.0,
             exceeded_limit: 48.0,
         })

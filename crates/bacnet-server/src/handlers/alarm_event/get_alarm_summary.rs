@@ -5,6 +5,7 @@
 
 use super::super::*;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
 
 const ALARM_SUMMARY_SIGNATURE: [PropertyIdentifier; 3] = [
@@ -15,8 +16,8 @@ const ALARM_SUMMARY_SIGNATURE: [PropertyIdentifier; 3] = [
 
 struct AlarmSummaryProjection {
     object_identifier: ObjectIdentifier,
-    event_state: u32,
-    acknowledged_transitions: (u8, Vec<u8>),
+    event_state: EventState,
+    acknowledged_transitions: EventTransitionBits,
 }
 
 enum AlarmSummaryProjectionResult {
@@ -53,9 +54,12 @@ impl AlarmSummaryProjection {
             }
         }
 
-        let event_state =
-            read_enumerated(object, object_identifier, PropertyIdentifier::EVENT_STATE)?;
-        if event_state == EventState::NORMAL.to_raw() {
+        let event_state = EventState::from_raw(read_enumerated(
+            object,
+            object_identifier,
+            PropertyIdentifier::EVENT_STATE,
+        )?);
+        if event_state == EventState::NORMAL {
             return Ok(AlarmSummaryProjectionResult::Excluded);
         }
 
@@ -92,7 +96,7 @@ pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Resu
         };
         entries.push(AlarmSummaryEntry {
             object_identifier: projection.object_identifier,
-            alarm_state: EventState::from_raw(projection.event_state),
+            alarm_state: projection.event_state,
             acknowledged_transitions: projection.acknowledged_transitions,
         });
     }
@@ -136,7 +140,7 @@ pub(crate) fn handle_get_alarm_summary_budgeted(
         GetAlarmSummaryAck {
             entries: vec![AlarmSummaryEntry {
                 object_identifier: projection.object_identifier,
-                alarm_state: EventState::from_raw(projection.event_state),
+                alarm_state: projection.event_state,
                 acknowledged_transitions: projection.acknowledged_transitions,
             }],
         }
@@ -180,7 +184,7 @@ fn read_enumerated(
 fn read_acknowledged_transitions(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
-) -> Result<(u8, Vec<u8>), Error> {
+) -> Result<EventTransitionBits, Error> {
     match read_required(
         object,
         object_identifier,
@@ -189,7 +193,7 @@ fn read_acknowledged_transitions(
         PropertyValue::BitString { unused_bits, data }
             if unused_bits == 5 && data.len() == 1 && data[0] & 0x1f == 0 =>
         {
-            Ok((unused_bits, data))
+            Ok(EventTransitionBits::from_bacnet(&data))
         }
         _ => Err(operational_problem(
             object_identifier,

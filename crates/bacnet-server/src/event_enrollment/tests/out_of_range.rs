@@ -136,7 +136,7 @@ fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x04); // only TO_NORMAL enabled
+    ee.set_event_enable(EventTransitionBits::TO_NORMAL);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -196,7 +196,7 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x04); // only TO_NORMAL enabled
+    ee.set_event_enable(EventTransitionBits::TO_NORMAL);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -269,7 +269,7 @@ fn out_of_range_event_enable_zero_still_tracks_event_state() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x00); // nothing distributed
+    ee.set_event_enable(EventTransitionBits::empty());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

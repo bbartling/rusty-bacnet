@@ -5,6 +5,7 @@
 
 use super::super::*;
 use bacnet_objects::event::EventStateChange;
+use bacnet_types::bitstring::EventTransitionBits;
 
 /// Exact context the bundled server can use for ACK_NOTIFICATION distribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +38,6 @@ pub fn handle_acknowledge_alarm(
     service_data: &[u8],
 ) -> Result<AcceptedAcknowledgeAlarm, Error> {
     let request = AcknowledgeAlarmRequest::decode(service_data)?;
-    let event_state = EventState::from_raw(request.event_state_acknowledged);
 
     let object = db
         .get_mut(&request.event_object_identifier)
@@ -46,8 +46,10 @@ pub fn handle_acknowledge_alarm(
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    let change =
-        object.acknowledge_alarm_correlated_detailed_internal(event_state, &request.timestamp)?;
+    let change = object.acknowledge_alarm_correlated_detailed_internal(
+        request.event_state_acknowledged,
+        &request.timestamp,
+    )?;
 
     let notification = change.and_then(|change| {
         let algorithm = object.enrollment_summary_capability_internal()?.event_type;
@@ -60,8 +62,8 @@ pub fn handle_acknowledge_alarm(
         if unused_bits != 5 || data.len() != 1 || data[0] & 0x1f != 0 {
             return None;
         }
-        let enabled = bacnet_types::bitstring::unpack_octet(&data, 3);
-        let distribute = enabled & change.transition().bit_mask() != 0;
+        let distribute =
+            EventTransitionBits::from_bacnet(&data).contains(change.transition().bit_mask());
         let event_type = change.event_type(algorithm);
         Some(AcknowledgmentNotificationContext {
             change,

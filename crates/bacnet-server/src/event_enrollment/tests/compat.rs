@@ -34,7 +34,7 @@ fn extended_algorithm_produces_no_transition() {
         extended_event_type: 99,
         parameters: vec![0x21, 0x07],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -70,7 +70,7 @@ fn legacy_le_out_of_range_fallback_round_trip() {
         None,
     )
     .unwrap();
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -99,7 +99,7 @@ fn legacy_le_change_of_state_fallback() {
         tag: 0xFF,
         data: encode_change_of_state_params(&[1]),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -127,7 +127,7 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -182,7 +182,7 @@ fn change_of_value_bitmask_criteria() {
 
     // Target object exposing a bitstring property (EVENT_ENABLE, 3 bits).
     let mut target = EventEnrollmentObject::new(96, "Tgt", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x07); // internal 0x07 -> wire 0xE0 (MSB-first)
+    target.set_event_enable(EventTransitionBits::all()); // wire 0xE0 (MSB-first)
     let target_oid = target.object_identifier();
     // Keep this Event Enrollment target itself healthy now that Reliability
     // evaluation applies to every Event Enrollment object in the database.
@@ -211,7 +211,7 @@ fn change_of_value_bitmask_criteria() {
             data: vec![0x80],
         },
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     // First sample: baseline masked value = 0xE0 & 0x80 = 0x80; no transition
@@ -274,7 +274,7 @@ fn change_of_value_wrong_type_monitored_value_skips() {
     // Target object whose EVENT_ENABLE is a BitString (not a Real) — the
     // ReferencedPropertyIncrement criterion needs a Real.
     let mut target = EventEnrollmentObject::new(98, "Tgt2", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x07);
+    target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
@@ -288,7 +288,7 @@ fn change_of_value_wrong_type_monitored_value_skips() {
         time_delay: 0,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     // Force the enrollment into OFFNORMAL so a spurious NORMAL transition
     // would otherwise be emitted. Seeded via the internal builder, not a
     // network write — `Event_State` is read-only over the network (issue #130).
@@ -330,7 +330,7 @@ fn empty_parameters_is_skipped() {
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
     // No parameters set — should remain at current state
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -365,7 +365,7 @@ fn evaluation_does_not_use_network_write_route() {
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
 
 use super::*;
@@ -174,7 +175,7 @@ fn selects_only_active_alarm_notify_type_and_preserves_output_fields() {
     assert_eq!(ack.entries[0].alarm_state, EventState::FAULT);
     assert_eq!(
         ack.entries[0].acknowledged_transitions,
-        (5, vec![0b0100_0000])
+        EventTransitionBits::TO_FAULT
     );
 }
 

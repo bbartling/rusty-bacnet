@@ -10,6 +10,7 @@ use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, GetEventInformationRequest};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
 };
@@ -36,7 +37,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     ee.set_notification_class(7);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -52,7 +53,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
 
 fn ack_request(
     ee_oid: ObjectIdentifier,
-    event_state: u32,
+    event_state: EventState,
     timestamp: BACnetTimeStamp,
 ) -> bytes::BytesMut {
     let request = AcknowledgeAlarmRequest {
@@ -68,7 +69,7 @@ fn ack_request(
     buf
 }
 
-fn gei_summary_acked(db: &ObjectDatabase, ee_oid: ObjectIdentifier) -> u8 {
+fn gei_summary_acked(db: &ObjectDatabase, ee_oid: ObjectIdentifier) -> EventTransitionBits {
     let request = GetEventInformationRequest {
         last_received_object_identifier: None,
     };
@@ -99,8 +100,8 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
     assert_eq!(
-        gei_summary_acked(&db, ee_oid) & 0x01,
-        0,
+        gei_summary_acked(&db, ee_oid) & EventTransitionBits::TO_OFFNORMAL,
+        EventTransitionBits::empty(),
         "TO_OFFNORMAL ack owed: GEI shows the bit cleared"
     );
 
@@ -110,14 +111,14 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::OFFNORMAL.to_raw(),
+            EventState::OFFNORMAL,
             BACnetTimeStamp::SequenceNumber(0),
         ),
     )
     .unwrap();
     assert_eq!(
-        gei_summary_acked(&db, ee_oid) & 0x01,
-        0x01,
+        gei_summary_acked(&db, ee_oid) & EventTransitionBits::TO_OFFNORMAL,
+        EventTransitionBits::TO_OFFNORMAL,
         "after the ack the bit is set"
     );
 
@@ -127,12 +128,12 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::OFFNORMAL.to_raw(),
+            EventState::OFFNORMAL,
             BACnetTimeStamp::SequenceNumber(0),
         ),
     )
     .unwrap();
-    assert_eq!(gei_summary_acked(&db, ee_oid), 0b111);
+    assert_eq!(gei_summary_acked(&db, ee_oid), EventTransitionBits::all());
 }
 
 /// A TO_NORMAL ack on an EE is equally serviceable (13.9's state matching:
@@ -170,7 +171,7 @@ fn ee_acknowledge_to_normal_bit() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::NORMAL.to_raw(),
+            EventState::NORMAL,
             BACnetTimeStamp::SequenceNumber(2),
         ),
     )
@@ -209,7 +210,7 @@ fn ee_acknowledge_alarm_detection_disabled_refused() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::OFFNORMAL.to_raw(),
+            EventState::OFFNORMAL,
             BACnetTimeStamp::SequenceNumber(1),
         ),
     )

@@ -3,7 +3,7 @@ use super::super::*;
 fn build_acknowledge_alarm_request(
     acknowledging_process_identifier: u32,
     event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
-    event_state_acknowledged: u32,
+    event_state_acknowledged: bacnet_types::enums::EventState,
     timestamp: BACnetTimeStamp,
     acknowledgment_source: String,
     time_of_acknowledgment: BACnetTimeStamp,
@@ -182,7 +182,7 @@ impl BACnetClient {
         address: String,
         acknowledging_process_identifier: u32,
         event_object_identifier: PyObjectIdentifier,
-        event_state_acknowledged: u32,
+        event_state_acknowledged: PyEventState,
         timestamp: PyBACnetTimeStamp,
         acknowledgment_source: String,
         time_of_acknowledgment: PyBACnetTimeStamp,
@@ -192,7 +192,7 @@ impl BACnetClient {
         let request = build_acknowledge_alarm_request(
             acknowledging_process_identifier,
             event_object_identifier.to_rust(),
-            event_state_acknowledged,
+            event_state_acknowledged.to_rust(),
             timestamp.to_rust().clone(),
             acknowledgment_source,
             time_of_acknowledgment.to_rust().clone(),
@@ -225,7 +225,7 @@ impl BACnetClient {
         address: String,
         acknowledging_process_identifier: u32,
         event_object_identifier: PyObjectIdentifier,
-        event_state_acknowledged: u32,
+        event_state_acknowledged: PyEventState,
         acknowledgment_source: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         PyErr::warn(
@@ -236,6 +236,7 @@ impl BACnetClient {
         )?;
         let inner = self.inner.clone();
         let oid = event_object_identifier.to_rust();
+        let event_state_acknowledged = event_state_acknowledged.to_rust();
 
         let future = async move {
             let mac = parse_address(&address)?;
@@ -373,7 +374,7 @@ mod acknowledgment_request_tests {
         let request = build_acknowledge_alarm_request(
             0x1020_3040,
             oid,
-            EventState::HIGH_LIMIT.to_raw(),
+            EventState::HIGH_LIMIT,
             event_timestamp.clone(),
             "operator-console".into(),
             acknowledgment_timestamp.clone(),
@@ -381,10 +382,7 @@ mod acknowledgment_request_tests {
 
         assert_eq!(request.acknowledging_process_identifier, 0x1020_3040);
         assert_eq!(request.event_object_identifier, oid);
-        assert_eq!(
-            request.event_state_acknowledged,
-            EventState::HIGH_LIMIT.to_raw()
-        );
+        assert_eq!(request.event_state_acknowledged, EventState::HIGH_LIMIT);
         assert_eq!(request.timestamp, event_timestamp);
         assert_eq!(request.acknowledgment_source, "operator-console");
         assert_eq!(request.time_of_acknowledgment, acknowledgment_timestamp);

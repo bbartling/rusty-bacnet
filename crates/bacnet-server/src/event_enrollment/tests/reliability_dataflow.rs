@@ -107,7 +107,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
 
     db.get_mut(&enrollment_oid)
         .unwrap()
-        .set_acked_transitions_internal(0x02, true)
+        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, true)
         .unwrap();
     db.get_mut(&target_oid)
         .unwrap()

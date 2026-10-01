@@ -25,6 +25,7 @@ use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, EventType, NotifyType};
+use bacnet_types::primitives::StatusFlags;
 use bytes::{Bytes, BytesMut};
 
 /// The state value the fixture treats as an alarm, and the one it does not.
@@ -54,13 +55,13 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
 
     assert_eq!(sent.len(), 1);
     let notification = decode_broadcast_notification(&sent);
-    assert_eq!(notification.notify_type, NotifyType::EVENT.to_raw());
-    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
+    assert_eq!(notification.notify_type, NotifyType::EVENT);
+    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(
         notification.event_values,
         Some(NotificationParameters::OutOfRange {
             exceeding_value: 81.0,
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
             deadband: 2.0,
             exceeded_limit: 80.0,
         })
@@ -280,22 +281,14 @@ fn assert_sole_notification(
     );
     assert_eq!(
         notif.event_type,
-        EventType::CHANGE_OF_STATE.to_raw(),
+        EventType::CHANGE_OF_STATE,
         "{context}: the detector's CHANGE_OF_STATE algorithm must reach the wire"
     );
-    assert_eq!(
-        notif.from_state,
-        from.to_raw(),
-        "{context}: from_state on the wire"
-    );
-    assert_eq!(
-        notif.to_state,
-        to.to_raw(),
-        "{context}: to_state on the wire"
-    );
+    assert_eq!(notif.from_state, from, "{context}: from_state on the wire");
+    assert_eq!(notif.to_state, to, "{context}: to_state on the wire");
     assert_eq!(
         notif.notify_type,
-        NotifyType::EVENT.to_raw(),
+        NotifyType::EVENT,
         "{context}: the commissioned Notify_Type must reach the wire, not the ALARM fallback"
     );
 }

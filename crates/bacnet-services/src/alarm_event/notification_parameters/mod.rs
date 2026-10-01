@@ -2,6 +2,11 @@ use super::property_states::{
     decode_device_obj_prop_ref, decode_property_states, encode_property_states, extract_raw_context,
 };
 use super::*;
+use bacnet_types::enums::{
+    AccessEvent, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState, Reliability, TimerState,
+    TimerTransition,
+};
+use bacnet_types::primitives::StatusFlags;
 
 mod decode;
 mod decode_helpers;
@@ -20,29 +25,29 @@ pub enum NotificationParameters {
     ChangeOfBitstring {
         /// Monitored bitstring value as `(unused_bits, data)`.
         referenced_bitstring: (u8, Vec<u8>),
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
     },
     /// \[1\] Change of state.
     ChangeOfState {
         /// New BACnetPropertyStates value that triggered the notification.
         new_state: BACnetPropertyStates,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
     },
     /// \[2\] Change of value.
     ChangeOfValue {
         /// New value (changed bits or a REAL) that triggered the notification.
         new_value: ChangeOfValueChoice,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
     },
     /// \[3\] Command failure. Value byte vectors contain encoded BACnet TLVs.
     CommandFailure {
         /// Commanded value as encoded BACnet bytes.
         command_value: Vec<u8>,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Feedback value that disagreed with the command, as encoded BACnet bytes.
         feedback_value: Vec<u8>,
     },
@@ -50,8 +55,8 @@ pub enum NotificationParameters {
     FloatingLimit {
         /// Current value of the monitored property (not the setpoint reference).
         reference_value: f32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Setpoint the reference value is tracked against.
         setpoint_value: f32,
         /// Differential limit (distance from the setpoint) that was exceeded.
@@ -61,8 +66,8 @@ pub enum NotificationParameters {
     OutOfRange {
         /// Monitored value that crossed a limit.
         exceeding_value: f32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Deadband applied to the limit comparison, in the monitored value's units.
         deadband: f32,
         /// The limit that was exceeded, in the monitored value's units.
@@ -75,14 +80,14 @@ pub enum NotificationParameters {
     },
     /// \[8\] Change of life safety.
     ChangeOfLifeSafety {
-        /// BACnetLifeSafetyState value the object entered (raw enumeration).
-        new_state: u32,
-        /// BACnetLifeSafetyMode value in effect (raw enumeration).
-        new_mode: u32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
-        /// BACnetLifeSafetyOperation the object expects from an operator (raw enumeration).
-        operation_expected: u32,
+        /// Life safety state the object entered.
+        new_state: LifeSafetyState,
+        /// Life safety mode in effect.
+        new_mode: LifeSafetyMode,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
+        /// Operation the object expects from an operator.
+        operation_expected: LifeSafetyOperation,
     },
     /// \[9\] Extended (vendor-defined). `parameters` contains encoded BACnet TLVs.
     Extended {
@@ -106,17 +111,17 @@ pub enum NotificationParameters {
     UnsignedRange {
         /// Monitored value that crossed a limit.
         exceeding_value: u64,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// The limit that was exceeded.
         exceeded_limit: u64,
     },
     /// \[13\] Access event. Authentication-factor bytes contain its three inner context fields.
     AccessEvent {
-        /// BACnetAccessEvent value describing what happened (raw enumeration).
-        access_event: u32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Access event describing what happened.
+        access_event: AccessEvent,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Counter distinguishing access events, carried as the `access-event-tag` field.
         access_event_tag: u32,
         /// Time of the access event; a BACnetTimeStamp on the wire, of which only the date-time
@@ -131,8 +136,8 @@ pub enum NotificationParameters {
     DoubleOutOfRange {
         /// Monitored value that crossed a limit.
         exceeding_value: f64,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Deadband applied to the limit comparison, in the monitored value's units.
         deadband: f64,
         /// The limit that was exceeded, in the monitored value's units.
@@ -142,8 +147,8 @@ pub enum NotificationParameters {
     SignedOutOfRange {
         /// Monitored value that crossed a limit.
         exceeding_value: i32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Deadband applied to the limit comparison (unsigned).
         deadband: u64,
         /// The limit that was exceeded.
@@ -153,8 +158,8 @@ pub enum NotificationParameters {
     UnsignedOutOfRange {
         /// Monitored value that crossed a limit.
         exceeding_value: u64,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Deadband applied to the limit comparison.
         deadband: u64,
         /// The limit that was exceeded.
@@ -164,8 +169,8 @@ pub enum NotificationParameters {
     ChangeOfCharacterstring {
         /// New value of the monitored character string.
         changed_value: String,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// The configured alarm string that the new value matched.
         alarm_value: String,
     },
@@ -173,15 +178,15 @@ pub enum NotificationParameters {
     ChangeOfStatusFlags {
         /// Present value as encoded BACnet bytes; `None` when the field is absent.
         present_value: Option<Vec<u8>>,
-        /// Status flags of the referenced object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        referenced_flags: u8,
+        /// Status flags of the referenced object.
+        referenced_flags: StatusFlags,
     },
     /// \[19\] Change of reliability. `property_values` contains encoded BACnet TLVs.
     ChangeOfReliability {
-        /// BACnetReliability value that triggered the notification (raw enumeration).
-        reliability: u32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Reliability value that triggered the notification.
+        reliability: Reliability,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Properties relevant to the reliability change, as encoded BACnet bytes.
         property_values: Vec<u8>,
     },
@@ -189,19 +194,19 @@ pub enum NotificationParameters {
     ChangeOfDiscreteValue {
         /// New discrete value as encoded BACnet bytes.
         new_value: Vec<u8>,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
     },
     /// \[22\] Change of timer.
     ChangeOfTimer {
-        /// BACnetTimerState value the timer entered (raw enumeration).
-        new_state: u32,
-        /// Status flags of the monitored object (4-bit BACnetStatusFlags, in-alarm = 0x08).
-        status_flags: u8,
+        /// State the timer entered.
+        new_state: TimerState,
+        /// Status flags of the monitored object.
+        status_flags: StatusFlags,
         /// Date and time of the timer update.
         update_time: (Date, Time),
-        /// BACnetTimerTransition of the last state change (raw enumeration); `None` when absent.
-        last_state_change: Option<u32>,
+        /// Transition of the last state change; `None` when absent.
+        last_state_change: Option<TimerTransition>,
         /// Initial timeout configured for the timer; `None` when absent.
         initial_timeout: Option<u32>,
         /// Date and time when the timer expires; `None` when absent.

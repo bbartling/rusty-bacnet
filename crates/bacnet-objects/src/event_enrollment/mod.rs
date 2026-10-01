@@ -1,9 +1,12 @@
 //! EventEnrollment (type 9) object per ASHRAE 135-2020 Clause 12.12.
 
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, NotifyType, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -36,12 +39,12 @@ pub struct EventEnrollmentObject {
     name: String,
     description: String,
     event_type: u32,
-    notify_type: u32,
+    notify_type: NotifyType,
     event_parameters: BACnetEventParameter,
     object_property_reference: Option<BACnetDeviceObjectPropertyReference>,
     event_state: u32,
-    event_enable: u8,
-    acked_transitions: u8,
+    event_enable: EventTransitionBits,
+    acked_transitions: EventTransitionBits,
     event_history: EventHistory,
     event_detection_enable: bool,
     notification_class: u32,
@@ -78,14 +81,14 @@ impl EventEnrollmentObject {
             name: name.into(),
             description: String::new(),
             event_type,
-            notify_type: 0,
+            notify_type: NotifyType::ALARM,
             event_parameters: BACnetEventParameter::Opaque {
                 tag: 0xFF,
                 data: Vec::new(),
             },
             object_property_reference: None,
             event_state: 0,
-            event_enable: 0b111,
+            event_enable: EventTransitionBits::all(),
             // Clause 12.12 requires a TRUE flag for an event type that has
             // never occurred on the object. That all-TRUE initial value
             // is also the initial condition the detection-disabled reset
@@ -112,7 +115,7 @@ impl EventEnrollmentObject {
     /// `Acked_Transitions` in its initial condition: every transition flag TRUE,
     /// meaning no event of that type has ever occurred (ASHRAE 135-2020
     /// Clause 12.12).
-    const RESET_ACKED_TRANSITIONS: u8 = 0b111;
+    const RESET_ACKED_TRANSITIONS: EventTransitionBits = EventTransitionBits::all();
 
     /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
     /// `Event_Detection_Enable` is FALSE: suppress transitions, restore NORMAL
@@ -184,9 +187,11 @@ impl EventEnrollmentObject {
         self.notification_class = nc;
     }
 
-    /// Set the event enable bitmask (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
-    pub fn set_event_enable(&mut self, enable: u8) {
-        self.event_enable = enable & 0x07;
+    /// Set `Event_Enable`: the transitions whose notifications are distributed.
+    ///
+    /// Flags outside the three named transitions are dropped.
+    pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
+        self.event_enable = enable & EventTransitionBits::all();
     }
 
     /// Set `Time_Delay_Normal` (the pTimeDelayNormal parameter). `None`
@@ -278,7 +283,7 @@ impl BACnetObject for EventEnrollmentObject {
                 Ok(PropertyValue::Enumerated(self.event_type))
             }
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
-                Ok(PropertyValue::Enumerated(self.notify_type))
+                Ok(PropertyValue::Enumerated(self.notify_type.to_raw()))
             }
             p if p == PropertyIdentifier::EVENT_PARAMETERS => {
                 let mut buf = bytes::BytesMut::new();
@@ -310,11 +315,11 @@ impl BACnetObject for EventEnrollmentObject {
             }
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(self.event_enable)],
+                data: vec![self.event_enable.to_bacnet()],
             }),
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(self.acked_transitions)],
+                data: vec![self.acked_transitions.to_bacnet()],
             }),
             p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
                 Ok(PropertyValue::Boolean(self.event_detection_enable))
@@ -361,13 +366,11 @@ impl BACnetObject for EventEnrollmentObject {
             // event, ack-notification} (Clause 21); out-of-production values
             // are PROPERTY / VALUE_OUT_OF_RANGE (Clause 15.9.1.3).
             if let PropertyValue::Enumerated(v) = value {
-                let named = bacnet_types::enums::NotifyType::ALL_NAMED
-                    .iter()
-                    .any(|&(_, n)| n.to_raw() == v);
-                if !named {
+                let notify_type = NotifyType::from_raw(v);
+                if !NotifyType::ALL_NAMED.iter().any(|&(_, n)| n == notify_type) {
                     return Err(common::value_out_of_range_error());
                 }
-                self.notify_type = v;
+                self.notify_type = notify_type;
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -384,7 +387,7 @@ impl BACnetObject for EventEnrollmentObject {
             // the written BitString must declare its canonical shape.
             if let PropertyValue::BitString { unused_bits, data } = &value {
                 let byte = common::check_fixed_width_bit_string(*unused_bits, data, 3)?;
-                self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                self.event_enable = EventTransitionBits::from_bacnet(&[byte]);
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -521,14 +524,17 @@ impl BACnetObject for EventEnrollmentObject {
     /// the initial condition, which an accepted ack would break.
     /// Out_Of_Service does not gate the ack: no clause bars acknowledging a
     /// notification already issued while the object is out of service.
-    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
+    fn acknowledge_alarm(
+        &mut self,
+        transition_bit: EventTransitionBits,
+    ) -> Result<(), bacnet_types::error::Error> {
         if !self.event_detection_enable {
             return Err(bacnet_types::error::Error::Protocol {
                 class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
                 code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
             });
         }
-        self.acked_transitions |= transition_bit & 0x07;
+        self.acked_transitions |= transition_bit & EventTransitionBits::all();
         Ok(())
     }
 
@@ -576,17 +582,14 @@ impl BACnetObject for EventEnrollmentObject {
     /// must retain its initial value throughout the disabled period.
     fn set_acked_transitions_internal(
         &mut self,
-        transition_bit: u8,
+        transition_bit: EventTransitionBits,
         acknowledged: bool,
     ) -> Result<(), Error> {
         if !self.event_detection_enable {
             return Err(common::write_access_denied_error());
         }
-        if acknowledged {
-            self.acked_transitions |= transition_bit & 0x07;
-        } else {
-            self.acked_transitions &= !(transition_bit & 0x07);
-        }
+        self.acked_transitions
+            .set(transition_bit & EventTransitionBits::all(), acknowledged);
         Ok(())
     }
 

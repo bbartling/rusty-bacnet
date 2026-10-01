@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -33,16 +34,16 @@ pub struct AlertEnrollmentObject {
     /// the setter as well: a direct FALSE-to-TRUE assignment cannot run the
     /// reset and may expose state stored before the direct disable.
     pub event_detection_enable: bool,
-    /// Acknowledged transitions in TO_OFFNORMAL, TO_FAULT, TO_NORMAL order.
-    pub(super) acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub(super) acked_transitions: EventTransitionBits,
     pub(super) event_history: EventHistory,
-    /// Event enable bits: 3-bit (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
-    pub event_enable: u8,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
     /// Notification class number.
     pub notification_class: u32,
     /// Notification category for generated notifications. The local default is
     /// ALARM; ACK_NOTIFICATION is output-only acknowledgement-flow vocabulary.
-    notify_type: u32,
+    notify_type: NotifyType,
 }
 
 impl AlertEnrollmentObject {
@@ -61,11 +62,11 @@ impl AlertEnrollmentObject {
             event_state: 0,
             present_value: initial_source,
             event_detection_enable: true,
-            acked_transitions: 0b111,
+            acked_transitions: EventTransitionBits::all(),
             event_history: EventHistory::default(),
-            event_enable: 0b111,
+            event_enable: EventTransitionBits::all(),
             notification_class: 0,
-            notify_type: NotifyType::ALARM.to_raw(),
+            notify_type: NotifyType::ALARM,
         })
     }
 
@@ -84,7 +85,7 @@ impl AlertEnrollmentObject {
     pub fn set_event_detection_enable(&mut self, enabled: bool) {
         if !enabled || !self.event_detection_enable {
             self.event_state = EventState::NORMAL.to_raw();
-            self.acked_transitions = 0b111;
+            self.acked_transitions = EventTransitionBits::all();
             self.event_history.reset();
         }
         self.event_detection_enable = enabled;
@@ -161,13 +162,13 @@ impl BACnetObject for AlertEnrollmentObject {
             }
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(self.event_enable)],
+                data: vec![self.event_enable.to_bacnet()],
             }),
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
             }
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
-                Ok(PropertyValue::Enumerated(self.notify_type))
+                Ok(PropertyValue::Enumerated(self.notify_type.to_raw()))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(if self.event_detection_enable {
@@ -178,13 +179,12 @@ impl BACnetObject for AlertEnrollmentObject {
             }
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(
-                    if self.event_detection_enable {
-                        self.acked_transitions
-                    } else {
-                        0b111
-                    },
-                )],
+                data: vec![if self.event_detection_enable {
+                    self.acked_transitions
+                } else {
+                    EventTransitionBits::all()
+                }
+                .to_bacnet()],
             }),
             _ => Err(common::unknown_property_error()),
         }
@@ -209,7 +209,7 @@ impl BACnetObject for AlertEnrollmentObject {
             // the written BitString must declare its canonical shape.
             if let PropertyValue::BitString { unused_bits, data } = &value {
                 let byte = common::check_fixed_width_bit_string(*unused_bits, data, 3)?;
-                self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                self.event_enable = EventTransitionBits::from_bacnet(&[byte]);
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -223,10 +223,11 @@ impl BACnetObject for AlertEnrollmentObject {
         }
         if property == PropertyIdentifier::NOTIFY_TYPE {
             if let PropertyValue::Enumerated(v) = value {
-                if v != NotifyType::ALARM.to_raw() && v != NotifyType::EVENT.to_raw() {
+                let notify_type = NotifyType::from_raw(v);
+                if notify_type != NotifyType::ALARM && notify_type != NotifyType::EVENT {
                     return Err(common::value_out_of_range_error());
                 }
-                self.notify_type = v;
+                self.notify_type = notify_type;
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -251,22 +252,24 @@ impl BACnetObject for AlertEnrollmentObject {
 
     fn set_acked_transitions_internal(
         &mut self,
-        transition_bit: u8,
+        transition_bit: EventTransitionBits,
         acknowledged: bool,
     ) -> Result<(), Error> {
         if !self.event_detection_enable {
             return Err(common::write_access_denied_error());
         }
-        let transition_bit = transition_bit & 0x07;
+        let transition_bit = transition_bit & EventTransitionBits::all();
         if acknowledged {
-            self.acked_transitions |= transition_bit;
+            self.acked_transitions.insert(transition_bit);
         } else {
             // Alert Enrollment never requires acknowledgment for TO_NORMAL
             // (Clause 12.52.8), so that bit cannot enter the unacknowledged
             // state even if a generic transition hook asks to clear it.
-            self.acked_transitions &= !(transition_bit & 0x03);
+            self.acked_transitions
+                .remove(transition_bit.difference(EventTransitionBits::TO_NORMAL));
         }
-        self.acked_transitions |= 0x04;
+        self.acked_transitions
+            .insert(EventTransitionBits::TO_NORMAL);
         Ok(())
     }
 

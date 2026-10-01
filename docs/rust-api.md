@@ -2234,7 +2234,18 @@ client.delete_object(&mac, oid).await?;
 ### Alarms & Events
 
 ```rust
-client.acknowledge_alarm(&mac, process_id, oid, event_state, "operator").await?;
+use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
+
+// Echo the event notification's timestamp; time_of_acknowledgment is the local time.
+let ack = AcknowledgeAlarmRequest {
+    acknowledging_process_identifier: process_id,
+    event_object_identifier: oid,
+    event_state_acknowledged: EventState::HIGH_LIMIT,
+    timestamp: notification_timestamp,
+    acknowledgment_source: "operator".into(),
+    time_of_acknowledgment: now,
+};
+client.acknowledge_alarm_request(&mac, &ack).await?;
 let raw = client.get_event_information(&mac, None).await?;
 ```
 

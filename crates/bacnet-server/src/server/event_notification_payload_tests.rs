@@ -121,7 +121,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::OutOfRange {
                 exceeding_value: 85.0,
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 deadband: 2.0,
                 exceeded_limit: 80.0,
             },
@@ -135,7 +135,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::OutOfRange {
                 exceeding_value: 85.0,
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 deadband: 2.0,
                 exceeded_limit: 80.0,
             },
@@ -149,7 +149,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::OutOfRange {
                 exceeding_value: 85.0,
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 deadband: 2.0,
                 exceeded_limit: 80.0,
             },
@@ -163,7 +163,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::BinaryValue(1),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -175,7 +175,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::BinaryValue(1),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -187,7 +187,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::UnsignedValue(3),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -199,7 +199,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::UnsignedValue(3),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -211,7 +211,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::CommandFailure {
                 command_value: vec![0x91, 0x01],
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 feedback_value: vec![0x91, 0x00],
             },
         ),
@@ -224,7 +224,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::CommandFailure {
                 command_value: vec![0x21, 0x03],
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 feedback_value: vec![0x21, 0x02],
             },
         ),
@@ -259,8 +259,8 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
         else {
             panic!("{} did not project CHANGE_OF_RELIABILITY", source.oid);
         };
-        assert_eq!(reliability, 2);
-        assert_eq!(status_flags, 0b1100);
+        assert_eq!(reliability, Reliability::OVER_RANGE);
+        assert_eq!(status_flags, StatusFlags::IN_ALARM | StatusFlags::FAULT);
 
         let mut decoded = Vec::new();
         let mut offset = 0;
