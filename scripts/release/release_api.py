@@ -89,9 +89,11 @@ GITHUB_REPO = "jscott3201/rusty-bacnet"
 PROBE_PREFIX = "release-preflight-"
 # The preflight's write check uploads one file of each kind a release has, named
 # like it, so the host's allowed attachment types are proven: an extension-less
-# file (the CLI binaries, SHA256SUMS, THIRD-PARTY-NOTICES), a wheel and an sdist.
+# file (the Linux and macOS CLI binaries, SHA256SUMS, THIRD-PARTY-NOTICES), the
+# Windows CLI's .exe, a wheel and an sdist.
 PROBE_ASSETS = {
     "bacnet-linux-amd64": b"\x7f",
+    "bacnet-windows-amd64.exe": b"MZ",
     "rusty_bacnet-0.0.0-py3-none-any.whl": b"PK\x05\x06" + bytes(18),  # an empty zip archive
     "rusty_bacnet-0.0.0.tar.gz": gzip.compress(b"", mtime=0),
 }

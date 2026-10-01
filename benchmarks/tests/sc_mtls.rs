@@ -20,17 +20,9 @@ mod node_identity;
 mod node_reconnect;
 
 async fn assert_connect_fails(url: &str, tls_config: Arc<rustls::ClientConfig>, message: &str) {
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio_tungstenite::connect_async_tls_with_config(
-            url,
-            None,
-            false,
-            Some(tokio_tungstenite::Connector::Rustls(tls_config)),
-        ),
-    )
-    .await
-    .expect("TLS/WebSocket connect attempt timed out");
+    let result = tokio::time::timeout(Duration::from_secs(5), connect_ws_tls(url, tls_config))
+        .await
+        .expect("TLS/WebSocket connect attempt timed out");
 
     let error = result.expect_err("invalid TLS peer was accepted");
     assert!(

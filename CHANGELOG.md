@@ -177,16 +177,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flagged unrelated passing tests as leaky (#751).
 
 - Releases are built, tested and published from Forgejo
-  (`.forgejo/workflows/release.yml`) while GitHub Actions is disabled on the
-  mirror, and each one is copied to GitHub Releases. A manual dispatch is a dry
-  run that publishes nothing. The workflow builds the Linux artifacts, and no
-  release is tagged until it also builds macOS and Windows (#944). Starting
-  with the next release, `bacnet-cli` and `bacnet-endpoint` are published on
-  crates.io; the Linux CLI binaries need glibc 2.17 instead of 2.39, so they
+  (`.forgejo/workflows/release.yml`), which keeps the heavy work on the
+  project's fixed-cost runner VM, and each one is copied to GitHub Releases.
+  A manual dispatch is a dry run that publishes nothing. The Linux runner
+  cross-compiles every artifact: the Linux and macOS ones with zig, and the
+  Windows ones for the MSVC target with cargo-xwin and the Microsoft CRT and
+  Windows SDK in the CI image. That
+  includes the macOS (x86_64, arm64) and Windows (x64) wheels and CLI binaries
+  that 0.11.0 built on GitHub's runners, under the same names, with the same
+  minimum macOS (10.12 on x86_64, 11.0 on arm64). The Windows CLI now links the
+  C runtime statically, so it no longer needs the Visual C++ Redistributable.
+  The release's artifact test checks every file's architecture and linked
+  libraries, and the macOS files' minimum OS and code signatures, but it can
+  only run the Linux ones (#944). Starting with the next release, `bacnet-cli`
+  and `bacnet-endpoint` are published on crates.io; the Linux CLI binaries
+  need glibc 2.17 instead of 2.39, so they
   run on RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later, and link libpcap
   statically; and each release has a `SHA256SUMS` file and a
   `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
   CPython 3.14 wheels ship once the release pipeline publishes (#943).
+
+- `tokio-tungstenite` is built without TLS features. BACnet/SC already ran its
+  own `tokio-rustls` handshake against the configured trust anchors and only
+  wrapped the result for tungstenite, so nothing loads the operating system's
+  root certificates any more. The benchmark tests dial the same way, so
+  `rustls-native-certs` and its platform crates (`security-framework` on macOS,
+  `schannel` on Windows, `openssl-probe` on Linux) leave `Cargo.lock`, and with
+  it what cargo-deny and cargo-audit check. On macOS the CLI no longer links
+  the Security and CoreFoundation frameworks. An application that relied on
+  `bacnet-transport` to turn on a tungstenite TLS feature must now turn it on
+  itself (#944).
 
 - `bacnet_server::schedule::tick_schedules` drops its unused UTC-offset argument;
   evaluation already used the database clock frame. It only evaluates schedules.

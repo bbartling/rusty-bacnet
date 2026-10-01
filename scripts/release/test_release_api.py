@@ -497,7 +497,7 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(host.tags, set())
         self.assertIn("GitHub has v1.0.0 at c0ffee", out)
         self.assertIn("Fake has no release v1.0.0 yet", out)
-        self.assertIn("final check: 3 assets as expected", out)
+        self.assertIn(f"final check: {len(api.PROBE_ASSETS)} assets as expected", out)
         self.assertIn("download check: bacnet-linux-amd64 (1 bytes)", out)
         self.assertIn(f"write check: no release or tag {PROBE} is left", out)
         self.assertIn("Fake preflight passed", out)
