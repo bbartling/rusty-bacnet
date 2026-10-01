@@ -16,16 +16,21 @@ pub(super) async fn response<T: TransportPort + 'static>(
         comm_state,
         dcc_outcomes: outcomes,
         config,
+        cov_table,
         ..
     } = services;
+    let cov_resume = cov_table.read().await.timed().clone();
     let result = super::super::dcc_timer::replace(
         timer,
         comm_state,
-        &req.service_request,
+        super::super::dcc_timer::DccRequest {
+            service_data: &req.service_request,
+            source_mac,
+            source,
+        },
         config,
-        source_mac,
-        source,
         request_tasks,
+        &cov_resume,
     )
     .await;
     // No await between validation failure/live commit and completion telemetry.

@@ -33,15 +33,29 @@ pub(super) async fn cancel(slot: &mut Option<JoinHandle<()>>) {
     *slot = None;
 }
 
+/// One DeviceCommunicationControl request and where it came from.
+pub(super) struct DccRequest<'a> {
+    pub(super) service_data: &'a [u8],
+    pub(super) source_mac: &'a [u8],
+    pub(super) source: Option<&'a bacnet_encoding::npdu::NpduAddress>,
+}
+
+/// Apply a DCC request and own its revert timer. Whenever communication is
+/// enabled again, by the request or when the timer expires, `cov_resume` is
+/// rearmed so timestamped COV changes held meanwhile go out promptly (#856).
 pub(super) async fn replace(
     timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     comm_state: &Arc<AtomicU8>,
-    service_data: &[u8],
+    request: DccRequest<'_>,
     config: &ServerConfig,
-    source_mac: &[u8],
-    source: Option<&bacnet_encoding::npdu::NpduAddress>,
     request_tasks: &super::request_tasks::RequestTaskSpawner,
+    cov_resume: &crate::cov::timed::TimedStore,
 ) -> Result<dcc_outcomes::DccMetadata, handlers::device_mgmt::DccFailure> {
+    let DccRequest {
+        service_data,
+        source_mac,
+        source,
+    } = request;
     // Decode and validate once, retaining only non-secret proposed state and
     // metadata. Never change live state before a cancellable await.
     let (mode, duration, proposed) =
@@ -75,9 +89,13 @@ pub(super) async fn replace(
     // Replacement, expiry, and shutdown share this linearization boundary.
     // No suspension between the live commit and installing the new owner.
     comm_state.store(proposed, Ordering::Release);
+    if proposed == 0 {
+        cov_resume.rearm();
+    }
     if let Some(minutes) = duration {
         let owner = Arc::downgrade(timer);
         let comm = Arc::clone(comm_state);
+        let cov_resume = cov_resume.clone();
         **slot = Some(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(minutes as u64 * 60)).await;
             if let Some(owner) = owner.upgrade() {
@@ -85,6 +103,7 @@ pub(super) async fn replace(
                 // replacement holds the slot; it never joins or removes itself.
                 let _slot = owner.lock().await;
                 comm.store(0, Ordering::Release);
+                cov_resume.rearm();
                 debug!(
                     "DCC timer expired after {} min, state reverted to ENABLE",
                     minutes

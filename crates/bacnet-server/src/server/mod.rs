@@ -667,7 +667,11 @@ mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;
 #[cfg(test)]
+mod cov_timed_deadline_tests;
+#[cfg(test)]
 mod cov_timed_multiple_tests;
+#[cfg(test)]
+mod cov_timed_producer_tests;
 #[cfg(test)]
 mod cov_wire_test_support;
 #[cfg(test)]
