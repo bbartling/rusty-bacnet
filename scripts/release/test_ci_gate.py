@@ -28,15 +28,19 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(verdict, "wait")
         self.assertEqual(states["CI / MSRV (Linux native) (push)"], "missing")
 
-    def test_skipped_heavy_job_fails(self):
-        # A dev push skips MSRV and audit; a release needs them to have run.
-        verdict, _ = gate.evaluate(statuses(ok="success", msrv="skipped", audit="skipped"), REQUIRED)
-        self.assertEqual(verdict, "fail")
+    def test_skipped_heavy_job_waits(self):
+        # A dev push skips MSRV and audit under the same context names; the
+        # tag's run, which runs them, may not have reported yet.
+        verdict, states = gate.evaluate(statuses(ok="success", msrv="skipped", audit="skipped"), REQUIRED)
+        self.assertEqual(verdict, "wait")
+        self.assertEqual(states["CI / MSRV (Linux native) (push)"], "skipped")
 
-    def test_failure_or_error_fails_even_while_others_are_pending(self):
+    def test_failure_or_error_fails_even_while_others_are_pending_or_skipped(self):
         for bad in ("failure", "error", "warning"):
             with self.subTest(bad=bad):
                 self.assertEqual(gate.evaluate(statuses(ok="pending", msrv=bad), REQUIRED)[0], "fail")
+                self.assertEqual(gate.evaluate(statuses(ok=bad, msrv="skipped", audit="skipped"), REQUIRED)[0],
+                                 "fail")
 
     def test_other_contexts_dont_matter(self):
         extra = [{"context": "Release / Validate (push)", "status": "pending"}]
@@ -82,25 +86,56 @@ class MainTests(unittest.TestCase):
     def test_times_out(self):
         code, _, err, _ = self.run_gate([self.combined(ok="pending")], "--wait", "0")
         self.assertEqual(code, 1)
-        self.assertIn("still hasn't finished", err)
+        self.assertIn("CI hasn't passed on abc after 0 s", err)
 
-    def test_skipped_fails_without_waiting(self):
-        code, _, err, fake = self.run_gate([self.combined(ok="success", msrv="skipped", audit="success")],
+    def test_skipped_waits_for_the_tags_run(self):
+        code, out, _, fake = self.run_gate(
+            [self.combined(ok="success", msrv="skipped", audit="skipped"),
+             self.combined(ok="success", msrv="pending", audit="skipped"),
+             self.combined(ok="success", msrv="success", audit="success")],
+            "--wait", "3600")
+        self.assertEqual((code, len(fake.urls)), (0, 3))
+        self.assertIn("CI passed on abc", out)
+
+    def test_skipped_until_the_deadline_fails_without_suggesting_a_new_tag(self):
+        code, _, err, _ = self.run_gate([self.combined(ok="success", msrv="skipped", audit="success")],
+                                        "--wait", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("MSRV (Linux native) (push): skipped", err)
+        self.assertIn("Re-run the release once the tag's CI run has passed", err)
+        self.assertNotIn("tag again", err)
+
+    def test_failure_fails_at_once_and_explains(self):
+        code, _, err, fake = self.run_gate([self.combined(ok="failure", msrv="skipped", audit="skipped")],
                                            "--wait", "3600")
         self.assertEqual((code, len(fake.urls)), (1, 1))
-        self.assertIn("MSRV (Linux native) (push): skipped", err)
+        self.assertIn("CI failed on abc", err)
+        self.assertIn("re-run the failed CI jobs on this commit", err)
 
     def test_dry_run_only_warns(self):
         code, out, _, _ = self.run_gate([self.combined(ok="failure")], "--warn-only")
         self.assertEqual(code, 0)
         self.assertIn("::warning::", out)
 
-    def test_pages_are_followed(self):
-        first = {"statuses": statuses(ok="success"), "total_count": 3}
-        second = {"statuses": statuses(msrv="success", audit="success"), "total_count": 3}
+    def test_pages_are_followed_until_a_short_page(self):
+        # This Forgejo's total_count is the size of the page, not of the list.
+        others = [{"context": f"CI / Job {i} (push)", "status": "success"} for i in range(gate.LIMIT - 1)]
+        first = {"statuses": statuses(ok="success") + others, "total_count": gate.LIMIT}
+        second = {"statuses": statuses(msrv="success", audit="success"), "total_count": 2}
         code, _, _, fake = self.run_gate([first, second])
-        self.assertEqual(code, 0)
+        self.assertEqual((code, len(fake.urls)), (0, 2))
         self.assertIn("page=2", fake.urls[1])
+
+    def test_a_full_last_page_ends_at_the_empty_one(self):
+        full = statuses(ok="success", msrv="success", audit="success")
+        full += [{"context": f"CI / Job {i} (push)", "status": "success"} for i in range(gate.LIMIT - 3)]
+        code, _, _, fake = self.run_gate([{"statuses": full, "total_count": gate.LIMIT},
+                                          {"statuses": [], "total_count": 0}])
+        self.assertEqual((code, len(fake.urls)), (0, 2))
+
+    def test_a_short_first_page_is_the_only_one(self):
+        code, _, _, fake = self.run_gate([self.combined(ok="success", msrv="success", audit="success")])
+        self.assertEqual((code, len(fake.urls)), (0, 1))
 
 
 if __name__ == "__main__":

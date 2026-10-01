@@ -8,9 +8,11 @@ Reads Forgejo's combined status for the commit, which keeps the latest status
 of each context, so an older success can't hide a newer failure. Every
 --context must be `success`:
 
-- `pending`, or no status yet: wait, up to --wait seconds (a tag push starts
-  CI on the tagged commit at the same time as the release);
-- anything else (`failure`, `error`, `skipped`, `warning`): fail at once.
+- `pending`, `skipped` or no status yet: wait, up to --wait seconds. A tag
+  push starts CI on the tagged commit at the same time as the release, and a
+  dev push's run, which skips the heavy jobs, posts `skipped` under the same
+  context names until the tag's run reports;
+- `failure`, `error` or anything else: fail at once.
 
 --warn-only (dry runs) checks once and only warns.
 
@@ -25,13 +27,15 @@ import time
 from release_api import Http, HttpFailure, ReleaseError
 
 POLL = 30
+LIMIT = 50  # statuses per page
+WAITING = ("pending", "skipped", "missing")
 
 
 def evaluate(statuses, contexts):
     """("pass" | "wait" | "fail", {context: state}) for the required contexts."""
     latest = {s["context"]: s["status"] for s in statuses}
     states = {c: latest.get(c, "missing") for c in contexts}
-    if any(s not in ("success", "pending", "missing") for s in states.values()):
+    if any(s not in ("success", *WAITING) for s in states.values()):
         return "fail", states
     if all(s == "success" for s in states.values()):
         return "pass", states
@@ -39,13 +43,14 @@ def evaluate(statuses, contexts):
 
 
 def combined_statuses(http, api, commit):
-    """Every context's latest status. The endpoint pages its statuses list."""
+    """Every context's latest status. The endpoint pages its statuses list, and
+    this Forgejo's total_count is the size of the page, so a short page is the last."""
     statuses = []
     for page in range(1, 21):
-        combined = http.call("GET", f"{api}/commits/{commit}/status?limit=50&page={page}")
+        combined = http.call("GET", f"{api}/commits/{commit}/status?limit={LIMIT}&page={page}")
         batch = combined.get("statuses") or []
         statuses += batch
-        if not batch or len(statuses) >= combined.get("total_count", 0):
+        if len(batch) < LIMIT:
             return statuses
     raise ReleaseError(f"{commit} has more than 20 pages of statuses")
 
@@ -89,10 +94,17 @@ def main(argv=None):
                       " (not required for a dry run)")
                 return 0
             if verdict == "fail":
-                raise ReleaseError(f"CI did not pass on {args.commit}: {describe(states)}; fix it and tag again")
+                raise ReleaseError(
+                    f"CI failed on {args.commit}: {describe(states)}. If that was transient (a flaky test,"
+                    " a runner problem), re-run the failed CI jobs on this commit, then re-run the release."
+                    " A real failure needs a fix, which goes into a new version")
             if time.monotonic() >= deadline:
-                raise ReleaseError(f"CI still hasn't finished on {args.commit} after {args.wait} s: "
-                                   f"{describe(states)}. Re-run the release once it has")
+                raise ReleaseError(
+                    f"CI hasn't passed on {args.commit} after {args.wait} s: {describe(states)}. pending or"
+                    " missing: the tag's CI run is still going or hasn't started. skipped: the latest run of"
+                    " that job on this commit skipped it, as a dev push does, and the tag's run hasn't"
+                    " reported yet (or reported before the run that skipped it; re-run the tag's CI run"
+                    " then). Re-run the release once the tag's CI run has passed")
             time.sleep(POLL)
     except KeyError as err:
         print(f"::error::{err.args[0]} is not set", file=sys.stderr)
