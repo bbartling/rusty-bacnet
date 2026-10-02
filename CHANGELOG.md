@@ -341,6 +341,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking Python panic exception:** a Python process that used the bindings
+  no longer segfaults at exit while a Tokio thread completes an awaited
+  future, such as `stop()` (#1002). Completing a future calls
+  `loop.call_soon_threadsafe`, which releases the GIL after queueing the
+  callback; the main thread could finish the program in that window, and
+  CPython 3.12 and 3.13 end a thread that takes the GIL back during
+  finalization, unwinding it through Rust frames that then dropped Python
+  objects without the GIL (51 of 800 fresh processes that exit right after
+  `await server.stop()` on the CI image under load, and none of 800 with this
+  fix). The bindings now bridge Tokio futures to asyncio themselves
+  (`py_async`) instead of through `pyo3-async-runtimes`, which is no longer a
+  dependency. Binding threads touch Python only through an exit gate, and an
+  `atexit` hook, which runs before finalization starts, closes it and waits
+  for them with the GIL released. A future requested after that hook raises
+  `RuntimeError` instead of never completing. A Rust panic in an async method
+  now raises PyO3's `PanicException`, as a panic in a synchronous method does,
+  instead of `pyo3_async_runtimes.RustPanic`; `PanicException` derives from
+  `BaseException`, so `except Exception` no longer catches it.
+
+- The Python B/IP endpoint tests bind port 0 and read the bound port back from
+  `local_address()` instead of probing a free port on 127.0.0.1 first. B/IP
+  binds the wildcard address, so a port free on loopback could be in use there,
+  and any process could take it between the probe and the bind (#993). The
+  audit-policy endpoint test does the same, and the `server_only` endpoint
+  example, which needs its port before it starts, now probes the wildcard
+  address.
+
 - **Breaking Rust `subscribe_multiple` argument:** timestamped COV-multiple
   history that one notification cannot carry now goes out in several
   notifications instead of being dropped (#986). Each fits the smaller of the

@@ -39,7 +39,7 @@ impl BACnetClient {
             _ => None,
         };
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -62,7 +62,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             let ack = GetEnrollmentSummaryAck::decode(&resp).map_err(to_py_err)?;
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 let list = pyo3::types::PyList::empty(py);
                 for entry in &ack.entries {
                     let dict = PyDict::new(py);
@@ -105,7 +105,7 @@ impl BACnetClient {
         address: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -118,7 +118,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             let ack = GetAlarmSummaryAck::decode(&resp).map_err(to_py_err)?;
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 let list = pyo3::types::PyList::empty(py);
                 for entry in &ack.entries {
                     let dict = PyDict::new(py);
@@ -215,7 +215,7 @@ impl BACnetClient {
             .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -255,7 +255,7 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -315,6 +315,6 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 }

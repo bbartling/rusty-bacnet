@@ -14,6 +14,7 @@ mod hub;
 mod hub_bindings;
 mod mstp_py;
 mod object_audit_policy;
+mod py_async;
 mod read_range;
 mod sc_identity;
 mod server;
@@ -27,12 +28,15 @@ async fn unit_result(
     future: impl std::future::Future<Output = PyResult<()>>,
 ) -> PyResult<Py<PyAny>> {
     future.await?;
-    Ok(Python::attach(|py| py.None()))
+    py_async::attach(|py| Ok(py.None()))
 }
 
 /// The `rusty_bacnet` Python module.
 #[pymodule]
 fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Keep binding threads out of the interpreter once it starts exiting (#1002).
+    py_async::register(m)?;
+
     // Register exception types
     errors::register(m)?;
 

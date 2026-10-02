@@ -2,7 +2,6 @@
 import asyncio
 import ast
 import inspect
-import socket
 from pathlib import Path
 import tempfile
 import unittest
@@ -39,10 +38,7 @@ class ObjectAuditPolicyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_server_and_endpoint_policy_rows_survive_start_and_are_readable(self):
         for endpoint in (False, True):
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.bind(("127.0.0.1", 0))
-                port = sock.getsockname()[1]
-            owner = (rb.BipEndpoint(device_instance=8111, interface="127.0.0.1", port=port)
+            owner = (rb.BipEndpoint(device_instance=8111, interface="127.0.0.1", port=0)
                      if endpoint else rb.BACnetServer(8110, interface="127.0.0.1", port=0))
             with self.assertRaises(ValueError):
                 owner.add_analog_value(1, "av", auditable_operations=1 << 16)

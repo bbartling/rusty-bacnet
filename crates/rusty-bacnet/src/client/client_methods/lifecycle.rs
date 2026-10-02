@@ -103,7 +103,7 @@ impl BACnetClient {
         let mstp_max_master = slf.borrow().mstp_max_master;
         let mstp_max_info_frames = slf.borrow().mstp_max_info_frames;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
                     let interface: Ipv4Addr = interface_str
@@ -216,7 +216,7 @@ impl BACnetClient {
             }
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
     /// Explicitly stop the client.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -239,6 +239,6 @@ impl BACnetClient {
             }
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 }

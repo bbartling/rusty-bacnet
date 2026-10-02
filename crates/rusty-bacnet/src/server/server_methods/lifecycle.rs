@@ -267,7 +267,7 @@ impl BACnetServer {
             started.store(true, Ordering::Release);
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Stop admitted work and release the owned transport.
@@ -284,7 +284,7 @@ impl BACnetServer {
             started.store(false, Ordering::Release);
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get the retained server instance's last bound address as a string.
@@ -294,7 +294,7 @@ impl BACnetServer {
     fn local_address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let transport_type = self.transport_type.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let guard = inner.lock().await;
             let srv = guard
                 .as_ref()
@@ -363,7 +363,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let db_arc = {
                 let guard = inner.lock().await;
                 let srv = guard
@@ -435,7 +435,7 @@ impl BACnetServer {
                 .await
                 .map_err(to_py_err)
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Update Present_Value for an application-owned Input object.
@@ -464,7 +464,7 @@ impl BACnetServer {
                 .await
                 .map_err(to_py_err)
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get the server's current communication state.
@@ -473,7 +473,7 @@ impl BACnetServer {
     fn comm_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let guard = inner.lock().await;
             let srv = guard
                 .as_ref()
