@@ -16,8 +16,16 @@ fn averaging_sample_route_and_property_cov_admission_survive_wrapping() {
     assert!(object.supports_subscribe_cov_property());
     assert!(object.supports_cov_property(PropertyIdentifier::AVERAGE_VALUE));
     for sample in [PropertyValue::Real(3.0), PropertyValue::Unsigned(5)] {
-        object.add_averaging_sample_internal(sample).unwrap();
+        object.add_averaging_sample_internal(Some(sample)).unwrap();
     }
+    // A missed attempt reaches the wrapped object too.
+    object.add_averaging_sample_internal(None).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::ATTEMPTED_SAMPLES, None)
+            .unwrap(),
+        PropertyValue::Unsigned(3)
+    );
     assert_eq!(
         object
             .read_property(PropertyIdentifier::AVERAGE_VALUE, None)

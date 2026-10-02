@@ -15,9 +15,13 @@ fn pics_averaging_property_metadata_is_exact() {
         (P::MINIMUM_VALUE, false, false),
         (P::MAXIMUM_VALUE, false, false),
         (P::AVERAGE_VALUE, false, false),
-        (P::ATTEMPTED_SAMPLES, false, false),
+        // Attempted_Samples takes a write of zero, and the window rows take
+        // writes (#1092); each one resets the window.
+        (P::ATTEMPTED_SAMPLES, false, true),
         (P::VALID_SAMPLES, false, false),
         (P::OBJECT_PROPERTY_REFERENCE, false, true),
+        (P::WINDOW_INTERVAL, false, true),
+        (P::WINDOW_SAMPLES, false, true),
         (P::PROPERTY_LIST, false, false),
     ];
     for configured in [false, true] {
@@ -31,9 +35,6 @@ fn pics_averaging_property_metadata_is_exact() {
                     None,
                 )
                 .unwrap();
-            object.add_sample(10.0).unwrap();
-            object.add_sample(20.0).unwrap();
-            object.add_sample(30.0).unwrap();
             let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
             object
                 .write_property(
@@ -46,6 +47,12 @@ fn pics_averaging_property_metadata_is_exact() {
                     None,
                 )
                 .unwrap();
+            object
+                .write_property(P::WINDOW_SAMPLES, None, PropertyValue::Unsigned(60), None)
+                .unwrap();
+            object.add_sample(10.0).unwrap();
+            object.add_sample(20.0).unwrap();
+            object.add_sample(30.0).unwrap();
         }
         let required = object.required_properties();
         let mut db = ObjectDatabase::new();

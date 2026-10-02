@@ -506,13 +506,6 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add an Averaging object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_averaging(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AveragingObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     // -----------------------------------------------------------------------
     // Value types — all take new(instance, name)
     // -----------------------------------------------------------------------
