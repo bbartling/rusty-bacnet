@@ -64,7 +64,7 @@ fn seconds(changes: &[TimedChange]) -> Vec<u8> {
 
 /// Octets one change of `payload` octets counts against its context's bound.
 fn change_len(payload: usize) -> usize {
-    change(0, payload).encoded_len
+    change(0, payload).cost
 }
 
 /// A maximum APDU whose context bound holds exactly `n` changes of `payload`
@@ -513,12 +513,134 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
     assert_eq!(dropped(&counters), 3);
 
     // Room the untimestamped values took is kept for them.
-    h.note_reserve(&context(1), 3 * change_len(4));
-    for second in 31..=36 {
+    h.note_reserve(&context(1), change_len(4));
+    for second in 31..=38 {
         h.push(&k, 1, change(second, 4));
     }
-    assert_eq!(seconds(&h.drain(&k, 1).1), [32, 33, 34, 35, 36]);
+    assert_eq!(seconds(&h.drain(&k, 1).1), [32, 33, 34, 35, 36, 37, 38]);
     assert_eq!(dropped(&counters), 4);
+    // At most one notification's worth: two changes here.
+    h.note_reserve(&context(1), 10 * change_len(4));
+    for second in 41..=47 {
+        h.push(&k, 1, change(second, 4));
+    }
+    assert_eq!(h.drain(&k, 1).1.len(), 6);
+    assert_eq!(dropped(&counters), 5);
+    // An admission starts the reserve over.
+    h.set_apdu(&context(1), None);
+    for second in 51..=58 {
+        h.push(&k, 1, change(second, 4));
+    }
+    assert_eq!(h.drain(&k, 1).1.len(), 8);
+    assert_eq!(dropped(&counters), 5);
+}
+
+#[test]
+fn the_reserve_belongs_to_the_context_and_starts_over_when_it_loses_a_reference() {
+    let (mut h, counters) = histories(8, 4);
+    let (a, b) = (key(1, 1), key(1, 2));
+    h.reset(&a, 1, 0);
+    h.note_reserve(&context(1), change_len(4));
+    h.reset(&b, 1, 0); // a later reference shares the context's reserve
+    for second in 1..=8 {
+        h.push(&b, 1, change(second, 4));
+    }
+    assert_eq!(
+        dropped(&counters),
+        1,
+        "seven changes fit beside the reserve"
+    );
+    h.drain(&b, 1);
+    h.remove(&a); // the context lost a reference: its reserve starts over
+    for second in 11..=18 {
+        h.push(&b, 1, change(second, 4));
+    }
+    assert_eq!(dropped(&counters), 1);
+    h.remove(&b);
+    assert_eq!(h.held(), (0, 0), "the last reference took the terms along");
+}
+
+#[test]
+fn a_send_turn_holds_back_other_reports_and_owes_one_follow_up() {
+    let (store, _) = store(8, 4);
+    let revisits = Arc::new(crate::cov::CovRevisits::default());
+    let k = key(1, 1);
+    let begin = |context: MultipleContextKey, keys: Vec<CovSubscriptionKey>| {
+        SendTurn::begin(&store, &context, &revisits, keys)
+    };
+    let turn = begin(context(1), vec![k.clone()]).expect("free");
+    assert!(
+        begin(context(1), vec![k.clone()]).is_none(),
+        "one at a time"
+    );
+    drop(begin(context(2), vec![key(2, 1)]).expect("per context"));
+    assert!(
+        revisits.queued().is_empty(),
+        "nobody stood back from context 2"
+    );
+    drop(turn);
+    assert_eq!(
+        revisits.queued(),
+        std::collections::HashSet::from([k.clone()]),
+        "the report that stood back gets one follow-up"
+    );
+    drop(begin(context(1), vec![k.clone()]).expect("free again"));
+}
+
+#[test]
+fn deferred_parts_return_without_eviction_and_discarded_ones_are_counted() {
+    let (store, counters) = store(2, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    store.lock().push(&k, 1, change(1, 4));
+    store.lock().push(&k, 1, change(2, 4));
+    let mut claim = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    claim.add(k.clone(), incarnation, drained);
+    store.lock().push(&k, 1, change(3, 4));
+    // Back over the bound, but a deferred part is not evicted.
+    drop(claim.without_eviction());
+    assert_eq!(dropped(&counters), 0);
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    assert_eq!(seconds(&drained), [1, 2, 3]);
+    let mut claim = TimedClaim::new(store.clone());
+    claim.add(k.clone(), incarnation, drained);
+    claim.split_earliest(1).discard("too large");
+    assert_eq!(dropped(&counters), 1);
+    drop(claim);
+    assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2, 3]);
+}
+
+#[test]
+fn an_admission_without_a_known_maximum_apdu_keeps_the_one_advertised_before() {
+    let mut table = crate::cov::CovSubscriptionTable::new();
+    let route = crate::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
+    let expires = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let sub = timed_reference(1, expires);
+    let advertised = |table: &crate::cov::CovSubscriptionTable| {
+        table
+            .get_subscription(&sub.key().unwrap())
+            .and_then(|entry| entry.subscriber_max_apdu())
+    };
+    table
+        .subscribe_multiple(
+            &context(1),
+            &route,
+            expires,
+            10,
+            Some(206),
+            vec![sub.clone()],
+        )
+        .unwrap();
+    assert_eq!(advertised(&table), Some(206));
+    table
+        .subscribe_multiple(&context(1), &route, expires, 10, None, Vec::new())
+        .unwrap();
+    assert_eq!(advertised(&table), Some(206), "an unknown one keeps it");
+    table
+        .subscribe_multiple(&context(1), &route, expires, 10, Some(480), Vec::new())
+        .unwrap();
+    assert_eq!(advertised(&table), Some(480), "a known one replaces it");
 }
 
 #[test]

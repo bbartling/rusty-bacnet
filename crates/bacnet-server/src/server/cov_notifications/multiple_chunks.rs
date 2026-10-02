@@ -4,14 +4,17 @@
 //! The report's last notification carries each timestamped reference's latest
 //! change and the untimestamped values, with as much of the newest queued
 //! history as still fits. The rest of the history goes out first, oldest
-//! first, in as few notifications as fit. A notification always carries at
-//! least one change, and latest changes are never split, so the last
-//! notification may still exceed the limit, as an unsplit one would.
+//! first, in as few notifications as fit. A history change that does not fit
+//! a notification even alone is dropped and counted, since every attempt to
+//! send it would fail. Latest changes are never split or dropped, so the last
+//! notification may still exceed the limit, as an unsplit one would; that is
+//! logged (#1008 tracks splitting them too).
 use std::collections::HashSet;
 
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationMultipleRequest};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
+use tracing::warn;
 
 use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::{build_items, Coordinate, History, Retained, Stamp};
@@ -148,11 +151,14 @@ pub(super) fn split(
     claim: &mut TimedClaim,
     limit: usize,
 ) -> (Vec<Chunk>, COVNotificationMultipleRequest) {
-    let sizes = {
+    // Each part as its count of the oldest remaining history changes, and
+    // whether that one change cannot fit a notification on its own.
+    let parts = {
         let history = claim.earlier();
         let whole = content.last(claim, &history);
         // A notification that does not encode is reported by its send.
         if history.is_empty() || encoded_len(&whole).is_none_or(|len| len <= limit) {
+            warn_oversized(&whole, limit);
             return (Vec::new(), whole);
         }
         // Moving more of the oldest history out never grows the rest, so the
@@ -160,30 +166,45 @@ pub(super) fn split(
         let moved = smallest(history.len(), |count| {
             fits(&content.last(claim, &history[count..]), limit)
         });
-        let mut sizes = Vec::new();
+        let mut parts = Vec::new();
         let mut start = 0;
         while start < moved {
-            let end = largest(start + 1, moved, |end| {
-                fits(&content.history(claim, &history[start..end]), limit)
-            });
-            sizes.push(end - start);
+            let alone = |end: usize| fits(&content.history(claim, &history[start..end]), limit);
+            let end = largest(start + 1, moved, alone);
+            parts.push((end - start, end == start + 1 && !alone(end)));
             start = end;
         }
-        sizes
+        parts
     };
-    let chunks: Vec<Chunk> = sizes
-        .into_iter()
-        .map(|count| {
-            let part = claim.split_earliest(count);
-            let notification = content.history(&part, &part.earlier());
-            Chunk {
-                notification,
-                claim: part,
-            }
-        })
-        .collect();
+    let mut chunks = Vec::new();
+    for (count, too_large) in parts {
+        let part = claim.split_earliest(count);
+        if too_large {
+            part.discard("a timestamped change exceeds the notification size on its own");
+            continue;
+        }
+        let notification = content.history(&part, &part.earlier());
+        chunks.push(Chunk {
+            notification,
+            claim: part,
+        });
+    }
     let last = content.last(claim, &claim.earlier());
+    warn_oversized(&last, limit);
     (chunks, last)
+}
+
+/// Log a last notification that still exceeds `limit`: its latest changes
+/// and untimestamped values alone do not fit, and are never split (#1008).
+fn warn_oversized(notification: &COVNotificationMultipleRequest, limit: usize) {
+    if let Some(len) = encoded_len(notification).filter(|len| *len > limit) {
+        warn!(
+            octets = len,
+            limit,
+            "COV-multiple notification exceeds the subscriber's maximum APDU: its \
+             latest changes and untimestamped values alone do not fit"
+        );
+    }
 }
 
 /// Smallest `count` in `1..=max` for which `fits` holds, knowing it fails at

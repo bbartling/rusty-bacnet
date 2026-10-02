@@ -4,7 +4,7 @@ use super::multiple_chunks::{request_limit, split, untimed_octets, Envelope, Rep
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::{FieldTiming, TimedChange, TimedClaim};
+use crate::cov::timed::{FieldTiming, SendTurn, TimedChange, TimedClaim};
 use std::collections::HashSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -99,6 +99,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
+        // The context's send turn, if it is unconfirmed (#986). Declared before
+        // the claim so that, on any early return, the claim's changes are back
+        // in their queue before the turn hands the context to a follow-up.
+        let mut turn: Option<SendTurn> = None;
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
         let mut claim: Option<TimedClaim> = None;
@@ -210,6 +214,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 let now = Instant::now();
                 let store = table.timed().clone();
+                // An unconfirmed context sends one report at a time, so no later
+                // report overtakes the parts of this one (#986); a confirmed
+                // context is held by its outstanding report instead. A fanout
+                // that finds a report going out leaves its changes queued, and
+                // that report hands the context to a follow-up when done.
+                if !context.confirmed
+                    && table
+                        .multiple_context_references(&context)
+                        .any(|sub| sub.timestamped)
+                {
+                    let keys = table
+                        .multiple_context_references(&context)
+                        .map(|sub| sub.key().clone())
+                        .collect();
+                    match SendTurn::begin(&store, &context, table.revisits(), keys) {
+                        Some(taken) => turn = Some(taken),
+                        None => return,
+                    }
+                }
                 let claim = claim.insert(TimedClaim::new(store.clone()));
                 let mut retained = Vec::new();
                 for (sub, prepared) in candidates {
@@ -424,7 +447,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 Some((sub.clone(), change.observation().clone(), *completion))
                             })
                             .collect();
-                        let deferred = chunks.map(|chunk| chunk.claim).chain(claim.take());
+                        // Deferred, not dropped: requeueing them must not let
+                        // the bound evict what this report planned to send.
+                        let deferred = chunks
+                            .map(|chunk| chunk.claim.without_eviction())
+                            .chain(claim.take().map(TimedClaim::without_eviction));
                         (
                             first.notification,
                             carried,
@@ -471,6 +498,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .map(|chunk| (chunk.notification, Some(chunk.claim)))
                 .chain(std::iter::once((notification, claim.take())));
             for (notification, claim) in parts {
+                // Communication may have been restricted since the fanout began
+                // (Clause 16.1). Stop; re-enabling it rearms the backstop, which
+                // sends the parts left queued.
+                if handles.ctx.comm_state.load(Ordering::Acquire) >= 1 {
+                    return;
+                }
                 let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
                     Ok(buf) => buf,
                     Err(e) => {
@@ -507,6 +540,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             for (snapshot, pv, completion) in &last_notified {
                 table.complete_observation(snapshot, *completion, pv.clone());
             }
+            drop(table);
+            drop(turn);
         }
     }
 }

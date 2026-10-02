@@ -32,19 +32,24 @@
 //! History that one notification cannot carry goes out in several (§13.1,
 //! §13.18.1.1): [`TimedClaim::split_earliest`] moves the oldest history into
 //! earlier notifications, and each reference's latest change stays with the
-//! last one.
+//! last one. An unconfirmed context sends one such report at a time
+//! ([`SendTurn`]), so a later report cannot overtake the parts of an earlier
+//! one.
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
 //! carry, each of the smaller of the local maximum APDU and the subscriber's.
 //! The estimate counts each change's values, item framing as if every change
-//! started its own item, and a reserve for the context's untimestamped values,
-//! which travel with the last notification. Peers therefore cannot grow this
-//! state without limit. Only on overflow, the last resort, is a change dropped:
-//! the oldest of the same reference first, then the oldest in the context. A
-//! reference's newest change is never evicted, so every reference's current
-//! state is always conveyed. Each discarded change is counted in
-//! [`AtomicCovCounters::timed_changes_dropped`].
+//! started its own item, and a fixed [`CHANGE_OVERHEAD`] per change for its
+//! bookkeeping, so many tiny changes cannot outgrow it in memory. It keeps a
+//! reserve, per context and at most one notification's worth, for the room the
+//! context's untimestamped values took in its reports since it was last
+//! admitted or lost a reference; they travel with the last notification. Peers
+//! therefore cannot grow this state without limit. Only on overflow, the last
+//! resort, is a change dropped: the oldest of the same reference first, then
+//! the oldest in the context. A reference's newest change is never evicted, so
+//! every reference's current state is always conveyed. Each discarded change
+//! is counted in [`AtomicCovCounters::timed_changes_dropped`].
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
@@ -57,7 +62,9 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::warn;
 
-use super::{AtomicCovCounters, CovObservation, CovSubscriptionKey, MultipleContextKey};
+use super::{
+    AtomicCovCounters, CovObservation, CovRevisits, CovSubscriptionKey, MultipleContextKey,
+};
 
 /// Notifications' worth of pending history one context may hold.
 pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
@@ -69,6 +76,9 @@ const ENVELOPE_RESERVE: usize = 33;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
 pub(crate) const ITEM_FRAMING: usize = 7;
+/// Octets each pending change counts beyond its encoding, for the memory it
+/// holds besides its values.
+pub(crate) const CHANGE_OVERHEAD: usize = 32;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
 const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
@@ -83,7 +93,9 @@ pub(crate) struct TimedChange {
     captured_at: Instant,
     values: Vec<COVNotificationValue>,
     observation: CovObservation,
-    encoded_len: usize,
+    /// Octets the change counts against its context's bound: its encoding,
+    /// one item's framing and [`CHANGE_OVERHEAD`].
+    cost: usize,
 }
 
 /// Octets of a context-tagged unsigned value: its tag and the minimal
@@ -115,10 +127,10 @@ impl TimedChange {
         mut values: Vec<COVNotificationValue>,
         observation: CovObservation,
     ) -> Self {
-        let mut encoded_len = ITEM_FRAMING;
+        let mut cost = ITEM_FRAMING + CHANGE_OVERHEAD;
         for value in &mut values {
             value.time_of_change = Some(frame.local_time);
-            encoded_len += value_len(value);
+            cost += value_len(value);
         }
         Self {
             seq: 0,
@@ -126,7 +138,7 @@ impl TimedChange {
             captured_at: Instant::now(),
             values,
             observation,
-            encoded_len,
+            cost,
         }
     }
 
@@ -175,20 +187,30 @@ struct TimedHistory {
     committed: u64,
     /// The context's Max_Notification_Delay, as last admitted.
     delay: Duration,
-    /// Octets one notification to the context may take: the smaller of the
-    /// local maximum APDU and the subscriber's, as last admitted.
-    apdu: usize,
-    /// Most octets the context's untimestamped values have taken in one of
-    /// its reports since this history began.
-    reserve: usize,
     entries: VecDeque<TimedChange>,
 }
 
-impl TimedHistory {
-    /// Octets of pending changes the history's context may hold.
-    fn capacity(&self) -> usize {
-        (HISTORY_NOTIFICATIONS * self.apdu.saturating_sub(ENVELOPE_RESERVE))
-            .saturating_sub(self.reserve)
+/// Sizing terms of a context with timestamped histories.
+#[derive(Debug, Clone, Copy)]
+struct ContextTerms {
+    /// Octets one notification to the context may take: the smaller of the
+    /// local maximum APDU and the subscriber's, as last admitted.
+    apdu: usize,
+    /// Most octets the context's untimestamped values have taken in one
+    /// report since the context was last admitted or lost a reference, at
+    /// most one notification's worth.
+    reserve: usize,
+}
+
+impl ContextTerms {
+    /// Octets of items one notification can carry.
+    fn notification(self) -> usize {
+        self.apdu.saturating_sub(ENVELOPE_RESERVE)
+    }
+
+    /// Octets of pending changes the context may hold.
+    fn capacity(self) -> usize {
+        (HISTORY_NOTIFICATIONS * self.notification()).saturating_sub(self.reserve)
     }
 }
 
@@ -223,6 +245,11 @@ pub(crate) enum FieldTiming {
 #[derive(Debug)]
 pub(crate) struct TimedHistories {
     histories: HashMap<CovSubscriptionKey, TimedHistory>,
+    /// Sizing terms of every context with a timestamped history.
+    terms: HashMap<MultipleContextKey, ContextTerms>,
+    /// Unconfirmed contexts with a report going out, and whether another
+    /// fanout stood back meanwhile and is owed a follow-up.
+    sending: HashMap<MultipleContextKey, bool>,
     context_bytes: HashMap<MultipleContextKey, usize>,
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
@@ -240,6 +267,8 @@ impl TimedHistories {
     fn new(local_apdu: usize, counters: Arc<AtomicCovCounters>) -> Self {
         Self {
             histories: HashMap::new(),
+            terms: HashMap::new(),
+            sending: HashMap::new(),
             context_bytes: HashMap::new(),
             not_before: HashMap::new(),
             wake: Arc::default(),
@@ -267,29 +296,49 @@ impl TimedHistories {
         }
     }
 
-    /// Apply the maximum APDU the context's subscriber last advertised, if
-    /// known, to its timestamped histories: notifications and the history
-    /// bound use the smaller of it and the local maximum.
+    /// Apply an admission of the context, renewals included: the maximum
+    /// APDU its subscriber last advertised, if known, sizes notifications and
+    /// the history bound together with the local maximum. The admission may
+    /// have changed the context's references, so the reserve for its
+    /// untimestamped values starts over and its next report notes it again.
     pub(super) fn set_apdu(&mut self, context: &MultipleContextKey, subscriber: Option<u16>) {
         let apdu = subscriber.map_or(self.local_apdu, |subscriber| {
             self.local_apdu.min(usize::from(subscriber))
         });
-        for (key, history) in &mut self.histories {
-            if key.multiple_context() == Some(context) {
-                history.apdu = apdu;
-            }
+        if let Some(terms) = self.terms.get_mut(context) {
+            terms.apdu = apdu;
+            terms.reserve = 0;
         }
     }
 
     /// Note the octets the context's untimestamped values took in a report.
-    /// The history bound keeps room for the most they have taken, since they
-    /// travel with the last notification of the next report too.
+    /// The history bound keeps room for the most they have taken, at most one
+    /// notification's worth, since they travel with the last notification of
+    /// the next report too.
     pub(crate) fn note_reserve(&mut self, context: &MultipleContextKey, octets: usize) {
-        for (key, history) in &mut self.histories {
-            if key.multiple_context() == Some(context) {
-                history.reserve = history.reserve.max(octets);
+        if let Some(terms) = self.terms.get_mut(context) {
+            terms.reserve = terms.reserve.max(octets.min(terms.notification()));
+        }
+    }
+
+    /// Start sending a report to an unconfirmed `context`, unless one is
+    /// still going out; then note that this fanout stood back.
+    fn begin_send(&mut self, context: &MultipleContextKey) -> bool {
+        match self.sending.get_mut(context) {
+            Some(owed) => {
+                *owed = true;
+                false
+            }
+            None => {
+                self.sending.insert(context.clone(), false);
+                true
             }
         }
+    }
+
+    /// Finish sending to `context`; `true` if a fanout stood back meanwhile.
+    fn end_send(&mut self, context: &MultipleContextKey) -> bool {
+        self.sending.remove(context).unwrap_or(false)
     }
 
     /// Drop every backstop wait: a block lifted, so overdue changes go out
@@ -382,7 +431,12 @@ impl TimedHistories {
     pub(super) fn reset(&mut self, key: &CovSubscriptionKey, generation: u64, delay: u32) {
         let delay = Duration::from_secs(u64::from(delay));
         let incarnation = self.next_incarnation;
-        let apdu = self.local_apdu;
+        if let Some(context) = key.multiple_context() {
+            let apdu = self.local_apdu;
+            self.terms
+                .entry(context.clone())
+                .or_insert(ContextTerms { apdu, reserve: 0 });
+        }
         let history = self
             .histories
             .entry(key.clone())
@@ -394,8 +448,6 @@ impl TimedHistories {
                 latest: 0,
                 committed: 0,
                 delay,
-                apdu,
-                reserve: 0,
                 entries: VecDeque::new(),
             });
         if history.incarnation == incarnation {
@@ -414,24 +466,34 @@ impl TimedHistories {
     /// wait once no timestamped reference of the context remains.
     pub(super) fn remove(&mut self, key: &CovSubscriptionKey) {
         if let Some(history) = self.histories.remove(key) {
-            let bytes: usize = history.entries.iter().map(|e| e.encoded_len).sum();
+            let bytes: usize = history.entries.iter().map(|e| e.cost).sum();
             self.release_bytes(key, bytes);
         }
         if let Some(context) = key.multiple_context() {
-            if !self
+            if self
                 .histories
                 .keys()
                 .any(|other| other.multiple_context() == Some(context))
             {
+                // The context lost a reference: its reserve starts over.
+                if let Some(terms) = self.terms.get_mut(context) {
+                    terms.reserve = 0;
+                }
+            } else {
                 self.not_before.remove(context);
+                self.terms.remove(context);
             }
         }
     }
 
-    /// Timestamped histories and backstop waits held, for leak tests.
+    /// Timestamped histories (or context terms, should any outlive them) and
+    /// backstop waits held, for leak tests.
     #[cfg(test)]
     pub(crate) fn held(&self) -> (usize, usize) {
-        (self.histories.len(), self.not_before.len())
+        (
+            self.histories.len().max(self.terms.len()),
+            self.not_before.len(),
+        )
     }
 
     /// Latest captured or conveyed observation of a live generation.
@@ -523,7 +585,7 @@ impl TimedHistories {
             return false;
         }
         let change = self.adopt(key, generation, change);
-        self.insert_ordered(key, generation, vec![change]);
+        self.insert_ordered(key, generation, vec![change], true);
         true
     }
 
@@ -571,7 +633,7 @@ impl TimedHistories {
             return (incarnation, Vec::new());
         }
         let drained: Vec<_> = history.entries.drain(..).collect();
-        let bytes = drained.iter().map(|e| e.encoded_len).sum();
+        let bytes = drained.iter().map(|e| e.cost).sum();
         self.release_bytes(key, bytes);
         (incarnation, drained)
     }
@@ -589,7 +651,7 @@ impl TimedHistories {
             .partition_point(|change| change.seq < committed);
         let removed: Vec<_> = history.entries.drain(..stale).collect();
         if !removed.is_empty() {
-            let bytes = removed.iter().map(|change| change.encoded_len).sum();
+            let bytes = removed.iter().map(|change| change.cost).sum();
             self.release_bytes(key, bytes);
             self.dropped(key, removed.len(), "superseded by a delivered newer change");
         }
@@ -598,8 +660,14 @@ impl TimedHistories {
     /// Return undelivered changes to their reference in capture order, also
     /// across a renewal. A cancelled reference discards them, and a newer
     /// delivered change supersedes them: delivering them now would regress
-    /// the subscriber.
-    fn requeue(&mut self, key: &CovSubscriptionKey, incarnation: u64, changes: Vec<TimedChange>) {
+    /// the subscriber. `evict` applies the context bound to the result.
+    fn requeue(
+        &mut self,
+        key: &CovSubscriptionKey,
+        incarnation: u64,
+        changes: Vec<TimedChange>,
+        evict: bool,
+    ) {
         let Some(history) = self.incarnation_mut(key, incarnation) else {
             return;
         };
@@ -611,7 +679,7 @@ impl TimedHistories {
         if !stale.is_empty() {
             self.dropped(key, stale.len(), "superseded by a delivered newer change");
         }
-        self.insert_ordered(key, generation, keep);
+        self.insert_ordered(key, generation, keep, evict);
     }
 
     fn insert_ordered(
@@ -619,6 +687,7 @@ impl TimedHistories {
         key: &CovSubscriptionKey,
         generation: u64,
         changes: Vec<TimedChange>,
+        evict: bool,
     ) {
         let Some(history) = self.history_mut(key, generation) else {
             return;
@@ -627,7 +696,7 @@ impl TimedHistories {
         // A new oldest pending change can bring its context's deadline forward.
         let mut new_front = false;
         for change in changes {
-            added += change.encoded_len;
+            added += change.cost;
             let at = history.entries.partition_point(|e| e.seq < change.seq);
             new_front |= at == 0;
             history.entries.insert(at, change);
@@ -635,17 +704,19 @@ impl TimedHistories {
         if let Some(context) = key.multiple_context() {
             *self.context_bytes.entry(context.clone()).or_default() += added;
         }
-        self.enforce_bound(key);
+        if evict {
+            self.enforce_bound(key);
+        }
         if new_front {
             self.wake.notify_one();
         }
     }
 
     fn enforce_bound(&mut self, key: &CovSubscriptionKey) {
-        let (Some(context), Some(capacity)) = (
-            key.multiple_context().cloned(),
-            self.histories.get(key).map(TimedHistory::capacity),
-        ) else {
+        let Some(context) = key.multiple_context().cloned() else {
+            return;
+        };
+        let Some(capacity) = self.terms.get(&context).map(|terms| terms.capacity()) else {
             return;
         };
         while self.context_bytes.get(&context).copied().unwrap_or(0) > capacity {
@@ -669,7 +740,7 @@ impl TimedHistories {
                 .get_mut(&victim)
                 .and_then(|h| h.entries.pop_front())
                 .expect("victim has an older pending change");
-            self.release_bytes(&victim, evicted.encoded_len);
+            self.release_bytes(&victim, evicted.cost);
             self.dropped(&victim, 1, "context history full");
         }
     }
@@ -796,6 +867,8 @@ pub(crate) struct TimedClaim {
     store: TimedStore,
     changes: Vec<(CovSubscriptionKey, u64, Vec<TimedChange>)>,
     history_only: bool,
+    /// Whether returning these changes applies the context bound.
+    evict: bool,
 }
 
 impl TimedClaim {
@@ -804,6 +877,24 @@ impl TimedClaim {
             store,
             changes: Vec::new(),
             history_only: false,
+            evict: true,
+        }
+    }
+
+    /// Return these changes without applying the context bound: a report
+    /// planned to send them and only defers them, so the bound must not drop
+    /// what it just drained (#986).
+    pub(crate) fn without_eviction(mut self) -> Self {
+        self.evict = false;
+        self
+    }
+
+    /// Give these changes up, counting each as dropped: one of them alone
+    /// does not fit a notification, so every attempt to send it would fail.
+    pub(crate) fn discard(mut self, reason: &str) {
+        let store = self.store.lock();
+        for (key, _, changes) in self.changes.drain(..) {
+            store.dropped(&key, changes.len(), reason);
         }
     }
 
@@ -828,6 +919,7 @@ impl TimedClaim {
             store: self.store.clone(),
             changes: Vec::new(),
             history_only: true,
+            evict: self.evict,
         };
         let cut = {
             let earlier = self.earlier();
@@ -913,7 +1005,51 @@ impl Drop for TimedClaim {
         }
         let mut store = self.store.lock();
         for (key, incarnation, changes) in self.changes.drain(..) {
-            store.requeue(&key, incarnation, changes);
+            store.requeue(&key, incarnation, changes, self.evict);
+        }
+    }
+}
+
+/// The one report an unconfirmed context is sending (#986).
+///
+/// Its parts go out one await apart, and an unconfirmed context has no
+/// outstanding-report mark, so another fanout could drain a newer change and
+/// send it between them: the subscriber would see a reference move back to
+/// older history. While a turn is held, other fanouts of the context stand
+/// back and leave their changes queued. Dropping the turn, after the last
+/// part or on any early return, hands the context to one follow-up if a
+/// fanout stood back.
+#[must_use = "dropping the turn ends the report"]
+pub(crate) struct SendTurn {
+    store: TimedStore,
+    context: MultipleContextKey,
+    revisits: Arc<CovRevisits>,
+    keys: Vec<CovSubscriptionKey>,
+}
+
+impl SendTurn {
+    /// Take the turn of `context`, unless a report of it is still going out.
+    /// `keys` are the context's references, for the follow-up.
+    pub(crate) fn begin(
+        store: &TimedStore,
+        context: &MultipleContextKey,
+        revisits: &Arc<CovRevisits>,
+        keys: Vec<CovSubscriptionKey>,
+    ) -> Option<Self> {
+        store.lock().begin_send(context).then(|| Self {
+            store: store.clone(),
+            context: context.clone(),
+            revisits: Arc::clone(revisits),
+            keys,
+        })
+    }
+}
+
+impl Drop for SendTurn {
+    fn drop(&mut self) {
+        let owed = self.store.lock().end_send(&self.context);
+        if owed {
+            self.revisits.request(std::mem::take(&mut self.keys));
         }
     }
 }

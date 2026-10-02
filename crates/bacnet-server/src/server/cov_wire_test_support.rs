@@ -63,6 +63,37 @@ impl ClockReader for SharedClock {
 
 pub(super) type Frames = Arc<StdMutex<Vec<Apdu>>>;
 
+/// What to do to one coming COV-multiple notification.
+enum PlanAction {
+    /// Hold it in the transport until a permit arrives.
+    Hold(Arc<tokio::sync::Semaphore>),
+    /// Fail its send.
+    Fail,
+    /// Disable initiation right after sending it.
+    Disable(Arc<AtomicU8>),
+}
+
+/// An action on the COV-multiple notification after `after` more of them.
+struct NotificationPlan {
+    after: usize,
+    action: PlanAction,
+}
+
+type Plan = Arc<StdMutex<Option<NotificationPlan>>>;
+
+fn is_cov_multiple(apdu: &Apdu) -> bool {
+    match apdu {
+        Apdu::UnconfirmedRequest(request) => {
+            request.service_choice
+                == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE
+        }
+        Apdu::ConfirmedRequest(request) => {
+            request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+        }
+        _ => false,
+    }
+}
+
 /// Send side of the harness link: records unicast APDUs and moves the shared
 /// Device clock at chosen points.
 #[derive(Clone)]
@@ -74,9 +105,26 @@ struct ClockLink {
     /// Device time once a broadcast (an event notification) has been sent.
     after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     fail_notifications: Arc<AtomicBool>,
+    plan: Plan,
 }
 
 impl ClockLink {
+    /// The plan's action if `apdu` is the COV-multiple notification it names.
+    fn planned(&self, apdu: &Apdu) -> Option<PlanAction> {
+        if !is_cov_multiple(apdu) {
+            return None;
+        }
+        let mut plan = self.plan.lock().unwrap();
+        match plan.as_mut() {
+            Some(pending) if pending.after > 0 => {
+                pending.after -= 1;
+                None
+            }
+            Some(_) => plan.take().map(|due| due.action),
+            None => None,
+        }
+    }
+
     async fn send(self, frame: SentFrame) -> Result<(), Error> {
         if frame.broadcast {
             if let Some(next) = self.after_broadcast.lock().unwrap().take() {
@@ -98,7 +146,20 @@ impl ClockLink {
             }
             _ => {}
         }
-        self.frames.lock().unwrap().push(apdu);
+        match self.planned(&apdu) {
+            Some(PlanAction::Hold(release)) => {
+                release.acquire().await.unwrap().forget();
+                self.frames.lock().unwrap().push(apdu);
+            }
+            Some(PlanAction::Fail) => {
+                return Err(Error::Encoding("injected notification send failure".into()));
+            }
+            Some(PlanAction::Disable(comm_state)) => {
+                self.frames.lock().unwrap().push(apdu);
+                comm_state.store(2, Ordering::Release);
+            }
+            None => self.frames.lock().unwrap().push(apdu),
+        }
         Ok(())
     }
 }
@@ -111,6 +172,7 @@ pub(super) struct Harness {
     pub(super) after_ack: Arc<StdMutex<Option<ClockFrame>>>,
     pub(super) after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     pub(super) fail_notifications: Arc<AtomicBool>,
+    plan: Plan,
     pub(super) invoke_id: u8,
     /// Max-APDU-length-accepted the subscriber advertises in its requests.
     pub(super) request_max_apdu: u16,
@@ -152,12 +214,14 @@ impl Harness {
         let after_ack = Arc::new(StdMutex::new(None));
         let after_broadcast = Arc::new(StdMutex::new(None));
         let fail_notifications = Arc::new(AtomicBool::new(false));
+        let plan: Plan = Arc::default();
         let link = ClockLink {
             frames: Arc::clone(&frames),
             clock: clock.clone(),
             after_ack: Arc::clone(&after_ack),
             after_broadcast: Arc::clone(&after_broadcast),
             fail_notifications: Arc::clone(&fail_notifications),
+            plan: Arc::clone(&plan),
         };
         let transport = TestTransport::builder()
             .local_mac(&[10, 0, 0, 2, 0xBA, 0xC0])
@@ -179,6 +243,7 @@ impl Harness {
             after_ack,
             after_broadcast,
             fail_notifications,
+            plan,
             invoke_id: 0,
             request_max_apdu: 1476,
             pv_increment: 0.5,
@@ -189,6 +254,32 @@ impl Harness {
 
     pub(super) fn set_clock(&self, second: u8) {
         *self.clock.0.lock().unwrap() = at(second);
+    }
+
+    fn plan(&self, after: usize, action: PlanAction) {
+        *self.plan.lock().unwrap() = Some(NotificationPlan { after, action });
+    }
+
+    /// Hold the COV-multiple notification after `after` more in the
+    /// transport until a permit is added to the returned semaphore.
+    pub(super) fn hold_notification(&self, after: usize) -> Arc<tokio::sync::Semaphore> {
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        self.plan(after, PlanAction::Hold(Arc::clone(&release)));
+        release
+    }
+
+    /// Fail the send of the COV-multiple notification after `after` more.
+    pub(super) fn fail_notification(&self, after: usize) {
+        self.plan(after, PlanAction::Fail);
+    }
+
+    /// Disable initiation right after sending the COV-multiple notification
+    /// after `after` more, as a DeviceCommunicationControl would.
+    pub(super) fn disable_after_notification(&self, after: usize) {
+        self.plan(
+            after,
+            PlanAction::Disable(Arc::clone(&self.server.comm_state)),
+        );
     }
 
     /// Deliver a confirmed request whose response goes out through the
@@ -296,7 +387,9 @@ impl Harness {
                                 property_identifier: property,
                                 property_array_index: None,
                             },
-                            cov_increment: (property == PV).then_some(self.pv_increment),
+                            cov_increment: (property == PV
+                                && object.object_type() == ObjectType::ANALOG_VALUE)
+                                .then_some(self.pv_increment),
                             timestamped,
                         })
                         .collect(),

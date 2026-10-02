@@ -26,8 +26,9 @@ impl CovSubscriptionTable {
     /// Atomically accept final unique Multiple references and refresh their exact context.
     /// All identities/options are validated before quota/generation reservation or refresh.
     /// The request's expiry, maximum notification delay and the maximum APDU
-    /// its subscriber advertised (`None` when unknown) become the whole
-    /// context's (last write wins). The delay bounds how long the context's
+    /// its subscriber advertised become the whole context's (last write wins;
+    /// a `None` maximum APDU, unknown, keeps the one advertised before). The
+    /// delay bounds how long the context's
     /// timestamped changes may stay queued after a notification failed or was
     /// held back; notifications fit the smaller of the subscriber's maximum
     /// APDU and the local one.
@@ -81,6 +82,14 @@ impl CovSubscriptionTable {
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
         let (flight, replaced) = self.context_flight(context, route, !subscriptions.is_empty());
+        // A request whose header is unknown (the raw-data handler) keeps the
+        // maximum APDU the context's subscriber advertised before.
+        let subscriber_max_apdu = subscriber_max_apdu.or_else(|| {
+            self.subs
+                .values()
+                .find(|entry| entry.key.multiple_context() == Some(context))
+                .and_then(|entry| entry.subscriber_max_apdu)
+        });
         let mut previously_indefinite = 0;
         for entry in self.subs.values_mut() {
             if entry.key.multiple_context() == Some(context) {
