@@ -135,7 +135,7 @@
    "id": "BACNET-12-SCHEDULE-EVALUATION",
    "standard_anchor": "Clause 12.24.4 Present_Value, 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule, 12.24.8 Exception_Schedule and 12.24.9 Schedule_Default; Clause 21 BACnetSpecialEvent and BACnetTimeValue; Clause 12 note on unspecified dates",
    "priority": "P1",
-   "requirement_summary": "Within Effective_Period (both ends included, an unspecified end open), Present_Value is the current value of the best-priority Exception_Schedule element in effect today whose current value is not NULL (priority 1 best, the lower array index breaking a tie); an element is in effect when its inline calendar entry matches today or the Calendar it references is TRUE today, resolved once per pass through the database. Failing that, today's Weekly_Schedule element if its current value is not NULL; failing that, Schedule_Default, which may be NULL. A list's current value is that of its latest time-value at or before the current time (seconds and hundredths included, entry order irrelevant), and none before the first. Outside Effective_Period nothing is calculated or written and Present_Value keeps its last value. Entering the period, the first pass after start-up included, writes the value to the references even when unchanged; afterwards only a change is written. Present_Value is calculated even without references, and Out_Of_Service suspends it. Time-values and Schedule_Default hold primitive datatypes only. The server evaluates every 60 seconds from one Device clock frame.",
+   "requirement_summary": "Within Effective_Period (both ends included, an unspecified end open), Present_Value is the current value of the best-priority Exception_Schedule element in effect today whose current value is not NULL (priority 1 best, the lower array index breaking a tie); an element is in effect when its inline calendar entry matches today or the Calendar it references is TRUE today, resolved once per pass through the database. Failing that, today's Weekly_Schedule element if its current value is not NULL; failing that, Schedule_Default, which may be NULL. A list's current value is that of its latest time-value at or before the current time (seconds and hundredths included, entry order irrelevant), and none before the first. Outside Effective_Period nothing is calculated or written and Present_Value keeps its last value. Entering the period, the first pass after start-up included, writes the value to the references even when unchanged; afterwards only a change is written. Present_Value is calculated even without references, and Out_Of_Service suspends it. Time-values and Schedule_Default hold primitive datatypes only. The server evaluates every 60 seconds from one Device clock frame, and evaluates a Schedule at once after a write to it commits.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/schedule/evaluation.rs",
@@ -174,7 +174,79 @@
     "CHANGELOG.md Unreleased Fixed entry for #1029 and #1028",
     "docs/rust-api.md#schedule--notification-5 Schedule & Notification"
    ],
-   "notes": "Refs #1028. Before, evaluate applied every exception whatever its period, ignored Calendar references and Effective_Period, treated a NULL time-value as a value, and returned an Octet String of the raw time-value bytes, which commandable targets refused. Local choices: the weekday used for Weekly_Schedule and matching is computed from the local date, so an inconsistent weekday octet in the clock cannot split the two; a Calendar reference to a missing object or a non-Calendar is never in effect; the setters refuse non-specific or repeated times (DUPLICATE_ENTRY, as 12.24.7 and 12.24.8 ask of written days), non-primitive values and out-of-range priorities and entries. Not covered: network writes of Weekly_Schedule, Exception_Schedule and Effective_Period (read-only); Present_Value writes while Out_Of_Service and their write-through to the references (12.24.14); the CONFIGURATION_ERROR consistency evaluation of 12.24.13; remote references; and evaluation finer than the 60-second pass (a change takes effect at the next pass, not exactly at its time)."
+   "notes": "Refs #1028. Before, evaluate applied every exception whatever its period, ignored Calendar references and Effective_Period, treated a NULL time-value as a value, and returned an Octet String of the raw time-value bytes, which commandable targets refused. Local choices: the weekday used for Weekly_Schedule and matching is computed from the local date, so an inconsistent weekday octet in the clock cannot split the two; a Calendar reference to a missing object or a non-Calendar is never in effect; the setters refuse non-specific or repeated times (DUPLICATE_ENTRY, as 12.24.7 and 12.24.8 ask of written days), non-primitive values and out-of-range priorities and entries. Network writes of Weekly_Schedule, Exception_Schedule and Effective_Period, with the immediate evaluation after them, are BACNET-12-SCHEDULE-WRITES (#1057), and the CONFIGURATION_ERROR evaluation of 12.24.13 is BACNET-12-SCHEDULE-RELIABILITY (#1056). Not covered: Present_Value writes while Out_Of_Service and their write-through to the references (12.24.14); remote references; and evaluation finer than the 60-second pass (a scheduled time takes effect at the next pass, not exactly at its time)."
+  },
+  {
+   "id": "BACNET-12-SCHEDULE-WRITES",
+   "standard_anchor": "Clause 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule and 12.24.8 Exception_Schedule (printed310-311/PDF312-313), recalculation in 12.24.4 (printed309/PDF311); Clauses 15.9.1.3 and 15.10; Clause 21 BACnetDailySchedule, BACnetSpecialEvent and BACnetDateRange",
+   "priority": "P1",
+   "requirement_summary": "WriteProperty, WritePropertyMultiple and write_local accept Weekly_Schedule, Exception_Schedule and Effective_Period whole, and one element of either array by index. The value is decoded with the shared constructed codecs and checked by the functions the local setters use: a non-specific time is VALUE_OUT_OF_RANGE, a time repeated within one list DUPLICATE_ENTRY, an element of another datatype INVALID_DATA_TYPE, a malformed element INVALID_DATA_ENCODING, and a refusal leaves the property unchanged. Weekly_Schedule stays seven elements (a whole write of another count is VALUE_OUT_OF_RANGE, index 0 WRITE_ACCESS_DENIED); writing Exception_Schedule index 0 resizes it, appended elements being special events without time-values, up to 1,024 events (NO_SPACE_TO_WRITE_PROPERTY). Once a write to a Schedule commits, the server runs that Schedule's evaluation at once under the same database guard, through the tick's code, and fans COV out for the targets it writes.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/schedule/writes.rs",
+    "crates/bacnet-objects/src/schedule/evaluation.rs",
+    "crates/bacnet-objects/src/schedule/mod.rs::ScheduleObject",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/bacnet-server/src/schedule.rs",
+    "crates/bacnet-server/src/server/requests/mutations.rs",
+    "crates/bacnet-server/src/server/local_writes.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/schedule/write_tests.rs::weekly_schedule_whole_write_takes_the_wire_bytes_and_the_read_shape",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::weekly_schedule_indexed_write_replaces_one_day",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::exception_schedule_whole_write_replaces_the_array",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::exception_schedule_indexed_write_replaces_one_event",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::exception_schedule_index_zero_resizes_with_empty_events",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::effective_period_write_takes_two_application_dates",
+    "crates/bacnet-objects/src/schedule/metadata.rs::tests::property_metadata_schedule_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/pics/property_metadata_tests/schedule.rs::pics_schedule_property_metadata_is_exact",
+    "crates/bacnet-server/src/server/schedule_write_tests.rs::write_property_of_a_weekly_day_commands_the_target_at_once",
+    "crates/bacnet-server/src/server/schedule_write_tests.rs::write_property_multiple_of_exceptions_and_period_commands_the_target_at_once",
+    "crates/bacnet-server/src/server/schedule_write_tests.rs::write_local_of_a_weekly_day_commands_the_target_at_once"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/schedule/write_tests.rs::weekly_schedule_refused_writes_leave_it_unchanged",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::exception_schedule_refused_writes_leave_it_unchanged",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::effective_period_refused_writes_leave_it_unchanged",
+    "crates/bacnet-objects/src/schedule/write_tests.rs::add_exception_refuses_an_event_past_the_cap",
+    "crates/bacnet-objects/src/schedule/metadata.rs::tests::property_metadata_schedule_stays_stable_across_reliability_simulation",
+    "crates/bacnet-server/src/server/schedule_write_tests.rs::a_refused_write_changes_neither_the_schedule_nor_the_target"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1057 and #1056",
+    "docs/rust-api.md#schedule--notification-5 Schedule & Notification",
+    "docs/architecture.md#server-engine Schedule tick row"
+   ],
+   "notes": "Refs #1057. Before, all three properties answered WRITE_ACCESS_DENIED. The server hands the three properties to the object as raw bytes (index 0 of the arrays stays an Unsigned), and the object also takes the List of ApplicationData a read returns, so a read value writes back unchanged. Local choices: the INVALID_DATA_TYPE / INVALID_DATA_ENCODING split follows the Date_List precedent, keyed on the element's first tag; an event priority outside 1 to 16 is INVALID_DATA_ENCODING over the network because the shared codec refuses it while decoding, where add_exception answers VALUE_OUT_OF_RANGE; an appended Exception_Schedule element has a wholly unspecified date and priority 16, which never supplies a value; the 1,024-event cap matches Date_List and now applies to add_exception too; any committed write to a Schedule, not only to these properties, triggers the immediate evaluation, which writes only a changed value or on entering Effective_Period. DATATYPE_NOT_SUPPORTED is never returned: every primitive datatype is accepted and a mixed configuration is reported through Reliability (BACNET-12-SCHEDULE-RELIABILITY), so a client can move a Schedule to another datatype one property at a time. Not covered: Present_Value writes while Out_Of_Service (#1055), network writes of List_Of_Object_Property_References and Priority_For_Writing, and remote references."
+  },
+  {
+   "id": "BACNET-12-SCHEDULE-RELIABILITY",
+   "standard_anchor": "Clause 12.24.13 Reliability, 12.24.12 Status_Flags and 12.24.14 Out_Of_Service (printed311-312/PDF313-314); output rule in 12.24.4 (printed309/PDF311)",
+   "priority": "P1",
+   "requirement_summary": "Reliability is CONFIGURATION_ERROR while the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default are not all of one datatype, and NO_FAULT_DETECTED again once they are; Status_Flags FAULT follows it. The check runs on every change to those properties, from the local setters or a network write, on the return to service, and in the fault detector's pass. The object clears only a fault it raised: a Reliability applied through set_reliability_internal, or simulated while Out_Of_Service is TRUE, is left alone. A misconfigured Schedule keeps evaluating and writing its references.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/schedule/reliability.rs",
+    "crates/bacnet-objects/src/schedule/mod.rs::ScheduleObject",
+    "crates/bacnet-server/src/fault_detection.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::mixed_datatypes_from_the_setters_are_a_configuration_error",
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::network_writes_re_evaluate_reliability",
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::a_misconfigured_schedule_still_writes_its_references"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::nulls_and_an_empty_schedule_never_disagree",
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::a_reliability_applied_by_the_application_is_left_alone",
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::out_of_service_keeps_the_simulated_reliability_until_return"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1057 and #1056",
+    "docs/rust-api.md#schedule--notification-5 Schedule & Notification"
+   ],
+   "notes": "Refs #1056. Before, nothing evaluated a Schedule's Reliability. Datatypes compare by PropertyValue variant, so Real, Unsigned and Enumerated differ. Writes continue under CONFIGURATION_ERROR because 12.24.4 sends every change to the references and keeps going past a failing member, while 12.24.13 only reports the condition; the multi-state objects treat their CONFIGURATION_ERROR as report-only too. Not covered: the second condition of 12.24.13, that every referenced property accept the datatype. Checking it needs the target objects in the database, so it waits on a design decision about where that check lives and how a target's accepted datatype is known."
   },
   {
    "id": "BACNET-12-AUDIT-REPORTER-DELAY",
@@ -3528,7 +3600,7 @@
     "CHANGELOG.md Unreleased Fixed entry for #996",
     "CHANGELOG.md Unreleased Fixed entry for #1029 and #1028"
    ],
-   "notes": "Split child of BACNET-21-FORMAL-APDUS (#996). Breaking on the wire: Date_List entries went out as an application Date or Octet String, Exception_Schedule dropped each event's period and sent the priority as an application Unsigned, Weekly_Schedule days were lists of Time and Octet String pairs, and Effective_Period was an eight-octet Octet String, NULL until set (it now defaults to the range with both dates unspecified). The codecs moved from bacnet-services::schedule, which is removed, to bacnet-encoding::constructed, and the raw eight-octet BACnetDateRange::encode/decode are removed. #1029 added the value checks: a date-range end may leave its weekday octet unspecified or inconsistent (Clause 20.2.12 makes the weekday a local matter), and a reversed range is accepted and matches no day. RemoveListElement has no VALUE_OUT_OF_RANGE in Clause 15.2.1.3.1; since no stored entry is out of range, such an element is absent and the request fails LIST_ELEMENT_NOT_FOUND at its position. #1028 made time-values typed. Present_Value evaluation is BACNET-12-CALENDAR-PROPERTY-SET and BACNET-12-SCHEDULE-EVALUATION. Not covered: network writes of the Schedule properties. The shared list-service element rules (#1027), under which a present entry is left on AddListElement and an absent one refuses RemoveListElement, are in BACNET-15-LIST-ELEMENT-SEMANTICS."
+   "notes": "Split child of BACNET-21-FORMAL-APDUS (#996). Breaking on the wire: Date_List entries went out as an application Date or Octet String, Exception_Schedule dropped each event's period and sent the priority as an application Unsigned, Weekly_Schedule days were lists of Time and Octet String pairs, and Effective_Period was an eight-octet Octet String, NULL until set (it now defaults to the range with both dates unspecified). The codecs moved from bacnet-services::schedule, which is removed, to bacnet-encoding::constructed, and the raw eight-octet BACnetDateRange::encode/decode are removed. #1029 added the value checks: a date-range end may leave its weekday octet unspecified or inconsistent (Clause 20.2.12 makes the weekday a local matter), and a reversed range is accepted and matches no day. RemoveListElement has no VALUE_OUT_OF_RANGE in Clause 15.2.1.3.1; since no stored entry is out of range, such an element is absent and the request fails LIST_ELEMENT_NOT_FOUND at its position. #1028 made time-values typed. Present_Value evaluation is BACNET-12-CALENDAR-PROPERTY-SET and BACNET-12-SCHEDULE-EVALUATION. Network writes of the Schedule properties decode with these codecs (BACNET-12-SCHEDULE-WRITES, #1057). The shared list-service element rules (#1027), under which a present entry is left on AddListElement and an absent one refuses RemoveListElement, are in BACNET-15-LIST-ELEMENT-SEMANTICS."
   },
   {
    "id": "BACNET-A-PICS",

@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 81 |
+| Priority | P1 | 83 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 53 |
+| Status | supported-with-clause-evidence | 55 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -38,6 +38,8 @@
 | `BACNET-12-CONFIGURED-BIP-PORT` | Clause12.56/Table12-71 application footnote25; printed551-557/PDF553-559 configuration activation, MAC/APDU/DNS; official2024-04-29 errata item23 (Link_Speed optional) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-SCHEDULE-LOCAL-REFERENCES` | Clause 12.24 Table 12-28 (printed308/PDF310), output continuation (printed309/PDF311), reference property (printed311/PDF313); Clause21 BACnetDeviceObjectPropertyReference (printed891/PDF893) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-SCHEDULE-EVALUATION` | Clause 12.24.4 Present_Value, 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule, 12.24.8 Exception_Schedule and 12.24.9 Schedule_Default; Clause 21 BACnetSpecialEvent and BACnetTimeValue; Clause 12 note on unspecified dates | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-12-SCHEDULE-WRITES` | Clause 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule and 12.24.8 Exception_Schedule (printed310-311/PDF312-313), recalculation in 12.24.4 (printed309/PDF311); Clauses 15.9.1.3 and 15.10; Clause 21 BACnetDailySchedule, BACnetSpecialEvent and BACnetDateRange | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-12-SCHEDULE-RELIABILITY` | Clause 12.24.13 Reliability, 12.24.12 Status_Flags and 12.24.14 Out_Of_Service (printed311-312/PDF313-314); output rule in 12.24.4 (printed309/PDF311) | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-AUDIT-REPORTER-DELAY` | Clause 12.63 / Table 12-82, printed page 619 / PDF page 621; Maximum_Send_Delay and Send_Now printed pages 621-622 / PDF pages 623-624; Clause 19.6.6 and Table 19-5 (partial-profile loss filtering remains unresolved) | P1 | in-progress | 5 |
 | `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
 | `BACNET-LOCAL-MUTATION-POLICY` | Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim | P1 | in-progress | 3 |

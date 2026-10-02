@@ -1736,6 +1736,21 @@ does not prevent subsequent target writes. `set_weekly_schedule`,
 non-primitive values, non-specific or repeated times, out-of-range priorities
 and calendar entries.
 
+Weekly_Schedule, Exception_Schedule and Effective_Period are network-writable
+(#1057): whole, or one element of either array by index. A write is decoded
+with the shared codecs in `bacnet_encoding::constructed` and refused, unchanged,
+wherever the setters would refuse it, with the same errors (DUPLICATE_ENTRY for
+a time given twice in one list). Writing Exception_Schedule's index 0 resizes
+it, appending empty events (a wholly unspecified date, priority 16); it holds at
+most 1,024 events, from writes or `add_exception` (RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY). After a WriteProperty, WritePropertyMultiple or
+`write_local` commits to a Schedule, the server runs that Schedule's
+evaluation at once, as the tick would, and fans COV out for the targets it
+writes. Reliability is CONFIGURATION_ERROR, with FAULT in Status_Flags, while
+the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
+are not all of one datatype (#1056); the Schedule still writes its references.
+Whether each referenced property accepts that datatype is not checked.
+
 `CalendarObject` evaluates Present_Value from the bound Device clock's local
 date on every read (#1029): TRUE when any Date_List entry matches, FALSE
 without a clock. `set_present_value` is gone; `is_active_on(day)` answers for

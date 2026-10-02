@@ -184,7 +184,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
         );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
-        let (exact_changes, staging_plans) = {
+        let (exact_changes, staging_plans, schedule_cov) = {
             let mut db = self.db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
             if db.get(oid).is_none() {
@@ -315,7 +315,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             };
             capture.run(&db);
-            (changes, staging_plans)
+            let schedule_cov = crate::schedule::reevaluate_written(
+                &mut db,
+                std::slice::from_ref(oid),
+                &self.cov_table,
+            )
+            .await;
+            (changes, staging_plans, schedule_cov)
         };
 
         Self::fire_event_notifications_with_bindings(
@@ -348,6 +354,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         } else {
             Self::fire_cov_notifications(&self.local_cov_context(), oid).await;
         }
+        // Targets a written Schedule commanded on re-evaluation.
+        Self::fire_post_write_cov_notifications(
+            &self.local_cov_context(),
+            &schedule_cov.coarse,
+            &schedule_cov.life_safety,
+        )
+        .await;
         Self::execute_staging_plans(
             &self.local_event_delivery(),
             &self.local_cov_context(),

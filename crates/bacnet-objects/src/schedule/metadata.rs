@@ -20,9 +20,9 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SCHEDULE_DEFAULT, RequiredRead, None, Always),
-    PropertyMetadata::new(P::WEEKLY_SCHEDULE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::EXCEPTION_SCHEDULE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::EFFECTIVE_PERIOD, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::WEEKLY_SCHEDULE, Optional, None, Always),
+    PropertyMetadata::new(P::EXCEPTION_SCHEDULE, Optional, None, Always),
+    PropertyMetadata::new(P::EFFECTIVE_PERIOD, RequiredRead, None, Always),
     PropertyMetadata::new(
         P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
         RequiredRead,
@@ -168,7 +168,12 @@ mod tests {
             for row in &original {
                 let p = row.property_identifier;
                 let capability = match p {
-                    P::SCHEDULE_DEFAULT | P::OUT_OF_SERVICE | P::DESCRIPTION => Always,
+                    P::SCHEDULE_DEFAULT
+                    | P::WEEKLY_SCHEDULE
+                    | P::EXCEPTION_SCHEDULE
+                    | P::EFFECTIVE_PERIOD
+                    | P::OUT_OF_SERVICE
+                    | P::DESCRIPTION => Always,
                     P::RELIABILITY => WhenOutOfService,
                     _ => ReadOnly,
                 };
@@ -284,16 +289,26 @@ mod tests {
         object
             .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
             .unwrap();
-        for p in [P::WEEKLY_SCHEDULE, P::EXCEPTION_SCHEDULE] {
+        // Refused array writes while the client owns Reliability.
+        for (p, index, error) in [
+            (P::WEEKLY_SCHEDULE, 0, ErrorCode::WRITE_ACCESS_DENIED),
+            (P::WEEKLY_SCHEDULE, 1, ErrorCode::INVALID_DATA_ENCODING),
+            (P::WEEKLY_SCHEDULE, u32::MAX, ErrorCode::INVALID_ARRAY_INDEX),
+            (P::EXCEPTION_SCHEDULE, 0, ErrorCode::INVALID_DATA_TYPE),
+            (P::EXCEPTION_SCHEDULE, 1, ErrorCode::INVALID_ARRAY_INDEX),
+            (
+                P::EXCEPTION_SCHEDULE,
+                u32::MAX,
+                ErrorCode::INVALID_ARRAY_INDEX,
+            ),
+        ] {
             assert!(object.is_array_property(p));
-            for index in [0, 1, u32::MAX] {
-                assert_error(
-                    object
-                        .write_property(p, Some(index), PropertyValue::List(vec![]), None)
-                        .unwrap_err(),
-                    ErrorCode::WRITE_ACCESS_DENIED,
-                );
-            }
+            assert_error(
+                object
+                    .write_property(p, Some(index), PropertyValue::List(vec![]), None)
+                    .unwrap_err(),
+                error,
+            );
         }
         assert_eq!(object.property_metadata().as_ref(), original);
         object
