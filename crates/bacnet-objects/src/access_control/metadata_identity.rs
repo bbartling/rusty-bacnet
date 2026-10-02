@@ -24,8 +24,9 @@ use crate::property_metadata::{
 // Members R, rights Accompaniment O, CDI event/intrinsic rows). Shared
 // conventions match metadata_topology.rs (Slice A): OI/ON/OT
 // RequiredRead/ReadOnly with the explicit Object_Name denial, Description
-// Optional/Always, table-absent-but-served Out_Of_Service
-// RequiredRead/Always, Status_Flags/Reliability RequiredRead/ReadOnly
+// Optional/Always, Out_Of_Service RequiredRead/Always on Credential Data
+// Input only (Tables 12-38, 12-39 and 12-40 have none; #1064 removed the rows
+// the 0.1.0 import carried), Status_Flags/Reliability RequiredRead/ReadOnly
 // (table R on all four quartet tables), Always-never-WhenOutOfService
 // writability mirroring dispatch, presence None, not createable but
 // deleteable with no overrides, and Property_List as the only array-gated row.
@@ -34,9 +35,9 @@ use crate::property_metadata::{
 // Credential_Status/Assigned_Access_Rights/Authentication_Factors carry the
 // table R code; the BACnetBinaryPV status arm makes CREDENTIAL_STATUS
 // RequiredRead/Always while the count/list stay RequiredRead/ReadOnly.
-// User Present_Value and Assigned_Access_Rights are implementation-extra
-// rows (Table 12-38 has neither); the PV arm makes it Optional/Always while
-// the count stays Optional/ReadOnly. User_Type/Credentials carry the table R code; the
+// Table 12-38 has neither Present_Value nor Assigned_Access_Rights, so the
+// user serves neither (#1064 removed the implementation-extra rows the 0.1.0
+// import carried). User_Type/Credentials carry the table R code; the
 // User_Type arm makes it RequiredRead/Always while Credentials stays
 // RequiredRead/ReadOnly. Rights Global_Identifier carries the table W code
 // with the routed Unsigned arm, so RequiredWrite/Always; the ±rules rows
@@ -57,7 +58,6 @@ const ACCESS_CREDENTIAL_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::ASSIGNED_ACCESS_RIGHTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::AUTHENTICATION_FACTORS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -67,12 +67,9 @@ const ACCESS_USER_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, Optional, None, Always),
     PropertyMetadata::new(P::USER_TYPE, RequiredRead, None, Always),
     PropertyMetadata::new(P::CREDENTIALS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::ASSIGNED_ACCESS_RIGHTS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -86,7 +83,6 @@ const ACCESS_RIGHTS_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::POSITIVE_ACCESS_RULES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::NEGATIVE_ACCESS_RULES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -223,7 +219,6 @@ mod tests {
             P::ASSIGNED_ACCESS_RIGHTS,
             P::AUTHENTICATION_FACTORS,
             P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
         ];
         let required = [
@@ -234,17 +229,19 @@ mod tests {
             P::ASSIGNED_ACCESS_RIGHTS,
             P::AUTHENTICATION_FACTORS,
             P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
-        // Table 12-40 has no Present_Value row (#979).
-        assert_error(
-            object.read_property(P::PRESENT_VALUE, None).unwrap_err(),
-            ErrorCode::UNKNOWN_PROPERTY,
-        );
+        // Table 12-40 has no Present_Value row (#979) and no Out_Of_Service
+        // row (#1064).
+        for property in [P::PRESENT_VALUE, P::OUT_OF_SERVICE] {
+            assert_error(
+                object.read_property(property, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
         assert_eq!(
             object.read_property(P::CREDENTIAL_STATUS, None).unwrap(),
             PropertyValue::Enumerated(0)
@@ -273,12 +270,9 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::USER_TYPE,
             P::CREDENTIALS,
-            P::ASSIGNED_ACCESS_RIGHTS,
             P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
         ];
         let required = [
@@ -288,16 +282,22 @@ mod tests {
             P::USER_TYPE,
             P::CREDENTIALS,
             P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(0)
-        );
+        // Table 12-38 has none of these rows (#1064).
+        for property in [
+            P::PRESENT_VALUE,
+            P::ASSIGNED_ACCESS_RIGHTS,
+            P::OUT_OF_SERVICE,
+        ] {
+            assert_error(
+                object.read_property(property, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
         assert_eq!(
             object.read_property(P::USER_TYPE, None).unwrap(),
             PropertyValue::Enumerated(0)
@@ -306,14 +306,7 @@ mod tests {
             object.read_property(P::CREDENTIALS, None).unwrap(),
             PropertyValue::List(vec![])
         );
-        assert_eq!(
-            object
-                .read_property(P::ASSIGNED_ACCESS_RIGHTS, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
         assert!(!object.is_array_property(P::CREDENTIALS));
-        assert!(!object.is_array_property(P::ASSIGNED_ACCESS_RIGHTS));
     }
 
     #[test]
@@ -328,7 +321,6 @@ mod tests {
             P::POSITIVE_ACCESS_RULES,
             P::NEGATIVE_ACCESS_RULES,
             P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
         ];
         let required = [
@@ -339,12 +331,16 @@ mod tests {
             P::POSITIVE_ACCESS_RULES,
             P::NEGATIVE_ACCESS_RULES,
             P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
+        // Table 12-39 has no Out_Of_Service row (#1064).
+        assert_error(
+            object.read_property(P::OUT_OF_SERVICE, None).unwrap_err(),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
         assert_eq!(
             object.read_property(P::GLOBAL_IDENTIFIER, None).unwrap(),
             PropertyValue::Unsigned(0)
@@ -428,20 +424,15 @@ mod tests {
         let cases: [WriteCase; 4] = [
             (
                 || Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
-                &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::CREDENTIAL_STATUS],
+                &[P::DESCRIPTION, P::CREDENTIAL_STATUS],
             ),
             (
                 || Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
-                &[
-                    P::DESCRIPTION,
-                    P::OUT_OF_SERVICE,
-                    P::PRESENT_VALUE,
-                    P::USER_TYPE,
-                ],
+                &[P::DESCRIPTION, P::USER_TYPE],
             ),
             (
                 || Box::new(AccessRightsObject::new(1, "AR-1").unwrap()),
-                &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::GLOBAL_IDENTIFIER],
+                &[P::DESCRIPTION, P::GLOBAL_IDENTIFIER],
             ),
             (
                 || Box::new(CredentialDataInputObject::new(1, "CDI-1").unwrap()),
@@ -451,14 +442,18 @@ mod tests {
         for (make, writable) in cases {
             for out_of_service in [false, true] {
                 let mut object = make();
-                object
-                    .write_property(
-                        P::OUT_OF_SERVICE,
-                        None,
-                        PropertyValue::Boolean(out_of_service),
-                        None,
-                    )
-                    .unwrap();
+                // Of the four, only Credential Data Input has Out_Of_Service
+                // (Table 12-43); the other tables have none (#1064).
+                if object.object_identifier().object_type() == ObjectType::CREDENTIAL_DATA_INPUT {
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                }
                 let original = object.property_metadata().into_owned();
                 for row in &original {
                     let p = row.property_identifier;
@@ -506,14 +501,6 @@ mod tests {
             let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
             credential
                 .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
-            credential
-                .write_property(
                     P::CREDENTIAL_STATUS,
                     None,
                     PropertyValue::Enumerated(1),
@@ -529,7 +516,6 @@ mod tests {
             for (p, value) in [
                 (P::CREDENTIAL_STATUS, PropertyValue::Real(1.0)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     credential.write_property(p, None, value, None).unwrap_err(),
@@ -550,42 +536,22 @@ mod tests {
                 assert!(!credential.is_writable_property(p));
             }
             let mut user = AccessUserObject::new(1, "USER-1").unwrap();
-            user.write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(out_of_service),
-                None,
-            )
-            .unwrap();
-            user.write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-                .unwrap();
             user.write_property(P::USER_TYPE, None, PropertyValue::Enumerated(2), None)
                 .unwrap();
-            assert_eq!(
-                user.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(1)
-            );
             assert_eq!(
                 user.read_property(P::USER_TYPE, None).unwrap(),
                 PropertyValue::Enumerated(2)
             );
             for (p, value) in [
-                (P::PRESENT_VALUE, PropertyValue::Real(1.0)),
                 (P::USER_TYPE, PropertyValue::Real(2.0)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     user.write_property(p, None, value, None).unwrap_err(),
                     ErrorCode::INVALID_DATA_TYPE,
                 );
             }
-            for p in [
-                P::CREDENTIALS,
-                P::ASSIGNED_ACCESS_RIGHTS,
-                P::STATUS_FLAGS,
-                P::RELIABILITY,
-            ] {
+            for p in [P::CREDENTIALS, P::STATUS_FLAGS, P::RELIABILITY] {
                 let value = user.read_property(p, None).unwrap();
                 assert_error(
                     user.write_property(p, None, value, None).unwrap_err(),
@@ -594,14 +560,6 @@ mod tests {
                 assert!(!user.is_writable_property(p));
             }
             let mut rights = AccessRightsObject::new(1, "AR-1").unwrap();
-            rights
-                .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
             rights
                 .write_property(
                     P::GLOBAL_IDENTIFIER,
@@ -617,7 +575,6 @@ mod tests {
             for (p, value) in [
                 (P::GLOBAL_IDENTIFIER, PropertyValue::Enumerated(77)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     rights.write_property(p, None, value, None).unwrap_err(),
@@ -693,21 +650,29 @@ mod tests {
 
         // Global_Identifier is the Table 12-40 W row with no read arm;
         // Activation_Time is the Table 12-40 R row with no read arm;
-        // Present_Value is no Table 12-40 row at all (#979).
+        // Present_Value (#979) and Out_Of_Service (#1064) are no Table 12-40
+        // rows at all.
         let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
         assert_unserved(&mut credential, P::GLOBAL_IDENTIFIER);
         assert_unserved(&mut credential, P::ACTIVATION_TIME);
         assert_unserved(&mut credential, P::PRESENT_VALUE);
+        assert_unserved(&mut credential, P::OUT_OF_SERVICE);
         // Global_Identifier is the Table 12-38 W row with no read arm;
-        // Members is the Table 12-38 O row with no read arm.
+        // Members is the Table 12-38 O row with no read arm; Present_Value,
+        // Assigned_Access_Rights and Out_Of_Service are no Table 12-38 rows
+        // (#1064).
         let mut user = AccessUserObject::new(1, "USER-1").unwrap();
         assert_unserved(&mut user, P::GLOBAL_IDENTIFIER);
         assert_unserved(&mut user, P::MEMBERS);
+        assert_unserved(&mut user, P::PRESENT_VALUE);
+        assert_unserved(&mut user, P::ASSIGNED_ACCESS_RIGHTS);
+        assert_unserved(&mut user, P::OUT_OF_SERVICE);
         // Accompaniment and Reliability_Evaluation_Inhibit are Table 12-39 O
-        // rows with no read arm.
+        // rows with no read arm; Out_Of_Service is no Table 12-39 row (#1064).
         let mut rights = AccessRightsObject::new(1, "AR-1").unwrap();
         assert_unserved(&mut rights, P::ACCOMPANIMENT);
         assert_unserved(&mut rights, P::RELIABILITY_EVALUATION_INHIBIT);
+        assert_unserved(&mut rights, P::OUT_OF_SERVICE);
         // Event_State and Event_Detection_Enable are Table 12-43 O rows with
         // no read arm (no intrinsic reporting is modeled).
         let mut cdi = CredentialDataInputObject::new(1, "CDI-1").unwrap();

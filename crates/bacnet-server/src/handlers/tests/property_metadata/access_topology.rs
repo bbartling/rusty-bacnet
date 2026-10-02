@@ -8,7 +8,7 @@ use PropertyIdentifier as P;
 
 fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
     let mut door = AccessDoorObject::new(7, "DOOR-7").unwrap();
-    let mut point = AccessPointObject::new(7, "AP-7").unwrap();
+    let point = AccessPointObject::new(7, "AP-7").unwrap();
     let mut zone = AccessZoneObject::new(7, "ZONE-7").unwrap();
     if configured {
         door.write_property(
@@ -25,11 +25,6 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
             None,
         )
         .unwrap();
-        point
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(2), None)
-            .unwrap();
-        zone.write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-            .unwrap();
         zone.write_property(
             P::GLOBAL_IDENTIFIER,
             None,
@@ -86,7 +81,6 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::ACCESS_EVENT,
             P::ACCESS_EVENT_TAG,
             P::ACCESS_EVENT_TIME,
@@ -101,10 +95,8 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::GLOBAL_IDENTIFIER,
             P::OCCUPANCY_COUNT,
-            P::ACCESS_DOORS,
             P::ENTRY_POINTS,
             P::EXIT_POINTS,
             P::STATUS_FLAGS,
@@ -121,13 +113,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::DOOR_ALARM_STATE,
             P::DOOR_MEMBERS,
         ],
-        ObjectType::ACCESS_POINT => vec![P::DESCRIPTION, P::PRESENT_VALUE],
-        _ => vec![
-            P::DESCRIPTION,
-            P::PRESENT_VALUE,
-            P::OCCUPANCY_COUNT,
-            P::ACCESS_DOORS,
-        ],
+        // Tables 12-36 and 12-37 have no Present_Value, and Table 12-37 no
+        // Access_Doors (#1064).
+        ObjectType::ACCESS_POINT => vec![P::DESCRIPTION],
+        _ => vec![P::DESCRIPTION, P::OCCUPANCY_COUNT],
     };
     let required: Vec<_> = all
         .iter()

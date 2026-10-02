@@ -38,14 +38,6 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 )
                 .unwrap();
         }
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                bacnet_types::primitives::PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
@@ -117,25 +109,15 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
+            // Table 12-32 has no Out_Of_Service (#1064), so the flag stays
+            // clear.
+            (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
@@ -158,10 +140,10 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x91, 218, 0x91, 214, 0x91, 212, 0x91, 219, 0x91, 142,
-                    0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36,
+                    0x91, 111, 0x91, 103, 0x91, 36,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 218])),
@@ -170,12 +152,11 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 219])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 142])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 103])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 36])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 36])),
             (
                 P::PROPERTY_LIST,
-                Some(12),
+                Some(11),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

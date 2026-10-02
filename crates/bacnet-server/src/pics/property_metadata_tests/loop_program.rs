@@ -51,7 +51,7 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
         (P::OBJECT_TYPE, false, false),
         (P::STATUS_FLAGS, true, false),
         (P::EVENT_STATE, true, false),
-        (P::OUT_OF_SERVICE, true, true),
+        // Table 12-24 has no Out_Of_Service (#1064).
         (P::RELIABILITY, true, false),
         (P::NOTIFICATION_CLASS, false, true),
         (P::PRIORITY, false, false),
@@ -67,14 +67,16 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
         ];
         for mut object in objects {
             let kind = object.object_identifier().object_type();
-            object
-                .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
+            if kind != ObjectType::NOTIFICATION_CLASS {
+                object
+                    .write_property(
+                        P::OUT_OF_SERVICE,
+                        None,
+                        PropertyValue::Boolean(out_of_service),
+                        None,
+                    )
+                    .unwrap();
+            }
             let required = object.required_properties();
             let mut db = ObjectDatabase::new();
             db.add(object).unwrap();

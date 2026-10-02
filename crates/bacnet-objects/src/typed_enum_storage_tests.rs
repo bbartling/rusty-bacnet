@@ -5,9 +5,7 @@
 //! must not change what a read returns, which values a write accepts, or how
 //! a vendor-proprietary or not-yet-named value round-trips.
 
-use crate::access_control::{
-    AccessDoorObject, AccessPointObject, AccessUserObject, AccessZoneObject,
-};
+use crate::access_control::{AccessDoorObject, AccessPointObject, AccessUserObject};
 use crate::analog::AnalogInputObject;
 use crate::elevator::ElevatorGroupObject;
 use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
@@ -339,16 +337,11 @@ fn silence_operation_refuses_a_reserved_or_proprietary_silenced_state_and_keeps_
 
 #[test]
 fn access_and_elevator_enumerated_writes_store_any_value() {
+    // The Access Point, Access User and Access Zone Present_Value rows these
+    // pins once covered are gone: their tables define none (#1064).
     assert_unchecked_enumerated_round_trip(
-        &mut AccessPointObject::new(1, "AP-1").unwrap(),
-        PropertyIdentifier::PRESENT_VALUE,
-    );
-    let mut user = AccessUserObject::new(1, "AU-1").unwrap();
-    assert_unchecked_enumerated_round_trip(&mut user, PropertyIdentifier::PRESENT_VALUE);
-    assert_unchecked_enumerated_round_trip(&mut user, PropertyIdentifier::USER_TYPE);
-    assert_unchecked_enumerated_round_trip(
-        &mut AccessZoneObject::new(1, "AZ-1").unwrap(),
-        PropertyIdentifier::PRESENT_VALUE,
+        &mut AccessUserObject::new(1, "AU-1").unwrap(),
+        PropertyIdentifier::USER_TYPE,
     );
     assert_unchecked_enumerated_round_trip(
         &mut ElevatorGroupObject::new(1, "EG-1").unwrap(),
@@ -368,22 +361,13 @@ fn retyped_access_and_elevator_defaults_keep_their_wire_values() {
         assert_eq!(read(&door, property), PropertyValue::Enumerated(0));
     }
     let point = AccessPointObject::new(1, "AP-1").unwrap();
-    for property in [
-        PropertyIdentifier::PRESENT_VALUE,
-        PropertyIdentifier::ACCESS_EVENT,
-    ] {
-        assert_eq!(read(&point, property), PropertyValue::Enumerated(0));
-    }
-    let user = AccessUserObject::new(1, "AU-1").unwrap();
-    for property in [
-        PropertyIdentifier::PRESENT_VALUE,
-        PropertyIdentifier::USER_TYPE,
-    ] {
-        assert_eq!(read(&user, property), PropertyValue::Enumerated(0));
-    }
-    let zone = AccessZoneObject::new(1, "AZ-1").unwrap();
     assert_eq!(
-        read(&zone, PropertyIdentifier::PRESENT_VALUE),
+        read(&point, PropertyIdentifier::ACCESS_EVENT),
+        PropertyValue::Enumerated(0)
+    );
+    let user = AccessUserObject::new(1, "AU-1").unwrap();
+    assert_eq!(
+        read(&user, PropertyIdentifier::USER_TYPE),
         PropertyValue::Enumerated(0)
     );
     let group = ElevatorGroupObject::new(1, "EG-1").unwrap();

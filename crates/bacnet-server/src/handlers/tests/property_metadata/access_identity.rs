@@ -22,8 +22,6 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 4] {
                 None,
             )
             .unwrap();
-        user.write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-            .unwrap();
         user.write_property(P::USER_TYPE, None, PropertyValue::Enumerated(2), None)
             .unwrap();
         rights
@@ -53,14 +51,17 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 4] {
             )
             .unwrap();
         // Exercise the unconditional write route so large encodings persist.
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
+        // Only Credential Data Input has Out_Of_Service (Table 12-43).
+        if object.object_identifier().object_type() == ObjectType::CREDENTIAL_DATA_INPUT {
+            object
+                .write_property(
+                    P::OUT_OF_SERVICE,
+                    None,
+                    PropertyValue::Boolean(configured),
+                    None,
+                )
+                .unwrap();
+        }
     }
     objects
 }
@@ -85,12 +86,8 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::ASSIGNED_ACCESS_RIGHTS,
             P::AUTHENTICATION_FACTORS,
         ],
-        ObjectType::ACCESS_USER => &[
-            P::PRESENT_VALUE,
-            P::USER_TYPE,
-            P::CREDENTIALS,
-            P::ASSIGNED_ACCESS_RIGHTS,
-        ],
+        // Table 12-38 has no Present_Value or Assigned_Access_Rights (#1064).
+        ObjectType::ACCESS_USER => &[P::USER_TYPE, P::CREDENTIALS],
         ObjectType::ACCESS_RIGHTS => &[
             P::GLOBAL_IDENTIFIER,
             P::POSITIVE_ACCESS_RULES,
@@ -104,10 +101,15 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         ],
     };
     all.extend_from_slice(middle);
-    all.extend_from_slice(&[P::STATUS_FLAGS, P::OUT_OF_SERVICE, P::RELIABILITY]);
+    // Of the four tables, only Table 12-43 has Out_Of_Service (#1064).
+    if kind == ObjectType::CREDENTIAL_DATA_INPUT {
+        all.extend_from_slice(&[P::STATUS_FLAGS, P::OUT_OF_SERVICE, P::RELIABILITY]);
+    } else {
+        all.extend_from_slice(&[P::STATUS_FLAGS, P::RELIABILITY]);
+    }
     let optional: &[P] = match kind {
         ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION],
-        ObjectType::ACCESS_USER => &[P::DESCRIPTION, P::PRESENT_VALUE, P::ASSIGNED_ACCESS_RIGHTS],
+        ObjectType::ACCESS_USER => &[P::DESCRIPTION],
         ObjectType::ACCESS_RIGHTS => &[P::DESCRIPTION],
         _ => &[P::DESCRIPTION, P::SUPPORTED_FORMAT_CLASSES],
     };

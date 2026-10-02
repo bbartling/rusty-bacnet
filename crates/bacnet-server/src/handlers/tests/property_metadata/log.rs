@@ -60,12 +60,6 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
                     None,
                 )
                 .unwrap();
-            // Only Event Log carries Out_Of_Service (Tables 12-29/12-35, #985).
-            if object.object_identifier().object_type() == ObjectType::EVENT_LOG {
-                object
-                    .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
-                    .unwrap();
-            }
         }
     }
     objects
@@ -96,7 +90,8 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
         (P::RELIABILITY, true, false),
     ];
     if kind == ObjectType::EVENT_LOG {
-        rows.insert(13, (P::OUT_OF_SERVICE, true, true));
+        // Table 12-31 has no Log_Interval (#1064).
+        rows.retain(|row| row.0 != P::LOG_INTERVAL);
     }
     if kind != ObjectType::EVENT_LOG {
         rows.extend([

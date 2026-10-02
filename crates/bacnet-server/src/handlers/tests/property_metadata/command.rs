@@ -19,15 +19,6 @@ fn command_object(configured: bool) -> CommandObject {
             .unwrap();
         object.set_action(vec![vec![1, 2, 3], vec![4, 5]]);
     }
-    // Exercise the unconditional write routes so large encodings persist.
-    object
-        .write_property(
-            P::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(configured),
-            None,
-        )
-        .unwrap();
     object
 }
 
@@ -43,7 +34,6 @@ fn rpm_command_metadata_selectors_preserve_bytes_and_budgets() {
         P::ALL_WRITES_SUCCESSFUL,
         P::ACTION,
         P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
         P::RELIABILITY,
     ];
     let required = [
@@ -55,12 +45,8 @@ fn rpm_command_metadata_selectors_preserve_bytes_and_budgets() {
         P::ALL_WRITES_SUCCESSFUL,
         P::ACTION,
     ];
-    let optional = [
-        P::DESCRIPTION,
-        P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
-    ];
+    // Table 12-12 has no Out_Of_Service (#1064).
+    let optional = [P::DESCRIPTION, P::STATUS_FLAGS, P::RELIABILITY];
     for configured in [false, true] {
         let object = command_object(configured);
         let oid = object.object_identifier();

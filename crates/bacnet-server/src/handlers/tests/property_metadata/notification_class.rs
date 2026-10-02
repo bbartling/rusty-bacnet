@@ -15,7 +15,6 @@ fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {
         P::OBJECT_TYPE,
         P::STATUS_FLAGS,
         P::EVENT_STATE,
-        P::OUT_OF_SERVICE,
         P::RELIABILITY,
         P::NOTIFICATION_CLASS,
         P::PRIORITY,
@@ -31,11 +30,11 @@ fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {
         P::ACK_REQUIRED,
         P::RECIPIENT_LIST,
     ];
+    // Table 12-24 has no Out_Of_Service (#1064).
     let optional = [
         P::DESCRIPTION,
         P::STATUS_FLAGS,
         P::EVENT_STATE,
-        P::OUT_OF_SERVICE,
         P::RELIABILITY,
     ];
     for configured in [false, true] {
@@ -52,9 +51,6 @@ fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {
                     PropertyValue::Unsigned(99),
                     None,
                 )
-                .unwrap();
-            object
-                .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
                 .unwrap();
             object.add_destination(BACnetDestination {
                 valid_days: DaysOfWeek::all(),

@@ -80,9 +80,7 @@ pub(super) static EVENT_ENROLLMENT_PROPERTIES: &[PropertyMetadata] = &[
         None,
         ReadOnly,
     ),
-    // Out_Of_Service is an existing compatibility projection, not a Table
-    // 12-14 row. Retain it so metadata remains complete for the readable API.
-    PropertyMetadata::new(PropertyIdentifier::OUT_OF_SERVICE, Optional, None, Always),
+    // Table 12-14 has no Out_Of_Service, so there is no such row (#1064).
     PropertyMetadata::new(
         PropertyIdentifier::RELIABILITY,
         RequiredRead,

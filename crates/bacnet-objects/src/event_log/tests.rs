@@ -210,7 +210,6 @@ fn property_list_complete() {
     let el = EventLogObject::new(1, "EL-1", 100).unwrap();
     let props = el.property_list();
     assert!(props.contains(&PropertyIdentifier::LOG_ENABLE));
-    assert!(props.contains(&PropertyIdentifier::LOG_INTERVAL));
     assert!(props.contains(&PropertyIdentifier::STOP_WHEN_FULL));
     assert!(props.contains(&PropertyIdentifier::BUFFER_SIZE));
     assert!(props.contains(&PropertyIdentifier::LOG_BUFFER));
@@ -218,24 +217,49 @@ fn property_list_complete() {
     assert!(props.contains(&PropertyIdentifier::TOTAL_RECORD_COUNT));
     assert!(props.contains(&PropertyIdentifier::STATUS_FLAGS));
     assert!(props.contains(&PropertyIdentifier::EVENT_STATE));
-    assert!(props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
     assert!(props.contains(&PropertyIdentifier::RELIABILITY));
+    // Table 12-31 has neither of these rows (#1064).
+    assert!(!props.contains(&PropertyIdentifier::LOG_INTERVAL));
+    assert!(!props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
 }
 
+/// Table 12-31 defines neither Out_Of_Service nor Log_Interval (#1064, as
+/// #985 did for the Trend Logs): reads and writes find no property, and the
+/// OUT_OF_SERVICE status flag stays clear.
 #[test]
-fn write_log_interval() {
+fn event_log_has_no_out_of_service_or_log_interval() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    el.write_property(
-        PropertyIdentifier::LOG_INTERVAL,
-        None,
-        PropertyValue::Unsigned(60),
-        None,
-    )
-    .unwrap();
-    let val = el
-        .read_property(PropertyIdentifier::LOG_INTERVAL, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(60));
+    for (property, value) in [
+        (
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyValue::Boolean(true),
+        ),
+        (
+            PropertyIdentifier::LOG_INTERVAL,
+            PropertyValue::Unsigned(60),
+        ),
+    ] {
+        assert!(!el.is_writable_property(property));
+        let read = el.read_property(property, None).map(|_| ());
+        let write = el.write_property(property, None, value, None);
+        for result in [read, write] {
+            match result {
+                Err(Error::Protocol { class, code }) => {
+                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+                }
+                other => panic!("{property:?}: expected UNKNOWN_PROPERTY, got {other:?}"),
+            }
+        }
+    }
+    assert_eq!(
+        el.read_property(PropertyIdentifier::STATUS_FLAGS, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0],
+        }
+    );
 }
 
 #[test]

@@ -15,9 +15,6 @@ fn rpm_metadata_file_selectors_preserve_bytes_and_budgets() {
         P::ARCHIVE,
         P::READ_ONLY,
         P::FILE_ACCESS_METHOD,
-        P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -40,12 +37,9 @@ fn rpm_metadata_file_selectors_preserve_bytes_and_budgets() {
             object.set_records(vec![vec![0xCD; 9], vec![]]);
             let oid = object.object_identifier();
             let mut all = base.to_vec();
-            let mut optional = vec![
-                P::DESCRIPTION,
-                P::STATUS_FLAGS,
-                P::OUT_OF_SERVICE,
-                P::RELIABILITY,
-            ];
+            // Table 12-16 has no Status_Flags, Out_Of_Service or Reliability
+            // (#1064).
+            let mut optional = vec![P::DESCRIPTION];
             if method == 0 {
                 all.push(P::RECORD_COUNT);
                 optional.push(P::RECORD_COUNT);
@@ -91,9 +85,6 @@ mod pics {
                     (P::ARCHIVE, false, true),
                     (P::READ_ONLY, false, false),
                     (P::FILE_ACCESS_METHOD, false, false),
-                    (P::STATUS_FLAGS, true, false),
-                    (P::OUT_OF_SERVICE, true, true),
-                    (P::RELIABILITY, true, false),
                     (P::PROPERTY_LIST, false, false),
                 ];
                 if method == 0 {
