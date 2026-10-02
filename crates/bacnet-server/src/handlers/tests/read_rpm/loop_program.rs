@@ -26,8 +26,10 @@ fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
         P::RELIABILITY,
         P::OUT_OF_SERVICE,
         P::CONTROLLED_VARIABLE_REFERENCE,
+        P::CONTROLLED_VARIABLE_VALUE,
         P::MANIPULATED_VARIABLE_REFERENCE,
         P::SETPOINT_REFERENCE,
+        P::COV_INCREMENT,
     ];
     let loop_optional = [
         P::DESCRIPTION,
@@ -36,6 +38,7 @@ fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
         P::DERIVATIVE_CONSTANT,
         P::UPDATE_INTERVAL,
         P::RELIABILITY,
+        P::COV_INCREMENT,
     ];
     let program_all = [
         P::OBJECT_IDENTIFIER,

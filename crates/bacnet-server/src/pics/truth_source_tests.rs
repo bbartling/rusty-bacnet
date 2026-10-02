@@ -580,7 +580,6 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
             ][..],
         ),

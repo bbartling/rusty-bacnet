@@ -38,8 +38,8 @@ fn status_flags(object: &dyn BACnetObject) -> StatusFlags {
 enum Kind {
     /// OUT_OF_SERVICE follows the Out_Of_Service property.
     FollowsOutOfService,
-    /// OUT_OF_SERVICE and OVERRIDDEN are always FALSE, whatever an
-    /// Out_Of_Service property says (Trend Log and Trend Log Multiple).
+    /// OUT_OF_SERVICE and OVERRIDDEN are always FALSE (Trend Log and Trend
+    /// Log Multiple, which have no Out_Of_Service property).
     LogFixedFalse,
 }
 
@@ -152,19 +152,16 @@ fn schedule_status_flags_follow_reliability_and_out_of_service() {
 }
 
 #[test]
-fn trend_log_status_flags_ignore_its_out_of_service_property() {
-    // Trend Log keeps a non-standard writable Out_Of_Service for
-    // compatibility; it must never reach Status_Flags. Its Reliability can't
-    // change yet (writes are refused and there is no internal route), so
-    // FAULT stays FALSE and agrees with the NO_FAULT_DETECTED readback.
+fn trend_log_flags_match_its_fixed_state() {
+    // Table 12-29 defines no Out_Of_Service, so #985 removed the
+    // compatibility row that #978 kept away from the flags. Its Reliability
+    // can't change yet (writes are refused and there is no internal route),
+    // so FAULT stays FALSE and agrees with the NO_FAULT_DETECTED readback.
     let mut log = TrendLogObject::new(1, "TL-1", 10).unwrap();
     assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
-    set_out_of_service(&mut log, true);
-    assert_eq!(
-        read(&log, PropertyIdentifier::OUT_OF_SERVICE),
-        PropertyValue::Boolean(true)
-    );
-    assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
+    assert!(log
+        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+        .is_err());
     assert!(log
         .write_property(
             PropertyIdentifier::RELIABILITY,
@@ -177,14 +174,13 @@ fn trend_log_status_flags_ignore_its_out_of_service_property() {
         .set_reliability_internal(Reliability::OPEN_LOOP)
         .is_err());
     assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
-    set_out_of_service(&mut log, false);
-    assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
 }
 
 #[test]
 fn trend_log_multiple_flags_match_its_fixed_state() {
-    // Trend Log Multiple can't change Reliability or Out_Of_Service yet, so the
-    // computed flags stay clear and agree with those readbacks.
+    // Trend Log Multiple can't change Reliability yet and has no
+    // Out_Of_Service (Table 12-35), so the computed flags stay clear and agree
+    // with the Reliability readback.
     assert_flags(
         &TrendLogMultipleObject::new(1, "TLM-1", 10).unwrap(),
         Kind::LogFixedFalse,

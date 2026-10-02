@@ -33,7 +33,34 @@ use crate::log_buffer::LogRecordIdentity;
 pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 
 mod defaults;
-use defaults::{array_property_default, historical_writable_default, list_property_default};
+use defaults::{
+    array_property_default, cov_reported_properties_default, historical_writable_default,
+    list_property_default,
+};
+
+/// One property a whole-object (SubscribeCOV) notification reports after
+/// Present_Value and Status_Flags, from the object type's Table 13-1 row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CovReportedProperty {
+    /// Carried in each notification; a change of it alone sends none.
+    Value(PropertyIdentifier),
+    /// Carried in each notification, and any change of it sends one.
+    Trigger(PropertyIdentifier),
+}
+
+impl CovReportedProperty {
+    /// The reported property.
+    pub const fn property(self) -> PropertyIdentifier {
+        match self {
+            Self::Value(property) | Self::Trigger(property) => property,
+        }
+    }
+
+    /// Whether any change of the property triggers a notification.
+    pub const fn triggers(self) -> bool {
+        matches!(self, Self::Trigger(_))
+    }
+}
 
 /// Result of applying a LifeSafetyOperation to an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,17 +466,31 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         }
     }
 
-    /// COV increment for this object (analog objects only).
+    /// COV increment for this object (objects with a COV_Increment property).
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering
-    /// (e.g., AnalogInput, AnalogOutput, AnalogValue). A notification fires only
-    /// when the numeric Present_Value delta reaches the increment. Property COV
-    /// inherits this increment only for numeric Present_Value; other selected
-    /// properties use their own supplied increment or typed change reporting.
+    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging). A
+    /// notification fires only when the numeric Present_Value delta reaches the
+    /// increment. Property COV inherits this increment only for numeric
+    /// Present_Value; other selected properties use their own supplied
+    /// increment or typed change reporting.
     ///
     /// Returns `None` for objects that notify on any state change (binary, multi-state).
     fn cov_increment(&self) -> Option<f32> {
         None
+    }
+
+    /// Properties a whole-object (SubscribeCOV) notification reports after
+    /// Present_Value and Status_Flags, in report order.
+    ///
+    /// The default follows the object type's Table 13-1 row: Loop reports
+    /// Setpoint and Controlled_Variable_Value, and Staging reports
+    /// Present_Stage, whose changes also trigger a notification. Every other
+    /// type reports nothing more. The server leaves out a listed property the
+    /// object's Property_List lacks. Property subscriptions (SubscribeCOVProperty
+    /// and SubscribeCOVPropertyMultiple) report their own property instead.
+    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+        cov_reported_properties_default(self.object_identifier().object_type())
     }
 
     /// Set the OVERRIDDEN bit in StatusFlags.

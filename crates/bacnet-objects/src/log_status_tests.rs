@@ -568,7 +568,6 @@ fn log_family_writability_matches_runtime_routes() {
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
             ],
         ),
@@ -603,7 +602,8 @@ fn log_family_writability_matches_runtime_routes() {
                 "{kind:?} {property:?}"
             );
         }
-        if matches!(kind, FamilyKind::TrendMultiple) {
+        // Tables 12-29 and 12-35 define no Out_Of_Service (#985).
+        if matches!(kind, FamilyKind::Trend | FamilyKind::TrendMultiple) {
             assert!(!object
                 .object()
                 .is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));

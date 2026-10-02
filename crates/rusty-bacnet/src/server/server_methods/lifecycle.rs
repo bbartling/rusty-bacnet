@@ -438,12 +438,12 @@ impl BACnetServer {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Update Present_Value for an application-owned Input object.
+    /// Update Present_Value for an application-owned Input or Loop object.
     ///
-    /// This is the narrow Input-only route for finite Analog Input REAL values,
-    /// logical Binary Input Enumerated 0/1 values, and in-range Multi-state
-    /// Input Unsigned values. The object implementation owns validation and
-    /// Out_Of_Service simulation exclusivity.
+    /// This is the narrow application route for finite Analog Input and Loop
+    /// REAL values, logical Binary Input Enumerated 0/1 values, and in-range
+    /// Multi-state Input Unsigned values. The object implementation owns
+    /// validation and Out_Of_Service simulation exclusivity.
     #[pyo3(signature = (object_id, value))]
     fn set_present_value_local<'py>(
         &self,
