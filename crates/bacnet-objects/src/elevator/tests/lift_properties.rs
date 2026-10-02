@@ -410,25 +410,54 @@ fn lift_fault_signals_refuses_bad_sets_atomically() {
         PropertyValue::Enumerated(2048),
     ]);
     write(&mut lift, P::FAULT_SIGNALS, prior.clone()).unwrap();
-    for (value, out_of_range) in [
-        (PropertyValue::Enumerated(17), true),
-        (PropertyValue::Enumerated(1023), true),
-        (PropertyValue::Enumerated(65_536), true),
+    // The Lift names the element it refuses, counting from 1 (#1048); a
+    // value that is no list and no fault names none.
+    for (value, code, position) in [
+        (
+            PropertyValue::Enumerated(17),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            Some(1),
+        ),
+        (
+            PropertyValue::Enumerated(1023),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            Some(1),
+        ),
+        (
+            PropertyValue::Enumerated(65_536),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            Some(1),
+        ),
         (
             PropertyValue::List(vec![
                 PropertyValue::Enumerated(3),
                 PropertyValue::Enumerated(3),
             ]),
-            true,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            Some(2),
         ),
-        (PropertyValue::List(vec![PropertyValue::Unsigned(3)]), false),
-        (PropertyValue::Boolean(true), false),
+        (
+            PropertyValue::List(vec![PropertyValue::Unsigned(3)]),
+            ErrorCode::INVALID_DATA_TYPE,
+            Some(1),
+        ),
+        (
+            PropertyValue::Boolean(true),
+            ErrorCode::INVALID_DATA_TYPE,
+            None,
+        ),
     ] {
         let result = write(&mut lift, P::FAULT_SIGNALS, value.clone());
-        if out_of_range {
-            assert_value_out_of_range(result, &format!("{value:?}"));
-        } else {
-            assert_invalid_data_type(result, &format!("{value:?}"));
+        let context = format!("{value:?}");
+        match position {
+            Some(position) => crate::common::assert_list_element_refused(
+                result,
+                ErrorClass::PROPERTY,
+                code,
+                position,
+                &context,
+            ),
+            None => assert_invalid_data_type(result, &context),
         }
         assert_eq!(read(&lift, P::FAULT_SIGNALS), prior, "{value:?}");
     }

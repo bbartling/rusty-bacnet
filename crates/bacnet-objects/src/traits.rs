@@ -194,6 +194,13 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Returning `Err` MUST leave the object unchanged. WritePropertyMultiple
     /// retains earlier successful writes and cannot undo a mutation made by the
     /// currently failing write, including for a write-only property.
+    ///
+    /// Refusing one element of a list value, an implementation may name it:
+    /// `Error::Structured` with `ErrorDetail::FirstFailedElementNumber`
+    /// holding the element's position, from 1, in the list `value` carries.
+    /// The server's AddListElement handler then reports the request element
+    /// at that position in its ChangeList-Error (#1048); a plain
+    /// `Error::Protocol` there names the first element the list would gain.
     fn write_property(
         &mut self,
         property: PropertyIdentifier,

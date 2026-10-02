@@ -1554,11 +1554,18 @@ datatype differs from the stored elements', returns
 `PROPERTY/INVALID_DATA_TYPE`, and one not in the list
 `SERVICES/LIST_ELEMENT_NOT_FOUND`. Both services always answer errors with a
 ChangeList-Error. A refusal of an element (decode, datatype, not found) names
-its position. When the object refuses the edited list as a whole for an
-element's datatype, encoding, range or space, the response names the first
-element the list would have gained, which is exact when one element is new.
-Refusals of the request or target (authorization, object, property, array
-index, list kind, write access) name element 0.
+its position. The object judges the edited list, the stored elements followed
+by the new ones in request order, through `write_property`. A refusal there
+that names an element, as `Error::Structured` with
+`ErrorDetail::FirstFailedElementNumber` holding its position in that list,
+goes out naming the request element at that position; the built-in Alarm_Values,
+Fault_Signals and Date_List writers all name it. A stored element named that
+way is no element of the request, so the response names element 0. A refusal
+that names no element, for an element's datatype, encoding, range or space,
+names the first element the list would have gained, which is exact when one
+element is new. Refusals of the request or target (authorization, object,
+property, array index, list kind, write access) name element 0, as do the
+object's refusals of what a removal leaves.
 
 ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
 single value, a whole array (Object_List, Priority_Array) or an indexed array

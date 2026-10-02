@@ -152,6 +152,9 @@ pub enum ErrorDetail {
     /// and 15.2.1.3) and CreateObject-Error (Clause 15.3.1.3): the 1-based
     /// position of the refused element in the request's List of Elements or
     /// List of Initial Values, or 0 when the failure is not about one element.
+    /// An object refusing one element of a list-valued write uses it too, for
+    /// that element's position in the list it was given; the server's list
+    /// handler turns that into the request's position.
     FirstFailedElementNumber(u32),
     /// WritePropertyMultiple-Error (Clause 15.10.1.3): the object, property
     /// and array index of the first write that failed.
