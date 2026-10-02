@@ -525,12 +525,11 @@ impl ScConnection {
     }
 }
 
+#[cfg(test)]
 impl<W: super::WebSocketPort> super::ScTransport<W> {
-    /// Get the connection state (for testing/inspection).
-    ///
-    /// This exposes mutable connection fields, including identity. Startup
-    /// validation does not protect against later application mutation here.
-    pub fn connection(&self) -> Option<&std::sync::Arc<tokio::sync::Mutex<ScConnection>>> {
+    /// The live connection, including its mutable identity fields. Test-only:
+    /// applications read the state through `connection_state_changes()`.
+    pub(crate) fn connection(&self) -> Option<&std::sync::Arc<tokio::sync::Mutex<ScConnection>>> {
         self.connection.as_ref()
     }
 }

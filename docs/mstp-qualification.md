@@ -74,8 +74,8 @@ and mark saturated fields indeterminate rather than claiming exact counts.
 
 TX means successful encode and `SerialPort::write` completion, not UART drain,
 actual wire transmission, peer receipt or ACK. Failed writes may emit partial
-bytes; cancelled calls have no completed outcome to count. Direct `node_state`
-manipulation bypasses transport admission/delivery accounting. There are no frame
+bytes; cancelled calls have no completed outcome to count. The counters see only
+traffic that goes through the transport API. There are no frame
 bytes, invoke IDs, MACs, identities, paths or timestamps in these snapshots.
 Host-read times must never be presented as wire timestamps. Counters alone cannot
 correlate a queued DNER with an earlier DER or establish the cause of a lost reply.

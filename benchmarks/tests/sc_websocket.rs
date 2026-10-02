@@ -226,7 +226,7 @@ async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
         .await
         .is_err());
     assert_eq!(
-        transport_b.connection().unwrap().lock().await.state,
+        *transport_b.connection_state_changes().borrow(),
         ScConnectionState::Connected
     );
 

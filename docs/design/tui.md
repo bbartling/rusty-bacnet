@@ -402,13 +402,16 @@ The TUI uses only public `bacnet-client` and `bacnet-transport` APIs.
   `device_collision_events()` and `discovered_devices()`.
 - **APIs later screens will use:** RP and RPM, WP and WPM (local and routed);
   `subscribe_cov`, `manage_cov_subscription` and `cov_notifications()`; the BBMD
-  helpers on `BACnetClient<BipTransport>`; `ScConnectError` and
-  `ScWebSocketErrorKind`; the MS/TP `node_state()` and `diagnostics()` handles
-  and `decode_frame_stream`.
-- **Transport handles.** MS/TP is reachable already: build `MstpTransport` by
-  hand, keep its handles, then call `generic_builder().transport(t)`. SC state,
-  SC drop counts and BIP counters are not reachable once a client is built;
-  that needs #956.
+  helpers on any `BACnetClient` whose transport is `AsBip` (`BipTransport`, or
+  `AnyTransport` with a `Bip` variant); `ScConnectError` and
+  `ScWebSocketErrorKind`; the MS/TP `diagnostics()` handle and
+  `decode_frame_stream`.
+- **Transport handles.** `client.transport()` (#956) borrows the transport of
+  any built client. Workers take the owned handles once (the SC
+  `connection_state_changes()` watch, the MS/TP `diagnostics()` handle, the
+  BBMD state `Arc`) and poll the counter snapshots (SC `npdu_drop_counts()`,
+  B/IP management, FDT and fanout counters) through the borrow. They never
+  send through the transport or hold the BBMD state lock across an await.
 - **Monitor and capture.** The MS/TP passive monitor has no client: a worker
   owns the serial port (#958). Live capture of our own traffic needs a
   link-level tap (#957).
@@ -517,7 +520,7 @@ cargo nextest run -p bacnet-cli --release -E 'test(drawing_a_full_device_table)'
 
 | Issue | Gap | Needed by |
 |---|---|---|
-| #956 | No access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
+| #956 | Done: `BACnetClient::transport()` and the `AsBip` BBMD helpers. Was: no access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
 | #957 | No link-level frame tap on any transport, so BVLC control traffic, SC control messages and MS/TP Token, PFM and Reply-Postponed frames are invisible | #971 |
 | #958 | No MS/TP passive monitor, per-station statistics or master list; `MstpDiagnostics` not exposed from builders | #970, #971 |
 | #959 | SC reconnect, failover and disconnect causes appear only as tracing lines; no active-hub indication, heartbeat statistics or peer certificate; no failover or reconnect options on `ScClientBuilder` | #967 |

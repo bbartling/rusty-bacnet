@@ -49,6 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux from sysfs. The release smoke test calls it on every platform, which on
   macOS proves the wheels' IOKit and CoreFoundation links at run time (#951).
 
+- `BACnetClient::transport()` borrows the transport a built client owns, so the
+  BACnet/SC connection-state watch and NPDU drop counts, the B/IP management,
+  FDT and fanout counters and BBMD state, and the MS/TP diagnostics handle are
+  reachable after `build()`, whichever builder made the client. The watch
+  receiver, diagnostics handle and BBMD state `Arc` are owned and outlive the
+  borrow. The borrow is shared, so it never blocks `stop()`, which stops the
+  transport in place. Its rustdoc lists what is supported through it, and that
+  sending through the transport or holding the BBMD state lock while the client
+  runs is not. The new `bacnet_transport::bip::AsBip` trait lends the
+  `BipTransport` beneath a transport: `BipTransport` lends itself, and
+  `AnyTransport` lends its `Bip` variant. The new
+  `bacnet_types::data_link::DataLink` names a data link (B/IP, B/IPv6, MS/TP,
+  SC, Ethernet, loopback) and displays its short name (#956).
+
 ### Changed
 
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
@@ -309,6 +323,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   B/IP; builder options/defaults, SC/generic builders and Python constructors
   are unchanged (#873).
 
+- **Breaking `Error` variant, BBMD helper bounds and live-state accessors:**
+  `bacnet_types::error::Error` gains
+  `UnsupportedTransport { required: DataLink, actual: DataLink }`, so an
+  exhaustive match on `Error` needs a new arm. Its message reads, for example,
+  "operation requires BACnet/IP; this transport is MS/TP". The `BACnetClient`
+  BBMD helpers (`read_bdt`, `write_bdt`, `read_fdt`, `delete_fdt_entry`,
+  `register_foreign_device_bvlc`) move from `BACnetClient<BipTransport>` to any
+  `BACnetClient<T>` whose transport implements `AsBip`. Calls on a B/IP client
+  compile unchanged. On a client over `AnyTransport` they work for the `Bip`
+  variant and return `Error::UnsupportedTransport` for any other, before
+  sending anything. `ScTransport::connection()` and `MstpTransport::node_state()`
+  are no longer public: they handed out the live SC connection, identity
+  included, and the MS/TP master node whose lock the token loop takes. Read the
+  SC link state with `connection_state_changes()` and MS/TP counts with
+  `diagnostics()` (#956).
+
 ### Fixed
 
 - **Breaking Elevator Group landing calls (API and wire format):** the
@@ -335,6 +365,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ElevatorGroupObject::set_landing_calls`, which refuses a reserved
   direction; `landing_calls()` and `landing_call_control()` read them back. A
   Landing_Call_Control write doesn't add to the list.
+
+- In a timestamped COV-multiple report, a field subscribed with timestamps no
+  longer goes out without a Time_Of_Change (#987). Before, when its own selector
+  had not changed in that round and an untimestamped sibling reference carried
+  the field, for example Status_Flags travelling with an untimestamped
+  Present_Value, it had no time. Captures now record the selector's own value at
+  the commit time even when it moves less than the selector's COV increment, and
+  a carried value carries the time of the commit that set it; an admission or
+  renewal capture counts as one. A value no producer captured carries the
+  preparation time instead, kept for that value. With no time to give, because
+  the Device clock is invalid or a producer snapshot predates the record, it is
+  left out of the notification. The header timestamp counts these times, so
+  across notifications to a context on several objects it can move back. A field
+  that a timestamped companion already times keeps that time.
 
 - On Windows, a B/IP transport bound to `0.0.0.0` now lists the host's IPv4
   addresses with `GetAdaptersAddresses`, as Linux and macOS do with

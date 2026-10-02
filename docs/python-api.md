@@ -2830,8 +2830,8 @@ that two same-UUID nodes coexist. Distinct UUIDs also need non-colliding VMACs.
 as described [above](#schub). The underlying raw Rust transport now requires a
 configured UUID and nonreserved local VMAC at start, before transport-owned I/O;
 it cannot undo a caller's prior WebSocket dial. Python signatures and earlier
-constructor preflights are unchanged. The raw guard is startup-only, not protection
-against later application mutation through Rust's public `connection()`; see the
+constructor preflights are unchanged. The raw guard runs at startup, and the Rust
+transport gives applications no mutable access to its connection afterwards; see the
 [Rust startup/retry limits](rust-api.md#bacnetsc-client-transport).
 The owner-approved [#517 acceptance closeout](conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
 resolves the scoped default/nil identity problem with caller-owned provisioning
