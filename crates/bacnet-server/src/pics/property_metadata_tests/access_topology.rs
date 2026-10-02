@@ -30,7 +30,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
-            (P::PRESENT_VALUE, true, true),
+            // Table 12-36 has no Present_Value row (#1064).
             (P::ACCESS_EVENT, false, false),
             (P::ACCESS_EVENT_TAG, false, false),
             (P::ACCESS_EVENT_TIME, false, false),
@@ -46,10 +46,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
-            (P::PRESENT_VALUE, true, true),
+            // Table 12-37 has no Present_Value or Access_Doors row (#1064).
             (P::GLOBAL_IDENTIFIER, false, true),
             (P::OCCUPANCY_COUNT, true, false),
-            (P::ACCESS_DOORS, true, false),
             (P::ENTRY_POINTS, false, false),
             (P::EXIT_POINTS, false, false),
             (P::STATUS_FLAGS, false, false),

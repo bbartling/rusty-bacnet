@@ -29,14 +29,6 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
                 .unwrap();
             object.set_action(vec![vec![1, 2, 3], vec![4, 5]]);
         }
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                bacnet_types::primitives::PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
@@ -87,25 +79,15 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
             (P::ACTION, Some(0), Ok(action_bytes)),
             (P::ACTION, Some(1), Ok(action_bytes)),
             (P::ACTION, Some(u32::MAX), Ok(action_bytes)),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
+            // Table 12-12 has no Out_Of_Service (#1064), so the flag stays
+            // clear.
+            (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
@@ -121,21 +103,20 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x91, 47, 0x91, 9, 0x91, 2, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x91, 85, 0x91, 47, 0x91, 9, 0x91, 2, 0x91, 111, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 47])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 9])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 2])),
             (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(9),
+                Some(8),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

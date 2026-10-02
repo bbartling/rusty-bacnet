@@ -20,25 +20,20 @@ use crate::property_metadata::{
 // carries the table W1 code but dispatch has no write arm (not even the
 // table's zero-reset), so the row mirrors dispatch as RequiredRead/ReadOnly
 // rather than advertising a route write_property rejects (Tracking_Value R1
-// precedent). Present_Value, Status_Flags, Out_Of_Service, Reliability, and
-// Event_State are served but have no Table 12-5 row, so they are Optional;
-// only Out_Of_Service has a network write route (Timer precedent).
+// precedent). Table 12-5 has no Present_Value, Status_Flags, Out_Of_Service,
+// Reliability or Event_State, so there are no such rows (#1064 removed the
+// rows the 0.1.0 import carried).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::MINIMUM_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::MAXIMUM_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::AVERAGE_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ATTEMPTED_SAMPLES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::VALID_SAMPLES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_PROPERTY_REFERENCE, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::STATUS_FLAGS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -72,17 +67,12 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::MINIMUM_VALUE,
             P::MAXIMUM_VALUE,
             P::AVERAGE_VALUE,
             P::ATTEMPTED_SAMPLES,
             P::VALID_SAMPLES,
             P::OBJECT_PROPERTY_REFERENCE,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
-            P::EVENT_STATE,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -98,7 +88,7 @@ mod tests {
         ];
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
-        assert_eq!(metadata.len(), 16);
+        assert_eq!(metadata.len(), 11);
         assert_eq!(object.property_list().as_ref(), all);
         assert_eq!(object.required_properties().as_ref(), required);
         assert_eq!(
@@ -124,23 +114,26 @@ mod tests {
             assert_eq!(row.conformance, expected, "{:?}", row.property_identifier);
             object.read_property(row.property_identifier, None).unwrap();
         }
-        // Served-but-unlisted rows stay readable although Table 12-5 has no
-        // Present_Value, Status_Flags, Out_Of_Service, Reliability, or
-        // Event_State row.
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Real(0.0)
-        );
-        assert_eq!(
-            object.read_property(P::EVENT_STATE, None).unwrap(),
-            PropertyValue::Enumerated(0)
-        );
+        // Table 12-5 has no Present_Value, Status_Flags, Out_Of_Service,
+        // Reliability or Event_State row (#1064).
+        for p in [
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
+            P::OUT_OF_SERVICE,
+            P::RELIABILITY,
+            P::EVENT_STATE,
+        ] {
+            assert_error(
+                object.read_property(p, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
         let wire: Vec<_> = all
             .iter()
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert_eq!(wire.len(), 12);
+        assert_eq!(wire.len(), 7);
         assert!(object.is_array_property(P::PROPERTY_LIST));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
@@ -148,7 +141,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
-            PropertyValue::Unsigned(12)
+            PropertyValue::Unsigned(7)
         );
         for (index, value) in wire.iter().enumerate() {
             assert_eq!(
@@ -158,7 +151,7 @@ mod tests {
                 *value
             );
         }
-        for index in [13, u32::MAX] {
+        for index in [8, u32::MAX] {
             assert_error(
                 object
                     .read_property(P::PROPERTY_LIST, Some(index))
@@ -170,113 +163,100 @@ mod tests {
 
     #[test]
     fn property_metadata_averaging_write_capabilities_match_dispatch() {
-        for out_of_service in [false, true] {
-            let mut object = AveragingObject::new(1, "AVG-1").unwrap();
+        let mut object = AveragingObject::new(1, "AVG-1").unwrap();
+        let original = object.property_metadata().into_owned();
+        for row in &original {
+            let p = row.property_identifier;
+            let capability = match p {
+                P::DESCRIPTION | P::OBJECT_PROPERTY_REFERENCE => Always,
+                _ => ReadOnly,
+            };
+            assert_eq!(row.write_capability, capability, "{p:?}");
+            assert_eq!(
+                object.is_writable_property(p),
+                capability.is_writable(),
+                "{p:?}"
+            );
+            let value = object.read_property(p, None).unwrap();
+            let result = object.write_property(p, None, value, None);
+            if capability.is_writable() {
+                result.unwrap();
+            } else {
+                assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+            }
+        }
+        // OBJECT_NAME has no network write route: a rename falls through
+        // to WRITE_ACCESS_DENIED even with a well-formed value.
+        assert!(!object.is_writable_property(P::OBJECT_NAME));
+        assert_error(
             object
                 .write_property(
-                    P::OUT_OF_SERVICE,
+                    P::OBJECT_NAME,
                     None,
-                    PropertyValue::Boolean(out_of_service),
+                    PropertyValue::CharacterString("AVG-2".into()),
                     None,
                 )
-                .unwrap();
-            let original = object.property_metadata().into_owned();
-            for row in &original {
-                let p = row.property_identifier;
-                let capability = match p {
-                    P::DESCRIPTION | P::OBJECT_PROPERTY_REFERENCE | P::OUT_OF_SERVICE => Always,
-                    _ => ReadOnly,
-                };
-                assert_eq!(row.write_capability, capability, "{p:?}");
-                assert_eq!(
-                    object.is_writable_property(p),
-                    capability.is_writable(),
-                    "{p:?}"
-                );
-                let value = object.read_property(p, None).unwrap();
-                let result = object.write_property(p, None, value, None);
-                if capability.is_writable() {
-                    result.unwrap();
-                } else {
-                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
-                }
-            }
-            // OBJECT_NAME has no network write route: a rename falls through
-            // to WRITE_ACCESS_DENIED even with a well-formed value.
-            assert!(!object.is_writable_property(P::OBJECT_NAME));
+                .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
+        // Attempted_Samples carries the table W1 code but dispatch has no
+        // write arm (not even the zero-reset), so even Unsigned(0) is
+        // denied and the row stays ReadOnly.
+        assert!(!object.is_writable_property(P::ATTEMPTED_SAMPLES));
+        assert_error(
+            object
+                .write_property(P::ATTEMPTED_SAMPLES, None, PropertyValue::Unsigned(0), None)
+                .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
+        // The statistics scalars have no network write route.
+        for p in [
+            P::MINIMUM_VALUE,
+            P::MAXIMUM_VALUE,
+            P::AVERAGE_VALUE,
+            P::VALID_SAMPLES,
+        ] {
+            let value = object.read_property(p, None).unwrap();
             assert_error(
-                object
-                    .write_property(
-                        P::OBJECT_NAME,
-                        None,
-                        PropertyValue::CharacterString("AVG-2".into()),
-                        None,
-                    )
-                    .unwrap_err(),
+                object.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            // Attempted_Samples carries the table W1 code but dispatch has no
-            // write arm (not even the zero-reset), so even Unsigned(0) is
-            // denied and the row stays ReadOnly.
-            assert!(!object.is_writable_property(P::ATTEMPTED_SAMPLES));
-            assert_error(
-                object
-                    .write_property(P::ATTEMPTED_SAMPLES, None, PropertyValue::Unsigned(0), None)
-                    .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-            // Present_Value and the other served-but-unlisted scalars have no
-            // network write route.
-            for p in [
-                P::PRESENT_VALUE,
-                P::MINIMUM_VALUE,
-                P::MAXIMUM_VALUE,
-                P::AVERAGE_VALUE,
-                P::VALID_SAMPLES,
-                P::STATUS_FLAGS,
-                P::RELIABILITY,
-                P::EVENT_STATE,
-            ] {
-                let value = object.read_property(p, None).unwrap();
-                assert_error(
-                    object.write_property(p, None, value, None).unwrap_err(),
-                    ErrorCode::WRITE_ACCESS_DENIED,
-                );
-                assert!(!object.is_writable_property(p));
-            }
-            // Description and Out_Of_Service reject mistyped values without
-            // changing state.
-            for (p, value) in [
-                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
-            ] {
-                assert_error(
-                    object.write_property(p, None, value, None).unwrap_err(),
-                    ErrorCode::INVALID_DATA_TYPE,
-                );
-            }
-            // Unserved Table 12-5 rows stay unknown on both paths.
-            for p in [
-                P::WINDOW_INTERVAL,
-                P::WINDOW_SAMPLES,
-                P::MINIMUM_VALUE_TIMESTAMP,
-                P::MAXIMUM_VALUE_TIMESTAMP,
-                P::VARIANCE_VALUE,
-                P::ALL,
-            ] {
-                assert!(!object.is_writable_property(p));
-                assert_error(
-                    object.read_property(p, None).unwrap_err(),
-                    ErrorCode::UNKNOWN_PROPERTY,
-                );
-                assert_error(
-                    object
-                        .write_property(p, None, PropertyValue::Null, None)
-                        .unwrap_err(),
-                    ErrorCode::UNKNOWN_PROPERTY,
-                );
-            }
-            assert_eq!(object.property_metadata().as_ref(), original);
+            assert!(!object.is_writable_property(p));
         }
+        // Description rejects a mistyped value without changing state.
+        assert_error(
+            object
+                .write_property(P::DESCRIPTION, None, PropertyValue::Unsigned(1), None)
+                .unwrap_err(),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+        // Unserved Table 12-5 rows, and the rows the table doesn't define
+        // (#1064), stay unknown on both paths.
+        for p in [
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
+            P::OUT_OF_SERVICE,
+            P::RELIABILITY,
+            P::EVENT_STATE,
+            P::WINDOW_INTERVAL,
+            P::WINDOW_SAMPLES,
+            P::MINIMUM_VALUE_TIMESTAMP,
+            P::MAXIMUM_VALUE_TIMESTAMP,
+            P::VARIANCE_VALUE,
+            P::ALL,
+        ] {
+            assert!(!object.is_writable_property(p));
+            assert_error(
+                object.read_property(p, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+            assert_error(
+                object
+                    .write_property(p, None, PropertyValue::Null, None)
+                    .unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
+        assert_eq!(object.property_metadata().as_ref(), original);
     }
 }

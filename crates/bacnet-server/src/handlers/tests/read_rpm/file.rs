@@ -16,9 +16,9 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
         let references = [
             (P::PROPERTY_LIST, Some(0)),
             (P::PROPERTY_LIST, Some(1)),
-            (P::PROPERTY_LIST, Some(10)),
-            (P::PROPERTY_LIST, Some(11)),
-            (P::PROPERTY_LIST, Some(12)),
+            (P::PROPERTY_LIST, Some(7)),
+            (P::PROPERTY_LIST, Some(8)),
+            (P::PROPERTY_LIST, Some(9)),
             (P::FILE_SIZE, Some(0)),
             (P::RECORD_COUNT, Some(1)),
             (P::RECORD_COUNT, None),
@@ -49,16 +49,18 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
                 if p == P::PROPERTY_LIST { index } else { None }
             );
             let expected = match (p, index) {
+                // Table 12-16 has no Status_Flags, Out_Of_Service or
+                // Reliability (#1064), so File_Access_Method ends the list.
                 (P::PROPERTY_LIST, Some(0)) => {
-                    Ok(PropertyValue::Unsigned(if method == 0 { 11 } else { 10 }))
+                    Ok(PropertyValue::Unsigned(if method == 0 { 8 } else { 7 }))
                 }
                 (P::PROPERTY_LIST, Some(1)) => {
                     Ok(PropertyValue::Enumerated(P::DESCRIPTION.to_raw()))
                 }
-                (P::PROPERTY_LIST, Some(10)) => {
-                    Ok(PropertyValue::Enumerated(P::RELIABILITY.to_raw()))
+                (P::PROPERTY_LIST, Some(7)) => {
+                    Ok(PropertyValue::Enumerated(P::FILE_ACCESS_METHOD.to_raw()))
                 }
-                (P::PROPERTY_LIST, Some(11)) if method == 0 => {
+                (P::PROPERTY_LIST, Some(8)) if method == 0 => {
                     Ok(PropertyValue::Enumerated(P::RECORD_COUNT.to_raw()))
                 }
                 (P::PROPERTY_LIST, _) => Err(ErrorCode::INVALID_ARRAY_INDEX),

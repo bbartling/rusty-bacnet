@@ -26,7 +26,6 @@ fn rpm_metadata_selectors_are_exact_for_event_enrollment() {
             PropertyIdentifier::FAULT_PARAMETERS,
             PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::RELIABILITY,
         ]
     );
@@ -57,7 +56,6 @@ fn rpm_metadata_selectors_are_exact_for_event_enrollment() {
             PropertyIdentifier::FAULT_TYPE,
             PropertyIdentifier::FAULT_PARAMETERS,
             PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::OUT_OF_SERVICE,
         ]
     );
 }

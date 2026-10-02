@@ -26,15 +26,6 @@ fn load_control_object(configured: bool) -> LoadControlObject {
             .write_property(P::SHED_DURATION, None, PropertyValue::Unsigned(3600), None)
             .unwrap();
     }
-    // Exercise the unconditional write routes so large encodings persist.
-    object
-        .write_property(
-            P::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(configured),
-            None,
-        )
-        .unwrap();
     object
 }
 
@@ -52,7 +43,6 @@ fn rpm_load_control_metadata_selectors_preserve_bytes_and_budgets() {
         P::SHED_DURATION,
         P::START_TIME,
         P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
         P::RELIABILITY,
         P::EVENT_STATE,
     ];
@@ -68,12 +58,8 @@ fn rpm_load_control_metadata_selectors_preserve_bytes_and_budgets() {
         P::START_TIME,
         P::EVENT_STATE,
     ];
-    let optional = [
-        P::DESCRIPTION,
-        P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
-    ];
+    // Table 12-32 has no Out_Of_Service (#1064).
+    let optional = [P::DESCRIPTION, P::STATUS_FLAGS, P::RELIABILITY];
     for configured in [false, true] {
         let object = load_control_object(configured);
         let oid = object.object_identifier();

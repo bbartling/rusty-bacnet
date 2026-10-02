@@ -21,8 +21,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::CREDENTIAL_STATUS, false, true),
             (P::ASSIGNED_ACCESS_RIGHTS, false, false),
             (P::AUTHENTICATION_FACTORS, false, false),
+            // Nor an Out_Of_Service row (#1064).
             (P::STATUS_FLAGS, false, false),
-            (P::OUT_OF_SERVICE, false, true),
             (P::RELIABILITY, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
@@ -31,12 +31,11 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
-            (P::PRESENT_VALUE, true, true),
+            // Table 12-38 has no Present_Value, Assigned_Access_Rights or
+            // Out_Of_Service row (#1064).
             (P::USER_TYPE, false, true),
             (P::CREDENTIALS, false, false),
-            (P::ASSIGNED_ACCESS_RIGHTS, true, false),
             (P::STATUS_FLAGS, false, false),
-            (P::OUT_OF_SERVICE, false, true),
             (P::RELIABILITY, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
@@ -48,8 +47,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::GLOBAL_IDENTIFIER, false, true),
             (P::POSITIVE_ACCESS_RULES, false, false),
             (P::NEGATIVE_ACCESS_RULES, false, false),
+            // Table 12-39 has no Out_Of_Service row (#1064).
             (P::STATUS_FLAGS, false, false),
-            (P::OUT_OF_SERVICE, false, true),
             (P::RELIABILITY, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
@@ -113,14 +112,16 @@ fn pics_access_identity_property_metadata_is_exact() {
                         )
                         .unwrap();
                 }
-                object
-                    .write_property(
-                        P::OUT_OF_SERVICE,
-                        None,
-                        PropertyValue::Boolean(out_of_service),
-                        None,
-                    )
-                    .unwrap();
+                if kind == ObjectType::CREDENTIAL_DATA_INPUT {
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                }
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();

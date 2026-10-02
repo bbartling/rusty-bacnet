@@ -554,10 +554,8 @@ fn log_family_writability_matches_runtime_routes() {
             FamilyKind::Event,
             vec![
                 PropertyIdentifier::LOG_ENABLE,
-                PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
             ],
         ),
@@ -602,11 +600,15 @@ fn log_family_writability_matches_runtime_routes() {
                 "{kind:?} {property:?}"
             );
         }
-        // Tables 12-29 and 12-35 define no Out_Of_Service (#985).
-        if matches!(kind, FamilyKind::Trend | FamilyKind::TrendMultiple) {
+        // Tables 12-29, 12-35 and 12-31 define no Out_Of_Service (#985,
+        // #1064), and Table 12-31 has no Log_Interval either.
+        assert!(!object
+            .object()
+            .is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+        if matches!(kind, FamilyKind::Event) {
             assert!(!object
                 .object()
-                .is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+                .is_writable_property(PropertyIdentifier::LOG_INTERVAL));
         }
     }
 }

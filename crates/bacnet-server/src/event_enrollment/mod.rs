@@ -145,12 +145,6 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         };
         let force_state_reset = db.enrollment_eval_state_invalidated(oid);
 
-        if let Ok(PropertyValue::Boolean(true)) =
-            enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        {
-            continue;
-        }
-
         // Clause 13.2.2.1 suspends evaluation and prohibits transitions while
         // Event_Detection_Enable is FALSE. The accompanying reset is applied by the
         // object when the property is written (Clause 12.12 states the disabled

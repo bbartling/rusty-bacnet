@@ -111,6 +111,7 @@ mod read_rpm;
 mod reference_writes;
 mod scalar_null_writes;
 mod staging_writes;
+mod undefined_property_rows;
 mod wpm_create_alarm;
 mod wpm_prefix_commit;
 mod write_cov_who;
