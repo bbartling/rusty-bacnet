@@ -599,6 +599,17 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
+    /// Take the write that a Present_Value written while Out_Of_Service was
+    /// TRUE owes the references (Clause 12.24.14), once per written value.
+    ///
+    /// A schedule pass collects it before calling
+    /// [`tick_schedule`](Self::tick_schedule), so the written value reaches
+    /// the targets ahead of any calculated one; it needs no clock. Only
+    /// meaningful for Schedule objects; default returns `None`.
+    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
+        None
+    }
+
     /// Whether this Calendar's Date_List matches `day`: its Present_Value on
     /// that day. `None` for an object that does not evaluate a date list; the
     /// schedule tick then reads its Present_Value instead.

@@ -1751,6 +1751,19 @@ the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
 are not all of one datatype (#1056); the Schedule still writes its references.
 Whether each referenced property accepts that datatype is not checked.
 
+While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
+primitive value, NULL included (INVALID_DATA_TYPE otherwise, and
+WRITE_ACCESS_DENIED in service), and the tick leaves it alone. Every accepted
+write goes on to the references at `Priority_For_Writing`, a NULL
+relinquishing, in the pass the committed write triggers. The public
+`BACnetObject::take_simulated_schedule_write()` hook hands that write to the
+pass once, before `tick_schedule`, and needs no clock, so a value written on
+the object directly goes out at the next tick. When Out_Of_Service returns to
+FALSE the evaluation runs at once and takes over. A special event's priority is
+a `u64` (`BACnetSpecialEvent::event_priority`): the shared codec decodes any
+Unsigned there, and the object refuses one outside 1 to 16 with
+VALUE_OUT_OF_RANGE, over the network and from `add_exception` alike (#1087).
+
 `CalendarObject` evaluates Present_Value from the bound Device clock's local
 date on every read (#1029): TRUE when any Date_List entry matches, FALSE
 without a clock. `set_present_value` is gone; `is_active_on(day)` answers for

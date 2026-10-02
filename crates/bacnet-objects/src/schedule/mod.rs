@@ -24,6 +24,7 @@ mod calendar_metadata;
 mod date_list;
 mod evaluation;
 mod metadata;
+mod out_of_service;
 mod reliability;
 mod writes;
 
@@ -55,6 +56,11 @@ pub use evaluation::ScheduleWrite;
 /// schedules and Schedule_Default are not all of one datatype (Clause
 /// 12.24.13), re-checked on every change to them. Such a schedule still
 /// evaluates and writes its references.
+///
+/// While Out_Of_Service is TRUE the calculation leaves Present_Value alone and
+/// a client may write it instead; each such write goes on to the references
+/// as a calculated change would (Clause 12.24.14). Back in service, the
+/// calculation takes over again.
 pub struct ScheduleObject {
     oid: ObjectIdentifier,
     name: String,
@@ -82,6 +88,9 @@ pub struct ScheduleObject {
     /// writes the references even if Present_Value is unchanged (Clause
     /// 12.24.6).
     in_effective_period: bool,
+    /// A Present_Value written while Out_Of_Service is TRUE that has not been
+    /// sent to the references yet.
+    simulated_write: Option<PropertyValue>,
 }
 
 impl ScheduleObject {
@@ -118,6 +127,7 @@ impl ScheduleObject {
             list_of_object_property_references: Vec::new(),
             priority_for_writing: 16, // default: lowest priority
             in_effective_period: false,
+            simulated_write: None,
         })
     }
 
@@ -335,6 +345,9 @@ impl BACnetObject for ScheduleObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            return self.write_present_value(array_index, value);
+        }
         if property == PropertyIdentifier::WEEKLY_SCHEDULE {
             return self.write_weekly_schedule(array_index, value);
         }
@@ -438,13 +451,18 @@ impl BACnetObject for ScheduleObject {
         Ok(self.recompute_reliability())
     }
 
+    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
+        self.take_simulated_write()
+    }
+
     fn tick_schedule(
         &mut self,
         today: SpecificDate,
         time: Time,
         calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
     ) -> Option<ScheduleWrite> {
-        // Out_Of_Service decouples Present_Value from the calculation.
+        // Out_Of_Service decouples Present_Value from the calculation; a
+        // client's write takes its place (`out_of_service.rs`).
         if self.out_of_service {
             return None;
         }
@@ -476,6 +494,9 @@ mod calendar_tests;
 
 #[cfg(test)]
 mod evaluation_tests;
+
+#[cfg(test)]
+mod out_of_service_tests;
 
 #[cfg(test)]
 mod reliability_tests;

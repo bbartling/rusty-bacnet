@@ -304,6 +304,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.tick_schedule(today, time, calendar_active)
     }
 
+    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
+        self.wrapped.take_simulated_schedule_write()
+    }
+
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.wrapped.calendar_state_internal(day)
     }

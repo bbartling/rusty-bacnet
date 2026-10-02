@@ -48,7 +48,7 @@ fn every_day() -> SpecialEventPeriod {
 fn event(
     period: SpecialEventPeriod,
     list_of_time_values: Vec<BACnetTimeValue>,
-    event_priority: u8,
+    event_priority: u64,
 ) -> BACnetSpecialEvent {
     BACnetSpecialEvent {
         period,
@@ -568,14 +568,17 @@ fn schedule_setters_refuse_values_outside_their_datatype_or_range() {
     }
     for priority in [0, 17] {
         assert_code(
-            sched.add_exception(event(every_day(), vec![], priority)),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-            "event priority",
-        );
-        assert_code(
             sched.set_priority_for_writing(priority),
             ErrorCode::VALUE_OUT_OF_RANGE,
             "Priority_For_Writing",
+        );
+    }
+    // The error a network write of these priorities gets too (#1087).
+    for priority in [0, 17, 300, u64::MAX] {
+        assert_code(
+            sched.add_exception(event(every_day(), vec![], priority)),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "event priority",
         );
     }
     let bad_entry =

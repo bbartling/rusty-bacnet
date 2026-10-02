@@ -14,7 +14,7 @@ fn pics_schedule_property_metadata_is_exact() {
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
-        (P::PRESENT_VALUE, false, false),
+        (P::PRESENT_VALUE, false, true),
         (P::SCHEDULE_DEFAULT, false, true),
         (P::WEEKLY_SCHEDULE, true, true),
         (P::EXCEPTION_SCHEDULE, true, true),

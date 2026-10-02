@@ -461,20 +461,33 @@ fn exception_schedule_refused_writes_leave_it_unchanged() {
             ErrorCode::VALUE_OUT_OF_RANGE,
             "unspecified hour",
         ),
-        // The shared codec refuses event priorities outside 1 to 16.
+        // A priority outside 1 to 16 decodes and is out of range, as from
+        // add_exception (#1087).
         (
             Some(1),
             event(christmas_day, &[], 0),
             ErrorClass::PROPERTY,
-            ErrorCode::INVALID_DATA_ENCODING,
+            ErrorCode::VALUE_OUT_OF_RANGE,
             "priority 0",
         ),
         (
             Some(1),
             event(christmas_day, &[], 17),
             ErrorClass::PROPERTY,
-            ErrorCode::INVALID_DATA_ENCODING,
+            ErrorCode::VALUE_OUT_OF_RANGE,
             "priority 17",
+        ),
+        (
+            None,
+            [
+                christmas(),
+                christmas_day.to_vec(),
+                vec![0x2E, 0x2F, 0x3A, 0x01, 0x2C],
+            ]
+            .concat(),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "priority 300 in the second event of a whole write",
         ),
         (
             Some(1),
