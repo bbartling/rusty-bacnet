@@ -19,8 +19,9 @@ pub(in crate::server) struct ConfirmedReport {
     /// returns to its references.
     pub(in crate::server) claim: Option<TimedClaim>,
     /// Later parts of a report too large for one notification (#986). They
-    /// return to their queue once this report holds its coordinate, so no
-    /// other report can carry them first, and the Ack's follow-up sends them.
+    /// return to their queue, their untimestamped references owed (#1038),
+    /// once this report holds its coordinate, so no other report can carry
+    /// them first, and the Ack's follow-up sends them.
     pub(in crate::server) deferred: Vec<TimedClaim>,
 }
 
@@ -108,8 +109,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
         let flight = match flight {
             Ok(flight) => {
-                // The coordinate is marked busy: the later parts can queue.
-                drop(std::mem::take(&mut report.deferred));
+                // The coordinate is marked busy: the later parts can queue,
+                // and their untimestamped references are owed (#1038).
+                for deferred in std::mem::take(&mut report.deferred) {
+                    drop(deferred.owing());
+                }
                 flight
             }
             Err(refusal) => {

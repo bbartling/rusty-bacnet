@@ -5,8 +5,9 @@
 //! the subscriber advertised in its SubscribeCOVPropertyMultiple request.
 //! Older changes go first, and the last notification carries the newest with
 //! the untimestamped values; `cov_timed_capture_order_tests` covers latest
-//! changes that do not fit it (#1008). Every envelope names the last change
-//! its notification carries. Time is paused.
+//! changes that do not fit it (#1008), and `cov_untimed_split_tests`
+//! untimestamped values that do not (#1038). Every envelope names the last
+//! change its notification carries. Time is paused.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
@@ -431,10 +432,28 @@ async fn a_part_whose_send_fails_goes_out_again_with_the_rest_at_the_deadline() 
     let first = h.notification().await;
     let mut conveyed = av1_pv_rows(&first);
     h.no_notification().await;
+    // The first part carried only history: the reference completes with the
+    // part carrying its latest change, not before.
+    assert_eq!(av1_completed(&h).await, Some(PropertyValue::Real(0.0)));
     conveyed.extend(take_through(&h, expected.last().unwrap(), SMALL_APDU).await);
     assert_eq!(conveyed, expected, "the failed part once, in order");
+    assert_eq!(
+        av1_completed(&h).await,
+        Some(PropertyValue::Real(f32::from(1 + HELD)))
+    );
     assert_eq!(h.server.cov_counters().timed_changes_dropped, 0);
     h.server.stop().await.unwrap();
+}
+
+/// The Present_Value AV-1's timestamped reference last completed.
+async fn av1_completed(h: &Harness) -> Option<PropertyValue> {
+    let mut table = h.server.cov_table.write().await;
+    table
+        .subscriptions_for(&av1())
+        .into_iter()
+        .find(|sub| sub.timestamped)
+        .and_then(|sub| sub.last_notified_observation.as_ref())
+        .map(|observation| observation.sample().value().clone())
 }
 
 /// PV rows of `object` in a notification that may carry several objects.
