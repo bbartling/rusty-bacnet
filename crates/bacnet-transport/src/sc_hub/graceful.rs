@@ -6,32 +6,26 @@
 //! established peer, awaited Disconnect-Ack, then the AB.7.5.5 WebSocket
 //! close handshake, all under validated bounds with a forceful fallback.
 //!
-//! Normative order (licensed Standard 135-2020 PDF, printed pp. 1401-1409):
+//! Spec basis (licensed Standard 135-2020 PDF, printed pp. 1401-1409):
 //!
-//! - AB.6.2: both peers run a connect/disconnect state machine. While waiting
-//!   for a response after sending Disconnect-Request, a disconnect wait timer
-//!   applies; its duration is a local matter. Closing an existing WebSocket
-//!   connection before entering IDLE shall be performed per AB.7.5.5.
-//! - AB.6.2.3 + Fig. AB-12 (accepting peer): on locally determined
-//!   disconnection in CONNECTED, send Disconnect-Request to the initiating
-//!   peer, start the disconnect wait timer, enter DISCONNECTING; on
-//!   Disconnect-Ack received, close the WebSocket and enter IDLE; on NAK to
-//!   the Request, close; on disconnect-wait expiry, close.
-//! - AB.7.5.5: the WebSocket close handshake shall be performed when
-//!   intentionally closing a connection (RFC 6455), with the close-status to
-//!   error-code map.
+//! - AB.6.2: each side of a connection runs its own setup/teardown state
+//!   machine. A peer that has sent Disconnect-Request runs a disconnect wait
+//!   timer whose length the standard leaves to the implementation, and any
+//!   WebSocket still open on the way back to IDLE is closed the AB.7.5.5 way.
+//! - AB.6.2.3 + Fig. AB-12 (accepting peer, i.e. this hub): deciding locally
+//!   to disconnect while CONNECTED sends Disconnect-Request to the initiating
+//!   peer, arms the disconnect wait timer and moves to DISCONNECTING. From
+//!   there a Disconnect-Ack closes the WebSocket and returns to IDLE, and so
+//!   does a NAK answering the Request or the timer running out.
+//! - AB.7.5.5: a deliberate close uses the RFC 6455 close handshake; the same
+//!   clause maps WebSocket close-status codes to BACnet error codes.
 //!
-//! Corrected role wording (official 2024-04-29 errata summary, item 13,
-//! Annex AB.6.2.3 p. 1405, visually verified redline on errata PDF p. 4):
-//!
-//! - Title: "Disconnecting-ACK message should be from the initiating peer."
-//! - Redline direction: the italic word "initiating" is inserted and the
-//!   struck-through word "accepting" is removed, so the corrected
-//!   DISCONNECTING text reads: "On receipt of a Disconnect-ACK message from
-//!   the initiating peer, close the WebSocket connection, and enter the IDLE
-//!   state." The supplied base PDF still shows the pre-errata "from the
-//!   accepting peer" in AB.6.2.3; this implementation follows the corrected
-//!   "from the initiating peer" direction.
+//! Errata (official 2024-04-29 errata summary, item 13, against Annex
+//! AB.6.2.3 p. 1405; redline checked visually on errata PDF p. 4): in the
+//! accepting peer's DISCONNECTING state, the Disconnect-Ack it waits for comes
+//! from the initiating peer. The supplied base PDF still names the accepting
+//! peer as the sender there, and the redline swaps that one word for
+//! initiating. This implementation follows the corrected reading.
 //!
 //! Adopted close order per established peer: snapshot-then-release the
 //! registry (never hold the Clients map or sink lock across waits), send a

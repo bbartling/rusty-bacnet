@@ -192,14 +192,10 @@ pub(crate) fn extract_property_value<'a>(
 // PropertyReference
 // ---------------------------------------------------------------------------
 
-/// BACnetPropertyReference.
+/// BACnetPropertyReference (Clause 21.6).
 ///
-/// ```text
-/// BACnetPropertyReference ::= SEQUENCE {
-///     propertyIdentifier  [0] BACnetPropertyIdentifier,
-///     propertyArrayIndex  [1] Unsigned OPTIONAL
-/// }
-/// ```
+/// The property identifier in context tag `[0]`, optionally followed by an Unsigned array index
+/// in `[1]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyReference {
     /// Property being referred to.
@@ -249,16 +245,11 @@ impl PropertyReference {
 // BACnetPropertyValue
 // ---------------------------------------------------------------------------
 
-/// BACnetPropertyValue.
+/// BACnetPropertyValue (Clause 21.6).
 ///
-/// ```text
-/// BACnetPropertyValue ::= SEQUENCE {
-///     propertyIdentifier  [0] BACnetPropertyIdentifier,
-///     propertyArrayIndex  [1] Unsigned OPTIONAL,
-///     value               [2] ABSTRACT-SYNTAX.&Type,
-///     priority            [3] Unsigned (1..16) OPTIONAL
-/// }
-/// ```
+/// Four context-tagged members in order: property identifier `[0]`, an optional Unsigned array
+/// index `[1]`, the value inside an opening/closing `[2]` pair (typed by the property), and an
+/// optional priority `[3]`, an Unsigned limited to 1-16.
 ///
 /// The `value` field contains raw application-tagged bytes. The application
 /// layer interprets the value based on the property type.

@@ -1,31 +1,27 @@
 //! `Recipient_List` full ASN.1 framing (ASHRAE 135-2020 Clauses 12.21, 21).
 //!
-//! ```text
-//! Recipient_List ::= BACnetLIST OF BACnetDestination    -- concatenation, no wrapper
+//! The property is a BACnetLIST of `BACnetDestination`, so on the wire it is
+//! the destinations back to back with no list wrapper. A destination has
+//! seven members and none carries a context tag, so they travel in this order
+//! as application-tagged elements (the recipient CHOICE brings its own tags):
 //!
-//! BACnetDestination ::= SEQUENCE {
-//!     valid-days                    BACnetDaysOfWeek,          -- untagged
-//!     from-time                     Time,                      -- untagged
-//!     to-time                       Time,                      -- untagged
-//!     recipient                     BACnetRecipient,           -- CHOICE
-//!     process-identifier            Unsigned32,                -- untagged
-//!     issue-confirmed-notifications BOOLEAN,                   -- untagged
-//!     transitions                   BACnetEventTransitionBits  -- untagged
-//! }
+//! | Member | Wire form |
+//! |---|---|
+//! | `valid-days` | Bit String (`BACnetDaysOfWeek`) |
+//! | `from-time` | Time |
+//! | `to-time` | Time |
+//! | `recipient` | `BACnetRecipient` CHOICE, see below |
+//! | `process-identifier` | Unsigned, 32-bit range |
+//! | `issue-confirmed-notifications` | Boolean |
+//! | `transitions` | Bit String (`BACnetEventTransitionBits`) |
 //!
-//! BACnetRecipient ::= CHOICE { device [0] BACnetObjectIdentifier,
-//!                              address [1] BACnetAddress }
-//!
-//! BACnetAddress ::= SEQUENCE { network-number Unsigned16,      -- untagged
-//!                              mac-address OCTET STRING }      -- untagged
-//! ```
-//!
-//! Tag forms: the destination members are UNTAGGED, so they travel as seven
-//! application-tagged elements in order (Bit String, Time, Time, recipient,
-//! Unsigned, Boolean, Bit String). `device [0]` tags a primitive
+//! `BACnetRecipient` picks either `device [0]`, an object identifier, or
+//! `address [1]`, a `BACnetAddress`. The device form tags a primitive
 //! ObjectIdentifier — a context-specific PRIMITIVE tag 0, length 4.
-//! `BACnetAddress` is constructed, so `address [1]` is an opening tag 1 /
-//! application-tagged Unsigned16 + OCTET STRING / closing tag 1.
+//! `BACnetAddress` is constructed (a 16-bit network number, then the MAC
+//! address as an OCTET STRING, both application-tagged), so `address [1]` is
+//! an opening tag 1 / application-tagged Unsigned16 + OCTET STRING / closing
+//! tag 1.
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};

@@ -87,9 +87,9 @@ pub(crate) struct Indication {
     /// (c) on later passes.
     pub offnormal_value: Option<u64>,
     /// CHANGE_OF_VALUE only: the sample installed as the new detection
-    /// baseline when the transition *fires*. Clause 13.3.3 uses the sample
-    /// at each NORMAL indication as the comparison baseline until another
-    /// NORMAL indication replaces it.
+    /// baseline when the transition *fires*. Under Clause 13.3.3 every
+    /// NORMAL indication resets the comparison baseline to the sample taken
+    /// at that moment.
     pub new_baseline: Option<PropertyValue>,
 }
 
@@ -437,11 +437,11 @@ impl PropertyStateValue {
 
 /// Structured CHANGE_OF_STATE evaluation against a list of alarm values.
 ///
-/// Implements Clause 13.3.2's conditions in the presented order:
-/// (a) NORMAL + monitored value equals an alarm value → OFFNORMAL;
-/// (b) OFFNORMAL + value equals no alarm value → NORMAL;
-/// (c) OFFNORMAL + value equals a *different* alarm value than the one that
-///     caused the last OFFNORMAL transition → re-indicate OFFNORMAL.
+/// Checks Clause 13.3.2's three conditions in the clause's own order. From
+/// NORMAL, a match against the alarm list moves to OFFNORMAL (a). From
+/// OFFNORMAL, losing every match returns to NORMAL (b), and a match on some
+/// *other* alarm value than the one recorded at the last OFFNORMAL transition
+/// indicates OFFNORMAL again (c).
 ///
 /// Condition (c) is optional in the standard. It is implemented
 /// here because without it an enrollment whose monitored value moves between
@@ -510,16 +510,17 @@ fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
 
 /// Structured CHANGE_OF_BITSTRING evaluation against a bitmask and alarm values.
 ///
-/// Clause 13.3.1 conditions: (a) NORMAL + masked value equals an alarm value
-/// → OFFNORMAL; (b) OFFNORMAL + masked value equals none → NORMAL.
-/// Optional condition (c) is deliberately NOT implemented: it requires the
-/// masked value to differ from the one at the last OFFNORMAL indication.
+/// Clause 13.3.1, conditions (a) and (b): after masking, a match against the
+/// alarm list moves NORMAL to OFFNORMAL, and no match moves OFFNORMAL back.
+/// Optional condition (c) is deliberately NOT implemented: it re-indicates
+/// OFFNORMAL only when the masked value has moved to a different alarm
+/// pattern than the one seen at the last OFFNORMAL indication.
 /// No such baseline is retained for bitstrings, and guessing
 /// would re-indicate on every poll while a value sits unchanged in an alarm
 /// pattern — the failure mode issue #166 documented for an unguarded pass.
 ///
-/// Comparison width: `max(mask, value)` with missing bytes zero-filled —
-/// "equals a listed alarm value" requires the whole significant width to
+/// Comparison width: `max(mask, value)` with missing bytes zero-filled — a
+/// match against an alarm pattern needs the whole significant width to
 /// agree, so a mask wider than the monitored bitstring covers bytes the
 /// value does not have (zero) and an alarm pattern set there does NOT match
 /// (the previous `min(mask, alarm, value)` truncation could report OFFNORMAL

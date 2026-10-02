@@ -5,26 +5,33 @@
 //! opening and closing tag 0. Each landing door inside the frame is a pair of
 //! primitive context tags, floor-number `[0]` (Unsigned8) then door-status
 //! `[1]` (BACnetDoorStatus). A car door with no landing doors encodes as the
-//! empty frame.
+//! empty frame. `BACnetAssignedLandingCalls` has the same shape, so both use
+//! the floor-pair helpers.
 
 use bacnet_types::constructed::{BACnetLandingDoorStatus, LandingDoor};
 use bacnet_types::enums::DoorStatus;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::members::{member_content, narrow, unsigned_member};
-use super::MAX_FRAMED_ITEMS;
-use crate::primitives;
-use crate::tags;
+use super::floor_pairs::{decode_floor_pairs, encode_floor_pairs, PairNames};
+
+const NAMES: PairNames = PairNames {
+    value: "landing door status",
+    frame: "landing-doors [0]",
+    entry: "landing door",
+    second: "door-status [1]",
+    second_oversized: "door-status [1] exceeds 32 bits",
+};
 
 /// Encode one `BACnetLandingDoorStatus` SEQUENCE.
 pub fn encode_landing_door_status(buf: &mut BytesMut, value: &BACnetLandingDoorStatus) {
-    tags::encode_opening_tag(buf, 0);
-    for door in &value.landing_doors {
-        primitives::encode_ctx_unsigned(buf, 0, door.floor_number.into());
-        primitives::encode_ctx_enumerated(buf, 1, door.door_status.to_raw());
-    }
-    tags::encode_closing_tag(buf, 0);
+    encode_floor_pairs(
+        buf,
+        value
+            .landing_doors
+            .iter()
+            .map(|door| (door.floor_number, door.door_status.to_raw())),
+    );
 }
 
 /// Decode one `BACnetLandingDoorStatus` SEQUENCE at `offset`.
@@ -48,60 +55,13 @@ pub fn decode_landing_door_status(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetLandingDoorStatus, usize), Error> {
-    let mut oversized = None;
-    let (tag, mut offset) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(0) {
-        return Err(Error::decoding(
-            offset,
-            "landing door status requires landing-doors [0]",
-        ));
-    }
-    let mut landing_doors = Vec::new();
-    loop {
-        let (tag, content) = tags::decode_tag(data, offset)?;
-        if tag.is_closing_tag(0) {
-            if let Some(member) = oversized {
-                return Err(Error::OutOfRange(format!("landing door status {member}")));
-            }
-            return Ok((BACnetLandingDoorStatus { landing_doors }, content));
-        }
-        if landing_doors.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
-                offset,
-                "landing door status exceeds the decoded item limit",
-            ));
-        }
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "landing door requires floor-number [0]",
-            ));
-        }
-        let (floor, next) = member_content(data, content, tag.length)?;
-        let floor_number = narrow(
-            unsigned_member(floor, content)?,
-            "floor-number [0] exceeds an Unsigned8",
-            &mut oversized,
-        );
-
-        let (tag, content) = tags::decode_tag(data, next)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(
-                next,
-                "landing door requires door-status [1]",
-            ));
-        }
-        let (status, next) = member_content(data, content, tag.length)?;
-        let door_status: u32 = narrow(
-            unsigned_member(status, content)?,
-            "door-status [1] exceeds 32 bits",
-            &mut oversized,
-        );
-
-        landing_doors.push(LandingDoor {
+    let (pairs, end) = decode_floor_pairs(data, offset, &NAMES)?;
+    let landing_doors = pairs
+        .into_iter()
+        .map(|(floor_number, status)| LandingDoor {
             floor_number,
-            door_status: DoorStatus::from_raw(door_status),
-        });
-        offset = next;
-    }
+            door_status: DoorStatus::from_raw(status),
+        })
+        .collect();
+    Ok((BACnetLandingDoorStatus { landing_doors }, end))
 }

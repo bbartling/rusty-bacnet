@@ -291,6 +291,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::READ_RANGE => {
                 read_range::response(
                     db,
+                    cov_table,
                     &req,
                     config.read_range_budget,
                     effective_max_apdu,

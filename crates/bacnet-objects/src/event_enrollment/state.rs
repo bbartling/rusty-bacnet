@@ -67,8 +67,8 @@ pub struct EventEnrollmentEvalState {
     /// indication is implementation-defined: here it is `None` until the
     /// first sample, which establishes a baseline without a transition.
     pub cov_baseline: Option<PropertyValue>,
-    /// Domain-tagged identity of the monitored value that caused the last
-    /// transition to OFFNORMAL. CHANGE_OF_STATE condition (c) requires a
+    /// Domain-tagged identity of the monitored value behind the most recent
+    /// OFFNORMAL transition. CHANGE_OF_STATE condition (c) requires a
     /// re-indication only for a different alarm value; retaining the BACnet
     /// datatype keeps equal numeric values from different domains distinct.
     pub last_offnormal_value: Option<u64>,

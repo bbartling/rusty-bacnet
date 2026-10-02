@@ -233,8 +233,8 @@ fn change_of_value_bitmask_criteria() {
         .unwrap();
     assert!(
         evaluate_event_enrollments(&mut db, 1).is_empty(),
-        "only masked bits are significant (13.3.3: 'changes in any of the bits \
-         specified by a bitmask')"
+        "only masked bits are significant (13.3.3: a BIT STRING change counts \
+         only in bits the bitmask selects)"
     );
 
     // The significant bit clearing is a change: NORMAL -> NORMAL, actions run.
