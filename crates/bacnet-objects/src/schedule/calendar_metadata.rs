@@ -9,9 +9,10 @@ use crate::property_metadata::{
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Preserve the legacy property order and the existing read-only status extensions.
-// Date_List and Present_Value remain application-managed; metadata adds no writes
-// or automatic evaluation. Only Description has a network write route.
+// Only rows Clause 12.9 Table 12-11 defines. The table has no Status_Flags,
+// Event_State, Out_Of_Service or Reliability, so Calendar serves none of them
+// (#984). Date_List and Present_Value remain application-managed; metadata adds
+// no writes or automatic evaluation. Only Description has a network write route.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -19,9 +20,6 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DATE_LIST, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::STATUS_FLAGS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -57,9 +55,6 @@ mod tests {
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
             P::DATE_LIST,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -71,7 +66,7 @@ mod tests {
         ];
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
-        assert_eq!(metadata.len(), 10);
+        assert_eq!(metadata.len(), 7);
         assert_eq!(object.property_list().as_ref(), all);
         assert_eq!(object.required_properties().as_ref(), required);
         assert_eq!(
@@ -97,17 +92,10 @@ mod tests {
             );
             object.read_property(row.property_identifier, None).unwrap();
         }
-        let wire: Vec<_> = [
-            P::DESCRIPTION,
-            P::PRESENT_VALUE,
-            P::DATE_LIST,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
-        ]
-        .iter()
-        .map(|p| PropertyValue::Enumerated(p.to_raw()))
-        .collect();
+        let wire: Vec<_> = [P::DESCRIPTION, P::PRESENT_VALUE, P::DATE_LIST]
+            .iter()
+            .map(|p| PropertyValue::Enumerated(p.to_raw()))
+            .collect();
         assert!(object.is_array_property(P::PROPERTY_LIST));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
@@ -115,7 +103,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
-            PropertyValue::Unsigned(6)
+            PropertyValue::Unsigned(3)
         );
         for (index, value) in wire.iter().enumerate() {
             assert_eq!(
@@ -125,7 +113,7 @@ mod tests {
                 *value
             );
         }
-        for index in [7, u32::MAX] {
+        for index in [4, u32::MAX] {
             assert_error(
                 object
                     .read_property(P::PROPERTY_LIST, Some(index))
@@ -178,7 +166,7 @@ mod tests {
             object.read_property(P::DESCRIPTION, None).unwrap(),
             PropertyValue::CharacterString("updated".into())
         );
-        for p in [P::DATE_LIST, P::PRESENT_VALUE, P::OUT_OF_SERVICE] {
+        for p in [P::DATE_LIST, P::PRESENT_VALUE] {
             for index in [None, Some(0), Some(1), Some(u32::MAX)] {
                 assert_error(
                     object
@@ -188,7 +176,12 @@ mod tests {
                 );
             }
         }
+        // Table 12-11 defines none of these, so reads and writes alike report
+        // the property unknown rather than read-only.
         for p in [
+            P::STATUS_FLAGS,
+            P::EVENT_STATE,
+            P::OUT_OF_SERVICE,
             P::RELIABILITY,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
