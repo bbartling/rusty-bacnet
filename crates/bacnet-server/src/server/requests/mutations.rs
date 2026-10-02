@@ -129,7 +129,7 @@ impl Request<'_> {
         }) {
             return self.error::<T>(&error);
         }
-        let (result, exact_changes, plans) = {
+        let (result, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
                 &db,
@@ -162,10 +162,21 @@ impl Request<'_> {
                 };
                 capture.run(&db);
             }
-            (result, changes, plans)
+            let schedule_cov = match &result {
+                Ok(oid) => {
+                    crate::schedule::reevaluate_written(
+                        &mut db,
+                        std::slice::from_ref(oid),
+                        cov_table,
+                    )
+                    .await
+                }
+                Err(_) => Default::default(),
+            };
+            (result, changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
-        match result {
+        let response = match result {
             Ok(oid) => {
                 written_oids.push(oid);
                 if crate::life_safety_cov::is_life_safety_object(oid) {
@@ -176,7 +187,10 @@ impl Request<'_> {
                 self.simple_ack()
             }
             Err(e) => self.error::<T>(&e),
-        }
+        };
+        // Targets a written Schedule commanded on re-evaluation.
+        schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes);
+        response
     }
 
     pub(super) async fn write_property_multiple<T: TransportPort + 'static>(
@@ -193,7 +207,7 @@ impl Request<'_> {
             staging_plans,
             timed_revisits,
         } = effects;
-        let (outcome, exact_changes, plans) = {
+        let (outcome, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
             // Lock order: database, then a short table read. Each attempt is
             // captured as it commits, under this guard (#856).
@@ -223,7 +237,9 @@ impl Request<'_> {
             let changes = snapshots.changes(&db, committed_oids);
             timed_revisits.extend_from_slice(observer.life_safety_queued());
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
-            (outcome, changes, plans)
+            let schedule_cov =
+                crate::schedule::reevaluate_written(&mut db, committed_oids, cov_table).await;
+            (outcome, changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
         let response = match outcome {
@@ -259,6 +275,8 @@ impl Request<'_> {
                 .filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)),
         );
         *life_safety_cov_changes = exact_changes;
+        // Targets a written Schedule commanded on re-evaluation.
+        schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes);
         response
     }
 
