@@ -328,8 +328,9 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
 
     // Send a SubscribeCOVPropertyMultiple request for 2 properties:
     // PRESENT_VALUE (matching the expired key) and STATUS_FLAGS.
-    // Expired subscriptions must be purged before evaluating new keys,
-    // so both properties are counted as new (2), which exceeds max_subscriptions_per_peer (1).
+    // Expired subscriptions must be purged before evaluating new keys, so
+    // PRESENT_VALUE is new and takes the one slot of
+    // max_subscriptions_per_peer, and STATUS_FLAGS is past it.
     let request = SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,
         issue_confirmed_notifications: false,
@@ -365,12 +366,17 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
     let res = crate::handlers::handle_subscribe_cov_property_multiple_with_initial(
         &mut table, &db, &peer, &buf,
     );
-    assert!(
-        res.is_err(),
-        "expected admission rejection when new keys exceed peer quota, got {res:?}"
-    );
-    // Expired subscription was purged and over-quota request rejected
-    assert_eq!(table.len(), 0);
+    let Err(refusal) = res else {
+        panic!("expected admission rejection when new keys exceed peer quota, got {res:?}");
+    };
+    // The expired subscription was purged, so the request's Present_Value is
+    // a new one that fits and Status_Flags is the reference refused.
+    assert_eq!(refusal.refused, Some(1));
+    assert_eq!(refusal.committed.len(), 1);
+    assert_eq!(table.len(), 1);
+    let counters = table.counters().snapshot();
+    assert_eq!(counters.subscriptions_purged, 1);
+    assert_eq!(counters.subscriptions_created, 2);
 }
 
 #[tokio::test]

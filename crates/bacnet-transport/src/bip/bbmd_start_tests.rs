@@ -7,6 +7,7 @@ use super::own_broadcast_tests::{
     assert_no_bvll, assert_own_forwarded, port_of, recv_bvll, udp, NPDU,
 };
 use super::*;
+use crate::port_ownership::{lost_port, restart, ATTEMPTS};
 
 const PORT: u16 = 47808;
 /// Stand-ins for the host's LAN addresses; tests only inject them.
@@ -60,7 +61,6 @@ async fn start_on_free_port(
     u16,
     Result<mpsc::Receiver<ReceivedNpdu>, Error>,
 ) {
-    const ATTEMPTS: usize = 8;
     let mut attempt = 1;
     loop {
         let port = free_port();
@@ -70,11 +70,7 @@ async fn start_on_free_port(
             let _ = std::fs::remove_file(path);
         }
         match started {
-            Err(Error::Transport(ref err))
-                if attempt < ATTEMPTS && crate::port_ownership::lost_to_another_socket(err) =>
-            {
-                attempt += 1
-            }
+            Err(Error::Transport(ref err)) if lost_port(attempt, err) => attempt += 1,
             started => return (transport, port, started),
         }
     }
@@ -225,11 +221,7 @@ async fn wildcard_bbmd_with_several_own_rows_fails_start_and_keeps_its_config() 
     // The second half gives the port back and takes it again, which another
     // process can win (#1032, #1068). A lost port reruns the test on a fresh
     // one; a start that really leaked its port would fail every attempt.
-    const ATTEMPTS: usize = 8;
     for attempt in 1..=ATTEMPTS {
-        let lost = |err: &std::io::Error| {
-            attempt < ATTEMPTS && crate::port_ownership::lost_to_another_socket(err)
-        };
         let (mut bbmd, port, started) = start_on_free_port(|port| {
             wildcard_bbmd(
                 port,
@@ -259,13 +251,13 @@ async fn wildcard_bbmd_with_several_own_rows_fails_start_and_keeps_its_config() 
         // can bind it, and a corrected retry starts on it.
         match std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)) {
             Ok(socket) => drop(socket),
-            Err(err) if lost(&err) => continue,
+            Err(err) if lost_port(attempt, &err) => continue,
             Err(err) => panic!("a failed start releases its port: {err}"),
         }
         bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
         let _rx = match bbmd.start().await {
             Ok(rx) => rx,
-            Err(Error::Transport(ref err)) if lost(err) => continue,
+            Err(Error::Transport(ref err)) if lost_port(attempt, err) => continue,
             Err(err) => panic!("the corrected retry starts: {err}"),
         };
         assert_eq!(
@@ -412,154 +404,192 @@ async fn started_on_lan(
 
 #[tokio::test]
 async fn restart_chooses_the_bbmd_address_again_and_drops_the_stale_self_row() {
-    let bdt_peer = udp().await;
-    let foreign = udp().await;
-    let (mut bbmd, _rx, port) = started_on_lan(true).await;
-    let peer_row = row(Ipv4Addr::LOCALHOST, port_of(&bdt_peer));
-    let loopback_row = row(Ipv4Addr::LOCALHOST, port);
-    {
-        // 127.0.0.1 is not among the host's addresses yet, so its row at the
-        // bound port is not the BBMD's own, and a self row for LAN is added.
-        let mut state = bbmd.bbmd_state().unwrap().lock().await;
-        state
-            .set_bdt(vec![peer_row.clone(), loopback_row.clone()])
-            .unwrap();
-        assert_eq!(
-            state.bdt(),
-            &[peer_row.clone(), loopback_row.clone(), row(LAN, port)]
-        );
-        assert_eq!(
-            state.register_foreign_device([127, 0, 0, 1], port_of(&foreign), 60),
-            BvlcResultCode::SUCCESSFUL_COMPLETION
-        );
-    }
-    bbmd.stop().await.unwrap();
+    // Each run starts on a fresh port; see `restart` for why it can lose it.
+    for attempt in 1..=ATTEMPTS {
+        let bdt_peer = udp().await;
+        let foreign = udp().await;
+        let (mut bbmd, _rx, port) = started_on_lan(true).await;
+        let peer_row = row(Ipv4Addr::LOCALHOST, port_of(&bdt_peer));
+        let loopback_row = row(Ipv4Addr::LOCALHOST, port);
+        {
+            // 127.0.0.1 is not among the host's addresses yet, so its row at
+            // the bound port is not the BBMD's own, and a self row for LAN is
+            // added.
+            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            state
+                .set_bdt(vec![peer_row.clone(), loopback_row.clone()])
+                .unwrap();
+            assert_eq!(
+                state.bdt(),
+                &[peer_row.clone(), loopback_row.clone(), row(LAN, port)]
+            );
+            assert_eq!(
+                state.register_foreign_device([127, 0, 0, 1], port_of(&foreign), 60),
+                BvlcResultCode::SUCCESSFUL_COMPLETION
+            );
+        }
+        bbmd.stop().await.unwrap();
 
-    // Restart: now 127.0.0.1 is local, so its row is the BBMD's own.
-    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST, LAN], Some(LAN))));
-    let mut rx = bbmd.start().await.unwrap();
-    let own = (Ipv4Addr::LOCALHOST.octets(), port);
-    assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
-    {
-        let mut state = bbmd.bbmd_state().unwrap().lock().await;
-        assert_eq!(state.local_address(), own);
-        // The self row appended for LAN is gone, not left behind as a peer.
-        assert_eq!(state.bdt(), &[peer_row, loopback_row]);
-        assert_eq!(state.fdt().len(), 1, "the FDT survives the restart");
-    }
+        // Restart: now 127.0.0.1 is local, so its row is the BBMD's own.
+        bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST, LAN], Some(LAN))));
+        let Some(started) = restart(&mut bbmd, attempt).await else {
+            continue;
+        };
+        let mut rx = started.unwrap();
+        let own = (Ipv4Addr::LOCALHOST.octets(), port);
+        assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
+        {
+            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            assert_eq!(state.local_address(), own);
+            // The self row appended for LAN is gone, not left behind as a peer.
+            assert_eq!(state.bdt(), &[peer_row, loopback_row]);
+            assert_eq!(state.fdt().len(), 1, "the FDT survives the restart");
+        }
 
-    bbmd.send_broadcast(NPDU).await.unwrap();
-    assert_own_forwarded(&recv_bvll(&bdt_peer).await, own, "BDT peer");
-    assert_own_forwarded(&recv_bvll(&foreign).await, own, "foreign device");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), rx.recv())
-            .await
-            .is_err(),
-        "own broadcast echo must not be delivered"
-    );
-    assert_no_bvll(&bdt_peer, "BDT peer").await;
-    assert_no_bvll(&foreign, "foreign device").await;
-    bbmd.stop().await.unwrap();
+        bbmd.send_broadcast(NPDU).await.unwrap();
+        assert_own_forwarded(&recv_bvll(&bdt_peer).await, own, "BDT peer");
+        assert_own_forwarded(&recv_bvll(&foreign).await, own, "foreign device");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .is_err(),
+            "own broadcast echo must not be delivered"
+        );
+        assert_no_bvll(&bdt_peer, "BDT peer").await;
+        assert_no_bvll(&foreign, "foreign device").await;
+        bbmd.stop().await.unwrap();
+        return;
+    }
 }
 
 #[tokio::test]
 async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
-    let (mut bbmd, _rx, port) = started_on_lan(true).await;
-    let listed = vec![
-        row(REMOTE_PEER, PORT),
-        row(Ipv4Addr::LOCALHOST, port),
-        row(OTHER_LAN, port),
-    ];
-    let (own, bdt) = {
-        let mut state = bbmd.bbmd_state().unwrap().lock().await;
-        state.set_bdt(listed.clone()).unwrap();
-        assert_eq!(
-            state.register_foreign_device([127, 0, 0, 1], 47809, 60),
-            BvlcResultCode::SUCCESSFUL_COMPLETION
+    // Each run starts on a fresh port; see `restart` for why it can lose it.
+    // The failing restart binds before it chooses the address, so a lost port
+    // would fail it with the wrong error.
+    for attempt in 1..=ATTEMPTS {
+        let (mut bbmd, _rx, port) = started_on_lan(true).await;
+        let listed = vec![
+            row(REMOTE_PEER, PORT),
+            row(Ipv4Addr::LOCALHOST, port),
+            row(OTHER_LAN, port),
+        ];
+        let (own, bdt) = {
+            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            state.set_bdt(listed.clone()).unwrap();
+            assert_eq!(
+                state.register_foreign_device([127, 0, 0, 1], 47809, 60),
+                BvlcResultCode::SUCCESSFUL_COMPLETION
+            );
+            (state.local_address(), state.bdt().to_vec())
+        };
+        assert_eq!(own, (LAN.octets(), port));
+        bbmd.stop().await.unwrap();
+
+        // Both listed rows at the bound port are now local: no choice is
+        // possible.
+        bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST, OTHER_LAN], Some(LAN))));
+        let Some(started) = restart(&mut bbmd, attempt).await else {
+            continue;
+        };
+        let text = started.unwrap_err().to_string();
+        assert!(
+            text.contains("the BDT has rows for several local IPv4 addresses"),
+            "{text}"
         );
-        (state.local_address(), state.bdt().to_vec())
-    };
-    assert_eq!(own, (LAN.octets(), port));
-    bbmd.stop().await.unwrap();
+        assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
+        {
+            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            assert_eq!(state.local_address(), own);
+            assert_eq!(state.bdt(), bdt.as_slice());
+            assert_eq!(state.fdt().len(), 1);
+        }
 
-    // Both listed rows at the bound port are now local: no choice is possible.
-    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST, OTHER_LAN], Some(LAN))));
-    let text = bbmd.start().await.unwrap_err().to_string();
-    assert!(
-        text.contains("the BDT has rows for several local IPv4 addresses"),
-        "{text}"
-    );
-    assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
-    {
-        let mut state = bbmd.bbmd_state().unwrap().lock().await;
-        assert_eq!(state.local_address(), own);
-        assert_eq!(state.bdt(), bdt.as_slice());
-        assert_eq!(state.fdt().len(), 1);
+        // With one of them local again, the same transport restarts with it,
+        // and the self row appended for LAN goes.
+        bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
+        let Some(started) = restart(&mut bbmd, attempt).await else {
+            continue;
+        };
+        let _rx = started.unwrap();
+        let state = bbmd.bbmd_state().unwrap().lock().await;
+        assert_eq!(state.local_address(), (Ipv4Addr::LOCALHOST.octets(), port));
+        assert_eq!(state.bdt(), listed.as_slice());
+        drop(state);
+        bbmd.stop().await.unwrap();
+        return;
     }
-
-    // With one of them local again, the same transport restarts with it, and
-    // the self row appended for LAN goes.
-    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
-    let _rx = bbmd.start().await.unwrap();
-    let state = bbmd.bbmd_state().unwrap().lock().await;
-    assert_eq!(state.local_address(), (Ipv4Addr::LOCALHOST.octets(), port));
-    assert_eq!(state.bdt(), listed.as_slice());
-    drop(state);
-    bbmd.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_state() {
-    let (mut bbmd, _rx, port) = started_on_lan(false).await;
-    // A full BDT that lists this BBMD's row for LAN, so none was appended.
-    let mut full: Vec<BdtEntry> = (1..BbmdState::MAX_BDT_ENTRIES as u32)
-        .map(|i| row(Ipv4Addr::from(0x0A00_0000 + i), PORT))
-        .collect();
-    full.push(row(LAN, port));
-    bbmd.bbmd_state()
-        .unwrap()
-        .lock()
-        .await
-        .set_bdt(full.clone())
-        .unwrap();
-    bbmd.stop().await.unwrap();
+    // Each run starts on a fresh port; see `restart` for why it can lose it.
+    // The restart binds before it chooses the address, so a lost port would
+    // fail it with the wrong error.
+    for attempt in 1..=ATTEMPTS {
+        let (mut bbmd, _rx, port) = started_on_lan(false).await;
+        // A full BDT that lists this BBMD's row for LAN, so none was appended.
+        let mut full: Vec<BdtEntry> = (1..BbmdState::MAX_BDT_ENTRIES as u32)
+            .map(|i| row(Ipv4Addr::from(0x0A00_0000 + i), PORT))
+            .collect();
+        full.push(row(LAN, port));
+        bbmd.bbmd_state()
+            .unwrap()
+            .lock()
+            .await
+            .set_bdt(full.clone())
+            .unwrap();
+        bbmd.stop().await.unwrap();
 
-    // LAN is gone and the route now leaves from OTHER_LAN, whose self row
-    // does not fit.
-    bbmd.local_ipv4_for_test = Some(Ok((vec![OTHER_LAN], Some(OTHER_LAN))));
-    let err = bbmd.start().await.unwrap_err();
+        // LAN is gone and the route now leaves from OTHER_LAN, whose self row
+        // does not fit.
+        bbmd.local_ipv4_for_test = Some(Ok((vec![OTHER_LAN], Some(OTHER_LAN))));
+        let Some(started) = restart(&mut bbmd, attempt).await else {
+            continue;
+        };
+        let err = started.unwrap_err();
 
-    assert!(matches!(err, Error::Encoding(_)), "{err:?}");
-    let text = err.to_string();
-    let moved =
-        format!("BBMD restart moved its own B/IP address from {LAN}:{port} to {OTHER_LAN}:{port}");
-    assert!(
-        text.contains(&moved) && text.contains("would exceed the BDT limit of 128 entries"),
-        "{text}"
-    );
-    assert!(bbmd.socket.is_none());
-    let state = bbmd.bbmd_state().unwrap().lock().await;
-    assert_eq!(state.local_address(), (LAN.octets(), port));
-    assert_eq!(state.bdt(), full.as_slice());
+        assert!(matches!(err, Error::Encoding(_)), "{err:?}");
+        let text = err.to_string();
+        let moved = format!(
+            "BBMD restart moved its own B/IP address from {LAN}:{port} to {OTHER_LAN}:{port}"
+        );
+        assert!(
+            text.contains(&moved) && text.contains("would exceed the BDT limit of 128 entries"),
+            "{text}"
+        );
+        assert!(bbmd.socket.is_none());
+        let state = bbmd.bbmd_state().unwrap().lock().await;
+        assert_eq!(state.local_address(), (LAN.octets(), port));
+        assert_eq!(state.bdt(), full.as_slice());
+        return;
+    }
 }
 
 #[tokio::test]
 async fn explicit_interface_restart_keeps_the_bbmd_address_without_locking_the_state() {
-    let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
-    bbmd.enable_bbmd(Vec::new());
-    let _rx = bbmd.start().await.unwrap();
-    let own = (Ipv4Addr::LOCALHOST.octets(), bbmd.port);
-    bbmd.stop().await.unwrap();
+    // Each run starts on a fresh port; see `restart` for why it can lose it.
+    for attempt in 1..=ATTEMPTS {
+        let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+        bbmd.enable_bbmd(Vec::new());
+        let _rx = bbmd.start().await.unwrap();
+        let own = (Ipv4Addr::LOCALHOST.octets(), bbmd.port);
+        bbmd.stop().await.unwrap();
 
-    // A restart that chose the address again would wait for this guard.
-    let state = Arc::clone(bbmd.bbmd_state().unwrap());
-    let guard = state.lock().await;
-    let _rx = tokio::time::timeout(Duration::from_secs(2), bbmd.start())
-        .await
-        .expect("an explicit-interface restart does not lock the BBMD state")
-        .unwrap();
-    assert_eq!(guard.local_address(), own);
-    drop(guard);
-    assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
-    bbmd.stop().await.unwrap();
+        // A restart that chose the address again would wait for this guard.
+        let state = Arc::clone(bbmd.bbmd_state().unwrap());
+        let guard = state.lock().await;
+        let restarted = tokio::time::timeout(Duration::from_secs(2), restart(&mut bbmd, attempt))
+            .await
+            .expect("an explicit-interface restart does not lock the BBMD state");
+        let Some(started) = restarted else {
+            continue;
+        };
+        let _rx = started.unwrap();
+        assert_eq!(guard.local_address(), own);
+        drop(guard);
+        assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
+        bbmd.stop().await.unwrap();
+        return;
+    }
 }

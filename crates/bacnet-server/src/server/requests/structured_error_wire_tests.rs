@@ -276,6 +276,8 @@ async fn subscribe_cov_property_multiple_refusals_go_out_in_their_choice() {
         .concat(),
         "golden vector: (BINARY_VALUE, 99) PRESENT_VALUE, OBJECT / UNKNOWN_OBJECT"
     );
+    // The good reference before a refused one stays subscribed (#1058); the
+    // second request renews it, and the zero lifetime changes nothing.
     for (what, request, expected) in [
         (
             "a property that does not exist, after a good reference",
@@ -324,7 +326,14 @@ async fn subscribe_cov_property_multiple_refusals_go_out_in_their_choice() {
         ),
     ] {
         assert_eq!(wire(&fixture, SCPM, request).await, expected, "{what}");
-        assert_eq!(fixture.table.read().await.len(), 0, "{what}");
+        let mut table = fixture.table.write().await;
+        assert_eq!(table.len(), 1, "{what}");
+        let kept: Vec<_> = table
+            .subscriptions_for(&bv)
+            .into_iter()
+            .map(|sub| sub.monitored_property)
+            .collect();
+        assert_eq!(kept, [Some(PropertyIdentifier::PRESENT_VALUE)], "{what}");
     }
 }
 

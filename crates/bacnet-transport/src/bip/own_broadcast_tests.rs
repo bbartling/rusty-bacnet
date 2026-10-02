@@ -1,6 +1,7 @@
 //! A BBMD forwards its own broadcasts to BDT peers and foreign devices (#937).
 
 use super::*;
+use crate::port_ownership::{restart, ATTEMPTS};
 use tokio::time::timeout;
 
 /// A global-broadcast Who-Is NPDU.
@@ -289,54 +290,62 @@ async fn bbmd_own_broadcast_queue_overflow_never_fails_the_local_broadcast() {
 
 #[tokio::test]
 async fn started_bbmd_forwards_its_own_broadcasts_across_restart() {
-    let bdt_peer = udp().await;
-    let foreign = udp().await;
-    let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
-    bbmd.enable_bbmd(vec![bdt_entry(LOCALHOST, port_of(&bdt_peer), [255; 4])]);
-    bbmd.enable_foreign_device_registration(ForeignDevicePolicy::default());
-    let mut rx = bbmd.start().await.unwrap();
-    let origin = decode_bip_mac(bbmd.local_mac()).unwrap();
+    // Each run starts on a fresh port; see `restart` for why it can lose it.
+    'run: for attempt in 1..=ATTEMPTS {
+        let bdt_peer = udp().await;
+        let foreign = udp().await;
+        let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+        bbmd.enable_bbmd(vec![bdt_entry(LOCALHOST, port_of(&bdt_peer), [255; 4])]);
+        bbmd.enable_foreign_device_registration(ForeignDevicePolicy::default());
+        let mut rx = bbmd.start().await.unwrap();
+        let origin = decode_bip_mac(bbmd.local_mac()).unwrap();
 
-    let mut register = BytesMut::new();
-    encode_bvll(
-        &mut register,
-        BvlcFunction::REGISTER_FOREIGN_DEVICE,
-        &60u16.to_be_bytes(),
-    )
-    .unwrap();
-    foreign
-        .send_to(
-            &register,
-            SocketAddrV4::new(Ipv4Addr::from(origin.0), origin.1),
+        let mut register = BytesMut::new();
+        encode_bvll(
+            &mut register,
+            BvlcFunction::REGISTER_FOREIGN_DEVICE,
+            &60u16.to_be_bytes(),
         )
-        .await
         .unwrap();
-    assert_eq!(
-        decode_bvlc_result_code(&recv_bvll(&foreign).await).unwrap(),
-        BvlcResultCode::SUCCESSFUL_COMPLETION
-    );
-
-    for round in ["first start", "restart"] {
-        if round == "restart" {
-            bbmd.stop().await.unwrap();
-            assert!(bbmd.own_broadcast.is_none(), "stop drops the forwarder");
-            rx = bbmd.start().await.unwrap();
-        }
-        bbmd.send_broadcast(NPDU).await.unwrap();
-        assert_own_forwarded(&recv_bvll(&bdt_peer).await, origin, round);
-        assert_own_forwarded(&recv_bvll(&foreign).await, origin, round);
-        // Its local copy reaches its own socket here and is dropped as an echo.
-        assert!(
-            timeout(Duration::from_millis(100), rx.recv())
-                .await
-                .is_err(),
-            "{round}: own broadcast echo must not be delivered"
+        foreign
+            .send_to(
+                &register,
+                SocketAddrV4::new(Ipv4Addr::from(origin.0), origin.1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            decode_bvlc_result_code(&recv_bvll(&foreign).await).unwrap(),
+            BvlcResultCode::SUCCESSFUL_COMPLETION
         );
-        // Nor forwarded again as if another device had sent it.
-        assert_no_bvll(&bdt_peer, round).await;
-        assert_no_bvll(&foreign, round).await;
+
+        for round in ["first start", "restart"] {
+            if round == "restart" {
+                bbmd.stop().await.unwrap();
+                assert!(bbmd.own_broadcast.is_none(), "stop drops the forwarder");
+                let Some(started) = restart(&mut bbmd, attempt).await else {
+                    continue 'run;
+                };
+                rx = started.unwrap();
+            }
+            bbmd.send_broadcast(NPDU).await.unwrap();
+            assert_own_forwarded(&recv_bvll(&bdt_peer).await, origin, round);
+            assert_own_forwarded(&recv_bvll(&foreign).await, origin, round);
+            // Its local copy reaches its own socket here and is dropped as an
+            // echo.
+            assert!(
+                timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                    .is_err(),
+                "{round}: own broadcast echo must not be delivered"
+            );
+            // Nor forwarded again as if another device had sent it.
+            assert_no_bvll(&bdt_peer, round).await;
+            assert_no_bvll(&foreign, round).await;
+        }
+        bbmd.stop().await.unwrap();
+        return;
     }
-    bbmd.stop().await.unwrap();
 }
 
 #[tokio::test]

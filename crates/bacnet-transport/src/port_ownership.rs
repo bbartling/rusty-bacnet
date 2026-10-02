@@ -15,6 +15,13 @@
 
 use std::io;
 
+#[cfg(test)]
+use crate::port::{ReceivedNpdu, TransportPort};
+#[cfg(test)]
+use bacnet_types::error::Error;
+#[cfg(test)]
+use tokio::sync::mpsc;
+
 /// Keep an unshared socket's port to itself. Call it before `bind`.
 ///
 /// Sets SO_EXCLUSIVEADDRUSE, which refuses every other bind to the port while
@@ -73,6 +80,42 @@ pub(crate) fn lost_to_another_socket(err: &io::Error) -> bool {
             || (cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied))
 }
 
+/// How many times a test that can lose its port to another socket runs, each
+/// time on a fresh port.
+#[cfg(test)]
+pub(crate) const ATTEMPTS: usize = 8;
+
+/// Whether `err`, from run `attempt` of such a test, is a bind that another
+/// socket beat to the port, so the test may go again on a fresh one (#1032,
+/// #1068, #1070, #1095). Never on the last run: a node that really kept its
+/// port fails every run, and the last one reports it.
+#[cfg(test)]
+pub(crate) fn lost_port(attempt: usize, err: &io::Error) -> bool {
+    attempt < ATTEMPTS && lost_to_another_socket(err)
+}
+
+/// Starts a stopped `transport` again, for the restart tests. The restart
+/// rebinds the port the first start was given, and another process can take
+/// it while the transport is stopped (#1070). `None` means it did, and the
+/// test goes again from its first start, which binds a fresh port; the last
+/// run keeps the bind's error, so a transport that really kept its port fails
+/// every run.
+///
+/// For a transport whose first start let the OS choose the port, the restart
+/// binds it without SO_REUSEADDR, and every OS refuses such a bind while
+/// another socket holds the port. The macOS gap in
+/// [`lost_to_another_socket`] needs a SO_REUSEADDR bind, so it does not apply.
+#[cfg(test)]
+pub(crate) async fn restart(
+    transport: &mut impl TransportPort,
+    attempt: usize,
+) -> Option<Result<mpsc::Receiver<ReceivedNpdu>, Error>> {
+    match transport.start().await {
+        Err(Error::Transport(ref err)) if lost_port(attempt, err) => None,
+        started => Some(started),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -92,5 +135,18 @@ mod tests {
         drop(socket);
         // UDP has no TIME_WAIT: the port is free as soon as its owner closes.
         UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+    }
+
+    /// A port held by another socket reruns every run but the last, so a
+    /// leak still fails the test.
+    #[test]
+    fn a_lost_port_reruns_every_run_but_the_last() {
+        let holder = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let err = UdpSocket::bind(holder.local_addr().unwrap()).unwrap_err();
+        assert!((1..super::ATTEMPTS).all(|attempt| super::lost_port(attempt, &err)));
+        assert!(!super::lost_port(super::ATTEMPTS, &err));
+        // An AddrInUse the transport made up, not the OS, is never a lost port.
+        let made_up = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        assert!(!super::lost_port(1, &made_up));
     }
 }

@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 85 |
+| Priority | P1 | 86 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 57 |
+| Status | supported-with-clause-evidence | 58 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -38,7 +38,7 @@
 | `BACNET-12-CONFIGURED-BIP-PORT` | Clause12.56/Table12-71 application footnote25; printed551-557/PDF553-559 configuration activation, MAC/APDU/DNS; official2024-04-29 errata item23 (Link_Speed optional) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-SCHEDULE-LOCAL-REFERENCES` | Clause 12.24 Table 12-28 (printed308/PDF310), output continuation (printed309/PDF311), reference property (printed311/PDF313); Clause21 BACnetDeviceObjectPropertyReference (printed891/PDF893) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-SCHEDULE-EVALUATION` | Clause 12.24.4 Present_Value, 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule, 12.24.8 Exception_Schedule and 12.24.9 Schedule_Default; Clause 21 BACnetSpecialEvent and BACnetTimeValue; Clause 12 note on unspecified dates | P1 | supported-with-clause-evidence | 2 |
-| `BACNET-12-SCHEDULE-WRITES` | Clause 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule and 12.24.8 Exception_Schedule (printed310-311/PDF312-313), recalculation in 12.24.4 (printed309/PDF311); Clauses 15.9.1.3 and 15.10; Clause 21 BACnetDailySchedule, BACnetSpecialEvent and BACnetDateRange | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-12-SCHEDULE-WRITES` | Clause 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule and 12.24.8 Exception_Schedule (printed310-311/PDF312-313), recalculation and Present_Value writability in 12.24.4 (printed309/PDF311), 12.24.14 Out_Of_Service (printed312/PDF314); Clauses 15.9.1.3 and 15.10; Clause 21 BACnetDailySchedule, BACnetSpecialEvent and BACnetDateRange | P1 | supported-with-clause-evidence | 5 |
 | `BACNET-12-SCHEDULE-RELIABILITY` | Clause 12.24.13 Reliability, 12.24.12 Status_Flags and 12.24.14 Out_Of_Service (printed311-312/PDF313-314); output rule in 12.24.4 (printed309/PDF311) | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-AUDIT-REPORTER-DELAY` | Clause 12.63 / Table 12-82, printed page 619 / PDF page 621; Maximum_Send_Delay and Send_Now printed pages 621-622 / PDF pages 623-624; Clause 19.6.6 and Table 19-5 (partial-profile loss filtering remains unresolved) | P1 | in-progress | 5 |
 | `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
@@ -72,6 +72,7 @@
 | `BACNET-12-ACCESS-CREDENTIAL-REQUIRED-ROWS` | Clause 12.35 and Table 12-40 (Global_Identifier, Reason_For_Disable, Authentication_Factors, Activation_Time, Expiration_Time, Credential_Disable, Assigned_Access_Rights); Clauses 12.35.5, 12.35.9, 12.35.10, 12.35.11, 12.35.12, 12.35.13 and 12.35.18; Clause 21 BACnetAssignedAccessRights, BACnetCredentialAuthenticationFactor, BACnetAuthenticationFactor, BACnetAuthenticationFactorType, BACnetAccessAuthenticationFactorDisable, BACnetAccessCredentialDisable and BACnetAccessCredentialDisableReason; Clause 15.5 ReadProperty and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-ACCESS-DOOR-PULSE-TIMING` | Clause 12.26 and Table 12-30 (Door_Pulse_Time, Door_Extended_Pulse_Time, Door_Open_Too_Long_Time, Current_Command_Priority); Clauses 12.26.4, 12.26.16, 12.26.17, 12.26.19 and 12.26.39; Clause 21 BACnetOptionalUnsigned; Clause 19 command prioritization; Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-UNDEFINED-PROPERTY-ROWS` | Clause 12 property tables: Tables 12-5 (Averaging), 12-12 (Command), 12-14 (Event Enrollment), 12-16 (File), 12-17 (Group), 12-24 (Notification Class), 12-31 (Event Log), 12-32 (Load Control), 12-34 (Structured View), 12-36 (Access Point), 12-37 (Access Zone), 12-38 (Access User), 12-39 (Access Rights) and 12-40 (Access Credential); the Status_Flags descriptions of Clauses 12.10, 12.12, 12.21, 12.27, 12.28, 12.33, 12.34 and 12.35; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-LOOP-PROPERTY-SET` | Clause 12.17 and Table 12-20 (Controlled_Variable_Units, Action, Priority_For_Writing; footnotes 1 to 3 for the gain-constant units rows); Clause 21 BACnetAction and BACnetEngineeringUnits; Clause 12.1.5.1; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-12-DEVICE-ACTIVE-COV-SUBSCRIPTIONS` | Clause 12.11, Table 12-13 and 12.11.31; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetObjectPropertyReference, ReadProperty-ACK, and ReadAccessResult productions | P1 | in-progress | 1 |
 | `BACNET-12-DEVICE-ACTIVE-COV-MULTIPLE-SUBSCRIPTIONS` | Clause 12.11, Table 12-13 footnote 18 and Active_COV_Multiple_Subscriptions; Clause 13.16.2; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVMultipleSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetPropertyReference, ReadProperty-ACK, and ReadAccessResult productions | P1 | in-progress | 1 |
@@ -98,7 +99,7 @@
 | `BACNET-15-LIST-ELEMENT-OUTBOUND-VALIDATION` | Clauses 15.1.1.1 and 15.2.1.1 (printed731/733, PDF733/735) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-15-LIST-ELEMENT-TARGET-KIND` | Clauses 15.1.1.3.1 and 15.2.1.3.1 with the service procedures of 15.1 and 15.2 (printed732/734, PDF734/736); Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); local licensed source inspected | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-15-LIST-ELEMENT-SEMANTICS` | Clauses 15.1.1.3, 15.1.2, 15.2.1.3 and 15.2.2 (printed732-734, PDF734-736); Clause 12.1.5.2 (BACnetLIST elements); Clause 21 BACnet-Error and ChangeList-Error productions; local licensed source inspected | P1 | supported-with-clause-evidence | 7 |
-| `BACNET-21-STRUCTURED-ERROR-BODIES` | Clause 21 BACnet-Error production (printed 871-872, PDF 873-874) and the CreateObject-Error, ConfirmedPrivateTransfer-Error (printed 873, PDF 875), SubscribeCOVPropertyMultiple-Error, WritePropertyMultiple-Error and VTClose-Error productions (printed 880, PDF 882); Clauses 13.16.1.3, 13.16.2 and 13.16.3.2 (printed 710-713, PDF 712-715); 15.3.1.3 and the 15.3 service procedure (printed 735-737, PDF 737-739); 16.2.1.3 (printed 762, PDF 764); 17.3.1.3 (printed 783, PDF 785); local licensed source inspected | P1 | supported-with-clause-evidence | 5 |
+| `BACNET-21-STRUCTURED-ERROR-BODIES` | Clause 21 BACnet-Error production (printed 871-872, PDF 873-874) and the CreateObject-Error, ConfirmedPrivateTransfer-Error (printed 873, PDF 875), SubscribeCOVPropertyMultiple-Error, WritePropertyMultiple-Error and VTClose-Error productions (printed 880, PDF 882); Clauses 13.16.1.3, 13.16.2 and 13.16.3.2 (printed 710-713, PDF 712-715); 15.3.1.3 and the 15.3 service procedure (printed 735-737, PDF 737-739); 16.2.1.3 (printed 762, PDF 764); 17.3.1.3 (printed 783, PDF 785); local licensed source inspected | P1 | supported-with-clause-evidence | 6 |
 | `BACNET-15-READ-RANGE-TARGET-KIND` | Clause 15.8 with its argument parameters, the 15.8.1.3 error table and the service procedure (printed 745 and 750-751, PDF 747 and 752-753); Clause 12.1.5.2; Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); Clause 12.11 Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; Clause 21 BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetCOVSubscription and BACnetCOVMultipleSubscription; local licensed source inspected | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-15-WPM-OUTBOUND-VALIDATION` | Clause 15.10 and 15.10.3.2 / Table 15-17 (printed754-756/PDF756-758) | P1 | supported-with-clause-evidence | 4 |
 | `BACNET-15-WPM-ORDERED-PREFIX-ERROR` | Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions) | P1 | supported-with-clause-evidence | 0 |
@@ -107,10 +108,10 @@
 | `BACNET-21-VALUE-SOURCE-CHOICE` | Clause 21 BACnetValueSource, BACnetDeviceObjectReference and BACnetAddress; Clause 20.2.1 tag framing | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-VALUE-PRESENT-VALUE-ACCESS` | Clauses 12.4, 12.8 and 12.20 Present_Value and Out_Of_Service; Clause 19.2; 135-2020 errata dated 2024-04-29 items 10–12 (Audit_Priority_Filter commandability condition) | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-19-COMMAND-SOURCE-TRACKING` | Clause 19.5.1 command source tracking and 19.5.1.3 source correction; Tables 12-3, 12-4, 12-8, 12-10, 12-22, 12-23; Clause 21 BACnetValueSource and BACnetTimeStamp | P1 | supported-with-clause-evidence | 3 |
-| `BACNET-13-COV-OBJECT-CRITERIA` | Clause 13.1 and Table 13-1 (Loop and Staging rows) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15 | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-13-COV-OBJECT-CRITERIA` | Clause 13.1 and Table 13-1 (Loop and Staging rows) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15 | P1 | supported-with-clause-evidence | 4 |
 | `BACNET-13-VALUE-SOURCE-COV` | Table 13-1 and Table 13-1a-2; Clause 19.5.2; Clauses 13.15, 13.16.3, 13.17.3.1.2.4 and 13.18.3.1.2.4 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
-| `BACNET-21-CALENDAR-ENTRY-CHOICE` | Clause 21 BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, BACnetSpecialEvent, BACnetDailySchedule and BACnetTimeValue; Clauses 20.2.1.3.2 and 20.2.1.5; Clause 12.9 Date_List; Clause 12.24 Effective_Period, Weekly_Schedule and Exception_Schedule; Clauses 15.1.1.3, 15.2, 15.8 and 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-21-CALENDAR-ENTRY-CHOICE` | Clause 21 BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, BACnetSpecialEvent, BACnetDailySchedule and BACnetTimeValue; Clauses 20.2.1.3.2 and 20.2.1.5; Clause 12.9 Date_List; Clause 12.24 Effective_Period, Weekly_Schedule and Exception_Schedule; Clauses 15.1.1.3, 15.2, 15.8 and 15.9.1.3 | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-A-PICS` | Annex A | P1 | in-progress | 0 |
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | implementation-present-needs-conformance-tests | 1 |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |

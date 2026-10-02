@@ -217,7 +217,7 @@ The `BACnetServer` spawns several background tasks:
 | Intrinsic reporting | Advances Time_Delay countdowns and fires confirmed transitions via `tick_intrinsic_reporting` | 1s |
 | Event enrollment | Evaluates Event Enrollment objects against their monitored properties | 10s |
 | Trend log | Records data samples for trend log objects | Per-object interval |
-| Schedule tick | Evaluates Schedule objects (exceptions by period and priority, weekly schedule, Schedule_Default, within Effective_Period) against one Device clock frame and Calendar states, and writes changes at Priority_For_Writing; a write that commits to a Schedule runs its pass at once | 60s |
+| Schedule tick | Evaluates Schedule objects (exceptions by period and priority, weekly schedule, Schedule_Default, within Effective_Period) against one Device clock frame and Calendar states, and writes changes at Priority_For_Writing; a write that commits to a Schedule runs its pass at once, which also sends on a Present_Value written while out of service | 60s |
 
 The server handles 20+ services including ReadProperty, WriteProperty, ReadPropertyMultiple, WritePropertyMultiple, SubscribeCOV, CreateObject, DeleteObject, DeviceCommunicationControl, GetEventInformation, GetAlarmSummary, LifeSafetyOperation, AtomicReadFile, AtomicWriteFile, TimeSynchronization, and more.
 

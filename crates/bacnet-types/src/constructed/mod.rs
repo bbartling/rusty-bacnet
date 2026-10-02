@@ -168,8 +168,12 @@ pub struct BACnetSpecialEvent {
     pub period: SpecialEventPeriod,
     /// Ordered list of time-value pairs to apply during this period.
     pub list_of_time_values: Vec<BACnetTimeValue>,
-    /// Priority for conflict resolution (1=highest..16=lowest).
-    pub event_priority: u8,
+    /// Priority for conflict resolution, 1 (highest) to 16 (lowest).
+    ///
+    /// Held as the full Unsigned the wire can carry, so a decoded event keeps
+    /// a priority outside that range intact for its consumer to refuse; the
+    /// Schedule object answers such a value with VALUE_OUT_OF_RANGE.
+    pub event_priority: u64,
 }
 
 // ---------------------------------------------------------------------------

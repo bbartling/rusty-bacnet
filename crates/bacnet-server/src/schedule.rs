@@ -5,6 +5,11 @@
 //! object-property reference at the Schedule's Priority_For_Writing. A write
 //! that commits to a Schedule runs the same evaluation for that Schedule at
 //! once, since a change to what it holds can change its value (#1057).
+//!
+//! Each pass first sends on a Present_Value a client wrote while the Schedule
+//! was out of service (Clause 12.24.14, #1055), through the same target
+//! writes, then calculates. That write needs no clock; the calculation
+//! does, and a Schedule out of service skips it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -97,24 +102,40 @@ fn calendar_states(db: &ObjectDatabase, today: SpecificDate) -> HashMap<ObjectId
 
 fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> BackgroundCommit {
     let mut commit = BackgroundCommit::new();
-    let Some((today, now)) = db_w.clock_frame().and_then(schedule_instant) else {
-        debug!("Skipping Schedule evaluation without a valid Device clock");
-        return commit;
-    };
-    let calendars = calendar_states(db_w, today);
+    let instant = db_w.clock_frame().and_then(schedule_instant);
+    if instant.is_none() {
+        debug!("Skipping the Schedule calculation without a valid Device clock");
+    }
+    let calendars = instant
+        .map(|(today, _)| calendar_states(db_w, today))
+        .unwrap_or_default();
     let calendar_active = |oid: ObjectIdentifier| calendars.get(&oid).copied().unwrap_or(false);
 
     let mut writes = Vec::new();
     for oid in schedules {
-        if let Some(obj) = db_w.get_mut(&oid) {
-            if let Some(write) = obj.tick_schedule(today, now, &calendar_active) {
-                debug!(
-                    schedule = %oid,
-                    refs = write.references.len(),
-                    "Schedule value changed, writing to controlled properties"
-                );
-                writes.push((oid, write));
-            }
+        let Some(obj) = db_w.get_mut(&oid) else {
+            continue;
+        };
+        // A simulated value goes first, so a calculated one written in the
+        // same pass, after a return to service, lands last.
+        if let Some(write) = obj.take_simulated_schedule_write() {
+            debug!(
+                schedule = %oid,
+                refs = write.references.len(),
+                "Schedule Present_Value written out of service, writing to controlled properties"
+            );
+            writes.push((oid, write));
+        }
+        let Some((today, now)) = instant else {
+            continue;
+        };
+        if let Some(write) = obj.tick_schedule(today, now, &calendar_active) {
+            debug!(
+                schedule = %oid,
+                refs = write.references.len(),
+                "Schedule value changed, writing to controlled properties"
+            );
+            writes.push((oid, write));
         }
     }
 

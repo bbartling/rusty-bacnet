@@ -666,6 +666,8 @@ mod cov_confirmed_baseline_tests;
 #[cfg(test)]
 mod cov_confirmed_context_tests;
 #[cfg(test)]
+mod cov_multiple_admission_tests;
+#[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;
@@ -711,6 +713,8 @@ mod life_safety_cov_tests;
 mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
+#[cfg(test)]
+mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;
 #[cfg(test)]

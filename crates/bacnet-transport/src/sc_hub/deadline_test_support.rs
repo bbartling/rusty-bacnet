@@ -44,6 +44,32 @@ pub(super) async fn until(predicate: impl Fn() -> bool) {
     .await;
 }
 
+/// Binds the address a stopped hub listened on, the tests' proof that the hub
+/// closed its listener. The port is free in between, so another process can
+/// take it first (#1095). `None` means one did, and the test goes again from
+/// its first start, where the hub gets a fresh port; the last run keeps the
+/// bind's error, so a hub that really kept its listener fails every run.
+///
+/// Tokio sets SO_REUSEADDR on this bind on Unix, which bounds what it shows
+/// there:
+/// - It binds beside connections the hub accepted on the port, established or
+///   in TIME_WAIT, so it proves the listener is gone but not that every
+///   connection is; the tests check connections from the peer side.
+/// - On macOS only an unconnected socket at this exact address refuses it. A
+///   socket another process holds on the wildcard address, or a connection
+///   using the port, does not: that is the macOS shadowing that
+///   `bip::bbmd_start_tests::start_on_free_port` describes, with the roles
+///   swapped. Such a holder goes unnoticed and the run passes, which hides no
+///   hub fault, since the hub's own listener sat on this exact address and
+///   would still refuse the bind.
+pub(super) async fn rebind(address: SocketAddr, attempt: usize) -> Option<TcpListener> {
+    match TcpListener::bind(address).await {
+        Ok(listener) => Some(listener),
+        Err(err) if crate::port_ownership::lost_port(attempt, &err) => None,
+        Err(err) => panic!("the stopped hub released {address}: {err}"),
+    }
+}
+
 pub(super) fn request(vmac: Vmac, uuid: DeviceUuid) -> Message {
     let mut wire = crate::sc_frame::connect_test_support::valid_connect(6, vmac);
     wire[10..26].copy_from_slice(&uuid);

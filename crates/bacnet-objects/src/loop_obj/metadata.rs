@@ -9,34 +9,42 @@ use crate::property_metadata::{
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
-// Describe only the implemented rows, preserving their legacy order. Base
-// conformance is separate from actual write capability: the algorithm owns the
-// output in service, and peers write it only while Out_Of_Service is TRUE.
+// The served rows, in Table 12-20 order. Base conformance is separate from
+// actual write capability: the algorithm owns the output in service, and peers
+// write it only while Out_Of_Service is TRUE. The units rows and
+// Priority_For_Writing are set by the application; footnotes 1 to 3 pair each
+// gain constant with its units row.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, WhenOutOfService),
-    PropertyMetadata::new(P::SETPOINT, RequiredRead, None, Always),
-    PropertyMetadata::new(P::PROPORTIONAL_CONSTANT, Optional, None, Always),
-    PropertyMetadata::new(P::INTEGRAL_CONSTANT, Optional, None, Always),
-    PropertyMetadata::new(P::DERIVATIVE_CONSTANT, Optional, None, Always),
-    PropertyMetadata::new(P::OUTPUT_UNITS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::UPDATE_INTERVAL, Optional, None, Always),
+    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::CONTROLLED_VARIABLE_REFERENCE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::CONTROLLED_VARIABLE_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::UPDATE_INTERVAL, Optional, None, Always),
+    PropertyMetadata::new(P::OUTPUT_UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(
         P::MANIPULATED_VARIABLE_REFERENCE,
         RequiredRead,
         None,
         Always,
     ),
+    PropertyMetadata::new(P::CONTROLLED_VARIABLE_REFERENCE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CONTROLLED_VARIABLE_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::CONTROLLED_VARIABLE_UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SETPOINT_REFERENCE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::SETPOINT, RequiredRead, None, Always),
+    PropertyMetadata::new(P::ACTION, RequiredRead, None, Always),
+    PropertyMetadata::new(P::PROPORTIONAL_CONSTANT, Optional, None, Always),
+    PropertyMetadata::new(P::PROPORTIONAL_CONSTANT_UNITS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::INTEGRAL_CONSTANT, Optional, None, Always),
+    PropertyMetadata::new(P::INTEGRAL_CONSTANT_UNITS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::DERIVATIVE_CONSTANT, Optional, None, Always),
+    PropertyMetadata::new(P::DERIVATIVE_CONSTANT_UNITS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, ReadOnly),
     // Table 12-20 footnote 4: present because the object supports COV.
     PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -60,23 +68,29 @@ mod tests {
         let all = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
-            P::SETPOINT,
-            P::PROPORTIONAL_CONSTANT,
-            P::INTEGRAL_CONSTANT,
-            P::DERIVATIVE_CONSTANT,
-            P::OUTPUT_UNITS,
-            P::UPDATE_INTERVAL,
+            P::DESCRIPTION,
             P::STATUS_FLAGS,
             P::EVENT_STATE,
             P::RELIABILITY,
             P::OUT_OF_SERVICE,
+            P::UPDATE_INTERVAL,
+            P::OUTPUT_UNITS,
+            P::MANIPULATED_VARIABLE_REFERENCE,
             P::CONTROLLED_VARIABLE_REFERENCE,
             P::CONTROLLED_VARIABLE_VALUE,
-            P::MANIPULATED_VARIABLE_REFERENCE,
+            P::CONTROLLED_VARIABLE_UNITS,
             P::SETPOINT_REFERENCE,
+            P::SETPOINT,
+            P::ACTION,
+            P::PROPORTIONAL_CONSTANT,
+            P::PROPORTIONAL_CONSTANT_UNITS,
+            P::INTEGRAL_CONSTANT,
+            P::INTEGRAL_CONSTANT_UNITS,
+            P::DERIVATIVE_CONSTANT,
+            P::DERIVATIVE_CONSTANT_UNITS,
+            P::PRIORITY_FOR_WRITING,
             P::COV_INCREMENT,
         ];
         let required = [
@@ -84,15 +98,18 @@ mod tests {
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
-            P::SETPOINT,
-            P::OUTPUT_UNITS,
             P::STATUS_FLAGS,
             P::EVENT_STATE,
             P::OUT_OF_SERVICE,
+            P::OUTPUT_UNITS,
+            P::MANIPULATED_VARIABLE_REFERENCE,
             P::CONTROLLED_VARIABLE_REFERENCE,
             P::CONTROLLED_VARIABLE_VALUE,
-            P::MANIPULATED_VARIABLE_REFERENCE,
+            P::CONTROLLED_VARIABLE_UNITS,
             P::SETPOINT_REFERENCE,
+            P::SETPOINT,
+            P::ACTION,
+            P::PRIORITY_FOR_WRITING,
             P::PROPERTY_LIST,
         ];
         assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
@@ -123,7 +140,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
-            PropertyValue::Unsigned(17)
+            PropertyValue::Unsigned(23)
         );
         for (index, value) in wire.iter().enumerate() {
             assert_eq!(
@@ -135,7 +152,7 @@ mod tests {
         }
         assert_error(
             object
-                .read_property(P::PROPERTY_LIST, Some(18))
+                .read_property(P::PROPERTY_LIST, Some(24))
                 .unwrap_err(),
             ErrorCode::INVALID_ARRAY_INDEX,
         );
@@ -175,6 +192,7 @@ mod tests {
                     | P::CONTROLLED_VARIABLE_REFERENCE
                     | P::MANIPULATED_VARIABLE_REFERENCE
                     | P::SETPOINT_REFERENCE
+                    | P::ACTION
                     | P::COV_INCREMENT => Always,
                     P::PRESENT_VALUE | P::RELIABILITY => WhenOutOfService,
                     _ => ReadOnly,

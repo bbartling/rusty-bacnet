@@ -92,16 +92,20 @@ fn cov_multiple_route_rejected_generation_or_identity_preserves_live_target() {
                 None,
                 vec![a.clone()]
             ),
-            Err(Error::Encoding(_))
+            Err(MultipleRefusal {
+                error: Error::Encoding(_),
+                refused: None,
+                ..
+            })
         ),
         "a proposal through A cannot publish on a separately supplied B route"
     );
     table.generation = u64::MAX;
-    resource_error(
-        table
-            .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
-            .unwrap_err(),
-    );
+    let exhausted = table
+        .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
+        .unwrap_err();
+    assert!(exhausted.refused.is_none() && exhausted.committed.is_empty());
+    resource_error(exhausted.error);
     let mut wrong_route = b.endpoint();
     wrong_route.network.as_mut().unwrap().network = 11;
     assert!(table

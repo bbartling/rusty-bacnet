@@ -122,18 +122,19 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     added.monitored_property_array_index = Some(0);
     table.generation = u64::MAX - 1;
     let counters = table.counters.snapshot();
-    resource_error(
-        table
-            .subscribe_multiple(
-                &context,
-                &existing.endpoint(),
-                expiry,
-                4,
-                None,
-                vec![replacement.clone(), added],
-            )
-            .unwrap_err(),
-    );
+    // Generation exhaustion refuses the request as a whole, keeping nothing.
+    let exhausted = table
+        .subscribe_multiple(
+            &context,
+            &existing.endpoint(),
+            expiry,
+            4,
+            None,
+            vec![replacement.clone(), added],
+        )
+        .unwrap_err();
+    assert!(exhausted.refused.is_none() && exhausted.committed.is_empty());
+    resource_error(exhausted.error);
     assert_eq!(table.generation, u64::MAX - 1);
     assert_eq!(table.len(), 1);
     assert_eq!(
@@ -260,3 +261,6 @@ mod multiple_route;
 
 #[path = "recipient_route_tests.rs"]
 mod recipient_route;
+
+#[path = "multiple_admission_tests.rs"]
+mod multiple_admission;
