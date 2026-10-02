@@ -5,6 +5,8 @@ use bacnet_types::{error::Error, primitives::PropertyValue};
 /// A bounded selected sample and its declared optional four-bit Status_Flags.
 /// Specialized commandable Value_Source reports also retain their captured PV
 /// and command priority; command time is reported but is not a trigger.
+/// Whole-object reports also retain the Table 13-1 values whose changes
+/// trigger a notification (Staging's Present_Stage).
 /// No delivered observation is represented by the subscription's outer `None`;
 /// an observation with absent flags is a distinct successful delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub struct CovObservation {
     sample: CovSample,
     flags: Option<u8>,
     command: Option<(CovSample, CovSample)>,
+    triggers: Box<[CovSample]>,
 }
 impl CovObservation {
     /// Pair a validated selected sample with absent or canonical present flags.
@@ -21,7 +24,18 @@ impl CovObservation {
             sample,
             command: None,
             flags: flags.map(validate_flags).transpose()?,
+            triggers: Box::default(),
         })
+    }
+    /// Attach the bounded trigger values captured with a whole-object report.
+    pub(crate) fn with_triggers(mut self, triggers: Box<[CovSample]>) -> Self {
+        self.triggers = triggers;
+        self
+    }
+    /// Whether a captured trigger value differs from the last delivered one.
+    /// An object with no trigger values never reports through this check.
+    pub(crate) fn triggers_changed(&self, previous: Option<&Self>) -> bool {
+        !self.triggers.is_empty() && previous.map(|p| &p.triggers) != Some(&self.triggers)
     }
     /// Attach the bounded PV/priority tuple captured with a commandable source.
     pub(crate) fn with_command(mut self, pv: CovSample, priority: CovSample) -> Self {

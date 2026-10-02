@@ -86,6 +86,7 @@ pub struct StagingObject {
     priority_for_writing: u8,
     min_present_value: f32,
     units: u32,
+    cov_increment: f32,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
@@ -123,6 +124,7 @@ impl StagingObject {
             priority_for_writing: config.priority_for_writing,
             min_present_value: config.min_present_value,
             units: config.units,
+            cov_increment: 0.0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -422,6 +424,7 @@ impl BACnetObject for StagingObject {
             }
             PropertyIdentifier::MIN_PRES_VALUE => Ok(PropertyValue::Real(self.min_present_value)),
             PropertyIdentifier::MAX_PRES_VALUE => Ok(PropertyValue::Real(self.max_present_value())),
+            PropertyIdentifier::COV_INCREMENT => Ok(PropertyValue::Real(self.cov_increment)),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -444,6 +447,10 @@ impl BACnetObject for StagingObject {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
+        {
             return result;
         }
         match property {
@@ -531,6 +538,16 @@ impl BACnetObject for StagingObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         property_list_from_metadata(&self.metadata())
+    }
+
+    // Table 13-1 Staging row: Present_Value by COV_Increment, Status_Flags and
+    // Present_Stage trigger, and Present_Stage is reported (the trait default).
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn cov_increment(&self) -> Option<f32> {
+        Some(self.cov_increment)
     }
 
     fn take_staging_write_plan_internal(&mut self) -> Option<StagingWritePlan> {

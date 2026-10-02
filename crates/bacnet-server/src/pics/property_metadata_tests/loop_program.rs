@@ -12,7 +12,8 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
-        (P::PRESENT_VALUE, false, false),
+        // Writable while Out_Of_Service is TRUE (#985).
+        (P::PRESENT_VALUE, false, true),
         (P::SETPOINT, false, true),
         (P::PROPORTIONAL_CONSTANT, true, true),
         (P::INTEGRAL_CONSTANT, true, true),
@@ -24,8 +25,10 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
         (P::RELIABILITY, true, true),
         (P::OUT_OF_SERVICE, false, true),
         (P::CONTROLLED_VARIABLE_REFERENCE, false, true),
+        (P::CONTROLLED_VARIABLE_VALUE, false, false),
         (P::MANIPULATED_VARIABLE_REFERENCE, false, true),
         (P::SETPOINT_REFERENCE, false, true),
+        (P::COV_INCREMENT, true, true),
         (P::PROPERTY_LIST, false, false),
     ];
     let program_rows = [

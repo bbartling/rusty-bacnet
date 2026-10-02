@@ -13,8 +13,8 @@ use crate::property_metadata::{
 
 // Preserve legacy order and the implemented surface. The monitored-reference
 // and interval rows retain their base optional classification; no new presence
-// or logging-mode write gates are introduced. Out_Of_Service is a compatibility
-// row, not an additional required property. Reliability stays read-only.
+// or logging-mode write gates are introduced. Table 12-29 defines no
+// Out_Of_Service, so there is no such row (#985). Reliability stays read-only.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -30,7 +30,6 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::LOGGING_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -82,9 +81,7 @@ mod tests {
         let mut event = EventLogObject::new(1, "EL-1", capacity).unwrap();
         trend.set_logging_type(logging_type);
         multiple.set_logging_type(logging_type);
-        trend.out_of_service = oos;
-        // Exercise both internal states without adding a network write route.
-        multiple.out_of_service = oos;
+        // Only Event Log carries Out_Of_Service; the Trend Logs have none.
         event
             .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(oos), None)
             .unwrap();
@@ -116,7 +113,6 @@ mod tests {
             P::TOTAL_RECORD_COUNT,
             P::STATUS_FLAGS,
             P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
         ];
         let base_required = [
@@ -138,8 +134,8 @@ mod tests {
                     let kind = object.object_identifier().object_type();
                     let mut all = base.to_vec();
                     let mut required = base_required.to_vec();
-                    if kind == ObjectType::TREND_LOG {
-                        all.swap(13, 14);
+                    if kind == ObjectType::EVENT_LOG {
+                        all.insert(13, P::OUT_OF_SERVICE);
                     }
                     if kind != ObjectType::EVENT_LOG {
                         all.extend([P::LOGGING_TYPE, P::LOG_DEVICE_OBJECT_PROPERTY]);
@@ -227,7 +223,7 @@ mod tests {
                             | P::STOP_WHEN_FULL
                             | P::RECORD_COUNT
                             | P::DESCRIPTION => Always,
-                            P::OUT_OF_SERVICE if kind != ObjectType::TREND_LOG_MULTIPLE => Always,
+                            P::OUT_OF_SERVICE => Always,
                             _ => ReadOnly,
                         };
                         assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
