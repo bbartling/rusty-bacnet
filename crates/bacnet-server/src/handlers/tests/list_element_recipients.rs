@@ -41,7 +41,7 @@ fn nc_db(entries: &[BACnetDestination]) -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     for entry in entries {
-        nc.add_destination(entry.clone());
+        nc.add_destination(entry.clone()).unwrap();
     }
     let oid = nc.object_identifier();
     db.add(Box::new(nc)).unwrap();

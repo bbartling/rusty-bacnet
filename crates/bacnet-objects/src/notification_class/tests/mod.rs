@@ -3,6 +3,7 @@ mod lookup;
 mod priority;
 mod properties;
 mod recipient_list;
+mod recipient_list_cap;
 mod recipients;
 
 use super::*;

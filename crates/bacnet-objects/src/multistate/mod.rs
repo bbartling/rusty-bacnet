@@ -16,8 +16,7 @@ use crate::event::{history::EventHistory, ChangeOfStateDetector};
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 
 /// Resource cap consistent with bounded server tables such as
-/// `MAX_COV_SUBSCRIPTIONS`. Recipient_List has the same pre-existing unbounded
-/// growth gap, which is outside issue #228.
+/// `MAX_COV_SUBSCRIPTIONS`.
 pub(crate) const MAX_ALARM_VALUES: usize = 1024;
 
 fn decode_alarm_values_write(

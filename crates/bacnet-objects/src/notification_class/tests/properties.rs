@@ -169,7 +169,7 @@ fn read_recipient_list_empty() {
 #[test]
 fn add_destination_device_and_read_back() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(99));
+    nc.add_destination(make_dest_device(99)).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -226,7 +226,7 @@ fn add_destination_address_variant() {
         issue_confirmed_notifications: false,
         transitions: EventTransitionBits::TO_OFFNORMAL,
     };
-    nc.add_destination(dest.clone());
+    nc.add_destination(dest.clone()).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -258,9 +258,9 @@ fn add_destination_address_variant() {
 #[test]
 fn add_multiple_destinations() {
     let mut nc = NotificationClass::new(5, "NC-5").unwrap();
-    nc.add_destination(make_dest_device(100));
-    nc.add_destination(make_dest_device(200));
-    nc.add_destination(make_dest_device(300));
+    nc.add_destination(make_dest_device(100)).unwrap();
+    nc.add_destination(make_dest_device(200)).unwrap();
+    nc.add_destination(make_dest_device(300)).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -283,8 +283,8 @@ fn add_multiple_destinations() {
 #[test]
 fn write_recipient_list_clears_existing() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(10));
-    nc.add_destination(make_dest_device(20));
+    nc.add_destination(make_dest_device(10)).unwrap();
+    nc.add_destination(make_dest_device(20)).unwrap();
     assert_eq!(nc.recipient_list.len(), 2);
 
     // Write an empty list — should clear
@@ -313,7 +313,7 @@ fn write_recipient_list_wrong_type_denied() {
 #[test]
 fn write_recipient_list_round_trip() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(10));
+    nc.add_destination(make_dest_device(10)).unwrap();
     // Read the encoded list, then write it back
     let encoded = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)

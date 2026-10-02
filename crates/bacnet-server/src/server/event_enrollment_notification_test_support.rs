@@ -224,9 +224,11 @@ pub(super) fn add_server_context(db: &mut ObjectDatabase, recipients: bool) {
     let mut notification_class = NotificationClass::new(0, "NC-0").unwrap();
     notification_class.ack_required = EventTransitionBits::all();
     if recipients {
-        notification_class.add_destination(
-            crate::server::event_notifications_tests::local_broadcast_destination(),
-        );
+        notification_class
+            .add_destination(
+                crate::server::event_notifications_tests::local_broadcast_destination(),
+            )
+            .unwrap();
     }
     db.add(Box::new(notification_class)).unwrap();
 }

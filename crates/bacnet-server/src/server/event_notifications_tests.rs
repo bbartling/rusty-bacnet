@@ -161,7 +161,7 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
 pub(super) fn notification_class_0_broadcasting(
 ) -> bacnet_objects::notification_class::NotificationClass {
     let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
-    nc.add_destination(local_broadcast_destination());
+    nc.add_destination(local_broadcast_destination()).unwrap();
     nc
 }
 
@@ -193,7 +193,9 @@ async fn fixture_with_commanded_nc(
         bacnet_objects::notification_class::NotificationClass::new(nc, "NC").unwrap();
     notification_class.priority = priority;
     notification_class.ack_required = ack_required;
-    notification_class.add_destination(local_broadcast_destination());
+    notification_class
+        .add_destination(local_broadcast_destination())
+        .unwrap();
     db.add(Box::new(notification_class)).unwrap();
 
     db.add(Box::new(

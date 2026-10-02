@@ -209,7 +209,9 @@ mod tests {
             .unwrap();
         let mut notification_class = NotificationClass::new(0, "NC-0").unwrap();
         for _ in 0..recipients {
-            notification_class.add_destination(local_broadcast_destination());
+            notification_class
+                .add_destination(local_broadcast_destination())
+                .unwrap();
         }
         db.add(Box::new(notification_class)).unwrap();
         db

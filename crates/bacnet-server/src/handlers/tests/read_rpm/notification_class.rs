@@ -12,25 +12,29 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
     let mut object = NotificationClass::new(7, "NC-7").unwrap();
     object.priority = [12, 34, 56];
     object.ack_required = EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL;
-    object.add_destination(BACnetDestination {
-        valid_days: DaysOfWeek::all(),
-        from_time: Time {
-            hour: 0,
-            minute: 0,
-            second: 0,
-            hundredths: 0,
-        },
-        to_time: Time {
-            hour: 23,
-            minute: 59,
-            second: 59,
-            hundredths: 99,
-        },
-        recipient: BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 42).unwrap()),
-        process_identifier: 123,
-        issue_confirmed_notifications: true,
-        transitions: EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
-    });
+    object
+        .add_destination(BACnetDestination {
+            valid_days: DaysOfWeek::all(),
+            from_time: Time {
+                hour: 0,
+                minute: 0,
+                second: 0,
+                hundredths: 0,
+            },
+            to_time: Time {
+                hour: 23,
+                minute: 59,
+                second: 59,
+                hundredths: 99,
+            },
+            recipient: BACnetRecipient::Device(
+                ObjectIdentifier::new(ObjectType::DEVICE, 42).unwrap(),
+            ),
+            process_identifier: 123,
+            issue_confirmed_notifications: true,
+            transitions: EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+        })
+        .unwrap();
     let oid = object.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(object)).unwrap();

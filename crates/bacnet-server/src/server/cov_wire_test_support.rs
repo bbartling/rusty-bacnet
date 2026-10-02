@@ -717,7 +717,8 @@ pub(super) fn envelope(notification: &COVNotificationMultipleRequest) -> Option<
 
 pub(super) fn high_limit_alarm(db: &mut ObjectDatabase) {
     let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
-    nc.add_destination(super::event_notifications_tests::local_broadcast_destination());
+    nc.add_destination(super::event_notifications_tests::local_broadcast_destination())
+        .unwrap();
     db.add(Box::new(nc)).unwrap();
     let object = db.get_mut(&av1()).unwrap();
     for (property, value) in [

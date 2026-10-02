@@ -111,7 +111,8 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
     db.add(Box::new(DeviceObject::new(Default::default()).unwrap()))
         .unwrap();
     let mut nc = NotificationClass::new(0, "NC-0").unwrap();
-    nc.add_destination(destination_for(address_recipient(0, &[1]), true));
+    nc.add_destination(destination_for(address_recipient(0, &[1]), true))
+        .unwrap();
     db.add(Box::new(nc)).unwrap();
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
         .unwrap();
