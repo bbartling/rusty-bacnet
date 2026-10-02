@@ -110,6 +110,18 @@ fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, w
     }
 }
 
+/// A Date_List refusal that names the entry at `position` (from 1) among the
+/// entries the write carried (#1048).
+fn assert_entry_error(
+    result: Result<(), Error>,
+    class: ErrorClass,
+    code: ErrorCode,
+    position: u32,
+    what: &str,
+) {
+    crate::common::assert_list_element_refused(result, class, code, position, what);
+}
+
 #[test]
 fn calendar_read_present_value_default() {
     let cal = CalendarObject::new(1, "CAL-1").unwrap();
@@ -290,30 +302,42 @@ fn calendar_date_list_write_accepts_every_choice_in_every_value_shape() {
 #[test]
 fn calendar_date_list_write_refuses_other_datatypes() {
     let date = monday_14_sep_2026();
-    for (what, value) in [
+    // A value that holds no entries names none; a foreign element or entry
+    // is named by its position among the entries (#1048).
+    for (what, value, entry) in [
         // The projection Date_List used to read as (#996).
-        ("Date", PropertyValue::Date(date)),
+        ("Date", PropertyValue::Date(date), None),
         (
             "Octet String",
             PropertyValue::OctetString(vec![255, 255, 1]),
+            None,
         ),
-        ("Null", PropertyValue::Null),
-        ("Unsigned", PropertyValue::Unsigned(1)),
+        ("Null", PropertyValue::Null, None),
+        ("Unsigned", PropertyValue::Unsigned(1), None),
         (
             "list holding a Date",
             PropertyValue::List(vec![app(&[0x0C, 126, 9, 14, 1]), PropertyValue::Date(date)]),
+            Some(2),
         ),
         // Raw bytes whose leading tag is no calendar-entry choice.
-        ("application-tagged Date bytes", app(&[0xA4, 126, 9, 14, 1])),
-        ("unknown alternative [3]", app(&[0x3B, 0xFF, 0xFF, 1])),
+        (
+            "application-tagged Date bytes",
+            app(&[0xA4, 126, 9, 14, 1]),
+            Some(1),
+        ),
+        (
+            "unknown alternative [3]",
+            app(&[0x3B, 0xFF, 0xFF, 1]),
+            Some(1),
+        ),
     ] {
         let mut cal = configured();
-        assert_error(
-            cal.write_property(DATE_LIST, None, value, None),
-            ErrorClass::PROPERTY,
-            ErrorCode::INVALID_DATA_TYPE,
-            what,
-        );
+        let result = cal.write_property(DATE_LIST, None, value, None);
+        let (class, code) = (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE);
+        match entry {
+            Some(entry) => assert_entry_error(result, class, code, entry, what),
+            None => assert_error(result, class, code, what),
+        }
         assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());
     }
 }
@@ -342,10 +366,17 @@ fn calendar_date_list_write_refuses_malformed_entries() {
         ),
     ] {
         let mut cal = configured();
-        assert_error(
+        // The good entry decodes; the one after it is entry 2.
+        let entry = if what.starts_with("a good entry") {
+            2
+        } else {
+            1
+        };
+        assert_entry_error(
             cal.write_property(DATE_LIST, None, app(bytes), None),
             ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_ENCODING,
+            entry,
             what,
         );
         assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());
@@ -366,7 +397,7 @@ fn calendar_date_list_write_caps_the_entry_count() {
     assert_eq!(cal.date_list().len(), date_list::MAX_DATE_LIST_ENTRIES);
 
     let mut cal = configured();
-    assert_error(
+    assert_entry_error(
         cal.write_property(
             DATE_LIST,
             None,
@@ -375,6 +406,7 @@ fn calendar_date_list_write_caps_the_entry_count() {
         ),
         ErrorClass::RESOURCES,
         ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        date_list::MAX_DATE_LIST_ENTRIES as u32 + 1,
         "one entry over the cap",
     );
     assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());
@@ -436,19 +468,21 @@ fn out_of_range_entries() -> Vec<(&'static str, Vec<u8>)> {
 fn calendar_date_list_write_refuses_out_of_range_entries() {
     // #1029: these decoded and were stored as written.
     for (what, bytes) in out_of_range_entries() {
-        for (shape, value) in [
-            ("alone", app(&bytes)),
+        for (shape, value, entry) in [
+            ("alone", app(&bytes), 1),
             // A good entry first does not save the list.
             (
                 "after a good entry",
                 PropertyValue::List(vec![app(&[0x2B, 0xFF, 0xFF, 1]), app(&bytes)]),
+                2,
             ),
         ] {
             let mut cal = configured();
-            assert_error(
+            assert_entry_error(
                 cal.write_property(DATE_LIST, None, value, None),
                 ErrorClass::PROPERTY,
                 ErrorCode::VALUE_OUT_OF_RANGE,
+                entry,
                 &format!("{what}, {shape}"),
             );
             assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());

@@ -57,7 +57,9 @@ pub(super) fn read(entries: &[BACnetCalendarEntry]) -> PropertyValue {
     )
 }
 
-/// Decode and validate a whole-list Date_List write.
+/// Decode and validate a whole-list Date_List write. A refused entry is
+/// named by its position among the entries decoded so far, however the write
+/// groups them into elements (#1048).
 pub(super) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetCalendarEntry>, Error> {
     let elements = match value {
         PropertyValue::List(elements) => elements,
@@ -66,17 +68,21 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetCalendarEnt
     };
     let mut entries = Vec::new();
     for element in elements {
+        // The entry being decoded is the next one: index `entries.len()`.
         let PropertyValue::ApplicationData(bytes) = element else {
-            return Err(common::invalid_data_type_error());
+            let error = common::invalid_data_type_error();
+            return Err(common::at_list_element(error, entries.len()));
         };
         let mut offset = 0;
         while offset < bytes.len() {
             if entries.len() == MAX_DATE_LIST_ENTRIES {
-                return Err(no_space_error());
+                return Err(common::at_list_element(no_space_error(), entries.len()));
             }
-            let (entry, end) = decode_entry(&bytes, offset)?;
+            let (entry, end) = decode_entry(&bytes, offset)
+                .map_err(|error| common::at_list_element(error, entries.len()))?;
             if !entry.is_valid() {
-                return Err(common::value_out_of_range_error());
+                let error = common::value_out_of_range_error();
+                return Err(common::at_list_element(error, entries.len()));
             }
             entries.push(entry);
             offset = end;

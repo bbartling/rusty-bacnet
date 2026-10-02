@@ -70,13 +70,20 @@ fn decode_fault_signals<T: Copy + Eq + Hash>(
     };
     let mut faults = Vec::with_capacity(values.len());
     let mut seen = HashSet::with_capacity(values.len());
-    for value in values {
+    // A refusal names its element (#1048).
+    for (index, value) in values.into_iter().enumerate() {
         let PropertyValue::Enumerated(raw) = value else {
-            return Err(common::invalid_data_type_error());
+            return Err(common::at_list_element(
+                common::invalid_data_type_error(),
+                index,
+            ));
         };
         let fault = from_raw(raw);
         if !named_or_proprietary(named, fault, raw) || !seen.insert(fault) {
-            return Err(common::value_out_of_range_error());
+            return Err(common::at_list_element(
+                common::value_out_of_range_error(),
+                index,
+            ));
         }
         faults.push(fault);
     }

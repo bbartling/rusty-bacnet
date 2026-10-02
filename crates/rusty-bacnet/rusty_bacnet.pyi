@@ -1403,7 +1403,9 @@ class BacnetProtocolError(BacnetError):
         first_failed_element_number: For an AddListElement or
             RemoveListElement ChangeList-Error, or a CreateObject-Error, the
             position (from 1) of the list element or initial value that
-            failed, or 0 when the request failed for another reason.
+            failed, or 0 when the request failed for another reason. A
+            server's write_local of a list whose object refuses one element
+            sets it to that element's position in the list written.
         first_failed_write_attempt: For a WritePropertyMultiple-Error, the
             object, property and index of the first write that failed.
         first_failed_subscription: For a SubscribeCOVPropertyMultiple-Error
