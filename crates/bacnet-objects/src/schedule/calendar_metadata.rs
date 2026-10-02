@@ -11,15 +11,16 @@ use crate::property_metadata::{
 
 // Only rows Clause 12.9 Table 12-11 defines. The table has no Status_Flags,
 // Event_State, Out_Of_Service or Reliability, so Calendar serves none of them
-// (#984). Date_List and Present_Value remain application-managed; metadata adds
-// no writes or automatic evaluation. Only Description has a network write route.
+// (#984). Present_Value stays application-managed. Description and Date_List
+// are network-writable; Date_List takes every BACnetCalendarEntry choice, as
+// the clause requires of a writable Date_List (#996).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DATE_LIST, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::DATE_LIST, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -130,7 +131,7 @@ mod tests {
         let metadata = object.property_metadata().into_owned();
         for row in &metadata {
             let p = row.property_identifier;
-            let writable = p == P::DESCRIPTION;
+            let writable = matches!(p, P::DESCRIPTION | P::DATE_LIST);
             assert_eq!(
                 row.write_capability,
                 if writable { Always } else { ReadOnly }
@@ -166,16 +167,29 @@ mod tests {
             object.read_property(P::DESCRIPTION, None).unwrap(),
             PropertyValue::CharacterString("updated".into())
         );
-        for p in [P::DATE_LIST, P::PRESENT_VALUE] {
-            for index in [None, Some(0), Some(1), Some(u32::MAX)] {
-                assert_error(
-                    object
-                        .write_property(p, index, PropertyValue::Null, Some(8))
-                        .unwrap_err(),
-                    ErrorCode::WRITE_ACCESS_DENIED,
-                );
-            }
+        for index in [None, Some(0), Some(1), Some(u32::MAX)] {
+            assert_error(
+                object
+                    .write_property(P::PRESENT_VALUE, index, PropertyValue::Null, Some(8))
+                    .unwrap_err(),
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
         }
+        // Date_List is a BACnetLIST of calendar entries: no index, no NULL.
+        for index in [Some(0), Some(1), Some(u32::MAX)] {
+            assert_error(
+                object
+                    .write_property(P::DATE_LIST, index, PropertyValue::List(vec![]), None)
+                    .unwrap_err(),
+                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            );
+        }
+        assert_error(
+            object
+                .write_property(P::DATE_LIST, None, PropertyValue::Null, Some(8))
+                .unwrap_err(),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
         // Table 12-11 defines none of these, so reads and writes alike report
         // the property unknown rather than read-only.
         for p in [

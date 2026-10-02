@@ -7,7 +7,7 @@ use bacnet_types::primitives::Date;
 use PropertyIdentifier as P;
 
 #[test]
-fn rpm_calendar_indexed_reads_and_date_list_bytes_are_unchanged() {
+fn rpm_calendar_indexed_reads_and_date_list_wire_bytes() {
     for configured in [false, true] {
         let mut object = CalendarObject::new(7, "CAL-7").unwrap();
         if configured {
@@ -32,8 +32,10 @@ fn rpm_calendar_indexed_reads_and_date_list_bytes_are_unchanged() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent bytes pin the existing Date/OctetString projection, not a
-        // new constructed CalendarEntry encoding or positional list access.
+        // Independent bytes pin each entry under its Clause 21 CHOICE tag
+        // (#996): date [0] (0x0C), the date-range [1] frame (0x1E ... 0x1F)
+        // around two application Dates (0xA4), and weekNDay [2] (0x2B). The
+        // old projection was an application Date and two Octet Strings.
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (
@@ -41,8 +43,8 @@ fn rpm_calendar_indexed_reads_and_date_list_bytes_are_unchanged() {
                 None,
                 Ok(if configured {
                     &[
-                        0xa4, 126, 9, 14, 1, 0x65, 8, 126, 9, 14, 1, 126, 9, 14, 1, 0x63, 255, 255,
-                        1,
+                        0x0c, 126, 9, 14, 1, 0x1e, 0xa4, 126, 9, 14, 1, 0xa4, 126, 9, 14, 1, 0x1f,
+                        0x2b, 255, 255, 1,
                     ]
                 } else {
                     &[]

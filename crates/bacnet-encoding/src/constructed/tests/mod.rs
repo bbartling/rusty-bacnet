@@ -7,12 +7,14 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::ObjectType;
 
+mod calendar;
 mod cov_subscription;
 mod event_parameter;
 mod fault_parameter;
 mod landing_call_status;
 mod object_identifier_invariant;
 mod recipient;
+mod schedule;
 mod staging;
 mod value_source;
 

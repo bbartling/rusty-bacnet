@@ -818,7 +818,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists. A zero-element propertyValue is admitted only for Fault_Signals; the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it. Energy_Meter_Ref, Reliability simulation, structured references, intrinsic reporting, physical-device arbitration, and the Escalator object's other missing properties remain outside this row, which is not a complete Escalator-object conformance claim."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists. A zero-element propertyValue is admitted only for Fault_Signals and Calendar Date_List (#996); the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it. Energy_Meter_Ref, Reliability simulation, structured references, intrinsic reporting, physical-device arbitration, and the Escalator object's other missing properties remain outside this row, which is not a complete Escalator-object conformance claim."
   },
   {
    "id": "BACNET-12-ELEVATOR-GROUP-LANDING-CALLS",
@@ -1448,7 +1448,7 @@
    "id": "BACNET-12-CALENDAR-PROPERTY-SET",
    "standard_anchor": "Clause 12.9 and Table 12-11; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
-   "requirement_summary": "Calendar serves only rows that Table 12-11 defines: the required Object_Identifier, Object_Name, Object_Type, Present_Value, Date_List and Property_List, plus Description, the one implemented optional row. Status_Flags, Event_State, Out_Of_Service and Reliability are not Table 12-11 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on any of them fail with PROPERTY / UNKNOWN_PROPERTY. Description is network-writable; Present_Value and Date_List are read-only over the network and stay application-managed.",
+   "requirement_summary": "Calendar serves only rows that Table 12-11 defines: the required Object_Identifier, Object_Name, Object_Type, Present_Value, Date_List and Property_List, plus Description, the one implemented optional row. Status_Flags, Event_State, Out_Of_Service and Reliability are not Table 12-11 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on any of them fail with PROPERTY / UNKNOWN_PROPERTY. Description and Date_List are network-writable (the Date_List wire form and write rules are BACNET-21-CALENDAR-ENTRY-CHOICE); Present_Value is read-only over the network and stays application-managed.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/schedule/mod.rs::CalendarObject",
@@ -1462,14 +1462,15 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/computed_status_flags_tests.rs::calendar_has_no_status_flags_to_compute",
-    "crates/bacnet-server/src/handlers/tests/read_rpm/calendar.rs::rpm_calendar_indexed_reads_and_date_list_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/calendar.rs::rpm_calendar_indexed_reads_and_date_list_wire_bytes",
     "crates/bacnet-server/src/handlers/tests/property_metadata/calendar.rs::wp_calendar_properties_outside_table_12_11_are_unknown"
    ],
    "benchmarks": [],
    "public_claims": [
-    "CHANGELOG.md Unreleased Fixed entry for #984"
+    "CHANGELOG.md Unreleased Fixed entry for #984",
+    "CHANGELOG.md Unreleased Fixed entry for #996"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#984). Breaking pre-1.0 removal: Calendar used to list Status_Flags, Event_State and Out_Of_Service as optional read-only rows returning fixed values (all-FALSE flags, NORMAL, FALSE), so their writes failed WRITE_ACCESS_DENIED; now they are unknown properties. The server's COV flag capture, event-notification payloads, GetAlarmSummary, GetEventInformation and GetEnrollmentSummary already treat an object without these properties as absent or not event-initiating, so they need no Calendar case. This row covers the served property set only. It makes no claim for the Date_List wire form, which still projects each BACnetCalendarEntry as an application-tagged Date or OctetString rather than the context-tagged CHOICE of Clause 21, nor for date-list evaluation of Present_Value, Date_List writes, or the audit, tag and profile optional rows."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#984). Breaking pre-1.0 removal: Calendar used to list Status_Flags, Event_State and Out_Of_Service as optional read-only rows returning fixed values (all-FALSE flags, NORMAL, FALSE), so their writes failed WRITE_ACCESS_DENIED; now they are unknown properties. The server's COV flag capture, event-notification payloads, GetAlarmSummary, GetEventInformation and GetEnrollmentSummary already treat an object without these properties as absent or not event-initiating, so they need no Calendar case. This row covers the served property set only. #996 made Date_List network-writable and moved its wire form to BACNET-21-CALENDAR-ENTRY-CHOICE. It makes no claim for date-list evaluation of Present_Value or the audit, tag and profile optional rows."
   },
   {
    "id": "BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS",
@@ -2452,7 +2453,7 @@
    "id": "BACNET-15-STRUCTURED-WRITE-DECODE",
    "standard_anchor": "Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements)",
    "priority": "P1",
-   "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List. Full consumption is required: a partial or undecodable trailing element is PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (an encoding incompatible with the property's datatype) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. Empty payloads are also INVALID_DATA_ENCODING except for Fault_Signals, whose Clause 12.60 BACnetLIST may be empty and is delivered as PropertyValue::List. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
+   "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List. Full consumption is required: a partial or undecodable trailing element is PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (an encoding incompatible with the property's datatype) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. Empty payloads are also INVALID_DATA_ENCODING except for Fault_Signals (Clause 12.60) and Calendar Date_List (Clause 12.9), BACnetLISTs that may be empty, which are delivered as an empty PropertyValue::List. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/write_property.rs",
@@ -2477,7 +2478,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure. AddListElement/RemoveListElement now validate all elements before mutation and reject malformed tails atomically (#279). Remaining separate residues: Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals and #996 one for Calendar Date_List; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure. AddListElement/RemoveListElement now validate all elements before mutation and reject malformed tails atomically (#279). Remaining separate residues: Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
   },
   {
    "id": "BACNET-15-LIST-ELEMENT-OUTBOUND-VALIDATION",
@@ -2516,7 +2517,7 @@
    "id": "BACNET-15-LIST-ELEMENT-TARGET-KIND",
    "standard_anchor": "Clauses 15.1.1.3.1 and 15.2.1.3.1 with the service procedures of 15.1 and 15.2 (printed732/734, PDF734/736); Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); local licensed source inspected",
    "priority": "P1",
-   "requirement_summary": "Inbound AddListElement and RemoveListElement decide from the target property's datatype, before decoding any element, whether it is a BACnetLIST, and refuse every other target (scalar, constructed single value, whole array or indexed array element) with SERVICES / PROPERTY_IS_NOT_A_LIST. Unknown object, unknown property and array-index errors take precedence, and element datatype errors follow. The destination codec serves only BACnetLIST of BACnetDestination properties.",
+   "requirement_summary": "Inbound AddListElement and RemoveListElement decide from the target property's datatype, before decoding any element, whether it is a BACnetLIST, and refuse every other target (scalar, constructed single value, whole array or indexed array element) with SERVICES / PROPERTY_IS_NOT_A_LIST. Unknown object, unknown property and array-index errors take precedence, and element datatype errors follow. The destination codec serves only BACnetLIST of BACnetDestination properties, and the calendar-entry codec only Calendar Date_List (#996).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/list.rs::list_target",
@@ -2837,6 +2838,71 @@
     "README supported services table (AcknowledgeAlarm, GetEventInformation)"
    ],
    "notes": "Split child of BACNET-21-FORMAL-APDUS. Resolves the divergent dual-codec defect from #259 per the Clause 20.2.1 tag-form rules: time [0] tags the primitive base type Time, so the primitives codec's primitive-tag form is conformant and the GetEventInformationAck opening-tag-0 form was removed. Golden vectors, 0/65535 boundary acceptance, 65536 and 3-octet overflow rejection, and a cross-call-site primitives<->GetEventInformationAck matrix all run in-tree."
+  },
+  {
+   "id": "BACNET-21-CALENDAR-ENTRY-CHOICE",
+   "standard_anchor": "Clause 21 BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, BACnetSpecialEvent, BACnetDailySchedule and BACnetTimeValue; Clauses 20.2.1.3.2 and 20.2.1.5; Clause 12.9 Date_List; Clause 12.24 Effective_Period, Weekly_Schedule and Exception_Schedule; Clauses 15.1.1.3, 15.2, 15.8 and 15.9.1.3",
+   "priority": "P1",
+   "requirement_summary": "Every BACnetCalendarEntry goes on the wire under its CHOICE tag: date [0] as a four-octet context primitive, date-range [1] as an opening/closing pair around two application-tagged Dates, weekNDay [2] as a three-octet context primitive. Calendar Date_List is the concatenation of its entries. Schedule Exception_Schedule elements are whole BACnetSpecialEvents: the period as the calendar-entry [0] frame around an entry or the calendar-reference [1] object identifier, the [2] time-value frame, and event-priority [3] limited to 1..16. Weekly_Schedule elements are BACnetDailySchedule [0] frames of application Time plus primitive value, and Effective_Period is two application Dates. One codec in bacnet-encoding serves objects, services and tests. Date_List is network-writable: WriteProperty and WritePropertyMultiple replace it (an empty list included) and AddListElement and RemoveListElement edit it. A written value that is not calendar entries is refused with PROPERTY / INVALID_DATA_TYPE, an undecodable entry with INVALID_DATA_ENCODING, and more than 1024 entries with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY (NO_SPACE_TO_ADD_LIST_ELEMENT for AddListElement), leaving the list unchanged. The list services decode their elements with the same calendar-entry codec (its own ElementCodec, beside the destination codec of BACNET-15-LIST-ELEMENT-TARGET-KIND), so RemoveListElement matches entries by value and either service refuses an element that is not a well-formed entry with INVALID_DATA_TYPE. Each entry is one list element, so ReadRange addresses entries by position.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-encoding/src/constructed/calendar.rs",
+    "crates/bacnet-encoding/src/constructed/schedule.rs",
+    "crates/bacnet-objects/src/schedule/date_list.rs",
+    "crates/bacnet-objects/src/schedule/mod.rs::ScheduleObject",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/bacnet-server/src/handlers/list.rs::ElementCodec"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_golden_vectors",
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_decodes_at_an_offset_and_stops_after_one_entry",
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_list_is_the_concatenation_of_its_entries",
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::unframed_date_range_is_two_application_dates",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::time_value_golden_vectors_keep_the_raw_value",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::special_event_golden_vectors_for_each_period",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::special_event_round_trips_several_time_values",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::daily_schedule_golden_vector_is_a_zero_frame",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::weekly_schedule_golden_vector_is_seven_daily_schedules",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::exception_schedule_is_the_concatenation_of_its_events",
+    "crates/bacnet-objects/src/schedule/calendar_tests.rs::calendar_date_list_reads_each_entry_under_its_choice_tag",
+    "crates/bacnet-objects/src/schedule/calendar_tests.rs::calendar_date_list_write_accepts_every_choice_in_every_value_shape",
+    "crates/bacnet-objects/src/schedule/tests.rs::schedule_weekly_schedule_set_monday_read_no_index",
+    "crates/bacnet-objects/src/schedule/tests.rs::schedule_weekly_schedule_index_1_returns_monday",
+    "crates/bacnet-objects/src/schedule/tests.rs::schedule_weekly_schedule_index_7_returns_sunday",
+    "crates/bacnet-objects/src/schedule/tests.rs::schedule_effective_period_defaults_to_every_date",
+    "crates/bacnet-objects/src/schedule/tests.rs::schedule_effective_period_set_and_read",
+    "crates/bacnet-objects/src/schedule/tests.rs::schedule_exception_schedule_reads_each_special_event_with_its_period",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_reads_each_entry_under_its_choice_tag",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_write_property_takes_every_choice",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_write_property_multiple_takes_entries_and_keeps_the_prefix",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_add_and_remove_list_element_match_entries_by_choice",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_read_range_addresses_entries_by_position",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/calendar.rs::rpm_calendar_indexed_reads_and_date_list_wire_bytes",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/schedule.rs::rpm_schedule_indexed_reads_and_reference_wire_bytes"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_rejects_wrong_tags",
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_rejects_wrong_content_lengths",
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_rejects_truncated_data",
+    "crates/bacnet-encoding/src/constructed/tests/calendar.rs::calendar_entry_list_rejects_a_bad_element_anywhere",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::time_value_rejects_a_context_tagged_value_and_a_missing_time",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::special_event_rejects_malformed_periods",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::special_event_rejects_bad_priorities_and_missing_members",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::special_event_rejects_truncated_data",
+    "crates/bacnet-encoding/src/constructed/tests/schedule.rs::weekly_schedule_round_trips_and_rejects_a_wrong_day_count",
+    "crates/bacnet-objects/src/schedule/calendar_tests.rs::calendar_date_list_write_refuses_other_datatypes",
+    "crates/bacnet-objects/src/schedule/calendar_tests.rs::calendar_date_list_write_refuses_malformed_entries",
+    "crates/bacnet-objects/src/schedule/calendar_tests.rs::calendar_date_list_write_caps_the_entry_count",
+    "crates/bacnet-objects/src/schedule/calendar_tests.rs::calendar_date_list_write_refuses_an_array_index",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_write_property_refuses_other_datatypes_and_bad_encodings",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_list_services_refuse_bad_entries_without_partial_commit",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_add_list_element_past_the_cap_is_no_space_to_add"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #996"
+   ],
+   "notes": "Split child of BACNET-21-FORMAL-APDUS (#996). Breaking on the wire: Date_List entries went out as an application Date or Octet String, Exception_Schedule dropped each event's period and sent the priority as an application Unsigned, Weekly_Schedule days were lists of Time and Octet String pairs, and Effective_Period was an eight-octet Octet String, NULL until set (it now defaults to the range with both dates unspecified). The codecs moved from bacnet-services::schedule, which is removed, to bacnet-encoding::constructed, and the raw eight-octet BACnetDateRange::encode/decode are removed. Not covered: Present_Value evaluation from Date_List, Schedule periods or Effective_Period; value checks on the date and week-n-day octets of a written entry; network writes of the Schedule properties; and the shared list-service behaviour, which still appends an element already present on AddListElement and ignores an absent element on RemoveListElement."
   },
   {
    "id": "BACNET-A-PICS",

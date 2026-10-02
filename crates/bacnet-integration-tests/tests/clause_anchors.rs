@@ -8,7 +8,8 @@ const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 const ACCUMULATOR: &str = include_str!("../../../crates/bacnet-objects/src/accumulator/mod.rs");
 const LOOP_OBJ: &str = include_str!("../../../crates/bacnet-objects/src/loop_obj.rs");
 const CONSTRUCTED: &str = include_str!("../../../crates/bacnet-types/src/constructed/mod.rs");
-const SCHEDULE_CODECS: &str = include_str!("../../../crates/bacnet-services/src/schedule.rs");
+const SCHEDULE_CODECS: &str =
+    include_str!("../../../crates/bacnet-encoding/src/constructed/schedule.rs");
 const ACCESS_ENUMS: &str = include_str!("../../../crates/bacnet-types/src/enums/access.rs");
 const NOTIFICATION_CLASS: &str =
     include_str!("../../../crates/bacnet-objects/src/notification_class/mod.rs");
@@ -106,12 +107,12 @@ fn constructed_fault_parameters_anchor() {
 }
 
 #[test]
-fn schedule_service_codecs_clause() {
+fn schedule_codecs_clause() {
     assert_anchors(
-        "crates/bacnet-services/src/schedule.rs",
+        "crates/bacnet-encoding/src/constructed/schedule.rs",
         SCHEDULE_CODECS,
-        &["Clauses 12.17, 21"],
-        &["Clauses 12.24, 21"],
+        &["Clause 12.17", "Clauses 12.17, 21"],
+        &["(Clause 12.24)"],
     );
 }
 

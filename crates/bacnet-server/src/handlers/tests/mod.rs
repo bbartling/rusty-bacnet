@@ -46,6 +46,7 @@ mod audit_log_query;
 mod audit_recipient_writes;
 mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;
+mod calendar_date_list;
 mod cov_multiple_parameters;
 mod cov_property_parameters;
 mod cov_request_parameters;
