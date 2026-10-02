@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Breaking Life Safety and Global Group required rows (wire and Rust API):**
+  Life Safety Point, Life Safety Zone and Global Group now serve required rows
+  of their Clause 12 tables that they lacked. Each new row is in Property_List,
+  the property metadata, RPM ALL and REQUIRED and the PICS (#1092).
+  - Life Safety Point (Table 12-18) and Zone (Table 12-19): Accepted_Modes, a
+    read-only list of the modes a WriteProperty or WritePropertyMultiple of
+    Mode may select. It starts as every standard LifeSafetyMode, and
+    `set_accepted_modes` replaces it. A network Mode write naming a mode off
+    the list now fails with PROPERTY / VALUE_OUT_OF_RANGE and leaves Mode
+    alone; before, any Enumerated was stored. The local `set_mode` is not
+    checked against the list.
+  - Life Safety Zone: Tracking_Value, read-only like the Point's and set with
+    `set_tracking_value` or a reset commit, so `LifeSafetyZoneResetContext`
+    and `LifeSafetyZoneResetCommit` gain a `tracking_value` field. As on the
+    Point, it can be subscribed with SubscribeCOVProperty, which used to fail
+    with NOT_COV_PROPERTY, and a reset that changes it notifies.
+  - Global Group (Table 12-57): Event_State, which stays NORMAL because the
+    object has no intrinsic reporting, and Member_Status_Flags, the OR of the
+    Status_Flags values held in Present_Value for members that reference
+    Status_Flags. It is worked out from Present_Value on every read, so it
+    follows each update the application makes there.
+
 - A running server's application can now update a Loop's
   Controlled_Variable_Value (#1063). Before, only
   `LoopObject::set_controlled_variable_value` could set it, and nothing could
@@ -152,6 +174,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until it reaches Python, and a Rust test checks the stub lists the same
   fields.
 
+- **Breaking `CovPolicy` validation (Rust API):** Python servers can now set
+  their COV limits with a keyword-only `cov_policy` dict on `BACnetServer`
+  (#1100). Before, they always ran `CovPolicy::default()`. Each key is a
+  `CovPolicy` field under its Rust name: the global and per-peer subscription
+  caps, the reserved capacity and the peers that may use it, the indefinite
+  lifetime switch and quota, the per-event notification and byte budgets, and
+  the confirmed in-flight limit. A key left out keeps its default, typed by the
+  new `CovPolicy` TypedDict in `rusty_bacnet.pyi`. The new
+  `CovPolicy::validate` refuses a zero subscription cap, notification budget or
+  in-flight limit, and a reserved peer that no request could match: a MAC
+  outside 1 to 255 octets, or a routed network outside 1 to 65534. The Rust
+  server now runs it before starting a transport, as it does the request
+  budgets, so a Rust server configured with one of these values fails to start
+  where it used to run refusing all COV work. Python runs the same check at
+  construction: an unknown key or a value of the wrong type raises TypeError, a
+  negative or oversized integer OverflowError, and a refused value ValueError,
+  as the other constructor keywords do. The conversion names every field
+  without `..`, so a field added in Rust doesn't compile until Python can set
+  it.
+
 - `BACnetClient::transport()` borrows the transport a built client owns, so the
   BACnet/SC connection-state watch and NPDU drop counts, the B/IP management,
   FDT and fanout counters and BBMD state, and the MS/TP diagnostics handle are
@@ -269,6 +311,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     through the helper the other commandable objects use. It is read-only.
 
 ### Changed
+
+- **Breaking Access Credential and Access Door required properties (wire and
+  Rust API):** both objects now serve every row their property tables mark
+  required (#1073).
+  - Access Credential (Clause 12.35, Table 12-40) gains Global_Identifier
+    (writable Unsigned32; a value past 32 bits is VALUE_OUT_OF_RANGE),
+    Reason_For_Disable, Activation_Time, Expiration_Time and
+    Credential_Disable. Credential_Status is now worked out from
+    Reason_For_Disable, INACTIVE while the list has anything in it and ACTIVE
+    otherwise, so it is read-only: a WriteProperty that used to set it now
+    fails with WRITE_ACCESS_DENIED, and a new credential reads ACTIVE instead
+    of INACTIVE. The list joins three sources: reasons the application raises
+    with the new `add_disable_reason` (and withdraws with
+    `remove_disable_reason`), the reason the current Credential_Disable value
+    stands for (DISABLED, DISABLED_MANUAL or DISABLED_LOCKOUT; a vendor value
+    stands for DISABLED), and DISABLED_NOT_YET_ACTIVE or DISABLED_EXPIRED,
+    judged against the database clock on every read. With no usable clock
+    frame the window adds nothing. Credential_Disable takes the four named
+    values and 64 to 65535; Activation_Time and Expiration_Time take a
+    specific date and time, or all X'FF' for an open end, and refuse a partly
+    specified one with VALUE_OUT_OF_RANGE.
+  - Assigned_Access_Rights used to read as an Unsigned count and
+    Authentication_Factors as a list of octet strings. They are now
+    BACnetARRAYs of BACnetAssignedAccessRights and
+    BACnetCredentialAuthenticationFactor, readable whole, by element or by
+    size, and set through `set_assigned_access_rights` and
+    `set_authentication_factors`, which refuse elements outside their
+    enumerations or that don't reference an Access Rights object.
+    `bacnet-encoding` adds codecs for the two element types and for
+    BACnetAuthenticationFactor, `bacnet-types` adds the
+    `AccessAuthenticationFactorDisable` and `AuthenticationFactorType`
+    enumerations and the element structs, and `BACnetAssignedAccessRights` now
+    holds a `BACnetDeviceObjectReference` instead of an object identifier.
+  - Access Door (Clause 12.26, Table 12-30) gains Door_Pulse_Time (default
+    5 s), Door_Extended_Pulse_Time (15 s) and Door_Open_Too_Long_Time (30 s),
+    all writable Unsigned32 counts of tenths of a second, and the read-only
+    Current_Command_Priority, NULL while Present_Value comes from
+    Relinquish_Default. A PULSE_UNLOCK or EXTENDED_PULSE_UNLOCK command is
+    relinquished from its slot once its pulse time has passed, so the door
+    relocks; the server's existing monotonic operation task, which also runs
+    Binary Lighting Output egress, does this and sends COV. A pulse written
+    below a slot already in use, or with a pulse time of zero, is relinquished
+    at once. Door_Open_Too_Long_Time is stored but no alarm logic uses it.
+    Relinquish_Default now refuses the two pulse values with
+    VALUE_OUT_OF_RANGE, as Clause 12.26.11 allows only LOCK and UNLOCK there.
 
 - The running server's Device read view, which wraps every object it serves
   to ReadProperty, ReadPropertyMultiple, ReadRange, `read_local` and the PICS,

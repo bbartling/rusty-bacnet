@@ -216,6 +216,7 @@ mod tests {
             atomic_write_file_budget: server::AtomicWriteFileBudget::default(),
             read_range_budget: server::ReadRangeBudget::default(),
             get_event_information_budget: server::GetEventInformationBudget::default(),
+            cov_policy: server::CovPolicy::default(),
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

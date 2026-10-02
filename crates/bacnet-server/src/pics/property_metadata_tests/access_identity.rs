@@ -9,21 +9,27 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     // PICS corrections vs the historical heuristic: Object_Name is required
     // and read-only; CDI Present_Value is required and read-only;
-    // Credential_Status, User_Type, and the rights Global_Identifier are
-    // required and writable.
+    // User_Type and the rights and credential Global_Identifier are required
+    // and writable.
     match kind {
         ObjectType::ACCESS_CREDENTIAL => vec![
             (P::OBJECT_IDENTIFIER, false, false),
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
-            // Table 12-40 has no Present_Value row (#979).
-            (P::CREDENTIAL_STATUS, false, true),
+            // Table 12-40 has no Present_Value row (#979). Credential_Status
+            // is derived from Reason_For_Disable, so read-only (#1073).
+            (P::CREDENTIAL_STATUS, false, false),
             (P::ASSIGNED_ACCESS_RIGHTS, false, false),
             (P::AUTHENTICATION_FACTORS, false, false),
             // Nor an Out_Of_Service row (#1064).
             (P::STATUS_FLAGS, false, false),
             (P::RELIABILITY, false, false),
+            (P::GLOBAL_IDENTIFIER, false, true),
+            (P::REASON_FOR_DISABLE, false, false),
+            (P::ACTIVATION_TIME, false, true),
+            (P::EXPIRATION_TIME, false, true),
+            (P::CREDENTIAL_DISABLE, false, true),
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::ACCESS_USER => vec![

@@ -16,9 +16,9 @@ use crate::property_metadata::{
 // Order preserves each legacy projection; PROPERTY_LIST is appended so the
 // projection helper omits it while required_properties keeps it. Only
 // implemented rows are described: table rows the objects do not serve (Group
-// audit/tag/profile rows; GlobalGroup event/COV/audit/tag/profile rows,
-// including Event_State and Member_Status_Flags; StructuredView subordinate
-// tags/relationships rows) stay absent until dispatch exists.
+// audit/tag/profile rows; GlobalGroup intrinsic-reporting, COVU, audit, tag
+// and profile rows; StructuredView subordinate tags/relationships rows) stay
+// absent until dispatch exists.
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
@@ -34,7 +34,10 @@ use crate::property_metadata::{
 // (DESCRIPTION O → Optional precedent): Table 12-57 lists Status_Flags R,
 // Out_Of_Service R, and Reliability O, so GlobalGroup Reliability is
 // Optional/ReadOnly, Status_Flags RequiredRead/ReadOnly and Out_Of_Service
-// RequiredRead/Always with its routed Boolean write arm. Group Table 12-17
+// RequiredRead/Always with its routed Boolean write arm. Event_State and
+// Member_Status_Flags (both R, #1092) are RequiredRead/ReadOnly: Event_State
+// stays NORMAL because the object has no intrinsic reporting, and
+// Member_Status_Flags is derived from the stored Present_Value. Group Table 12-17
 // and StructuredView Table 12-34 carry none of the three, so those objects
 // serve none of them (#1064 removed the rows the 0.1.0 import carried).
 // Presence is None throughout: the implementation models no commandable,
@@ -68,6 +71,8 @@ const GLOBAL_GROUP_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::GROUP_MEMBER_NAMES, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::MEMBER_STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -229,6 +234,8 @@ mod tests {
             P::PRESENT_VALUE,
             P::GROUP_MEMBER_NAMES,
             P::STATUS_FLAGS,
+            P::EVENT_STATE,
+            P::MEMBER_STATUS_FLAGS,
             P::OUT_OF_SERVICE,
             P::RELIABILITY,
         ];
@@ -239,6 +246,8 @@ mod tests {
             P::GROUP_MEMBERS,
             P::PRESENT_VALUE,
             P::STATUS_FLAGS,
+            P::EVENT_STATE,
+            P::MEMBER_STATUS_FLAGS,
             P::OUT_OF_SERVICE,
             P::PROPERTY_LIST,
         ];
@@ -439,10 +448,10 @@ mod tests {
             assert_unserved(&mut group, p);
         }
         let mut global = GlobalGroupObject::new(1, "GG-1").unwrap();
-        // Event_State and Member_Status_Flags are table rows with no read
-        // arm, so they stay absent from the served set.
-        assert_unserved(&mut global, P::EVENT_STATE);
-        assert_unserved(&mut global, P::MEMBER_STATUS_FLAGS);
+        // The intrinsic-reporting and COVU rows stay absent: the object has
+        // no event algorithm and sends no unsubscribed COV.
+        assert_unserved(&mut global, P::EVENT_ENABLE);
+        assert_unserved(&mut global, P::COVU_PERIOD);
         let mut view = StructuredViewObject::new(1, "SV-1").unwrap();
         assert_unserved(&mut view, P::SUBORDINATE_TAGS);
         for p in removed {

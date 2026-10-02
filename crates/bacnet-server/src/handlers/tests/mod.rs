@@ -57,6 +57,7 @@ fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
     )
 }
 
+mod access_required_rows;
 mod access_typed_values;
 mod acknowledge_alarm;
 mod acknowledge_alarm_ee;
@@ -95,6 +96,7 @@ mod framed_properties;
 mod get_event_information_projection;
 mod indexed_write_presence;
 mod life_safety_cov;
+mod life_safety_mode_writes;
 mod life_safety_operation;
 mod life_safety_reset;
 mod lighting_required_rows;

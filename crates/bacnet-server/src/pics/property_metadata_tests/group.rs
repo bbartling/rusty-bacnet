@@ -25,6 +25,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::PRESENT_VALUE, false, false),
             (P::GROUP_MEMBER_NAMES, true, false),
             (P::STATUS_FLAGS, false, false),
+            (P::EVENT_STATE, false, false),
+            (P::MEMBER_STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
             (P::RELIABILITY, true, false),
             (P::PROPERTY_LIST, false, false),

@@ -83,6 +83,7 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
         let zone_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
         let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
         zone.set_present_value(LifeSafetyState::FAULT_ALARM);
+        zone.set_tracking_value(LifeSafetyState::FAULT);
         zone.set_silenced(SilencedState::VISIBLE_SILENCED);
         zone.set_operation_expected(operation);
         zone.set_reset_executor(Arc::new(move |context| {
@@ -92,12 +93,14 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
                     object_identifier: zone_oid,
                     operation,
                     present_value: LifeSafetyState::FAULT_ALARM,
+                    tracking_value: LifeSafetyState::FAULT,
                     silenced: SilencedState::VISIBLE_SILENCED,
                     operation_expected: operation,
                 }
             );
             Ok(LifeSafetyZoneResetCommit {
                 present_value: Some(LifeSafetyState::SUPERVISORY),
+                tracking_value: Some(LifeSafetyState::QUIET),
                 silenced: None,
             })
         }));
@@ -122,6 +125,7 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
                 object_identifier: zone_oid,
                 changed_properties: vec![
                     PropertyIdentifier::PRESENT_VALUE,
+                    PropertyIdentifier::TRACKING_VALUE,
                     PropertyIdentifier::OPERATION_EXPECTED
                 ]
             }]
@@ -134,6 +138,10 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
             read(&db, point_oid, PropertyIdentifier::TRACKING_VALUE),
             LifeSafetyState::FAULT.to_raw(),
             "an omitted update remains unchanged"
+        );
+        assert_eq!(
+            read(&db, zone_oid, PropertyIdentifier::TRACKING_VALUE),
+            LifeSafetyState::QUIET.to_raw()
         );
         assert_eq!(
             read(&db, zone_oid, PropertyIdentifier::SILENCED),

@@ -1,13 +1,37 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use super::*;
+use crate::traits::MonotonicClock;
 
 // AccessDoorObject (type 30)
 // ---------------------------------------------------------------------------
+
+/// Door_Pulse_Time a new door starts with, in tenths of a second (5 s).
+pub const DEFAULT_DOOR_PULSE_TIME: u32 = 50;
+/// Door_Extended_Pulse_Time a new door starts with, in tenths of a second
+/// (15 s).
+pub const DEFAULT_DOOR_EXTENDED_PULSE_TIME: u32 = 150;
+/// Door_Open_Too_Long_Time a new door starts with, in tenths of a second
+/// (30 s).
+pub const DEFAULT_DOOR_OPEN_TOO_LONG_TIME: u32 = 300;
 
 /// BACnet Access Door object (type 30).
 ///
 /// Represents a physical door or barrier in an access control system.
 /// Present value carries the door command (BACnetDoorValue); Door_Status
 /// reports the physical DoorStatus.
+///
+/// A PULSE_UNLOCK or EXTENDED_PULSE_UNLOCK command holds its priority slot
+/// for Door_Pulse_Time or Door_Extended_Pulse_Time and is then relinquished,
+/// so the door relocks (Clauses 12.26.4, 12.26.16 and 12.26.17; #1073). The
+/// deadline is taken from the database's monotonic clock when the command is
+/// written, and the server's monotonic operation task relinquishes the slot
+/// at that deadline, the mechanism Binary Lighting Output egress uses. A
+/// pulse written below a priority already commanded is relinquished at once,
+/// and a pulse time of zero relinquishes at once too. Changing a pulse time
+/// leaves an armed deadline as it was.
+#[derive(Clone)]
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
     name: String,
@@ -26,6 +50,20 @@ pub struct AccessDoorObject {
     /// 16-level priority array for commandable Present_Value.
     priority_array: [Option<DoorValue>; 16],
     relinquish_default: DoorValue,
+    /// Door_Pulse_Time, tenths of a second.
+    door_pulse_time: u32,
+    /// Door_Extended_Pulse_Time, tenths of a second.
+    door_extended_pulse_time: u32,
+    /// Door_Open_Too_Long_Time, tenths of a second. Stored and served; no
+    /// door-open-too-long alarm logic is modelled.
+    door_open_too_long_time: u32,
+    /// For each priority slot holding a pulse, the monotonic instant it is
+    /// relinquished.
+    pulse_deadlines: [Option<Duration>; 16],
+    monotonic_clock: Option<Arc<MonotonicClock>>,
+    /// Elapsed time for a door with no bound clock, advanced by
+    /// `advance_time_internal`.
+    logical_now: Duration,
 }
 
 impl AccessDoorObject {
@@ -48,22 +86,25 @@ impl AccessDoorObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: Default::default(),
             relinquish_default: DoorValue::LOCK,
+            door_pulse_time: DEFAULT_DOOR_PULSE_TIME,
+            door_extended_pulse_time: DEFAULT_DOOR_EXTENDED_PULSE_TIME,
+            door_open_too_long_time: DEFAULT_DOOR_OPEN_TOO_LONG_TIME,
+            pulse_deadlines: [None; 16],
+            monotonic_clock: None,
+            logical_now: Duration::ZERO,
         })
     }
 
     /// Set the Relinquish_Default (#270).
     ///
-    /// Table 12-30 types both Present_Value and Relinquish_Default as
-    /// BACnetDoorValue, whose Clause 21 production is a closed set of four
-    /// (`DoorValue::LOCK..=DoorValue::EXTENDED_PULSE_UNLOCK`, 0..=3). A
-    /// `DoorValue` made with `from_raw` can carry any number, so a value
-    /// outside that set is refused with VALUE_OUT_OF_RANGE and the stored
-    /// default is left unchanged; a commanded Present_Value is checked the
-    /// same way (#979). After the store, Present_Value is resolved anew from
-    /// the priority array so an empty array falls back to the new default
-    /// immediately.
+    /// Table 12-30 types it as BACnetDoorValue, but Clause 12.26.11 admits
+    /// only LOCK and UNLOCK: a pulse can't be the resting command. Any other
+    /// value, including a `DoorValue::from_raw` outside the production, is
+    /// refused with VALUE_OUT_OF_RANGE and the stored default kept. After the
+    /// store, Present_Value is resolved anew from the priority array so an
+    /// empty array falls back to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: DoorValue) -> Result<(), Error> {
-        if !is_door_value(value) {
+        if !matches!(value, DoorValue::LOCK | DoorValue::UNLOCK) {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
@@ -71,9 +112,78 @@ impl AccessDoorObject {
         Ok(())
     }
 
+    /// Set Door_Pulse_Time, in tenths of a second.
+    pub fn set_door_pulse_time(&mut self, tenths: u32) {
+        self.door_pulse_time = tenths;
+    }
+
+    /// Set Door_Extended_Pulse_Time, in tenths of a second.
+    pub fn set_door_extended_pulse_time(&mut self, tenths: u32) {
+        self.door_extended_pulse_time = tenths;
+    }
+
+    /// Set Door_Open_Too_Long_Time, in tenths of a second.
+    pub fn set_door_open_too_long_time(&mut self, tenths: u32) {
+        self.door_open_too_long_time = tenths;
+    }
+
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
+    }
+
+    fn monotonic_now(&self) -> Duration {
+        self.monotonic_clock
+            .as_ref()
+            .map_or(self.logical_now, |clock| clock())
+    }
+
+    /// Store a command (or a NULL relinquish) at `priority`, arming the
+    /// relock deadline for a pulse.
+    fn command(&mut self, priority: u8, value: Option<DoorValue>) {
+        let index = usize::from(priority - 1);
+        self.pulse_deadlines[index] = None;
+        let pulse = match value {
+            Some(DoorValue::PULSE_UNLOCK) => Some(self.door_pulse_time),
+            Some(DoorValue::EXTENDED_PULSE_UNLOCK) => Some(self.door_extended_pulse_time),
+            _ => None,
+        };
+        self.priority_array[index] = match pulse {
+            // A pulse below a live command, or of zero length, is
+            // relinquished as soon as it is written.
+            Some(tenths)
+                if tenths == 0 || self.priority_array[..index].iter().any(Option::is_some) =>
+            {
+                None
+            }
+            Some(tenths) => {
+                let length = Duration::from_millis(u64::from(tenths) * 100);
+                self.pulse_deadlines[index] = Some(self.monotonic_now().saturating_add(length));
+                value
+            }
+            None => value,
+        };
+        self.recalculate_present_value();
+    }
+
+    /// Relinquish every pulse whose deadline has passed; `true` when one was.
+    fn expire_pulses(&mut self, now: Duration) -> bool {
+        let mut expired = false;
+        for (slot, deadline) in self
+            .priority_array
+            .iter_mut()
+            .zip(&mut self.pulse_deadlines)
+        {
+            if deadline.is_some_and(|deadline| now >= deadline) {
+                *slot = None;
+                *deadline = None;
+                expired = true;
+            }
+        }
+        if expired {
+            self.recalculate_present_value();
+        }
+        expired
     }
 }
 
@@ -94,6 +204,14 @@ fn checked_door_value(value: PropertyValue) -> Result<DoorValue, Error> {
         return Err(common::value_out_of_range_error());
     }
     Ok(value)
+}
+
+/// Decode a door time write: an Unsigned of at most 32 bits.
+fn checked_tenths(value: PropertyValue) -> Result<u32, Error> {
+    let PropertyValue::Unsigned(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    common::u64_to_u32(raw)
 }
 
 impl BACnetObject for AccessDoorObject {
@@ -149,6 +267,20 @@ impl BACnetObject for AccessDoorObject {
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Enumerated(self.relinquish_default.to_raw()))
             }
+            p if p == PropertyIdentifier::DOOR_PULSE_TIME => {
+                Ok(PropertyValue::Unsigned(self.door_pulse_time.into()))
+            }
+            p if p == PropertyIdentifier::DOOR_EXTENDED_PULSE_TIME => Ok(PropertyValue::Unsigned(
+                self.door_extended_pulse_time.into(),
+            )),
+            p if p == PropertyIdentifier::DOOR_OPEN_TOO_LONG_TIME => {
+                Ok(PropertyValue::Unsigned(self.door_open_too_long_time.into()))
+            }
+            // NULL while Present_Value comes from Relinquish_Default
+            // (Clause 12.26.39).
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -172,12 +304,33 @@ impl BACnetObject for AccessDoorObject {
             // A command (or a NULL relinquish) at the write priority, 16 when
             // absent; Present_Value is then resolved from the priority array.
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                common::write_priority_array!(self, value, priority, checked_door_value)
+                let priority = priority.unwrap_or(16);
+                if !(1..=16).contains(&priority) {
+                    return Err(common::value_out_of_range_error());
+                }
+                let value = match value {
+                    PropertyValue::Null => None,
+                    other => Some(checked_door_value(other)?),
+                };
+                self.command(priority, value);
+                Ok(())
             }
             // Table 12-30 carries Relinquish_Default R (BACnetDoorValue) for
             // the commandable Access Door; the standard permits writability.
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 self.set_relinquish_default(checked_door_value(value)?)
+            }
+            p if p == PropertyIdentifier::DOOR_PULSE_TIME => {
+                self.door_pulse_time = checked_tenths(value)?;
+                Ok(())
+            }
+            p if p == PropertyIdentifier::DOOR_EXTENDED_PULSE_TIME => {
+                self.door_extended_pulse_time = checked_tenths(value)?;
+                Ok(())
+            }
+            p if p == PropertyIdentifier::DOOR_OPEN_TOO_LONG_TIME => {
+                self.door_open_too_long_time = checked_tenths(value)?;
+                Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
@@ -197,6 +350,27 @@ impl BACnetObject for AccessDoorObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.expire_pulses(self.logical_now)
+    }
+
+    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.monotonic_clock = clock;
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.expire_pulses(now)
+    }
+
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        self.pulse_deadlines.iter().flatten().min().copied()
+    }
+
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        Some(Box::new(self.clone()))
     }
 }
 

@@ -59,16 +59,19 @@ fn life_safety_single_property_cov_uses_explicit_capability_and_error_taxonomy()
         (point_oid(), PropertyIdentifier::TRACKING_VALUE),
         (point_oid(), PropertyIdentifier::SILENCED),
         (zone_oid(), PropertyIdentifier::OPERATION_EXPECTED),
+        // The zone serves Tracking_Value too, so it is subscribable (#1092).
+        (zone_oid(), PropertyIdentifier::TRACKING_VALUE),
     ] {
         handle_subscribe_cov_property(&mut table, &db, &mac, &property_request(oid, property))
             .unwrap();
     }
 
+    // Accepted_Modes is readable but outside the COV surface.
     let error = handle_subscribe_cov_property(
         &mut table,
         &db,
         &mac,
-        &property_request(zone_oid(), PropertyIdentifier::TRACKING_VALUE),
+        &property_request(zone_oid(), PropertyIdentifier::ACCEPTED_MODES),
     )
     .unwrap_err();
     assert_protocol(error, ErrorClass::PROPERTY, ErrorCode::NOT_COV_PROPERTY);
@@ -90,7 +93,7 @@ fn life_safety_single_property_cov_uses_explicit_capability_and_error_taxonomy()
     )
     .unwrap_err();
     assert_protocol(error, ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY);
-    assert_eq!(table.len(), 3);
+    assert_eq!(table.len(), 4);
 }
 
 #[test]
@@ -104,7 +107,7 @@ fn life_safety_multiple_property_cov_rejection_keeps_the_earlier_reference() {
         ),
         (
             zone_oid(),
-            PropertyIdentifier::TRACKING_VALUE,
+            PropertyIdentifier::ACCEPTED_MODES,
             ErrorCode::NOT_COV_PROPERTY,
         ),
         (
@@ -187,7 +190,7 @@ fn life_safety_property_cancellation_bypasses_current_capability_checks() {
         monitored_object_identifier: zone_oid(),
         issue_confirmed_notifications: None,
         lifetime: None,
-        monitored_property_identifier: PropertyIdentifier::TRACKING_VALUE,
+        monitored_property_identifier: PropertyIdentifier::ACCEPTED_MODES,
         monitored_property_array_index: None,
         cov_increment: None,
     };
