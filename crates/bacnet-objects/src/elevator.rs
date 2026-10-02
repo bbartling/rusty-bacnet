@@ -4,6 +4,7 @@
 //! - EscalatorObject (type 58) — Clause 12.60
 //! - LiftObject (type 59) — Clause 12.59
 
+use bacnet_types::constructed::BACnetLandingCallStatus;
 use bacnet_types::enums::{
     EscalatorFault, EscalatorMode, EscalatorOperationDirection, LiftGroupMode, ObjectType,
     PropertyIdentifier, Reliability,
@@ -15,6 +16,7 @@ use std::{borrow::Cow, collections::HashSet};
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod landing_calls;
 mod metadata;
 
 // ===========================================================================
@@ -32,10 +34,10 @@ pub struct ElevatorGroupObject {
     group_members: Vec<ObjectIdentifier>,
     /// Group mode.
     group_mode: LiftGroupMode,
-    /// Number of landing calls (stored as count).
-    landing_calls: u64,
-    /// Landing call control (Enumerated).
-    landing_call_control: u32,
+    /// Active landing calls, served as the Landing_Calls BACnetLIST.
+    landing_calls: Vec<BACnetLandingCallStatus>,
+    /// The last call written to Landing_Call_Control.
+    landing_call_control: BACnetLandingCallStatus,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
@@ -52,8 +54,8 @@ impl ElevatorGroupObject {
             group_id: 0,
             group_members: Vec::new(),
             group_mode: LiftGroupMode::UNKNOWN,
-            landing_calls: 0,
-            landing_call_control: 0,
+            landing_calls: Vec::new(),
+            landing_call_control: landing_calls::initial_landing_call_control(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -63,6 +65,28 @@ impl ElevatorGroupObject {
     /// Add a lift member to this elevator group.
     pub fn add_member(&mut self, oid: ObjectIdentifier) {
         self.group_members.push(oid);
+    }
+
+    /// The last landing call written to Landing_Call_Control, or a placeholder
+    /// of floor 0 with direction UNKNOWN before any write.
+    pub fn landing_call_control(&self) -> &BACnetLandingCallStatus {
+        &self.landing_call_control
+    }
+
+    /// The active landing calls served as Landing_Calls.
+    pub fn landing_calls(&self) -> &[BACnetLandingCallStatus] {
+        &self.landing_calls
+    }
+
+    /// Replace the active landing calls served as Landing_Calls.
+    ///
+    /// The application owns this list: a Landing_Call_Control write doesn't
+    /// add to it. A call with a direction outside BACnetLiftCarDirection is
+    /// refused with VALUE_OUT_OF_RANGE and the list is left unchanged.
+    pub fn set_landing_calls(&mut self, calls: Vec<BACnetLandingCallStatus>) -> Result<(), Error> {
+        calls.iter().try_for_each(landing_calls::validate)?;
+        self.landing_calls = calls;
+        Ok(())
     }
 }
 
@@ -99,11 +123,14 @@ impl BACnetObject for ElevatorGroupObject {
             p if p == PropertyIdentifier::GROUP_MODE => {
                 Ok(PropertyValue::Enumerated(self.group_mode.to_raw()))
             }
-            p if p == PropertyIdentifier::LANDING_CALLS => {
-                Ok(PropertyValue::Unsigned(self.landing_calls))
-            }
+            p if p == PropertyIdentifier::LANDING_CALLS => Ok(PropertyValue::List(
+                self.landing_calls
+                    .iter()
+                    .map(landing_calls::encode)
+                    .collect::<Result<Vec<_>, Error>>()?,
+            )),
             p if p == PropertyIdentifier::LANDING_CALL_CONTROL => {
-                Ok(PropertyValue::Enumerated(self.landing_call_control))
+                landing_calls::encode(&self.landing_call_control)
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -142,12 +169,8 @@ impl BACnetObject for ElevatorGroupObject {
                 }
             }
             p if p == PropertyIdentifier::LANDING_CALL_CONTROL => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.landing_call_control = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
+                self.landing_call_control = landing_calls::decode_write(value)?;
+                Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),

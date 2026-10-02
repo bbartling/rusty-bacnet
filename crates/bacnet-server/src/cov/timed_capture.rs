@@ -176,6 +176,10 @@ impl TimedCapture {
                 .or(sub.last_notified_observation.as_ref())
                 .cloned();
             if !self.force && !reads.reports(&prepared, baseline.as_ref()) {
+                // Below the reference's increment: nothing to report, but a
+                // sibling may carry the field, which then needs the time of
+                // this commit (#987).
+                timed.note_field(key, generation, &prepared.values, frame);
                 continue;
             }
             let values =

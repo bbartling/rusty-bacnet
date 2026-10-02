@@ -69,14 +69,19 @@ test('native search returns a local-lab route under the project prefix', async (
   await expect(page).toHaveURL(/\/rusty-bacnet\/start\/local-lab\//);
 });
 
-test('light and dark themes have no automated WCAG A/AA violations on every route', async ({ page }) => {
+// One test per route, so each scan pair stays well inside the test timeout as
+// the site grows, and the two workers can share the routes.
+test.describe('light and dark themes have no automated WCAG A/AA violations', () => {
+  test.describe.configure({ mode: 'parallel' });
   for (const route of routes) {
-    await page.goto(base + route);
-    for (const theme of ['light', 'dark'] as const) {
-      await selectTheme(page, theme);
-      const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
-      expect(scan.violations, `${route} / ${theme}`).toEqual([]);
-    }
+    test(`on ${base}${route}`, async ({ page }) => {
+      await page.goto(base + route);
+      for (const theme of ['light', 'dark'] as const) {
+        await selectTheme(page, theme);
+        const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+        expect(scan.violations, `${route} / ${theme}`).toEqual([]);
+      }
+    });
   }
 });
 

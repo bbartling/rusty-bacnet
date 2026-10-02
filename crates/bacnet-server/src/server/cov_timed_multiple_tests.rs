@@ -337,3 +337,185 @@ async fn an_explicit_untimestamped_selector_is_never_repeated_or_timestamped() {
     );
     h.server.stop().await.unwrap();
 }
+
+/// Take AV-1 out of service, which sets its OUT_OF_SERVICE Status_Flags bit.
+async fn out_of_service(h: &Harness) {
+    h.server
+        .write_local(
+            &av1(),
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+}
+
+/// Status_Flags times of a single-object notification.
+fn flag_times(
+    report: &bacnet_services::cov_multiple::COVNotificationMultipleRequest,
+) -> Vec<Option<bacnet_types::primitives::Time>> {
+    rows(report)
+        .into_iter()
+        .filter(|(property, _, _)| *property == SF)
+        .map(|(_, _, time_of_change)| time_of_change)
+        .collect()
+}
+
+#[tokio::test]
+async fn an_explicit_timestamped_selector_that_did_not_change_keeps_its_last_change_time() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.set_clock(1);
+    h.subscribe_specs(false, vec![(av1(), vec![(PV, false), (SF, true)])])
+        .await;
+    let initial = h.notification().await;
+    assert_eq!(flag_times(&initial), vec![Some(time(1))], "admission time");
+    // Status_Flags changes at 3: its own selector captures that.
+    h.set_clock(3);
+    out_of_service(&h).await;
+    assert_eq!(flag_times(&h.notification().await), vec![Some(time(3))]);
+    // Only PV changes at 5. The untimestamped PV reference carries Status_Flags
+    // along, and the field still reports the time its own timestamped selector
+    // last saw it change (§13.17.3.1.2.4; #987).
+    h.set_clock(5);
+    h.write_local(10.0).await;
+    let report = h.notification().await;
+    assert_eq!(pv_rows(&report), vec![(real(10.0), None)]);
+    assert_eq!(flag_times(&report), vec![Some(time(3))]);
+    assert_eq!(
+        envelope(&report),
+        Some((at(3).local_date, time(3))),
+        "the last change conveyed"
+    );
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_timestamped_companion_keeps_its_time_over_an_unchanged_selector() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.set_clock(1);
+    h.subscribe_specs(false, vec![(av1(), vec![(PV, true), (SF, true)])])
+        .await;
+    assert_eq!(flag_times(&h.notification().await), vec![Some(time(1))]);
+    // PV changes at 5 and Status_Flags does not. PV's change carries
+    // Status_Flags with its own time; the unchanged Status_Flags selector only
+    // fills in a missing time, so it leaves that one alone (#987).
+    h.set_clock(5);
+    h.write_local(10.0).await;
+    let report = h.notification().await;
+    assert_eq!(pv_rows(&report), vec![(real(10.0), Some(time(5)))]);
+    assert_eq!(flag_times(&report), vec![Some(time(5))]);
+    assert_eq!(envelope(&report), Some((at(5).local_date, time(5))));
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_header_names_each_notifications_own_newest_change_even_if_older() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
+            .unwrap();
+    })
+    .await;
+    h.set_clock(1);
+    h.subscribe_specs(
+        false,
+        vec![
+            (av1(), vec![(PV, false), (SF, true)]),
+            (av2(), vec![(PV, true)]),
+        ],
+    )
+    .await;
+    h.notification().await;
+    h.set_clock(3);
+    out_of_service(&h).await;
+    assert_eq!(
+        envelope(&h.notification().await),
+        Some((at(3).local_date, time(3)))
+    );
+    h.set_clock(4);
+    h.write_local_to(av2(), 7.0).await;
+    assert_eq!(
+        envelope(&h.notification().await),
+        Some((at(4).local_date, time(4)))
+    );
+    // Only AV-1's PV changes at 5. Its Status_Flags field keeps the time of
+    // its change at 3, the newest change this notification conveys, so the
+    // header goes back from 4 to 3: it describes each notification alone.
+    h.set_clock(5);
+    h.write_local(10.0).await;
+    let report = h.notification().await;
+    assert_eq!(pv_rows(&report), vec![(real(10.0), None)]);
+    assert_eq!(flag_times(&report), vec![Some(time(3))]);
+    assert_eq!(envelope(&report), Some((at(3).local_date, time(3))));
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn without_a_valid_clock_an_uncaptured_timestamped_field_is_left_out() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.set_clock(1);
+    h.subscribe_specs(false, vec![(av1(), vec![(PV, false), (SF, true)])])
+        .await;
+    h.notification().await;
+    // Status_Flags changes while the Device clock is invalid, so nothing
+    // captures or times it. The untimestamped PV reference still reports, but
+    // the new Status_Flags value its sibling asked to timestamp stays out
+    // rather than going out untimed (#987).
+    let mut invalid = at(3);
+    invalid.local_time.hour = 24;
+    *h.clock.0.lock().unwrap() = invalid;
+    out_of_service(&h).await;
+    let report = h.notification().await;
+    assert_eq!(pv_rows(&report), vec![(real(0.0), None)]);
+    assert!(flag_times(&report).is_empty(), "{report:?}");
+    assert_eq!(envelope(&report), None);
+    // With a valid clock again, the next report times it.
+    h.set_clock(7);
+    h.write_local(10.0).await;
+    let report = h.notification().await;
+    assert_eq!(flag_times(&report), vec![Some(time(7))]);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_field_below_the_increment_reports_the_time_its_value_was_committed() {
+    const VALUE_SOURCE: PropertyIdentifier = PropertyIdentifier::VALUE_SOURCE;
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.pv_increment = 100.0;
+    h.set_clock(1);
+    h.subscribe_specs(
+        false,
+        vec![(av1(), vec![(PV, true), (VALUE_SOURCE, false)])],
+    )
+    .await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(0.0), Some(time(1)))]
+    );
+    // B: 12.0 moves less than the PV selector's increment, so only the
+    // Value_Source report carries it. It is timed with its commit at 3, not
+    // with the preparation at 4 (#987).
+    h.set_clock(3);
+    h.write_pv(12.0, 4).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(12.0), Some(time(3)))]
+    );
+    // Still B: another writer's later Value_Source report reports 3 again.
+    h.set_clock(5);
+    h.write_local(12.0).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(12.0), Some(time(3)))]
+    );
+    // A again, at 7: its own commit time, not the first A's.
+    h.set_clock(7);
+    h.write_pv(0.0, 8).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(0.0), Some(time(7)))]
+    );
+    h.server.stop().await.unwrap();
+}

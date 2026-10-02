@@ -1,6 +1,9 @@
 name: CI
 
-# Runs on the self-hosted Forgejo runner (Linux amd64 Spot VM). Jobs run in the
+# Runs on the self-hosted Forgejo runner VM (Linux amd64 Spot VM): the build and
+# test jobs in the main runner's three slots, and the seconds-long CI image and
+# CI OK jobs on the same VM's gate runner (label `gate`, two slots), so a run
+# doesn't wait for a slot before and after its real work. Jobs run in the
 # prebuilt image from .forgejo/ci-image (the runner's act image plus the
 # toolchains, tools and apt packages), which the "CI image" job builds and pushes
 # to Forgejo's registry when its tag is missing (#904). The tests, clippy and
@@ -60,9 +63,11 @@ env:
 jobs:
   # Builds and pushes CI_IMAGE only when that tag is not in the registry yet, so
   # a PR that changes the Dockerfile (and therefore the tag) tests its own image.
+  # Runs in host mode on the gate runner, which shares the VM's Docker with the
+  # main runner, so the pull below reaches the job containers that follow.
   image:
     name: CI image
-    runs-on: linux-host
+    runs-on: gate
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,6 +158,10 @@ jobs:
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      # bacnet-cli without its default `tui` feature, which every other run turns on.
+      - name: Clippy (bacnet-cli, no default features)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
       - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/check-default-features.sh
@@ -185,6 +194,11 @@ jobs:
       # sc-tls and pcap); LINUX_FEATURES compiles them out.
       - name: bacnet-cli tests (default features)
         run: cargo nextest run -p bacnet-cli --locked --profile ci
+      # And with the default `tui` feature off too, where `bacnet tui` prints
+      # rebuild advice instead.
+      - name: bacnet-cli tests (no default features)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
 
   python:
     name: Python bindings
@@ -268,7 +282,8 @@ jobs:
     name: CI OK
     if: ${{ always() }}
     needs: [image, lint, clippy, test, python, msrv, audit-deny]
-    runs-on: ubuntu-latest
+    # Host mode on the gate runner: the VM's jq does the check.
+    runs-on: gate
     timeout-minutes: 5
     steps:
       - name: All required jobs succeeded or were skipped by tier

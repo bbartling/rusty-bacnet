@@ -163,7 +163,7 @@ fn dropped_claim_requeues_ahead_of_newer_changes_and_commit_retires() {
     claim.add(k.clone(), incarnation, drained);
     assert_eq!(claim.earlier().len(), 1);
     assert_eq!(claim.latest(&k).map(|c| c.frame()), Some(frame(2)));
-    assert_eq!(claim.last_frame(), Some(frame(2)));
+    assert_eq!(claim.newest().map(|(_, f)| f), Some(frame(2)));
     store.lock().push(&k, 3, change(3, 4));
     drop(claim);
     assert_eq!(seconds(&store.lock().drain(&k, 3).1), [1, 2, 3]);
@@ -251,6 +251,121 @@ fn renewal_keeps_pending_changes_and_recaptures_its_baseline() {
     assert_eq!(seconds(&h.drain(&k, 2).1), [1]);
 }
 
+/// A change whose PV value encodes as four `byte` octets.
+fn valued(second: u8, byte: u8) -> TimedChange {
+    let mut change = change(second, 4);
+    change.values[0].value = vec![byte; 4];
+    change
+}
+
+/// How `h` times the own field of `k`'s `generation` carried as four `byte`
+/// octets, with `now` as the preparation clock.
+fn timing(
+    h: &mut TimedHistories,
+    k: &CovSubscriptionKey,
+    generation: u64,
+    byte: u8,
+    now: Option<ClockFrame>,
+) -> FieldTiming {
+    h.field_time(k, generation, &[byte; 4], || now)
+}
+
+/// The clock frame of an `At` timing.
+fn at_frame(timing: FieldTiming) -> Option<ClockFrame> {
+    match timing {
+        FieldTiming::At(_, frame) => Some(frame),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_field_keeps_its_captured_time_and_remembers_one_for_an_uncaptured_value() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    assert_eq!(timing(&mut h, &k, 1, 1, None), FieldTiming::NoTime);
+    h.push(&k, 1, valued(3, 1));
+    let captured = timing(&mut h, &k, 1, 1, Some(frame(9)));
+    assert_eq!(
+        at_frame(captured),
+        Some(frame(3)),
+        "the captured value's time"
+    );
+    // A value no capture recorded takes the preparation time, once.
+    assert_eq!(
+        timing(&mut h, &k, 1, 2, None),
+        FieldTiming::NoTime,
+        "left out"
+    );
+    let moved = timing(&mut h, &k, 1, 2, Some(frame(9)));
+    assert_eq!(at_frame(moved), Some(frame(9)));
+    let (FieldTiming::At(old, _), FieldTiming::At(new, _)) = (captured, moved) else {
+        unreachable!()
+    };
+    assert!(new > old, "newer than the captured change");
+    assert_eq!(
+        timing(&mut h, &k, 1, 2, Some(frame(12))),
+        moved,
+        "remembered"
+    );
+    assert_eq!(
+        h.baseline(&k, 1),
+        Some(valued(3, 1).observation()),
+        "the increment baseline is untouched"
+    );
+    // A reference that is no longer live owns nothing.
+    assert_eq!(
+        timing(&mut h, &k, 2, 2, Some(frame(12))),
+        FieldTiming::NotLive
+    );
+    h.remove(&k);
+    assert_eq!(
+        timing(&mut h, &k, 1, 2, Some(frame(12))),
+        FieldTiming::NotLive
+    );
+}
+
+#[test]
+fn a_capture_below_the_increment_records_the_value_at_its_commit_time() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    h.push(&k, 1, valued(3, 1)); // A, captured
+    h.note_field(&k, 1, &valued(5, 2).values, frame(5)); // B, below the increment
+    assert_eq!(at_frame(timing(&mut h, &k, 1, 2, None)), Some(frame(5)));
+    h.note_field(&k, 1, &valued(7, 2).values, frame(7)); // still B
+    assert_eq!(at_frame(timing(&mut h, &k, 1, 2, None)), Some(frame(5)));
+    h.note_field(&k, 1, &valued(9, 1).values, frame(9)); // A again
+    assert_eq!(
+        at_frame(timing(&mut h, &k, 1, 1, None)),
+        Some(frame(9)),
+        "A-B-A: the second A's time, not the first's"
+    );
+    assert_eq!(h.baseline(&k, 1), Some(valued(3, 1).observation()));
+    h.note_field(&k, 2, &valued(11, 3).values, frame(11)); // a stale generation
+    assert_eq!(timing(&mut h, &k, 1, 3, None), FieldTiming::NoTime);
+}
+
+#[test]
+fn a_field_time_follows_renewal_captures_and_a_recreated_reference_starts_fresh() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    h.push(&k, 1, valued(3, 1));
+    h.reset(&k, 2, 0); // a renewal
+    let at = |h: &mut TimedHistories, generation| at_frame(timing(h, &k, generation, 1, None));
+    assert_eq!(at(&mut h, 2), Some(frame(3)), "until the renewal's capture");
+    h.push(&k, 2, valued(5, 1)); // its initial report, the same value
+    assert_eq!(
+        at(&mut h, 2),
+        Some(frame(5)),
+        "a renewal capture is a change"
+    );
+    h.remove(&k); // cancelled, then subscribed again
+    h.reset(&k, 3, 0);
+    assert_eq!(at(&mut h, 3), None, "a recreated reference starts fresh");
+}
+
 #[test]
 fn failed_older_notification_cannot_requeue_behind_a_transmitted_newer_one() {
     let (store, counters) = store(8, 4);
@@ -310,7 +425,11 @@ fn splitting_moves_the_oldest_history_and_keeps_every_latest_change() {
     let part = claim.split_earliest(2);
     assert_eq!(history_seconds(&part), [1, 2], "every change is history");
     assert_eq!(part.latest(&a).map(|c| c.frame()), None);
-    assert_eq!(part.last_frame(), Some(frame(2)), "named after its last");
+    assert_eq!(
+        part.newest().map(|(_, f)| f),
+        Some(frame(2)),
+        "named after its last"
+    );
     assert_eq!(history_seconds(&claim), [9], "the oldest across the claim");
     assert_eq!(claim.latest(&a).map(|c| c.frame()), Some(frame(3)));
     assert_eq!(claim.latest(&b).map(|c| c.frame()), Some(frame(10)));
@@ -320,7 +439,7 @@ fn splitting_moves_the_oldest_history_and_keeps_every_latest_change() {
     let rest = claim.split_earliest(5);
     assert_eq!(history_seconds(&rest), [9]);
     assert!(history_seconds(&claim).is_empty());
-    assert_eq!(claim.last_frame(), Some(frame(10)));
+    assert_eq!(claim.newest().map(|(_, f)| f), Some(frame(10)));
     assert_eq!(
         claim
             .last_changes()

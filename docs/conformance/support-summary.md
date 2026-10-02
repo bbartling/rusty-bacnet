@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 66 |
+| Priority | P1 | 67 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 38 |
+| Status | supported-with-clause-evidence | 39 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -59,6 +59,7 @@
 | `BACNET-15-READ-RANGE-LOG-BUFFER` | Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 12.27 (PDF pp. 337-340 / printed pp. 335-338); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751); Clause 21.6 BACnetEventLogRecord, BACnetLogRecord, and BACnetLogMultipleRecord (PDF pp. 906, 916) | P1 | in-progress | 0 |
 | `BACNET-12-PROPERTY-METADATA-CORE` | Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965) | P1 | in-progress | 1 |
 | `BACNET-12-ESCALATOR-STATUS-WRITABILITY` | Clause 12 general property conformance rules; Clause 12.60 Table 12-78 and Out_Of_Service; Clause 15.9.1.3; Clause 21 BACnetEscalatorMode, BACnetEscalatorOperationDirection, and BACnetEscalatorFault; Clause 23.1 | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-ELEVATOR-GROUP-LANDING-CALLS` | Clause 12.58, Table 12-76 and 12.58.9-12.58.10; Clause 21 BACnetLandingCallStatus and BACnetLiftCarDirection; Clause 23.1 Table 23-1; Clause 15.9.1.3 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-12-DEVICE-ACTIVE-COV-SUBSCRIPTIONS` | Clause 12.11, Table 12-13 and 12.11.31; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetObjectPropertyReference, ReadProperty-ACK, and ReadAccessResult productions | P1 | in-progress | 0 |
 | `BACNET-12-DEVICE-ACTIVE-COV-MULTIPLE-SUBSCRIPTIONS` | Clause 12.11, Table 12-13 footnote 18 and Active_COV_Multiple_Subscriptions; Clause 13.16.2; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVMultipleSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetPropertyReference, ReadProperty-ACK, and ReadAccessResult productions | P1 | in-progress | 0 |
@@ -121,7 +122,7 @@
 | `BACNET-14-FILE-STORAGE` | Clause 12.13 / Table 12-16 and footnotes 1-2 (File object property model; File_Size stream-only conditional writability; Record_Count record-only presence and conditional writability; truncate, clear, local-matter expansion fill; Modification_Date events and Archive reset), Clause 14.1 (AtomicReadFile parameters, End Of File, Service Procedure), Clause 14.2 (AtomicWriteFile parameters, -1 append, Service Procedure, Result(+) position), Clauses 14.1.4.1 and 14.2.4.1 (INVALID_FILE_START_POSITION), Clause 14.2.4.1 (FILE_FULL), Clause 18 (INVALID_FILE_START_POSITION, FILE_FULL, FILE_ACCESS_DENIED), Clause 19.1.3.3 (restore context writes File_Size=0 before rewriting a differently-sized stream configuration file), Clause 21 (Date, Time, and BACnetDateTime), Annex F (AtomicWriteFile append example) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` | Clause 13.2.2.1.4 transition actions; Clause 13.2.5 notification distribution | P1 | in-progress | 1 |
 | `BACNET-12-REGISTERED-BIP-PORT` | Clause12.56/Table12-71 and APDU_Length12.56.10; receiving Network Port wildcard15.5.2/15.7.2; concrete ACK15.5.1.2/15.7.3.2; Audit Tables19-4/19-5; AnnexJ local BVLL framing | P1 | supported-with-clause-evidence | 3 |
-| `BACNET-06-NONROUTER-NETWORK-NUMBER` | 135-2020 6.4.14–6.4.15, 6.5.2.2; 12.56 Network_Number and Network_Number_Quality; Annex J, Annex U and Annex AB logical broadcast delivery | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-06-NONROUTER-NETWORK-NUMBER` | 135-2020 6.4.19–6.4.20, 6.5.2.2; 12.56 Network_Number and Network_Number_Quality; Annex J, Annex U and Annex AB logical broadcast delivery | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-15-BUILT-IN-WRITE-PROPERTY-PRESENCE` | 135-2020 Clause15.9 printed752-753/PDF754-755 and15.10 printed754/PDF756; local licensed source inspected | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-AB-HUB-CERTIFICATE-BINDINGS` | 135-2020 Annex AB.7.4 printed1406/PDF1408: additional checks only when installation-enabled | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-AB-SC-DIRECT-MEMBERSHIP` | 135-2020 Annex AB.4.2/AB.4.2.1, AB.6.2.1/AB.6.2.3 and AB.2.4.1 | P1 | supported-with-clause-evidence | 2 |

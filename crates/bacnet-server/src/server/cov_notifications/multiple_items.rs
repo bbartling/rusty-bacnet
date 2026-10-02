@@ -2,6 +2,7 @@
 //! followed by one current value per coordinate.
 use std::collections::HashSet;
 
+use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -20,19 +21,38 @@ pub(super) type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificati
 /// Queued history conveyed as distinct timestamped values, in capture order.
 pub(super) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
 
+/// Capture sequence and clock frame of a change whose time a value carries.
+pub(super) type LastChange = (u64, ClockFrame);
+
+/// How to time a current value that would otherwise go out untimed.
+pub(super) enum FieldStamp {
+    /// No timestamped reference that conveys no change now owns its coordinate.
+    Unowned,
+    /// Its owner's field takes the time of this change.
+    At(LastChange),
+    /// Its owner has no time to give it: leave the value out.
+    Withhold,
+}
+
+/// Times a current value of a coordinate whose timestamped reference conveys
+/// no change now, given the value's encoding.
+pub(super) type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
+
 /// Build the items of one notification: `history`, then, unless `retained` is
 /// `None` (a notification carrying history only), the current state of the
 /// `retained` references. Untimestamped references supply their prepared
 /// current values; timestamped references their latest change in `claim`.
 /// `untimed` holds coordinates the context explicitly subscribes without
-/// timestamps.
+/// timestamps, and `stamp` times the current values described above. Returns
+/// the items and the newest change whose time `stamp` gave them.
 pub(super) fn build_items(
     claim: &TimedClaim,
     history: &History<'_>,
     retained: Option<&Retained<'_>>,
     reads: &MultipleReads,
     untimed: &HashSet<Coordinate>,
-) -> Vec<COVNotificationItem> {
+    stamp: &Stamp<'_>,
+) -> (Vec<COVNotificationItem>, Option<LastChange>) {
     let mut items: Vec<COVNotificationItem> = Vec::new();
     let item_for = |items: &mut Vec<COVNotificationItem>, oid: ObjectIdentifier| {
         items
@@ -72,7 +92,7 @@ pub(super) fn build_items(
             let rows = values.len();
             item.list_of_values = collapse_repeats(values, rows);
         }
-        return items;
+        return (items, None);
     };
     let history_rows: Vec<usize> = items.iter().map(|item| item.list_of_values.len()).collect();
     let start = |index: usize| history_rows.get(index).copied().unwrap_or(0);
@@ -141,6 +161,43 @@ pub(super) fn build_items(
                 .flatten();
         }
     }
+    // An explicit timestamped selector that conveys no change this round only
+    // fills in a missing time when a sibling carries its field: a value its
+    // subscription asked to timestamp never goes out untimed (§13.17.3.1.2.4,
+    // §13.18.3.1.3; #987). A companion that already carries a time keeps it.
+    // Unlike an explicit untimestamped selector below, which governs its
+    // coordinate outright, it overrides nothing.
+    let mut stamped: Option<LastChange> = None;
+    for (index, item) in items.iter_mut().enumerate() {
+        let oid = item.monitored_object_identifier;
+        let from = start(index);
+        let mut kept = Vec::with_capacity(item.list_of_values.len());
+        for (at, mut value) in std::mem::take(&mut item.list_of_values)
+            .into_iter()
+            .enumerate()
+        {
+            if at >= from && value.time_of_change.is_none() {
+                let coordinate = (
+                    oid,
+                    Some(value.property_identifier),
+                    value.property_array_index,
+                );
+                match stamp(&coordinate, &value.value) {
+                    FieldStamp::Unowned => {}
+                    FieldStamp::At((seq, frame)) => {
+                        value.time_of_change = Some(frame.local_time);
+                        stamped = Some(match stamped {
+                            Some(newest) if newest.0 > seq => newest,
+                            _ => (seq, frame),
+                        });
+                    }
+                    FieldStamp::Withhold => continue,
+                }
+            }
+            kept.push(value);
+        }
+        item.list_of_values = kept;
+    }
     // An explicit untimestamped selector governs its coordinate whether or not
     // it qualified this round, over any timestamped companion (§13.17.3.1.2.4).
     for (index, item) in items.iter_mut().enumerate() {
@@ -159,9 +216,10 @@ pub(super) fn build_items(
         item.list_of_values =
             collapse_repeats(std::mem::take(&mut item.list_of_values), start(index));
     }
-    // An object whose history rows were all explicitly untimestamped.
+    // An object whose history rows were all explicitly untimestamped, or
+    // whose only current value was withheld.
     items.retain(|item| !item.list_of_values.is_empty());
-    items
+    (items, stamped)
 }
 
 /// Drop each history row (the first `history` values) whose next row for the

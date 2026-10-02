@@ -1,9 +1,10 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
 use super::multiple_chunks::{request_limit, split, untimed_octets, Envelope, ReportContent};
+use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::{TimedChange, TimedClaim};
+use crate::cov::timed::{FieldTiming, TimedChange, TimedClaim};
 use std::collections::HashSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -104,8 +105,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (chunks, notification, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
             // identity, the clock sample for any current-state fallback and
-            // every value. A producer snapshot carries its own captured
-            // changes, so that path takes no fallback clock.
+            // every value. Producers capture under the database write guard,
+            // so while this read guard is held no capture can move a field
+            // record past the values read here. A producer snapshot carries its
+            // own captured changes, so that path takes no clock: it neither
+            // adopts a fallback change nor times an uncaptured field (#987).
             let (device_oid, clock_frame, db) = if snapshot.is_none() {
                 let db = db.read().await;
                 let clock_frame = subscriptions
@@ -178,7 +182,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
-            let (retained, untimed, subscriber_max_apdu) = {
+            let (retained, untimed, subscriber_max_apdu, owners, store) = {
                 let table = cov_table.read().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
@@ -309,7 +313,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let subscriber_max_apdu = table
                     .multiple_context_references(&context)
                     .find_map(|sub| sub.subscriber_max_apdu());
-                (retained, untimed, subscriber_max_apdu)
+                // Live timestamped references that convey no change now still
+                // time their field when a sibling carries it (#987).
+                let conveying: HashSet<_> = retained.iter().map(|(sub, ..)| sub.key()).collect();
+                let owners: HashMap<Coordinate, (crate::cov::CovSubscriptionKey, u64)> = table
+                    .multiple_context_references(&context)
+                    .filter(|other| {
+                        other.timestamped
+                            && !conveying.contains(other.key())
+                            && table
+                                .remaining_lifetime(other, now)
+                                .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                                .is_some()
+                    })
+                    .map(|other| {
+                        (
+                            (
+                                other.monitored_object_identifier,
+                                other.monitored_property,
+                                other.monitored_property_array_index,
+                            ),
+                            (other.key().clone(), other.generation()),
+                        )
+                    })
+                    .collect();
+                (retained, untimed, subscriber_max_apdu, owners, store)
             };
             let claim = claim.as_mut().expect("claim created under the table guard");
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
@@ -327,20 +355,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .collect();
             // The untimestamped values travel with the last notification, so
             // the history bound keeps room for them (#986).
-            claim
-                .store()
-                .lock()
-                .note_reserve(&context, untimed_octets(&parts));
+            store.lock().note_reserve(&context, untimed_octets(&parts));
             let limit = request_limit(
                 config.max_apdu_length,
                 subscriber_max_apdu,
                 representative.issue_confirmed_notifications,
             );
+            // Times a field of a timestamped reference that conveys no change
+            // now, when a sibling carries it (#987).
+            let stamp = |coordinate: &Coordinate, value: &[u8]| {
+                let Some((key, generation)) = owners.get(coordinate) else {
+                    return FieldStamp::Unowned;
+                };
+                // The clock is read only for a value no capture recorded, and
+                // only on the database path, under its read guard.
+                let now = || {
+                    db.as_deref()?
+                        .clock_frame()
+                        .filter(|frame| frame.is_valid_actual_datetime())
+                };
+                match store.lock().field_time(key, *generation, value, now) {
+                    FieldTiming::NotLive => FieldStamp::Unowned,
+                    FieldTiming::NoTime => FieldStamp::Withhold,
+                    FieldTiming::At(seq, frame) => FieldStamp::At((seq, frame)),
+                }
+            };
             let content = ReportContent {
                 envelope: &envelope,
                 retained: &parts,
                 reads: &reads,
                 untimed: &untimed,
+                stamp: &stamp,
             };
             let (chunks, notification) = split(&content, claim, limit);
             let last_notified: Vec<_> = retained

@@ -1,7 +1,8 @@
 //! BACnet command-line tool.
 //!
 //! Running `bacnet` with no arguments or with the `shell` subcommand launches
-//! an interactive REPL. Subcommands can also be used directly for scripting.
+//! an interactive REPL, and `bacnet tui` opens the full-screen terminal UI.
+//! Subcommands can also be used directly for scripting.
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool prints its results
 
 use std::{io::IsTerminal, net::Ipv4Addr};
@@ -12,6 +13,7 @@ use clap::Parser;
 
 mod args;
 mod commands;
+mod core;
 #[allow(dead_code)] // Public API consumed by capture command handler (Task 4).
 mod decode;
 mod output;
@@ -21,7 +23,10 @@ mod session;
 mod shell;
 mod timestamp;
 mod transport;
+#[cfg(feature = "tui")]
+mod tui;
 
+use crate::core::range::parse_discover_range;
 use args::{Cli, Command};
 use output::OutputFormat;
 
@@ -94,7 +99,7 @@ async fn execute_command<T: TransportPort + 'static>(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        Command::Shell => unreachable!(),
+        Command::Shell | Command::Tui { .. } => unreachable!(),
         Command::Discover {
             range,
             wait,
@@ -343,30 +348,6 @@ async fn execute_command<T: TransportPort + 'static>(
     Ok(())
 }
 
-/// Parse a discover range string like "1000-2000" into (low, high).
-fn parse_discover_range(
-    range: Option<&str>,
-) -> Result<(Option<u32>, Option<u32>), Box<dyn std::error::Error>> {
-    if let Some(r) = range {
-        if let Some((lo, hi)) = r.split_once('-') {
-            let low = lo
-                .parse::<u32>()
-                .map_err(|_| format!("invalid range low: '{lo}'"))?;
-            let high = hi
-                .parse::<u32>()
-                .map_err(|_| format!("invalid range high: '{hi}'"))?;
-            if low > high {
-                return Err(format!("invalid range: low ({low}) > high ({high})").into());
-            }
-            Ok((Some(low), Some(high)))
-        } else {
-            Err(format!("invalid range format: '{r}', expected 'low-high'").into())
-        }
-    } else {
-        Ok((None, None))
-    }
-}
-
 /// Try to execute a BIP-specific BBMD management command.
 /// Returns `Ok(true)` if handled, `Ok(false)` if not a BIP-specific command.
 async fn execute_bip_command(
@@ -503,17 +484,15 @@ fn boxed_cli_main(cli: Cli) -> std::pin::Pin<Box<impl std::future::Future<Output
 }
 
 async fn cli_main(cli: Cli) -> CliResult {
+    if matches!(cli.command, Some(Command::Tui { .. })) {
+        // The TUI sets up its own tracing: nothing may write to the terminal
+        // while it is in raw mode. Boxed so its state stays out of this future.
+        return Box::pin(run_tui(cli)).await;
+    }
     setup_tracing(cli.verbose, cli.sc);
     let format = resolve_format(&cli);
 
-    let ipv6_interface = cli
-        .ipv6_interface
-        .as_deref()
-        .map(|s| {
-            s.parse::<std::net::Ipv6Addr>()
-                .map_err(|e| format!("invalid --ipv6-interface address '{s}': {e}"))
-        })
-        .transpose()?;
+    let mut args = transport::TransportArgs::from_cli(&cli, Ipv4Addr::UNSPECIFIED, cli.broadcast)?;
 
     // Determine interface and broadcast address.
     // If --interface was explicitly given, use it (with the given or default broadcast).
@@ -527,23 +506,8 @@ async fn cli_main(cli: Cli) -> CliResult {
     } else {
         (Ipv4Addr::UNSPECIFIED, cli.broadcast)
     };
-
-    let args = transport::TransportArgs {
-        interface,
-        port: cli.port,
-        broadcast,
-        timeout_ms: cli.timeout,
-        sc: cli.sc,
-        sc_url: cli.sc_url.clone(),
-        sc_ca: cli.sc_ca.clone(),
-        sc_cert: cli.sc_cert.clone(),
-        sc_key: cli.sc_key.clone(),
-        sc_vmac: cli.sc_vmac,
-        sc_device_uuid: cli.sc_device_uuid,
-        ipv6: cli.ipv6,
-        ipv6_interface,
-        device_instance: cli.device_instance,
-    };
+    args.interface = interface;
+    args.broadcast = broadcast;
 
     // Handle capture command separately — no BACnet client needed
     if let Some(Command::Capture {
@@ -611,4 +575,18 @@ async fn cli_main(cli: Cli) -> CliResult {
     }
 
     Ok(())
+}
+
+/// `bacnet tui`, or the rebuild advice when the `tui` feature is off.
+async fn run_tui(cli: Cli) -> CliResult {
+    #[cfg(feature = "tui")]
+    {
+        tui::run(cli).await
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = cli;
+        eprintln!("Error: The terminal UI requires the 'tui' feature. Rebuild with:\n  cargo install bacnet-cli --features tui");
+        std::process::exit(1);
+    }
 }

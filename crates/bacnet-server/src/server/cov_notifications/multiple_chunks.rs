@@ -14,7 +14,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::cov_clock::cov_multiple_datetime;
-use super::multiple_items::{build_items, Coordinate, History, Retained};
+use super::multiple_items::{build_items, Coordinate, History, Retained, Stamp};
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{value_len, TimedClaim, ITEM_FRAMING};
 
@@ -91,27 +91,39 @@ pub(super) struct ReportContent<'a> {
     pub(super) retained: &'a Retained<'a>,
     pub(super) reads: &'a MultipleReads,
     pub(super) untimed: &'a HashSet<Coordinate>,
+    /// Times a field of a timestamped reference that conveys no change now,
+    /// carried by a sibling (#987). Only the last notification has such
+    /// current values.
+    pub(super) stamp: &'a Stamp<'a>,
 }
 
 impl ReportContent<'_> {
     /// History-only notification of `history`, named after its last change.
     fn history(&self, claim: &TimedClaim, history: &History<'_>) -> COVNotificationMultipleRequest {
         let timestamp = history.last().map(|(_, change)| change.frame());
-        let items = build_items(claim, history, None, self.reads, self.untimed);
+        let (items, _) = build_items(claim, history, None, self.reads, self.untimed, self.stamp);
         self.envelope.notification(timestamp, items)
     }
 
     /// The report's last notification: `history`, then every reference's
-    /// current state, named after the latest change claimed.
+    /// current state. Its header names the newest change whose time it
+    /// carries, claimed now or kept by a reference that conveys no change.
     fn last(&self, claim: &TimedClaim, history: &History<'_>) -> COVNotificationMultipleRequest {
-        let items = build_items(
+        let (items, stamped) = build_items(
             claim,
             history,
             Some(self.retained),
             self.reads,
             self.untimed,
+            self.stamp,
         );
-        self.envelope.notification(claim.last_frame(), items)
+        let newest = claim
+            .newest()
+            .into_iter()
+            .chain(stamped)
+            .max_by_key(|(seq, _)| *seq)
+            .map(|(_, frame)| frame);
+        self.envelope.notification(newest, items)
     }
 }
 
