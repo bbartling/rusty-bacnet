@@ -24,6 +24,8 @@ mod calendar_metadata;
 mod date_list;
 mod evaluation;
 mod metadata;
+mod reliability;
+mod writes;
 
 pub use calendar::CalendarObject;
 pub use evaluation::ScheduleWrite;
@@ -44,7 +46,15 @@ pub use evaluation::ScheduleWrite;
 /// value even when it has not changed.
 ///
 /// Time-values and Schedule_Default hold values of a primitive datatype; the
-/// setters refuse anything else.
+/// setters refuse anything else. Weekly_Schedule, Exception_Schedule,
+/// Effective_Period and Schedule_Default are network-writable, through the
+/// same checks as the setters; after such a write the bundled server runs the
+/// evaluation again at once.
+///
+/// Reliability is CONFIGURATION_ERROR while the non-NULL values in the two
+/// schedules and Schedule_Default are not all of one datatype (Clause
+/// 12.24.13), re-checked on every change to them. Such a schedule still
+/// evaluates and writes its references.
 pub struct ScheduleObject {
     oid: ObjectIdentifier,
     name: String,
@@ -56,6 +66,9 @@ pub struct ScheduleObject {
     /// Evaluated Reliability saved while a client simulation owns the property
     /// (Out_Of_Service TRUE); restored on the return to service.
     reliability_before_out_of_service: Option<Reliability>,
+    /// Whether the current CONFIGURATION_ERROR was raised by this object's
+    /// own consistency check, which may then clear it.
+    owns_configuration_error: bool,
     status_flags: StatusFlags,
     /// 7-day weekly schedule: index 0 = Monday, index 6 = Sunday.
     weekly_schedule: [Vec<BACnetTimeValue>; 7],
@@ -94,6 +107,7 @@ impl ScheduleObject {
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
+            owns_configuration_error: false,
             status_flags: StatusFlags::empty(),
             weekly_schedule: [vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
             exception_schedule: Vec::new(),
@@ -128,17 +142,24 @@ impl ScheduleObject {
         };
         evaluation::check_time_values(&entries)?;
         *day = entries;
+        self.contents_changed();
         Ok(())
     }
 
     /// Append a special event to the exception schedule.
     ///
     /// Refuses an event priority outside 1 to 16 or an inline calendar entry
-    /// with an out-of-range value (VALUE_OUT_OF_RANGE), and time-values that
-    /// [`set_weekly_schedule`](Self::set_weekly_schedule) would refuse.
+    /// with an out-of-range value (VALUE_OUT_OF_RANGE), time-values that
+    /// [`set_weekly_schedule`](Self::set_weekly_schedule) would refuse, and an
+    /// event past the 1,024-event cap (RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY).
     pub fn add_exception(&mut self, event: BACnetSpecialEvent) -> Result<(), Error> {
         evaluation::check_special_event(&event)?;
+        if self.exception_schedule.len() >= writes::MAX_EXCEPTIONS {
+            return Err(writes::no_space_error());
+        }
         self.exception_schedule.push(event);
+        self.contents_changed();
         Ok(())
     }
 
@@ -172,6 +193,12 @@ impl ScheduleObject {
     /// Read the current present_value.
     pub fn present_value(&self) -> &PropertyValue {
         &self.present_value
+    }
+
+    /// Weekly_Schedule, Exception_Schedule or Schedule_Default changed:
+    /// re-check Reliability.
+    fn contents_changed(&mut self) {
+        let _ = self.recompute_reliability();
     }
 }
 
@@ -304,16 +331,32 @@ impl BACnetObject for ScheduleObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if property == PropertyIdentifier::WEEKLY_SCHEDULE {
+            return self.write_weekly_schedule(array_index, value);
+        }
+        if property == PropertyIdentifier::EXCEPTION_SCHEDULE {
+            return self.write_exception_schedule(array_index, value);
+        }
+        if property == PropertyIdentifier::EFFECTIVE_PERIOD {
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            return self.write_effective_period(value);
+        }
         if property == PropertyIdentifier::SCHEDULE_DEFAULT {
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
             // Clause 12.24.9: any primitive datatype, NULL included.
             if !value.is_primitive() {
                 return Err(common::invalid_data_type_error());
             }
             self.schedule_default = value;
+            self.contents_changed();
             return Ok(());
         }
         // Clause 12.24 Table 12-28 carries no writable footnote on Reliability
@@ -349,7 +392,11 @@ impl BACnetObject for ScheduleObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            // Back in service, the restored value may predate changes made
+            // while the client owned Reliability.
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
@@ -357,7 +404,7 @@ impl BACnetObject for ScheduleObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 
@@ -380,7 +427,15 @@ impl BACnetObject for ScheduleObject {
             return Err(common::value_out_of_range_error());
         }
         self.reliability = reliability;
+        // The caller owns this value; the consistency check leaves it alone.
+        self.owns_configuration_error = false;
         Ok(())
+    }
+
+    fn evaluate_reliability_internal(
+        &mut self,
+    ) -> Result<crate::traits::ReliabilityEvaluation, Error> {
+        Ok(self.recompute_reliability())
     }
 
     fn tick_schedule(
@@ -421,3 +476,9 @@ mod calendar_tests;
 
 #[cfg(test)]
 mod evaluation_tests;
+
+#[cfg(test)]
+mod reliability_tests;
+
+#[cfg(test)]
+mod write_tests;
