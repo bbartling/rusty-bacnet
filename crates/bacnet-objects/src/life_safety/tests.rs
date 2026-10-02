@@ -467,13 +467,14 @@ fn life_safety_property_cov_capabilities_are_explicit() {
     for property in [
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::STATUS_FLAGS,
+        PropertyIdentifier::TRACKING_VALUE,
         PropertyIdentifier::SILENCED,
         PropertyIdentifier::OPERATION_EXPECTED,
     ] {
         assert!(zone.supports_cov_property(property));
     }
-    assert!(!zone.supports_cov_property(PropertyIdentifier::TRACKING_VALUE));
     assert!(!zone.supports_cov_property(PropertyIdentifier::MODE));
+    assert!(!zone.supports_cov_property(PropertyIdentifier::ACCEPTED_MODES));
 }
 
 #[test]
@@ -699,15 +700,28 @@ fn zone_write_out_of_service() {
 }
 
 #[test]
-fn zone_write_unknown_property_denied() {
+fn zone_tracking_value_is_network_read_only() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    let result = z.write_property(
-        PropertyIdentifier::TRACKING_VALUE,
-        None,
-        PropertyValue::Enumerated(0),
-        None,
+    assert_eq!(
+        read_enumerated(&z, PropertyIdentifier::TRACKING_VALUE),
+        LifeSafetyState::QUIET.to_raw()
     );
-    assert!(result.is_err());
+    z.set_tracking_value(LifeSafetyState::PRE_ALARM);
+    assert_protocol_error(
+        z.write_property(
+            PropertyIdentifier::TRACKING_VALUE,
+            None,
+            PropertyValue::Enumerated(LifeSafetyState::QUIET.to_raw()),
+            None,
+        )
+        .unwrap_err(),
+        ErrorClass::PROPERTY,
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
+    assert_eq!(
+        read_enumerated(&z, PropertyIdentifier::TRACKING_VALUE),
+        LifeSafetyState::PRE_ALARM.to_raw()
+    );
 }
 
 #[test]
@@ -716,8 +730,8 @@ fn life_safety_property_metadata_drives_required_sets() {
 
     let point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     assert!(matches!(point.property_metadata(), Cow::Borrowed(_)));
-    assert_eq!(point.property_metadata().len(), 17);
-    assert_eq!(point.required_properties().len(), 13);
+    assert_eq!(point.property_metadata().len(), 18);
+    assert_eq!(point.required_properties().len(), 14);
     assert!(point
         .required_properties()
         .contains(&PropertyIdentifier::PROPERTY_LIST));
@@ -727,8 +741,8 @@ fn life_safety_property_metadata_drives_required_sets() {
     assert!(!point.is_createable());
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
-    assert_eq!(zone.property_metadata().len(), 14);
-    assert_eq!(zone.required_properties().len(), 13);
+    assert_eq!(zone.property_metadata().len(), 16);
+    assert_eq!(zone.required_properties().len(), 15);
     assert!(zone
         .required_properties()
         .contains(&PropertyIdentifier::PROPERTY_LIST));

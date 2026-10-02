@@ -456,18 +456,11 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         use bacnet_types::enums::ObjectType;
 
         match self.object_identifier().object_type() {
-            ObjectType::LIFE_SAFETY_POINT => matches!(
+            ObjectType::LIFE_SAFETY_POINT | ObjectType::LIFE_SAFETY_ZONE => matches!(
                 property,
                 PropertyIdentifier::PRESENT_VALUE
                     | PropertyIdentifier::STATUS_FLAGS
                     | PropertyIdentifier::TRACKING_VALUE
-                    | PropertyIdentifier::SILENCED
-                    | PropertyIdentifier::OPERATION_EXPECTED
-            ),
-            ObjectType::LIFE_SAFETY_ZONE => matches!(
-                property,
-                PropertyIdentifier::PRESENT_VALUE
-                    | PropertyIdentifier::STATUS_FLAGS
                     | PropertyIdentifier::SILENCED
                     | PropertyIdentifier::OPERATION_EXPECTED
             ),

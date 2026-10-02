@@ -77,6 +77,8 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::PRESENT_VALUE,
             P::GROUP_MEMBER_NAMES,
             P::STATUS_FLAGS,
+            P::EVENT_STATE,
+            P::MEMBER_STATUS_FLAGS,
             P::OUT_OF_SERVICE,
             P::RELIABILITY,
         ],

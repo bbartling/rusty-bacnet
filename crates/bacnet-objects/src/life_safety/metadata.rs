@@ -14,13 +14,15 @@ use crate::property_metadata::{
 // Order preserves the legacy property_list projection; PROPERTY_LIST is
 // appended so the projection helper omits it while required_properties keeps
 // it. Only implemented rows are described: table rows the objects do not
-// serve (Accepted_Modes, the Zone Tracking_Value and Member_Of, Device_Type,
-// Units, Setting, intrinsic-reporting/event rows, Reliability_Evaluation_Inhibit,
+// serve (the Zone Member_Of, Device_Type, Units, Setting,
+// intrinsic-reporting/event rows, Reliability_Evaluation_Inhibit,
 // Value_Source/audit/tags/profile rows) stay absent until dispatch exists.
-// Mode carries the table W code. Tracking_Value and Reliability carry the
-// table R1 OOS-writable footnote, but dispatch currently has no write arm for
-// either property, so both rows mirror dispatch as ReadOnly rather than
-// advertising a route write_property rejects.
+// Mode carries the table W code; Accepted_Modes (R) follows it, read-only, and
+// bounds what a Mode write may select (#1092). Tracking_Value, served by
+// both objects, and Reliability carry the table R1 OOS-writable footnote, but
+// dispatch currently has no write arm for either property, so both rows
+// mirror dispatch as ReadOnly rather than advertising a route write_property
+// rejects.
 const POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -28,6 +30,7 @@ const POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::MODE, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::ACCEPTED_MODES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SILENCED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OPERATION_EXPECTED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, ReadOnly),
@@ -48,8 +51,10 @@ const ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::MODE, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::ACCEPTED_MODES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SILENCED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OPERATION_EXPECTED, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ZONE_MEMBERS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -140,6 +145,7 @@ mod tests {
             P::DESCRIPTION,
             P::PRESENT_VALUE,
             P::MODE,
+            P::ACCEPTED_MODES,
             P::SILENCED,
             P::OPERATION_EXPECTED,
             P::TRACKING_VALUE,
@@ -157,6 +163,7 @@ mod tests {
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
             P::MODE,
+            P::ACCEPTED_MODES,
             P::SILENCED,
             P::OPERATION_EXPECTED,
             P::TRACKING_VALUE,
@@ -204,8 +211,10 @@ mod tests {
             P::DESCRIPTION,
             P::PRESENT_VALUE,
             P::MODE,
+            P::ACCEPTED_MODES,
             P::SILENCED,
             P::OPERATION_EXPECTED,
+            P::TRACKING_VALUE,
             P::ZONE_MEMBERS,
             P::EVENT_STATE,
             P::STATUS_FLAGS,
@@ -218,8 +227,10 @@ mod tests {
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
             P::MODE,
+            P::ACCEPTED_MODES,
             P::SILENCED,
             P::OPERATION_EXPECTED,
+            P::TRACKING_VALUE,
             P::ZONE_MEMBERS,
             P::EVENT_STATE,
             P::STATUS_FLAGS,
@@ -291,6 +302,12 @@ mod tests {
                 PropertyValue::Real(1.0),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
+            // A mode outside Accepted_Modes (#1092).
+            (
+                P::MODE,
+                PropertyValue::Enumerated(300),
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            ),
             (
                 P::DIRECT_READING,
                 PropertyValue::Null,
@@ -324,7 +341,7 @@ mod tests {
                 error,
             );
         }
-        for p in [P::ACCEPTED_MODES, P::RELIABILITY_EVALUATION_INHIBIT, P::ALL] {
+        for p in [P::DEVICE_TYPE, P::RELIABILITY_EVALUATION_INHIBIT, P::ALL] {
             assert!(!object.is_writable_property(p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
@@ -369,6 +386,12 @@ mod tests {
                 PropertyValue::Real(1.0),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
+            // A mode outside Accepted_Modes (#1092).
+            (
+                P::MODE,
+                PropertyValue::Enumerated(300),
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            ),
             (
                 P::DESCRIPTION,
                 PropertyValue::Unsigned(1),
@@ -387,7 +410,7 @@ mod tests {
                 error,
             );
         }
-        for p in [P::TRACKING_VALUE, P::MEMBER_OF, P::ACCEPTED_MODES, P::ALL] {
+        for p in [P::MEMBER_OF, P::DEVICE_TYPE, P::ALL] {
             assert!(!object.is_writable_property(p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),

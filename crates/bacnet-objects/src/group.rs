@@ -4,8 +4,9 @@
 //! - GlobalGroupObject (type 26) — Clause 12.50
 //! - StructuredViewObject (type 29) — Clause 12.29
 
+use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -129,6 +130,12 @@ impl BACnetObject for GroupObject {
 /// Similar to Group but members are DeviceObjectPropertyReference entries,
 /// allowing references to properties on remote devices. GROUP_MEMBER_NAMES
 /// provides human-readable names for each member.
+///
+/// The application fills `present_value` with the members' values, one per
+/// `group_members` entry. Member_Status_Flags is derived from that store on
+/// every read (see [`member_status_flags`](Self::member_status_flags)), so it
+/// tracks Present_Value without a second update path. Event_State reads
+/// NORMAL: the object has no intrinsic reporting (Clause 12.50.9).
 pub struct GlobalGroupObject {
     oid: ObjectIdentifier,
     name: String,
@@ -159,6 +166,26 @@ impl GlobalGroupObject {
             present_value: Vec::new(),
             group_member_names: Vec::new(),
         })
+    }
+
+    /// Member_Status_Flags (Clause 12.50.10): the OR of every Status_Flags
+    /// value held in Present_Value.
+    ///
+    /// A member contributes when its reference names Status_Flags and its
+    /// stored value is a bit string. Other members, and members with no
+    /// stored value or a value of another type, add nothing, so a group
+    /// without Status_Flags members reads all-clear.
+    pub fn member_status_flags(&self) -> StatusFlags {
+        let status_flags = PropertyIdentifier::STATUS_FLAGS.to_raw();
+        self.group_members
+            .iter()
+            .zip(&self.present_value)
+            .filter(|(member, _)| member.property_identifier == status_flags)
+            .filter_map(|(_, value)| match value {
+                PropertyValue::BitString { data, .. } => Some(status_flags_from_bacnet(data)),
+                _ => None,
+            })
+            .fold(StatusFlags::empty(), |combined, flags| combined | flags)
     }
 }
 
@@ -211,6 +238,13 @@ impl BACnetObject for GlobalGroupObject {
                     .map(|n| PropertyValue::CharacterString(n.clone()))
                     .collect(),
             )),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
+            }
+            p if p == PropertyIdentifier::MEMBER_STATUS_FLAGS => Ok(PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![self.member_status_flags().bits() << 4],
+            }),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -366,6 +400,9 @@ impl BACnetObject for StructuredViewObject {
 // ===========================================================================
 
 #[cfg(test)]
+mod member_status_flags_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -511,6 +548,8 @@ mod tests {
         assert!(props.contains(&PropertyIdentifier::GROUP_MEMBERS));
         assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
         assert!(props.contains(&PropertyIdentifier::GROUP_MEMBER_NAMES));
+        assert!(props.contains(&PropertyIdentifier::EVENT_STATE));
+        assert!(props.contains(&PropertyIdentifier::MEMBER_STATUS_FLAGS));
     }
 
     // -----------------------------------------------------------------------
