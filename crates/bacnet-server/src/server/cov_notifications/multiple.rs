@@ -1,9 +1,10 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
 use super::cov_clock::cov_multiple_datetime;
-use super::multiple_items::build_items;
+use super::multiple_items::{build_items, Coordinate, FieldStamp};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
+use crate::cov::timed::FieldTiming;
 use crate::cov::timed::{TimedChange, TimedClaim};
 
 /// Octets of an unsegmented confirmed-request APDU header.
@@ -108,8 +109,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (notification, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
             // identity, the clock sample for any current-state fallback and
-            // every value. A producer snapshot carries its own captured
-            // changes, so that path takes no fallback clock.
+            // every value. Producers capture under the database write guard,
+            // so while this read guard is held no capture can move a field
+            // record past the values read here. A producer snapshot carries its
+            // own captured changes, so that path takes no clock: it neither
+            // adopts a fallback change nor times an uncaptured field (#987).
             let (device_oid, clock_frame, db) = if snapshot.is_none() {
                 let db = db.read().await;
                 let clock_frame = subscriptions
@@ -182,7 +186,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
-            let (retained, untimed) = {
+            let (retained, untimed, owners, store) = {
                 let table = cov_table.read().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
@@ -310,7 +314,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     claim.add(other.key().clone(), incarnation, changes);
                     retained.push((other.clone(), Vec::new(), last, completion, remaining));
                 }
-                (retained, untimed)
+                // Live timestamped references that convey no change now still
+                // time their field when a sibling carries it (#987).
+                let conveying: HashSet<_> = retained.iter().map(|(sub, ..)| sub.key()).collect();
+                let owners: HashMap<Coordinate, (crate::cov::CovSubscriptionKey, u64)> = table
+                    .multiple_context_references(&context)
+                    .filter(|other| {
+                        other.timestamped
+                            && !conveying.contains(other.key())
+                            && table
+                                .remaining_lifetime(other, now)
+                                .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                                .is_some()
+                    })
+                    .map(|other| {
+                        (
+                            (
+                                other.monitored_object_identifier,
+                                other.monitored_property,
+                                other.monitored_property_array_index,
+                            ),
+                            (other.key().clone(), other.generation()),
+                        )
+                    })
+                    .collect();
+                (retained, untimed, owners, store)
             };
             let claim = claim.as_mut().expect("claim created under the table guard");
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
@@ -326,12 +354,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // the larger form) by discarding the oldest queued history; the
             // latest change of every reference is always kept.
             let notification = loop {
+                let mut stamp = |coordinate: &Coordinate, value: &[u8]| {
+                    let Some((key, generation)) = owners.get(coordinate) else {
+                        return FieldStamp::Unowned;
+                    };
+                    // The clock is read only for a value no capture recorded,
+                    // and only on the database path, under its read guard.
+                    let now = || {
+                        db.as_deref()?
+                            .clock_frame()
+                            .filter(|frame| frame.is_valid_actual_datetime())
+                    };
+                    match store.lock().field_time(key, *generation, value, now) {
+                        FieldTiming::NotLive => FieldStamp::Unowned,
+                        FieldTiming::NoTime => FieldStamp::Withhold,
+                        FieldTiming::At(seq, frame) => FieldStamp::At((seq, frame)),
+                    }
+                };
+                let (items, stamp) = build_items(claim, &parts, &reads, &untimed, &mut stamp);
+                // The header names the newest change whose time is conveyed,
+                // claimed now or stamped from an earlier one.
+                let timestamp = claim
+                    .newest()
+                    .into_iter()
+                    .chain(stamp)
+                    .max_by_key(|(seq, _)| *seq)
+                    .map(|(_, frame)| cov_multiple_datetime(frame));
                 let notification = COVNotificationMultipleRequest {
                     subscriber_process_identifier: representative.subscriber_process_identifier,
                     initiating_device_identifier: device_oid,
                     time_remaining,
-                    timestamp: claim.last_frame().map(cov_multiple_datetime),
-                    list_of_cov_notifications: build_items(claim, &parts, &reads, &untimed),
+                    timestamp,
+                    list_of_cov_notifications: items,
                 };
                 let mut encoded = BytesMut::new();
                 let fits = notification.encode(&mut encoded).is_err()

@@ -361,4 +361,165 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
     }
 }
 
+/// The COV-multiple notifications sent since `from`, decoded.
+fn multiple_notifications(sent: &SendLog, from: usize) -> Vec<COVNotificationMultipleRequest> {
+    sent.lock()
+        .iter()
+        .skip(from)
+        .filter_map(|frame| {
+            let apdu = decode_apdu(decode_npdu(frame.npdu.clone()).unwrap().payload).unwrap();
+            match apdu {
+                Apdu::UnconfirmedRequest(request)
+                    if request.service_choice
+                        == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE =>
+                {
+                    Some(COVNotificationMultipleRequest::decode(&request.service_request).unwrap())
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_snapshot_report_times_a_timestamped_field_only_with_its_own_value() {
+    use super::cov_wire_test_support::{at, time, SharedClock};
+    let (mut server, oid, sent) = start_server(2).await;
+    if let Some(task) = server.binary_lighting_operation_task.take() {
+        task.abort();
+        let _ = task.await;
+    }
+    let clock = SharedClock(Arc::new(std::sync::Mutex::new(at(1))));
+    server
+        .database()
+        .write()
+        .await
+        .set_clock_reader(Some(Arc::new(clock.clone())));
+    // One context: an untimestamped PV reference and a timestamped
+    // Status_Flags reference, whose field the PV reports carry along.
+    let flags = {
+        let mut table = server.cov_table.write().await;
+        let mut admit = |property, timestamped| {
+            table
+                .admit_for_test(
+                    CovSubscription {
+                        subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 33]),
+                        subscriber_network: None,
+                        subscriber_process_identifier: 33,
+                        monitored_object_identifier: oid,
+                        issue_confirmed_notifications: false,
+                        expires_at: Some(std::time::Instant::now() + Duration::from_secs(3600)),
+                        last_notified_observation: None,
+                        monitored_property: Some(property),
+                        monitored_property_array_index: None,
+                        cov_increment: None,
+                        notification_kind: CovNotificationKind::Multiple,
+                        timestamped,
+                    },
+                    0,
+                )
+                .unwrap()
+        };
+        admit(PropertyIdentifier::PRESENT_VALUE, false);
+        admit(PropertyIdentifier::STATUS_FLAGS, true)
+    };
+    // Convey whatever the timestamped reference holds, as a report would.
+    let convey = |table: &CovSubscriptionTable| {
+        let store = table.timed().clone();
+        let (incarnation, drained) = store.lock().drain(flags.key(), flags.generation());
+        let mut claim = crate::cov::timed::TimedClaim::new(store.clone());
+        claim.add(flags.key().clone(), incarnation, drained);
+        claim.commit();
+    };
+    {
+        let db = server.db.read().await;
+        let table = server.cov_table.read().await;
+        table
+            .initial_timed_capture(std::slice::from_ref(&flags), at(1))
+            .run(&db);
+        convey(&table);
+    }
+    let fire = |snapshot: Box<dyn BACnetObject>| {
+        let server = &server;
+        async move {
+            BACnetServer::<TestTransport>::fire_cov_notifications_from_snapshot(
+                &crate::server::cov_notify_context::CovNotifyContext {
+                    db: &server.db,
+                    network: server.test_network(),
+                    cov_table: &server.cov_table,
+                    cov_in_flight: &server.cov_in_flight,
+                    notification_transactions: &server.notification_transactions,
+                    comm_state: &server.comm_state,
+                    config: &server.config,
+                },
+                &oid,
+                snapshot.as_ref(),
+            )
+            .await;
+        }
+    };
+    let flag_times = |notification: &COVNotificationMultipleRequest| {
+        notification.list_of_cov_notifications[0]
+            .list_of_values
+            .iter()
+            .filter(|value| value.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+            .map(|value| value.time_of_change)
+            .collect::<Vec<_>>()
+    };
+    let snapshot_with_pv = |value| {
+        let server = &server;
+        async move {
+            let mut db = server.db.write().await;
+            let object = db.get_mut(&oid).unwrap();
+            object
+                .write_property(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Enumerated(value),
+                    Some(8),
+                )
+                .unwrap();
+            object.cov_snapshot_internal().unwrap()
+        }
+    };
+
+    // The snapshot's Status_Flags is the value captured at 1: it keeps 1.
+    let snapshot = snapshot_with_pv(0).await;
+    *clock.0.lock().unwrap() = at(5);
+    let before = sent.lock().len();
+    fire(snapshot).await;
+    let reports = multiple_notifications(&sent, before);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(flag_times(&reports[0]), vec![Some(time(1))]);
+    assert_eq!(reports[0].timestamp, Some((at(1).local_date, time(1))));
+
+    // A snapshot older than a captured Status_Flags change carries a stale
+    // value: no time belongs to it here, so it is left out (#987).
+    let snapshot = snapshot_with_pv(1).await;
+    *clock.0.lock().unwrap() = at(6);
+    {
+        let mut db = server.db.write().await;
+        db.get_mut(&oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::OUT_OF_SERVICE,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
+        let table = server.cov_table.read().await;
+        table.timed_capture(oid).run(&db);
+        convey(&table);
+    }
+    *clock.0.lock().unwrap() = at(7);
+    let before = sent.lock().len();
+    fire(snapshot).await;
+    let reports = multiple_notifications(&sent, before);
+    assert_eq!(reports.len(), 1);
+    assert!(flag_times(&reports[0]).is_empty(), "{:?}", reports[0]);
+    assert_eq!(reports[0].timestamp, None);
+    server.stop().await.unwrap();
+}
+
 mod observation_order;

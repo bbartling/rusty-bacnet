@@ -365,6 +365,12 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
         .unwrap()
         .overrides
         .insert(PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(12.0));
+    // A known preparation time, distinct from the system clock of the first
+    // report.
+    let prepared = crate::server::cov_wire_test_support::at(42);
+    f.db.write().await.set_clock_reader(Some(Arc::new(
+        crate::server::cov_wire_test_support::SharedClock(Arc::new(StdMutex::new(prepared))),
+    )));
     f.fire(false, &[]).await;
     let frame = f.sent.lock().unwrap().pop().unwrap();
     let Apdu::UnconfirmedRequest(request) =
@@ -373,10 +379,46 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
         panic!()
     };
     let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
-    assert!(report.list_of_cov_notifications[0]
+    // The unqualified timestamped PV selector adds no companion timestamps.
+    // Its own field, carried by the Value_Source report, still needs a time.
+    // PV moved less than the selector's increment, so the selector captured
+    // no change: 12.0 takes the preparation time, never the time of the value
+    // the selector last captured (#987).
+    for v in &report.list_of_cov_notifications[0].list_of_values {
+        let expected = (v.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+            .then_some(prepared.local_time);
+        assert_eq!(v.time_of_change, expected, "{:?}", v.property_identifier);
+    }
+    assert_eq!(
+        report.timestamp,
+        Some((prepared.local_date, prepared.local_time))
+    );
+    // A later Value_Source report, at 50, while PV is still 12.0: the value
+    // keeps the time it was first given.
+    f.db.write().await.set_clock_reader(Some(Arc::new(
+        crate::server::cov_wire_test_support::SharedClock(Arc::new(StdMutex::new(
+            crate::server::cov_wire_test_support::at(50),
+        ))),
+    )));
+    state.lock().unwrap().overrides.insert(
+        PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
+        PropertyValue::Unsigned(8),
+    );
+    f.fire(false, &[]).await;
+    let frame = f.sent.lock().unwrap().pop().unwrap();
+    let Apdu::UnconfirmedRequest(request) =
+        decode_apdu(decode_npdu(frame).unwrap().payload).unwrap()
+    else {
+        panic!()
+    };
+    let later = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+    let pv_times: Vec<_> = later.list_of_cov_notifications[0]
         .list_of_values
         .iter()
-        .all(|v| v.time_of_change.is_none()));
+        .filter(|v| v.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+        .map(|v| v.time_of_change)
+        .collect();
+    assert_eq!(pv_times, vec![Some(prepared.local_time)]);
     assert_eq!(baseline(&f, &pv).await, pv_before);
     assert!(baseline(&f, &source).await.unwrap().command().is_some());
     f.finish(false).await;
