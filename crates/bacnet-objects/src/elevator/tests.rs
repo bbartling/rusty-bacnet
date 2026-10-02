@@ -6,7 +6,9 @@ mod escalator_status_writability;
 mod group_membership;
 mod group_properties;
 mod landing_calls;
+mod lift_car_calls;
 mod lift_car_moving_direction;
+mod lift_car_state;
 mod lift_door_simulation;
 mod lift_properties;
 mod metadata;
@@ -60,6 +62,32 @@ fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
         }
         other => panic!("{context}: expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
     }
+}
+
+fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
+    match result {
+        Err(Error::Protocol { class, code }) => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
+            assert_eq!(code, expected.to_raw() as u32, "{context}: {expected:?}");
+        }
+        other => panic!("{context}: expected PROPERTY/{expected:?}, got {other:?}"),
+    }
+}
+
+fn set_out_of_service(lift: &mut LiftObject, out_of_service: bool) {
+    lift.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(out_of_service),
+        None,
+    )
+    .unwrap();
+}
+
+/// A framed element (a landing-doors, landing-calls or floor-numbers frame)
+/// as the service decoder hands it over.
+fn frame(bytes: &[u8]) -> PropertyValue {
+    PropertyValue::ApplicationData(bytes.to_vec())
 }
 
 fn read_mode(esc: &EscalatorObject) -> u32 {

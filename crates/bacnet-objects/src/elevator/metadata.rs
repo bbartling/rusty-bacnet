@@ -19,10 +19,10 @@ use crate::property_metadata::{
 // is last so the projection helper omits it while required_properties keeps
 // it. Only implemented rows are described: table rows the objects do not
 // serve (ElevatorGroup audit/tag/profile rows; Escalator event, intrinsic,
-// audit, tag and profile rows; Lift Car_Door_Text, call, door-command,
-// Car_Mode, Next_Stopping_Floor, drive, deck, event, intrinsic, audit, tag
-// and profile rows) stay absent until dispatch exists. The Lift serves
-// Energy_Meter_Ref after Energy_Meter, its Table 12-77 neighbour (#1036).
+// audit, tag and profile rows; Lift Car_Door_Text, deck, event, intrinsic,
+// audit, tag and profile rows) stay absent until dispatch exists. The Lift
+// serves Energy_Meter_Ref after Energy_Meter, its Table 12-77 neighbour
+// (#1036).
 // Every Lift and Escalator row the objects serve is a table row: the Lift's
 // former Tracking_Value and Floor_Number are gone (#1021).
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
@@ -51,9 +51,11 @@ use crate::property_metadata::{
 // Car_Moving_Direction, Car_Load, Passenger_Alarm, Energy_Meter,
 // Fault_Signals, and the Escalator family of #401) stay Always, since the
 // writability suites pin in-service writes. The Lift's per-door arrays
-// Car_Door_Status and Landing_Door_Status are application-owned in service
-// and take simulation writes only while out of service (doors.rs), so they
-// are WhenOutOfService (#1035).
+// (doors.rs) and its car-state rows Car_Assigned_Direction, Car_Door_Zone,
+// Car_Mode, Next_Stopping_Floor and Car_Drive_Status (car_state.rs) are
+// application-owned in service and take simulation writes only while out
+// of service, as items (c) and (d) ask, so they are WhenOutOfService
+// (#1035, #1052). All of those are Table 12-77 O rows.
 // Presence is None throughout: the implementation models no
 // lift-group-conditional, intrinsic-reporting, or paired-text gating on this
 // family, and Car_Load and Car_Load_Units are always served together. The
@@ -64,9 +66,9 @@ use crate::property_metadata::{
 // neither needs an override. COV keeps its default. Group_Members admits an
 // index through the array default (BACnetARRAY per Table 12-76) and serves
 // it through common::read_array (#1034); the Lift
-// overrides is_array_property so Floor_Text, Car_Door_Status and
-// Landing_Door_Status (BACnetARRAYs of Table 12-77) admit one too. Every
-// other served row rejects an index.
+// overrides is_array_property so Floor_Text and the per-door arrays
+// (BACnetARRAYs of Table 12-77) admit one too. Every other served row
+// rejects an index.
 const ELEVATOR_GROUP_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -112,16 +114,25 @@ const LIFT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::GROUP_ID, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::INSTALLATION_ID, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::FLOOR_TEXT, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::ASSIGNED_LANDING_CALLS, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(P::MAKING_CAR_CALL, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(P::REGISTERED_CAR_CALL, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::CAR_POSITION, RequiredRead, None, Always),
     PropertyMetadata::new(P::CAR_MOVING_DIRECTION, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CAR_ASSIGNED_DIRECTION, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::CAR_DOOR_STATUS, RequiredRead, None, WhenOutOfService),
+    PropertyMetadata::new(P::CAR_DOOR_COMMAND, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(P::CAR_DOOR_ZONE, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(P::CAR_MODE, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::CAR_LOAD, Optional, None, Always),
     PropertyMetadata::new(P::CAR_LOAD_UNITS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::NEXT_STOPPING_FLOOR, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::PASSENGER_ALARM, RequiredRead, None, Always),
     PropertyMetadata::new(P::ENERGY_METER, Optional, None, Always),
     PropertyMetadata::new(P::ENERGY_METER_REF, Optional, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CAR_DRIVE_STATUS, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::FAULT_SIGNALS, RequiredRead, None, Always),
     PropertyMetadata::new(P::LANDING_DOOR_STATUS, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),

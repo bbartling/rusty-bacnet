@@ -185,16 +185,25 @@ fn property_metadata_lift_exact_sets_readable_rows_and_indexed_list() {
         P::GROUP_ID,
         P::INSTALLATION_ID,
         P::FLOOR_TEXT,
+        P::ASSIGNED_LANDING_CALLS,
+        P::MAKING_CAR_CALL,
+        P::REGISTERED_CAR_CALL,
         P::CAR_POSITION,
         P::CAR_MOVING_DIRECTION,
+        P::CAR_ASSIGNED_DIRECTION,
         P::CAR_DOOR_STATUS,
+        P::CAR_DOOR_COMMAND,
+        P::CAR_DOOR_ZONE,
+        P::CAR_MODE,
         P::CAR_LOAD,
         P::CAR_LOAD_UNITS,
+        P::NEXT_STOPPING_FLOOR,
         P::PASSENGER_ALARM,
         P::ENERGY_METER,
         P::ENERGY_METER_REF,
         P::RELIABILITY,
         P::OUT_OF_SERVICE,
+        P::CAR_DRIVE_STATUS,
         P::FAULT_SIGNALS,
         P::LANDING_DOOR_STATUS,
     ];
@@ -216,10 +225,17 @@ fn property_metadata_lift_exact_sets_readable_rows_and_indexed_list() {
     ];
     assert_exact_sets(&object, &all, &required);
     assert_indexed_property_list(&object, &all);
-    // Floor_Text, Car_Door_Status and Landing_Door_Status are the
-    // BACnetARRAYs of Table 12-77 the object serves; every other row
-    // rejects an index.
-    let arrays = [P::FLOOR_TEXT, P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS];
+    // Floor_Text and the six per-door arrays are the BACnetARRAYs of
+    // Table 12-77 the object serves; every other row rejects an index.
+    let arrays = [
+        P::FLOOR_TEXT,
+        P::ASSIGNED_LANDING_CALLS,
+        P::MAKING_CAR_CALL,
+        P::REGISTERED_CAR_CALL,
+        P::CAR_DOOR_STATUS,
+        P::CAR_DOOR_COMMAND,
+        P::LANDING_DOOR_STATUS,
+    ];
     for p in all {
         assert_eq!(object.is_array_property(p), arrays.contains(&p), "{p:?}");
     }
@@ -273,8 +289,21 @@ fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
                 P::ENERGY_METER,
                 P::FAULT_SIGNALS,
             ],
-            // Item (c) of the Lift's Out_Of_Service description (#1035).
-            &[P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS],
+            // Items (c) and (d) of the Lift's Out_Of_Service description
+            // (#1035, #1052).
+            &[
+                P::ASSIGNED_LANDING_CALLS,
+                P::MAKING_CAR_CALL,
+                P::REGISTERED_CAR_CALL,
+                P::CAR_ASSIGNED_DIRECTION,
+                P::CAR_DOOR_STATUS,
+                P::CAR_DOOR_COMMAND,
+                P::CAR_DOOR_ZONE,
+                P::CAR_MODE,
+                P::NEXT_STOPPING_FLOOR,
+                P::CAR_DRIVE_STATUS,
+                P::LANDING_DOOR_STATUS,
+            ],
         ),
     ];
     for (make, writable, out_of_service_only) in cases {
@@ -361,14 +390,15 @@ fn property_metadata_elevator_trio_unserved_rows_stay_unknown() {
         assert_unserved(&mut escalator, p);
     }
     // Lift: Tracking_Value and Floor_Number aren't Table 12-77 rows
-    // (#1021), and Car_Mode and Car_Drive_Status are optional rows it
+    // (#1021), and Car_Door_Text and the deck rows are optional rows it
     // doesn't serve.
     let mut lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
     for p in [
         P::TRACKING_VALUE,
         P::FLOOR_NUMBER,
-        P::CAR_MODE,
-        P::CAR_DRIVE_STATUS,
+        P::CAR_DOOR_TEXT,
+        P::HIGHER_DECK,
+        P::LOWER_DECK,
     ] {
         assert_unserved(&mut lift, p);
     }

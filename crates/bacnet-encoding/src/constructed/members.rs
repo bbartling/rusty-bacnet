@@ -1,11 +1,11 @@
-//! Member helpers the landing-call and landing-door codecs share.
+//! Member helpers the elevator codecs share: landing calls, landing doors,
+//! assigned landing calls and car call lists.
 //!
-//! Both decode SEQUENCEs of primitive context-tagged Unsigned members and
-//! keep two kinds of failure apart, so a property writer can answer with the
-//! matching Clause 15.9.1.3 error: a malformed member fails at once, while a
-//! well-formed member whose value doesn't fit its type is only recorded, and
-//! the codec reports it as [`Error::OutOfRange`] once the rest of the value
-//! has been checked.
+//! Each decodes primitive Unsigned members and keeps two kinds of failure
+//! apart, so a property writer can answer with the matching Clause 15.9.1.3
+//! error: a malformed member fails at once, while a well-formed member whose
+//! value doesn't fit its type is only recorded, and the codec reports it as
+//! [`Error::OutOfRange`] once the rest of the value has been checked.
 
 use bacnet_types::error::Error;
 

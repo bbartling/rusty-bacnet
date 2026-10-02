@@ -289,9 +289,21 @@ fn property_metadata_lift_writes_store_verbatim_with_range_gates() {
             );
             assert!(!object.is_writable_property(p));
         }
-        // The door arrays take their read-back values only out of
-        // service.
-        for p in [P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS] {
+        // The per-door arrays and car-state rows take their read-back
+        // values only out of service.
+        for p in [
+            P::ASSIGNED_LANDING_CALLS,
+            P::MAKING_CAR_CALL,
+            P::REGISTERED_CAR_CALL,
+            P::CAR_ASSIGNED_DIRECTION,
+            P::CAR_DOOR_STATUS,
+            P::CAR_DOOR_COMMAND,
+            P::CAR_DOOR_ZONE,
+            P::CAR_MODE,
+            P::NEXT_STOPPING_FLOOR,
+            P::CAR_DRIVE_STATUS,
+            P::LANDING_DOOR_STATUS,
+        ] {
             let value = object.read_property(p, None).unwrap();
             let result = object.write_property(p, None, value, None);
             if out_of_service {
