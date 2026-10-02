@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The conformance ledger check now requires every Markdown `public_claims`
+  entry to name a heading (`docs/rust-api.md#heading-slug`), so a renamed or
+  removed section is caught. Source files and `CHANGELOG.md` stay bare, since
+  they have no stable headings. 82 bare entries now point at specific
+  headings, and Recipient_List, Event_Parameters and BACnetTimeStamp framing
+  have a short public statement in `docs/rust-api.md` (#1041).
+- Test-only: the endpoint Device-write tests bind port 0 and read the real
+  address back, the benchmarks hub-restart test retries on a lost bind instead
+  of probing the old address, and the BBMD several-own-rows test reruns on a
+  lost port. The macOS limit of the BBMD probe retry is documented (#1068).
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
   prefers dependency versions that support the declared MSRV (1.93). Feature
   resolution is unchanged, and the MSRV CI job still checks the lock file
