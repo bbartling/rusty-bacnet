@@ -5,6 +5,7 @@
 mod credentials;
 
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
+use bacnet_types::error::Error;
 use clap::Parser;
 use credentials::{required, Credentials};
 
@@ -72,14 +73,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_writer(std::io::stderr)
         .init();
     // Retain the existing handshake budgets; identity is caller-provisioned.
-    let mut hub = ScHub::start_with_tls_config(
+    let mut hub = match ScHub::start_with_tls_config(
         &args.listen,
         tls,
         vmac,
         uuid,
         ScHubHandshakeTimeouts::default(),
     )
-    .await?;
+    .await
+    {
+        Ok(hub) => hub,
+        // Name the address, and keep the OS's words and the error kind, which
+        // the tests read to tell a port another process took (#1104).
+        Err(Error::Transport(err)) => {
+            return Err(format!(
+                "Hub bind failed on {}: {err} ({:?})",
+                args.listen,
+                err.kind()
+            )
+            .into())
+        }
+        Err(err) => return Err(err.into()),
+    };
     let addr = hub.local_addr().unwrap();
     eprintln!("BACnet/SC hub listening on {addr}");
 

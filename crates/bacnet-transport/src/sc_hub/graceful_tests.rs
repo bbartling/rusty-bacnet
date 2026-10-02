@@ -393,47 +393,61 @@ async fn established_hub_restarts_same_address_config_with_independent_outcomes(
         .hub_config
         .clone()
         .with_graceful_timeouts(short_timeouts());
-    let mut first = ScHub::start("127.0.0.1:0", config.clone(), [0x10; 6], [0x10; 16])
-        .await
-        .unwrap();
-    let address = first.local_addr().unwrap();
-    let mut peer = register(&tls, address, 0x42).await;
-    let mut collision = tls.websocket(address).await;
-    collision
-        .send(request([0x10; 6], [0x43; 16]))
-        .await
-        .unwrap();
-    assert!(
-        matches!(poll_io(collision.next()).await, Some(Ok(Message::Binary(data))) if data[0] == 0)
-    );
-    drop(collision);
-    let (outcome, ()) = tokio::join!(first.shutdown_gracefully(), reciprocal(&mut peer));
-    assert_eq!(outcome, ScHubShutdownOutcome::Graceful);
-    let stopped = first.status().await;
-    assert!(!stopped.listening);
-    assert_eq!((stopped.client_count, stopped.handshake_count), (0, 0));
-    assert_eq!(
-        stopped.outcomes,
-        ScHubOutcomeCounts {
-            vmac_collision_rejections: 1,
-            ..ScHubOutcomeCounts::default()
-        }
-    );
-    let mut second = ScHub::start(&address.to_string(), config, [0x10; 6], [0x10; 16])
-        .await
-        .unwrap();
-    assert_eq!(second.local_addr(), Some(address));
-    assert_eq!(
-        second.status().await.outcomes,
-        ScHubOutcomeCounts::default()
-    );
-    let mut peer = register(&tls, address, 0x42).await;
-    assert_eq!(second.status().await.client_count, 1);
-    let (outcome, ()) = tokio::join!(second.shutdown_gracefully(), reciprocal(&mut peer));
-    assert_eq!(outcome, ScHubShutdownOutcome::Graceful);
-    assert_eq!(
-        second.status().await.outcomes,
-        ScHubOutcomeCounts::default()
-    );
-    assert_eq!(first.status().await, stopped);
+    // The restart binds the first hub's port again, and another process can
+    // take it while no hub holds it (#1104). Such a run goes again from the
+    // first start, on a fresh port; the last run keeps the bind's error.
+    for attempt in 1..=ATTEMPTS {
+        let mut first = ScHub::start("127.0.0.1:0", config.clone(), [0x10; 6], [0x10; 16])
+            .await
+            .unwrap();
+        let address = first.local_addr().unwrap();
+        let mut peer = register(&tls, address, 0x42).await;
+        let mut collision = tls.websocket(address).await;
+        collision
+            .send(request([0x10; 6], [0x43; 16]))
+            .await
+            .unwrap();
+        assert!(
+            matches!(poll_io(collision.next()).await, Some(Ok(Message::Binary(data))) if data[0] == 0)
+        );
+        drop(collision);
+        let (outcome, ()) = tokio::join!(first.shutdown_gracefully(), reciprocal(&mut peer));
+        assert_eq!(outcome, ScHubShutdownOutcome::Graceful);
+        let stopped = first.status().await;
+        assert!(!stopped.listening);
+        assert_eq!((stopped.client_count, stopped.handshake_count), (0, 0));
+        assert_eq!(
+            stopped.outcomes,
+            ScHubOutcomeCounts {
+                vmac_collision_rejections: 1,
+                ..ScHubOutcomeCounts::default()
+            }
+        );
+        let restarted =
+            ScHub::start(&address.to_string(), config.clone(), [0x10; 6], [0x10; 16]).await;
+        let mut second = match restarted {
+            Ok(hub) => hub,
+            Err(bacnet_types::error::Error::Transport(ref err))
+                if crate::port_ownership::lost_port(attempt, err) =>
+            {
+                continue;
+            }
+            Err(err) => panic!("the restart could not bind {address}: {err}"),
+        };
+        assert_eq!(second.local_addr(), Some(address));
+        assert_eq!(
+            second.status().await.outcomes,
+            ScHubOutcomeCounts::default()
+        );
+        let mut peer = register(&tls, address, 0x42).await;
+        assert_eq!(second.status().await.client_count, 1);
+        let (outcome, ()) = tokio::join!(second.shutdown_gracefully(), reciprocal(&mut peer));
+        assert_eq!(outcome, ScHubShutdownOutcome::Graceful);
+        assert_eq!(
+            second.status().await.outcomes,
+            ScHubOutcomeCounts::default()
+        );
+        assert_eq!(first.status().await, stopped);
+        return;
+    }
 }

@@ -175,8 +175,11 @@ async fn local_hub_identity_rejected_before_bind_on_every_start_api() {
             .await
             .err()
             .expect("occupied address must fail");
+        // The OS error itself comes back (#1104), so the kind names the cause.
         assert!(
-            matches!(error, bacnet_types::error::Error::Encoding(ref text) if text.starts_with("Hub bind failed:"))
+            matches!(error, bacnet_types::error::Error::Transport(ref err)
+                if err.kind() == std::io::ErrorKind::AddrInUse && err.raw_os_error().is_some()),
+            "API {api}, expected the OS address-in-use error, got {error:?}"
         );
     }
 }
