@@ -1189,7 +1189,8 @@
    "code_anchors": [
     "crates/bacnet-objects/src/loop_obj.rs::LoopObject",
     "crates/bacnet-objects/src/loop_obj/metadata.rs",
-    "crates/bacnet-objects/src/traits/defaults.rs"
+    "crates/bacnet-objects/src/traits/defaults.rs",
+    "crates/rusty-bacnet/src/server/server_methods/loop_methods.rs"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/loop_obj/property_set_tests.rs::loop_serves_the_missing_table_12_20_rows_with_their_datatypes",
@@ -1200,7 +1201,9 @@
     "crates/bacnet-objects/src/loop_obj/metadata.rs::tests::property_metadata_loop_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/loop_properties.rs::rp_loop_serves_units_action_and_priority_for_writing",
     "crates/bacnet-server/src/handlers/tests/read_rpm/loop_program.rs::rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets",
-    "crates/bacnet-server/src/pics/property_metadata_tests/loop_program.rs::pics_loop_program_notification_class_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/loop_program.rs::pics_loop_program_notification_class_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/loop_methods_tests.rs::python_add_loop_settings_reach_the_read_only_rows",
+    "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopStubContractTests::test_add_loop_takes_the_read_only_rows_as_keyword_only_arguments"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/loop_obj/property_set_tests.rs::loop_action_refuses_values_outside_bacnet_action_atomically",
@@ -1208,14 +1211,16 @@
     "crates/bacnet-objects/src/loop_obj/property_set_tests.rs::loop_action_is_a_single_value_not_an_array",
     "crates/bacnet-server/src/handlers/tests/loop_properties.rs::wp_loop_action_holds_to_bacnet_action",
     "crates/bacnet-server/src/handlers/tests/loop_properties.rs::wp_loop_application_set_rows_are_read_only",
-    "crates/bacnet-server/src/handlers/tests/loop_properties.rs::loop_action_rejects_an_array_index_but_command_action_admits_one"
+    "crates/bacnet-server/src/handlers/tests/loop_properties.rs::loop_action_rejects_an_array_index_but_command_action_admits_one",
+    "crates/rusty-bacnet/src/server/server_methods/loop_methods_tests.rs::python_add_loop_settings_are_checked_like_the_rust_setters",
+    "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopStubContractTests::test_add_loop_refuses_values_the_rust_setters_refuse"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1062",
     "docs/rust-api.md#building-control-7 Loop property set"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1062), found during #985. Breaking pre-1.0 wire change: ALL and REQUIRED gain rows, and Property_List follows the Table 12-20 order instead of the order the 0.1.0 import used. Local policy, since an R row leaves writability to the implementation: Action is network-writable, like Setpoint and the gain constants, as tuning a peer may adjust; the units rows and Priority_For_Writing are read-only, like Output_Units and the Schedule's Priority_For_Writing (#1028), and the application sets them with LoopObject setters that refuse units above 65535 or a priority outside 1 to 16 with VALUE_OUT_OF_RANGE. Defaults are NO_UNITS for the four units rows, DIRECT and priority 16. ACTION used to be classified as an array on every object type; it is now an array only on Command. The Loop doesn't run its control algorithm or command the property its Manipulated_Variable_Reference names, so Action and Priority_For_Writing change nothing inside the object; they describe the application's algorithm. The Python add_loop is unchanged, so a Python Loop serves the defaults. Not claimed: writing Present_Value to the Manipulated_Variable_Reference target at Priority_For_Writing, including the Out_Of_Service case in which that target follows a simulated Present_Value; resolving Controlled_Variable_Reference or Setpoint_Reference (#1063); the optional Bias, Maximum_Output and Minimum_Output rows; intrinsic reporting; and the audit, tag and profile rows."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1062), found during #985. Breaking pre-1.0 wire change: ALL and REQUIRED gain rows, and Property_List follows the Table 12-20 order instead of the order the 0.1.0 import used. Local policy, since an R row leaves writability to the implementation: Action is network-writable, like Setpoint and the gain constants, as tuning a peer may adjust; the units rows and Priority_For_Writing are read-only, like Output_Units and the Schedule's Priority_For_Writing (#1028), and the application sets them with LoopObject setters that refuse units above 65535 or a priority outside 1 to 16 with VALUE_OUT_OF_RANGE. Defaults are NO_UNITS for the four units rows, DIRECT and priority 16. ACTION used to be classified as an array on every object type; it is now an array only on Command. The Loop doesn't run its control algorithm or command the property its Manipulated_Variable_Reference names, so Action and Priority_For_Writing change nothing inside the object; they describe the application's algorithm. Python's add_loop takes the read-only rows as keyword-only arguments and builds the Loop through the same setters. Not claimed: writing Present_Value to the Manipulated_Variable_Reference target at Priority_For_Writing, including the Out_Of_Service case in which that target follows a simulated Present_Value; resolving Controlled_Variable_Reference or Setpoint_Reference (#1063 chose an application route for Controlled_Variable_Value instead); the optional Bias, Maximum_Output and Minimum_Output rows; intrinsic reporting; and the audit, tag and profile rows."
   },
   {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
@@ -3353,7 +3358,7 @@
    "id": "BACNET-13-COV-OBJECT-CRITERIA",
    "standard_anchor": "Clause 13.1 and Table 13-1 (Loop and Staging rows) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15",
    "priority": "P1",
-   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment.",
+   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/traits.rs",
@@ -3362,7 +3367,9 @@
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-server/src/cov/reported.rs",
     "crates/bacnet-server/src/cov/observation.rs",
-    "crates/bacnet-server/src/server/cov_notifications.rs"
+    "crates/bacnet-server/src/server/cov_notifications.rs",
+    "crates/bacnet-server/src/server/local_writes.rs",
+    "crates/rusty-bacnet/src/server/server_methods/loop_methods.rs"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_cov_notification_reports_setpoint_and_controlled_variable_value",
@@ -3370,19 +3377,27 @@
     "crates/bacnet-server/src/server/staging_cov_tests.rs::staging_subscribe_cov_reports_stage_increment_and_completion",
     "crates/bacnet-server/src/server/staging_cov_tests.rs::staging_subscribe_cov_property_reports_each_property_with_flags",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_cov_reports_setpoint_and_controlled_variable_value",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_controlled_variable_value_is_application_fed_and_read_only"
+    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_controlled_variable_value_is_application_fed_and_read_only",
+    "crates/bacnet-server/src/server/loop_controlled_variable_tests.rs::controlled_variable_value_local_notifies_a_property_subscription",
+    "crates/bacnet-server/src/server/loop_controlled_variable_tests.rs::controlled_variable_value_local_rides_the_next_subscribe_cov_report",
+    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service",
+    "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopLiveServerTests::test_live_server_serves_settings_and_takes_the_measurement",
+    "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopStubContractTests::test_runtime_and_stub_expose_the_controlled_variable_route"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_cov_increment_is_writable_validated_and_drives_cov",
-    "crates/bacnet-objects/src/staging/tests.rs::staging_cov_increment_and_reported_present_stage"
+    "crates/bacnet-objects/src/staging/tests.rs::staging_cov_increment_and_reported_present_stage",
+    "crates/bacnet-server/src/server/loop_controlled_variable_tests.rs::controlled_variable_value_local_refuses_bad_values_and_targets",
+    "crates/bacnet-objects/src/loop_obj/tests.rs::controlled_variable_value_hook_is_refused_by_other_objects"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #988",
     "CHANGELOG.md Unreleased Fixed entry for #985",
-    "docs/rust-api.md#building-control-7 Staging COV (Table 13-1)"
+    "docs/rust-api.md#building-control-7 Staging COV (Table 13-1)",
+    "CHANGELOG.md Unreleased Added entry for #1063"
    ],
-   "notes": "Split child of BACNET-13-COV-SUBSCRIPTIONS (#985, #988). The server takes the extra values from BACnetObject::cov_reported_properties (a default keyed by object type that custom objects may override) under the same object borrow as Present_Value and Status_Flags, leaves out a declared property the object's Property_List lacks, and sends nothing when a listed one fails to read, as for an unreadable Present_Value. Only trigger values (Present_Stage) are kept in the delivered observation; Setpoint and Controlled_Variable_Value are carried at their current value. A WriteProperty runs a Staging plan before its own fanout, so a stage change and the completion's Status_Flags can arrive in one notification; write_local reports the stage first. Local reading of Table 13-1a: a SubscribeCOVProperty on Present_Value reports Present_Value and Status_Flags only, and a Staging Present_Value property subscription does not fire on a Present_Stage change alone. Not claimed: the extra Table 13-1 values of other COV objects (Access Door Door_Alarm_State, Load Control, Pulse Converter, Credential Data Input, Access Point); a runtime route for Loop Controlled_Variable_Value after the object is added to a running server (#1063). Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062)."
+   "notes": "Split child of BACNET-13-COV-SUBSCRIPTIONS (#985, #988). The server takes the extra values from BACnetObject::cov_reported_properties (a default keyed by object type that custom objects may override) under the same object borrow as Present_Value and Status_Flags, leaves out a declared property the object's Property_List lacks, and sends nothing when a listed one fails to read, as for an unreadable Present_Value. Only trigger values (Present_Stage) are kept in the delivered observation; Setpoint and Controlled_Variable_Value are carried at their current value. A WriteProperty runs a Staging plan before its own fanout, so a stage change and the completion's Status_Flags can arrive in one notification; write_local reports the stage first. Local reading of Table 13-1a: a SubscribeCOVProperty on Present_Value reports Present_Value and Status_Flags only, and a Staging Present_Value property subscription does not fire on a Present_Stage change alone. Not claimed: the extra Table 13-1 values of other COV objects (Access Door Door_Alarm_State, Load Control, Pulse Converter, Credential Data Input, Access Point). #1063 gave Controlled_Variable_Value an application route through the BACnetObject::set_controlled_variable_value_internal hook and the existing local-write path, which runs the COV capture under the database lock and fires after the guard drops; the server doesn't follow Controlled_Variable_Reference. Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062)."
   },
   {
    "id": "BACNET-13-VALUE-SOURCE-COV",

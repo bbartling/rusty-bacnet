@@ -1701,7 +1701,10 @@ Present_Value peers may write only while Out_Of_Service is TRUE. Application NUL
 is an invalid datatype, not a relinquishment. For network-equivalent writes use
 `write_local`; noncommandable writes remain available without resolved command
 identity. Commandable writes still require a valid source. These access modes are
-Rust construction APIs; Python constructors retain their current defaults.
+Rust construction APIs; Python constructors retain their current defaults. A
+Loop's measured input has its own route,
+`BACnetServer::set_controlled_variable_value_local` (see
+[Building Control](#building-control-7)).
 
 #### Schedule & Notification (5)
 
@@ -1827,6 +1830,20 @@ are read-only over the network; set them before adding the Loop with
 `set_priority_for_writing`. The object stores the loop's configuration and
 output for the application's algorithm: it neither computes Present_Value nor
 writes it to the Manipulated_Variable_Reference target.
+
+While the application runs the algorithm, it also feeds Controlled_Variable_Value,
+the measurement the algorithm compares with Setpoint. The server doesn't follow
+Controlled_Variable_Reference. In a running server the application calls
+`BACnetServer::set_controlled_variable_value_local(&loop_id, PropertyValue::Real(v))`
+alongside `set_present_value_local` for the output. The property stays
+read-only over the network. The call takes a finite REAL and refuses any other
+object with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Unlike Present_Value, it is
+accepted while Out_Of_Service is TRUE, because Out_Of_Service decouples only the
+output and Reliability. The change goes through the server's COV path: a
+SubscribeCOVProperty on Controlled_Variable_Value is notified, while a SubscribeCOV
+on the Loop carries the value in its next report without being triggered by it.
+Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
+starting value.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid

@@ -25,6 +25,8 @@ enum LocalWrite {
     },
     /// The application supplying a supported object's logical `Present_Value`.
     ApplicationPresentValue,
+    /// The application supplying a Loop's measured `Controlled_Variable_Value`.
+    ApplicationControlledVariableValue,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -122,7 +124,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// by the object clauses for the supported Values and Loop. NULL is an invalid
     /// application value. Other object families fail closed; use
     /// [`BACnetServer::write_local`] for network-equivalent writes and sourced
-    /// commands on commandable objects. Python exposure is tracked in #503.
+    /// commands on commandable objects. The Python binding exposes this as
+    /// `BACnetServer.set_present_value_local`.
     ///
     /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
     pub async fn set_present_value_local(
@@ -132,6 +135,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         self.write_local_as(oid, LocalWrite::ApplicationPresentValue, value, None)
             .await
+    }
+
+    /// Supply a Loop's measured `Controlled_Variable_Value` from the
+    /// application that runs its control algorithm.
+    ///
+    /// The value is a finite REAL: another datatype fails with PROPERTY /
+    /// INVALID_DATA_TYPE and NaN or an infinity with PROPERTY /
+    /// VALUE_OUT_OF_RANGE. An unknown object fails with OBJECT /
+    /// UNKNOWN_OBJECT and any object other than a Loop with OBJECT /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same errors as
+    /// [`BACnetServer::set_present_value_local`]. Unlike Present_Value it is
+    /// accepted while `Out_Of_Service` is TRUE, because Out_Of_Service
+    /// decouples only the output and Reliability from the algorithm.
+    ///
+    /// The update runs the same post-write COV processing as
+    /// `set_present_value_local` once the database lock is released. A
+    /// SubscribeCOVProperty on `Controlled_Variable_Value` is notified of the
+    /// change; a SubscribeCOV on the Loop is not, since the Loop's COV report
+    /// carries this value without being triggered by it, so its next report
+    /// carries the new value. The property stays read-only over the network.
+    pub async fn set_controlled_variable_value_local(
+        &self,
+        oid: &ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        self.write_local_as(
+            oid,
+            LocalWrite::ApplicationControlledVariableValue,
+            value,
+            None,
+        )
+        .await
     }
 
     async fn write_local_as(
@@ -204,7 +239,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         audit
                     }
                 }
-                LocalWrite::ApplicationPresentValue => None,
+                LocalWrite::ApplicationPresentValue
+                | LocalWrite::ApplicationControlledVariableValue => None,
             };
             let prepared = match write {
                 LocalWrite::Property {
@@ -227,7 +263,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         )
                     })
                 }
-                LocalWrite::ApplicationPresentValue => None,
+                LocalWrite::ApplicationPresentValue
+                | LocalWrite::ApplicationControlledVariableValue => None,
             };
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
@@ -250,6 +287,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         )
                     }
                     LocalWrite::ApplicationPresentValue => object.set_present_value_internal(value),
+                    LocalWrite::ApplicationControlledVariableValue => {
+                        object.set_controlled_variable_value_internal(value)
+                    }
                 }
             });
             if let Err(error) = result {

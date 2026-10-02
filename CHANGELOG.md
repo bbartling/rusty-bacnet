@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A running server's application can now update a Loop's
+  Controlled_Variable_Value (#1063). Before, only
+  `LoopObject::set_controlled_variable_value` could set it, and nothing could
+  reach a Loop's concrete type once the server held it. The application that
+  runs the loop's algorithm calls
+  `BACnetServer::set_controlled_variable_value_local` (Python:
+  `BACnetServer.set_controlled_variable_value_local`), which goes through the
+  new `BACnetObject::set_controlled_variable_value_internal` hook. It takes a
+  finite REAL. Another datatype fails with INVALID_DATA_TYPE, and NaN or an
+  infinity with VALUE_OUT_OF_RANGE. An unknown object fails with
+  UNKNOWN_OBJECT, and any object other than a Loop with
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as with `set_present_value_local`.
+  The route is accepted while Out_Of_Service is TRUE, which decouples only
+  the output and Reliability. The change goes through the server's COV path:
+  a SubscribeCOVProperty on Controlled_Variable_Value is notified. A
+  SubscribeCOV on the Loop is not, since the COV criteria table (Clause 13.1,
+  Table 13-1) carries the value without making it a trigger, so the next
+  report carries the new value. The property stays read-only over the
+  network. The server doesn't follow Controlled_Variable_Reference itself.
+
 - Staging objects support COV (#988). A SubscribeCOV notification carries
   Present_Value, Status_Flags and Present_Stage, and goes out when
   Present_Value moves by at least COV_Increment, when Status_Flags changes, or
@@ -511,8 +531,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PROPERTY_IS_NOT_AN_ARRAY; Command's Action array still takes one. The Loop
   doesn't run its control algorithm or command the property its
   Manipulated_Variable_Reference names, so Action and Priority_For_Writing
-  describe the application's algorithm and change nothing in the object. The
-  Python `add_loop` is unchanged, so a Python Loop serves the defaults.
+  describe the application's algorithm and change nothing in the object.
+  Python's `add_loop` takes the read-only rows as keyword-only arguments
+  (`controlled_variable_units`, `proportional_constant_units`,
+  `integral_constant_units`, `derivative_constant_units`,
+  `priority_for_writing`), checked like the Rust setters; omitted ones keep
+  the defaults.
 
 - **Loop COV notifications carry Setpoint and Controlled_Variable_Value
   (wire):** a Loop's SubscribeCOV notification now reports Present_Value,

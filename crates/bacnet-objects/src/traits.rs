@@ -879,6 +879,22 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         })
     }
 
+    /// Apply the Controlled_Variable_Value measured by the local application.
+    ///
+    /// Only the built-in Loop opts in. Its control algorithm runs in the
+    /// application, which feeds the measured value here while it does so; the
+    /// property stays read-only over the network. The default fails closed
+    /// with the same error as [`set_present_value_internal`](Self::set_present_value_internal).
+    fn set_controlled_variable_value_internal(
+        &mut self,
+        _value: PropertyValue,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
     /// Borrow this object's Audit Log query storage, if it has any.
     ///
     /// This read-only, type-erased channel lets the bundled server execute an

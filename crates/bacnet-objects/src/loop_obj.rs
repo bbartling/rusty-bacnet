@@ -5,7 +5,9 @@
 //! Action and Priority_For_Writing are configuration for that algorithm:
 //! the object itself neither computes an output nor commands the property
 //! that Manipulated_Variable_Reference names, so nothing here changes with
-//! them.
+//! them. While the application runs the algorithm it also feeds
+//! Controlled_Variable_Value, the measurement it compares with Setpoint; the
+//! object doesn't follow Controlled_Variable_Reference itself.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
@@ -99,7 +101,10 @@ impl LoopObject {
     /// Controlled_Variable_Reference names (Clause 12.17.14).
     ///
     /// COV notifications carry the latest value, but a change of it alone
-    /// sends none (Table 13-1).
+    /// sends none (Table 13-1). Like [`Self::set_present_value`] this direct
+    /// setter bypasses the server's COV fanout and value checks; a running
+    /// server's application uses
+    /// `BACnetServer::set_controlled_variable_value_local` instead.
     pub fn set_controlled_variable_value(&mut self, value: f32) {
         self.controlled_variable_value = value;
     }
@@ -470,6 +475,16 @@ impl BACnetObject for LoopObject {
             return Err(common::write_access_denied_error());
         }
         self.apply_present_value(value)
+    }
+
+    fn set_controlled_variable_value_internal(
+        &mut self,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        // Out_Of_Service decouples only Present_Value and Reliability from the
+        // algorithm (Clause 12.17.9), so the measurement keeps flowing while a
+        // client simulates the output.
+        write_finite_real(&mut self.controlled_variable_value, value)
     }
 
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
