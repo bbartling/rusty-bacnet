@@ -33,7 +33,7 @@ pub fn decode_sc_bvlc_result(msg: &ScMessage) -> Result<ScBvlcResult, Error> {
     if !msg.data_options.is_empty() {
         return Err(Error::decoding(
             SC_MIN_HEADER,
-            "BVLC-Result shall not convey data options",
+            "data options are not allowed on a BVLC-Result",
         ));
     }
     if msg.payload.len() < 2 {
