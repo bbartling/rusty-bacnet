@@ -707,6 +707,12 @@ pub(super) fn real(value: f32) -> Vec<u8> {
 /// Wait for the SimpleACK or Error answering the last request sent, take it,
 /// and return the error code of an Error.
 pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
+    error_response(h).await.map_err(|error| error.error_code)
+}
+
+/// Wait for the SimpleACK or Error PDU answering the last request sent, take
+/// it, and return the whole Error PDU.
+pub(super) async fn error_response(h: &Harness) -> Result<(), bacnet_encoding::apdu::ErrorPdu> {
     let invoke_id = h.invoke_id;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -721,7 +727,7 @@ pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
             };
             match answer {
                 Some(Apdu::SimpleAck(_)) => return Ok(()),
-                Some(Apdu::Error(error)) => return Err(error.error_code),
+                Some(Apdu::Error(error)) => return Err(error),
                 _ => tokio::time::sleep(Duration::from_millis(1)).await,
             }
         }

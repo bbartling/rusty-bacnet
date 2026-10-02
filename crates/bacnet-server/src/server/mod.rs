@@ -728,6 +728,8 @@ mod pulse_converter_cov_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
 #[cfg(test)]
+mod schedule_reference_list_tests;
+#[cfg(test)]
 mod schedule_reference_write_tests;
 #[cfg(test)]
 mod schedule_write_tests;
