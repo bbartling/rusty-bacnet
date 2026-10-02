@@ -96,11 +96,23 @@ about them.
 
 ### Runner
 
-Jobs run on a self-hosted Linux runner (8 vCPU, 32 GB) on a preemptible VM. It
-runs up to three jobs at once, and the host-mode CI image job takes one of those
-slots. `Swatinem/rust-cache` keeps Cargo state in the runner's cache. The cache
-lives on the VM, so a preemption starts the next run cold, and a preempted job
-must be re-run.
+Jobs run on a self-hosted Linux VM (8 vCPU, 32 GB) that is preemptible. It
+runs two runner daemons, set up in the infrastructure repository (forgejo-dev):
+
+- **Main runner:** up to three jobs at once, every build and test job.
+- **Gate runner:** label `gate`, host mode, up to two jobs at once, this
+  repository only. It runs the seconds-long CI image and CI OK jobs, so a run
+  no longer waits for one of the three slots before its builds start and again
+  after they finish. When the CI image job has to build a new image, that build
+  runs alongside the main runner's three jobs.
+
+While no runner with the `gate` label is online, every run stops at CI image,
+and its `CI OK` status stays pending. The gate runner is listed under this
+repository's Settings → Actions → Runners.
+
+`Swatinem/rust-cache` keeps Cargo state in the runner's cache. The cache lives
+on the VM, so a preemption starts the next run cold, and a preempted job must be
+re-run.
 
 ### CI image
 
@@ -127,8 +139,8 @@ contains:
 
 The jobs no longer spend time on apt, rustup or tool downloads.
 
-The first job, **CI image**, runs on the `linux-host` label. It does three
-things:
+The first job, **CI image**, runs on the gate runner (`gate` label) in host
+mode. It does three things:
 
 1. **Tag.** Checks that `CI_IMAGE`'s tag equals the first 12 hex digits of the
    Dockerfile's SHA-256, that `release.yml` uses the same `CI_IMAGE`, and that
@@ -165,8 +177,10 @@ both the pull and the push.
 - Forgejo's automatic job token can log in, but gets 401 on uploads.
 - The login uses a Docker config under `RUNNER_TEMP`, which the runner deletes
   even if the job is cancelled.
-- If the runner ever gets a second VM, or turns on `force_pull`, give the jobs
-  `container.credentials` with a separate read-only package token.
+- The pull reaches the job containers because the gate runner shares the VM's
+  Docker with the main runner. If the runners ever span more than one VM, or
+  turn on `force_pull`, give the jobs `container.credentials` with a separate
+  read-only package token.
 
 **Storage:** each image version takes space on Forgejo's data disk, and old tags
 stay cached on the runner VM until it's rebuilt. Keep the last few versions with

@@ -1,6 +1,9 @@
 name: CI
 
-# Runs on the self-hosted Forgejo runner (Linux amd64 Spot VM). Jobs run in the
+# Runs on the self-hosted Forgejo runner VM (Linux amd64 Spot VM): the build and
+# test jobs in the main runner's three slots, and the seconds-long CI image and
+# CI OK jobs on the same VM's gate runner (label `gate`, two slots), so a run
+# doesn't wait for a slot before and after its real work. Jobs run in the
 # prebuilt image from .forgejo/ci-image (the runner's act image plus the
 # toolchains, tools and apt packages), which the "CI image" job builds and pushes
 # to Forgejo's registry when its tag is missing (#904). The tests, clippy and
@@ -60,9 +63,11 @@ env:
 jobs:
   # Builds and pushes CI_IMAGE only when that tag is not in the registry yet, so
   # a PR that changes the Dockerfile (and therefore the tag) tests its own image.
+  # Runs in host mode on the gate runner, which shares the VM's Docker with the
+  # main runner, so the pull below reaches the job containers that follow.
   image:
     name: CI image
-    runs-on: linux-host
+    runs-on: gate
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -268,7 +273,8 @@ jobs:
     name: CI OK
     if: ${{ always() }}
     needs: [image, lint, clippy, test, python, msrv, audit-deny]
-    runs-on: ubuntu-latest
+    # Host mode on the gate runner: the VM's jq does the check.
+    runs-on: gate
     timeout-minutes: 5
     steps:
       - name: All required jobs succeeded or were skipped by tier
