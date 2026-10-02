@@ -161,13 +161,10 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
         let mut object = AccessCredentialObject::new(7, "CRED-7").unwrap();
         if configured {
             object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-                .unwrap();
-            object
                 .write_property(
                     P::CREDENTIAL_STATUS,
                     None,
-                    PropertyValue::Enumerated(2),
+                    PropertyValue::Enumerated(1),
                     None,
                 )
                 .unwrap();
@@ -180,19 +177,9 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
         // Authentication_Factors is BACnetLIST and rejects any index.
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (
-                P::PRESENT_VALUE,
-                None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
-            ),
-            (
-                P::PRESENT_VALUE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
                 P::CREDENTIAL_STATUS,
                 None,
-                Ok(if configured { &[0x91, 2] } else { &[0x91, 0] }),
+                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
             ),
             (
                 P::CREDENTIAL_STATUS,
@@ -242,22 +229,21 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x92, 0x01, 0x08, 0x92, 0x01, 0x00, 0x92, 0x01, 0x01, 0x91,
-                    111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x92, 0x01, 0x08, 0x92, 0x01, 0x00, 0x92, 0x01, 0x01, 0x91, 111,
+                    0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x08])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x00])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x01])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x08])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x00])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x01])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 111])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 81])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(9),
+                Some(8),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -265,8 +251,15 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Global_Identifier is the Table 12-40 W row with no read arm;
-            // Activation_Time is the Table 12-40 R row with no read arm.
+            // Present_Value is no Table 12-40 row (#979); Global_Identifier
+            // is the Table 12-40 W row with no read arm; Activation_Time is
+            // the Table 12-40 R row with no read arm.
+            (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (
+                P::PRESENT_VALUE,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (P::GLOBAL_IDENTIFIER, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::GLOBAL_IDENTIFIER,

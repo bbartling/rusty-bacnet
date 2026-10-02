@@ -29,14 +29,14 @@ use crate::property_metadata::{
 // (table R on all four quartet tables), Always-never-WhenOutOfService
 // writability mirroring dispatch, presence None, not createable but
 // deleteable with no overrides, and Property_List as the only array-gated row.
-// Credential Present_Value is an implementation-extra row (Table 12-40 has no
-// Present_Value row) with a routed Enumerated arm, so Optional/Always.
+// Table 12-40 has no Present_Value row, so the credential serves none (#979
+// removed the implementation-extra row the 0.1.0 import carried).
 // Credential_Status/Assigned_Access_Rights/Authentication_Factors carry the
-// table R code; the status arm makes CREDENTIAL_STATUS RequiredRead/Always
-// while the count/list stay RequiredRead/ReadOnly. User Present_Value and
-// Assigned_Access_Rights are implementation-extra rows (Table 12-38 has
-// neither); the PV arm makes it Optional/Always while the count stays
-// Optional/ReadOnly. User_Type/Credentials carry the table R code; the
+// table R code; the BACnetBinaryPV status arm makes CREDENTIAL_STATUS
+// RequiredRead/Always while the count/list stay RequiredRead/ReadOnly.
+// User Present_Value and Assigned_Access_Rights are implementation-extra
+// rows (Table 12-38 has neither); the PV arm makes it Optional/Always while
+// the count stays Optional/ReadOnly. User_Type/Credentials carry the table R code; the
 // User_Type arm makes it RequiredRead/Always while Credentials stays
 // RequiredRead/ReadOnly. Rights Global_Identifier carries the table W code
 // with the routed Unsigned arm, so RequiredWrite/Always; the ±rules rows
@@ -53,7 +53,6 @@ const ACCESS_CREDENTIAL_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, Optional, None, Always),
     PropertyMetadata::new(P::CREDENTIAL_STATUS, RequiredRead, None, Always),
     PropertyMetadata::new(P::ASSIGNED_ACCESS_RIGHTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::AUTHENTICATION_FACTORS, RequiredRead, None, ReadOnly),
@@ -220,7 +219,6 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::CREDENTIAL_STATUS,
             P::ASSIGNED_ACCESS_RIGHTS,
             P::AUTHENTICATION_FACTORS,
@@ -242,9 +240,10 @@ mod tests {
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(0)
+        // Table 12-40 has no Present_Value row (#979).
+        assert_error(
+            object.read_property(P::PRESENT_VALUE, None).unwrap_err(),
+            ErrorCode::UNKNOWN_PROPERTY,
         );
         assert_eq!(
             object.read_property(P::CREDENTIAL_STATUS, None).unwrap(),
@@ -429,12 +428,7 @@ mod tests {
         let cases: [WriteCase; 4] = [
             (
                 || Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
-                &[
-                    P::DESCRIPTION,
-                    P::OUT_OF_SERVICE,
-                    P::PRESENT_VALUE,
-                    P::CREDENTIAL_STATUS,
-                ],
+                &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::CREDENTIAL_STATUS],
             ),
             (
                 || Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
@@ -519,29 +513,21 @@ mod tests {
                 )
                 .unwrap();
             credential
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(3), None)
-                .unwrap();
-            credential
                 .write_property(
                     P::CREDENTIAL_STATUS,
                     None,
-                    PropertyValue::Enumerated(2),
+                    PropertyValue::Enumerated(1),
                     None,
                 )
                 .unwrap();
             assert_eq!(
-                credential.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(3)
-            );
-            assert_eq!(
                 credential
                     .read_property(P::CREDENTIAL_STATUS, None)
                     .unwrap(),
-                PropertyValue::Enumerated(2)
+                PropertyValue::Enumerated(1)
             );
             for (p, value) in [
-                (P::PRESENT_VALUE, PropertyValue::Real(3.0)),
-                (P::CREDENTIAL_STATUS, PropertyValue::Real(2.0)),
+                (P::CREDENTIAL_STATUS, PropertyValue::Real(1.0)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
@@ -706,10 +692,12 @@ mod tests {
         }
 
         // Global_Identifier is the Table 12-40 W row with no read arm;
-        // Activation_Time is the Table 12-40 R row with no read arm.
+        // Activation_Time is the Table 12-40 R row with no read arm;
+        // Present_Value is no Table 12-40 row at all (#979).
         let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
         assert_unserved(&mut credential, P::GLOBAL_IDENTIFIER);
         assert_unserved(&mut credential, P::ACTIVATION_TIME);
+        assert_unserved(&mut credential, P::PRESENT_VALUE);
         // Global_Identifier is the Table 12-38 W row with no read arm;
         // Members is the Table 12-38 O row with no read arm.
         let mut user = AccessUserObject::new(1, "USER-1").unwrap();
