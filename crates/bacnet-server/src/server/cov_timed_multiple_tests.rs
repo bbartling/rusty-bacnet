@@ -511,3 +511,44 @@ async fn without_a_valid_clock_an_uncaptured_timestamped_field_is_left_out() {
     assert_eq!(flag_times(&report), vec![Some(time(7))]);
     h.server.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_field_below_the_increment_reports_the_time_its_value_was_committed() {
+    const VALUE_SOURCE: PropertyIdentifier = PropertyIdentifier::VALUE_SOURCE;
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.pv_increment = 100.0;
+    h.set_clock(1);
+    h.subscribe_specs(
+        false,
+        vec![(av1(), vec![(PV, true), (VALUE_SOURCE, false)])],
+    )
+    .await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(0.0), Some(time(1)))]
+    );
+    // B: 12.0 moves less than the PV selector's increment, so only the
+    // Value_Source report carries it. It is timed with its commit at 3, not
+    // with the preparation at 4 (#987).
+    h.set_clock(3);
+    h.write_pv(12.0, 4).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(12.0), Some(time(3)))]
+    );
+    // Still B: another writer's later Value_Source report reports 3 again.
+    h.set_clock(5);
+    h.write_local(12.0).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(12.0), Some(time(3)))]
+    );
+    // A again, at 7: its own commit time, not the first A's.
+    h.set_clock(7);
+    h.write_pv(0.0, 8).await;
+    assert_eq!(
+        pv_rows(&h.notification().await),
+        vec![(real(0.0), Some(time(7)))]
+    );
+    h.server.stop().await.unwrap();
+}

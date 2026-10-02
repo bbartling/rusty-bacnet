@@ -4,6 +4,7 @@ use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::{build_items, Coordinate, FieldStamp};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
+use crate::cov::timed::FieldTiming;
 use crate::cov::timed::{TimedChange, TimedClaim};
 
 /// Octets of an unsegmented confirmed-request APDU header.
@@ -107,18 +108,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut claim: Option<TimedClaim> = None;
         let (notification, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
-            // identity, the preparation clock sample and every value. The
-            // sample times the current-state fallback and a field that changed
-            // without its timestamped reference capturing it (#987). A producer
-            // snapshot carries its own captured changes, so that path adopts no
-            // fallback change; it still samples the clock for such a field.
-            let (device_oid, clock_frame, db) = {
-                let guard = db.read().await;
-                let device = crate::local_device::selected_device(&guard);
-                let clock_frame = guard
-                    .clock_frame()
+            // identity, the clock sample for any current-state fallback and
+            // every value. Producers capture under the database write guard,
+            // so while this read guard is held no capture can move a field
+            // record past the values read here. A producer snapshot carries its
+            // own captured changes, so that path takes no clock: it neither
+            // adopts a fallback change nor times an uncaptured field (#987).
+            let (device_oid, clock_frame, db) = if snapshot.is_none() {
+                let db = db.read().await;
+                let clock_frame = subscriptions
+                    .iter()
+                    .any(|sub| sub.timestamped)
+                    .then(|| db.clock_frame())
+                    .flatten()
                     .filter(|frame| frame.is_valid_actual_datetime());
-                (device, clock_frame, snapshot.is_none().then_some(guard))
+                (
+                    crate::local_device::selected_device(&db),
+                    clock_frame,
+                    Some(db),
+                )
+            } else {
+                (
+                    crate::local_device::selected_device(&*db.read().await),
+                    None,
+                    None,
+                )
             };
             let device_oid =
                 device_oid.unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
@@ -344,10 +358,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let Some((key, generation)) = owners.get(coordinate) else {
                         return FieldStamp::Unowned;
                     };
-                    store
-                        .lock()
-                        .field_time(key, *generation, value, clock_frame)
-                        .map_or(FieldStamp::Withhold, FieldStamp::At)
+                    // The clock is read only for a value no capture recorded,
+                    // and only on the database path, under its read guard.
+                    let now = || {
+                        db.as_deref()?
+                            .clock_frame()
+                            .filter(|frame| frame.is_valid_actual_datetime())
+                    };
+                    match store.lock().field_time(key, *generation, value, now) {
+                        FieldTiming::NotLive => FieldStamp::Unowned,
+                        FieldTiming::NoTime => FieldStamp::Withhold,
+                        FieldTiming::At(seq, frame) => FieldStamp::At((seq, frame)),
+                    }
                 };
                 let (items, stamp) = build_items(claim, &parts, &reads, &untimed, &mut stamp);
                 // The header names the newest change whose time is conveyed,

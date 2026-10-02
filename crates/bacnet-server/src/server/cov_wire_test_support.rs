@@ -112,6 +112,8 @@ pub(super) struct Harness {
     pub(super) after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     pub(super) fail_notifications: Arc<AtomicBool>,
     pub(super) invoke_id: u8,
+    /// COV increment the harness's PV references subscribe with.
+    pub(super) pv_increment: f32,
     /// Invoke ID and service of the last confirmed notification taken.
     last_confirmed: StdMutex<Option<(u8, ConfirmedServiceChoice)>>,
     /// Every confirmed notification taken. Invoke IDs rotate, so a byte-equal
@@ -176,6 +178,7 @@ impl Harness {
             after_broadcast,
             fail_notifications,
             invoke_id: 0,
+            pv_increment: 0.5,
             last_confirmed: StdMutex::new(None),
             taken: StdMutex::new(Vec::new()),
         }
@@ -290,7 +293,7 @@ impl Harness {
                                 property_identifier: property,
                                 property_array_index: None,
                             },
-                            cov_increment: (property == PV).then_some(0.5),
+                            cov_increment: (property == PV).then_some(self.pv_increment),
                             timestamped,
                         })
                         .collect(),

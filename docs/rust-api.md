@@ -2176,23 +2176,25 @@ the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
 without timestamps is never repeated as history, and its current row carries no
 time even when that selector did not qualify: it governs its coordinate outright.
 An explicit timestamped selector that conveys no change in a round only fills in a
-missing time when a sibling carries its coordinate. When the carried value is the
-one the selector last captured (an admission or renewal capture counts), the row
-takes that change's time. A value the selector did not capture, because it moved
-less than its COV increment or no producer captured it, takes the preparation
-time, which is kept for that value; the selector's increment baseline is
-untouched. Without a valid Device clock such a value is left out of the
-notification, as a timestamped change without a clock is. A companion that already
-carries a time keeps it. A history row is dropped only when the next row for its
-coordinate repeats it exactly (overlapping selectors of one change, or an
-unchanged companion); a value that returns after a different one within the same
-clock tick stays. The header timestamp names the newest change whose time the
-notification carries, captured now or kept. It describes one notification, so
-across notifications to a context on several objects it can move back. The initial
-report after admission or re-subscription is stamped with the Device time of
-admission; this is a local convention, since no change has been observed yet. A
-renewal keeps changes not yet conveyed, including those of a notification that
-fails during the renewal.
+missing time when a sibling carries its coordinate. Its captures record the own
+value at the commit time even when it moves less than the selector's COV
+increment, and an admission or renewal capture counts too, so a carried value the
+selector last saw takes the time of that commit. A value no producer captured
+takes the preparation time, which is kept for that value; the selector's increment
+baseline is untouched. With no time to give, because the Device clock is invalid
+or a producer snapshot may be older than the record, the value is left out of the
+notification, as a timestamped change without a clock is. A selector cancelled
+since its fanout looked owns nothing, so the field goes out as an ordinary
+untimestamped value. A companion that already carries a time keeps it. A history
+row is dropped only when the next row for its coordinate repeats it exactly
+(overlapping selectors of one change, or an unchanged companion); a value that
+returns after a different one within the same clock tick stays. The header
+timestamp names the newest change whose time the notification carries, captured
+now or kept. It describes one notification, so across notifications to a context
+on several objects it can move back. The initial report after admission or
+re-subscription is stamped with the Device time of admission; this is a local
+convention, since no change has been observed yet. A renewal keeps changes not yet
+conveyed, including those of a notification that fails during the renewal.
 
 Local bounds deviate from the Standard's expectation of additional notifications
 rather than loss (§13.1, §13.18.1.1). One context's pending changes are limited to
