@@ -355,6 +355,11 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
     )
 }
 
+mod list_element;
+#[cfg(test)]
+pub(crate) use list_element::assert_list_element_refused;
+pub(crate) use list_element::at_list_element;
+
 /// Return the invalid-data-encoding protocol error.
 ///
 /// Clause 15.9.1.3 covers an encoding incompatible with the property's

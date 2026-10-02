@@ -282,14 +282,12 @@ fn whole_list_write_property_decodes_all_elements() {
     assert_eq!(alarm_values(&db, oid), list_of([2, 3]));
 
     // Per-element validation still applies: one non-Unsigned member refuses
-    // the whole write and leaves the list untouched.
-    match write(&mut db, vec![0x21, 4, 0x11]).unwrap_err() {
-        Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
-        }
-        other => panic!("expected INVALID_DATA_TYPE, got {other:?}"),
-    }
+    // the whole write, names its element (#1048), and leaves the list
+    // untouched.
+    assert_eq!(
+        list_refusal(write(&mut db, vec![0x21, 4, 0x11]).map(|_| ())),
+        (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, 2)
+    );
     assert_eq!(
         alarm_values(&db, oid),
         list_of([2, 3]),

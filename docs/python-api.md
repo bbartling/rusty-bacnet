@@ -2259,7 +2259,7 @@ except BacnetError as e:
 
 | Attribute | Set by | Value |
 |-----------|--------|-------|
-| `first_failed_element_number` | AddListElement/RemoveListElement ChangeList-Error, CreateObject-Error | Position, from 1, of the list element or initial value that failed; 0 when the request failed for another reason |
+| `first_failed_element_number` | AddListElement/RemoveListElement ChangeList-Error, CreateObject-Error; a server's `write_local` of a list an object refuses one element of | Position, from 1, of the list element or initial value that failed; 0 when the request failed for another reason. From `write_local`, the element's position in the list written |
 | `first_failed_write_attempt` | WritePropertyMultiple-Error | `{"object_identifier", "property_identifier", "property_array_index"}` of the first write that failed |
 | `first_failed_subscription` | SubscribeCOVPropertyMultiple-Error about one COV reference | The same dict for the refused reference; `None` for a general failure |
 | `vendor_id`, `service_number` | ConfirmedPrivateTransfer-Error | The private service the error answers |
