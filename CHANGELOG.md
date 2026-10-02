@@ -295,20 +295,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   addresses cannot be listed, with the OS error's kind, or when none is
   usable, and the error suggests binding an explicit interface address.
 
-- Loop, Schedule, Calendar, Trend Log and Trend Log Multiple now compute
-  Status_Flags as the other objects do (#978). They used to return the flags
-  they were built with, so Status_Flags read all FALSE forever: a Loop or
-  Schedule whose Reliability was evaluated or simulated as a fault still
-  reported FAULT FALSE, and neither set OUT_OF_SERVICE when Out_Of_Service was
-  TRUE. Loop and Schedule now derive FAULT from Reliability, OUT_OF_SERVICE from
-  Out_Of_Service and IN_ALARM from Event_State. Trend Log and Trend Log Multiple
-  derive only FAULT and IN_ALARM, and keep OVERRIDDEN and OUT_OF_SERVICE FALSE
-  as their object types require, so Trend Log's non-standard Out_Of_Service
-  property doesn't reach its flags. Calendar's Status_Flags, which the standard
-  doesn't define for it, always reads all FALSE. A Loop's COV subscribers now
-  get a notification when a write to Reliability or Out_Of_Service changes its
-  Status_Flags, carrying the new flags; before, they never heard of either
-  change.
+- Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags
+  as the other objects do (#978). They used to return the flags they were
+  built with, so Status_Flags read all FALSE forever: a Loop or Schedule whose
+  Reliability was evaluated or simulated as a fault still reported FAULT
+  FALSE, and neither set OUT_OF_SERVICE when Out_Of_Service was TRUE. Loop and
+  Schedule now derive FAULT from Reliability, OUT_OF_SERVICE from
+  Out_Of_Service and IN_ALARM from Event_State. Trend Log and Trend Log
+  Multiple derive only FAULT and IN_ALARM, and keep OVERRIDDEN and
+  OUT_OF_SERVICE FALSE as their object types require, so Trend Log's
+  non-standard Out_Of_Service property doesn't reach its flags. Calendar,
+  which the standard gives no Status_Flags, no longer serves one (see the
+  #984 entry below). A Loop's COV subscribers now get a notification when a
+  write to Reliability or Out_Of_Service changes its Status_Flags, carrying the
+  new flags; before, they never heard of either change.
+
+- **Breaking Calendar property set (wire):** Calendar no longer serves
+  Status_Flags, Event_State or Out_Of_Service (#984), so a client that read
+  them from a Calendar now gets an error. Its property table (Clause 12.9,
+  Table 12-11) defines none of them, yet Calendar listed all three as
+  optional and returned fixed values: flags all FALSE, NORMAL and FALSE. They
+  are gone from its Property_List, its property metadata, RPM ALL and
+  OPTIONAL, and its PICS rows, and ReadProperty or WriteProperty on any of
+  them now fails with PROPERTY / UNKNOWN_PROPERTY, as it does for
+  Reliability.
 
 - On Windows, a B/IP or B/IPv6 transport on an ephemeral port now owns the
   port (#950). It binds the wildcard address without SO_REUSEADDR, and
