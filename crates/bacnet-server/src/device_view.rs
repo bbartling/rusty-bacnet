@@ -332,6 +332,9 @@ impl BACnetObject for DeviceReadView<'_> {
     fn supports_cov(&self) -> bool {
         self.object.supports_cov()
     }
+    fn supports_subscribe_cov_property(&self) -> bool {
+        self.object.supports_subscribe_cov_property()
+    }
     fn staging_generation_internal(&self) -> Option<u64> {
         self.object.staging_generation_internal()
     }

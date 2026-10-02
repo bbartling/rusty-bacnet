@@ -160,6 +160,15 @@ const QUERIES: &[(&str, Query)] = &[
         format!("{:?}", o.required_properties())
     }),
     ("supports_cov", |o| o.supports_cov().to_string()),
+    // Rendered beside `supports_cov`: the probe's false must differ both from
+    // an all-default object (false, false) and from a view that kept the
+    // default, which follows the forwarded `supports_cov` (true, true).
+    ("supports_subscribe_cov_property", |o| {
+        format!(
+            "{:?}",
+            [o.supports_cov(), o.supports_subscribe_cov_property()]
+        )
+    }),
     ("staging_generation_internal", |o| {
         format!("{:?}", o.staging_generation_internal())
     }),
@@ -315,6 +324,10 @@ impl BACnetObject for Probe {
     fn supports_cov(&self) -> bool {
         true
     }
+    fn supports_subscribe_cov_property(&self) -> bool {
+        // Unlike the default, which follows `supports_cov`.
+        false
+    }
     fn staging_generation_internal(&self) -> Option<u64> {
         Some(7)
     }
@@ -325,7 +338,8 @@ impl BACnetObject for Probe {
         })
     }
     fn supports_cov_property(&self, property: P) -> bool {
-        // Unlike the default, which follows `supports_cov` for every property.
+        // Unlike the default, which follows `supports_subscribe_cov_property`
+        // for every property.
         property == CUSTOM
     }
     fn cov_increment(&self) -> Option<f32> {
