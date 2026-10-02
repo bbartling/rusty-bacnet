@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import inspect
 import re
+import sys
 import tempfile
 import unittest
 import uuid
@@ -218,6 +219,24 @@ class SignatureCompatibilityTests(unittest.TestCase):
         path = nonexistent_serial_path()
         self.assertIsInstance(make_client(path), BACnetClient)
         self.assertIsInstance(make_server(path), BACnetServer)
+
+    def test_list_serial_ports_returns_port_names(self) -> None:
+        # The runners have no serial hardware, so the list may be empty; the
+        # call still goes through the OS's port listing (IOKit on macOS).
+        ports = rusty_bacnet.list_serial_ports()
+        self.assertIsInstance(ports, list)
+        for name in ports:
+            self.assertIsInstance(name, str)
+            self.assertTrue(name)
+            if sys.platform != "win32":
+                self.assertTrue(name.startswith("/dev/"), name)
+        stub = ast.parse(Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text(encoding="utf-8"))
+        function = next(
+            node for node in stub.body
+            if isinstance(node, ast.FunctionDef) and node.name == "list_serial_ports"
+        )
+        self.assertEqual(function.args.args, [])
+        self.assertEqual(ast.unparse(function.returns), "list[str]")
 
 
 class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
