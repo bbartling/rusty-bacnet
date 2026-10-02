@@ -150,6 +150,39 @@ fn landing_call_control_rejects_reserved_and_oversized_directions_atomically() {
 }
 
 #[test]
+fn landing_call_control_refuses_oversized_unsigned_members_as_out_of_range() {
+    // Clause 15.9.1.3 separates a well-formed value outside the property's
+    // range from a malformed encoding: every case below is a well-formed
+    // BACnetLandingCallStatus whose member doesn't fit its type.
+    let mut group = ElevatorGroupObject::new(1, "EG-1").unwrap();
+    group
+        .write_property(LCC, None, app(&[0x09, 0x05, 0x19, 0x03]), None)
+        .unwrap();
+    let before = group.read_property(LCC, None).unwrap();
+    let cases: &[(&str, &[u8])] = &[
+        ("floor 256", &[0x0A, 0x01, 0x00, 0x19, 0x03]),
+        ("floor 300", &[0x0A, 0x01, 0x2C, 0x19, 0x03]),
+        ("destination 256", &[0x09, 0x01, 0x2A, 0x01, 0x00]),
+        (
+            "direction 2^32",
+            &[0x09, 0x01, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+        ),
+    ];
+    for (what, bytes) in cases {
+        assert_value_out_of_range(group.write_property(LCC, None, app(bytes), None), what);
+        assert_eq!(group.read_property(LCC, None).unwrap(), before, "{what}");
+    }
+    // The same calls split into one ApplicationData per member, as the
+    // service decoder delivers them.
+    let split = PropertyValue::List(vec![app(&[0x0A, 0x01, 0x2C]), app(&[0x19, 0x03])]);
+    assert_value_out_of_range(
+        group.write_property(LCC, None, split, None),
+        "split floor 300",
+    );
+    assert_eq!(group.read_property(LCC, None).unwrap(), before);
+}
+
+#[test]
 fn landing_call_control_rejects_wrong_datatypes_atomically() {
     let mut group = ElevatorGroupObject::new(1, "EG-1").unwrap();
     let before = group.read_property(LCC, None).unwrap();
@@ -177,11 +210,7 @@ fn landing_call_control_rejects_malformed_encodings_atomically() {
     let cases: &[(&str, &[u8])] = &[
         ("floor-number only", &[0x09, 0x05]),
         ("command first", &[0x19, 0x03, 0x09, 0x05]),
-        ("floor above Unsigned8", &[0x0A, 0x01, 0x00, 0x19, 0x03]),
-        (
-            "destination above Unsigned8",
-            &[0x09, 0x01, 0x2A, 0x01, 0x00],
-        ),
+        ("oversized floor without a command", &[0x0A, 0x01, 0x2C]),
         (
             "both command alternatives",
             &[0x09, 0x05, 0x19, 0x03, 0x29, 0x14],

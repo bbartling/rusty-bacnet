@@ -5,12 +5,13 @@
 //! propertyValue as one `ApplicationData`, or, from the service decoder,
 //! which splits a payload at context-tag boundaries, a `List` holding one
 //! `ApplicationData` per member. The members are rejoined and decoded
-//! strictly. Error pairings follow Clause 15.9.1.3 and the Loop reference
-//! properties: a value that isn't this constructed type at all is
-//! INVALID_DATA_TYPE, bytes that don't decode as one complete
-//! `BACnetLandingCallStatus` (including an Unsigned8 member above 255) are
-//! INVALID_DATA_ENCODING, and a direction outside BACnetLiftCarDirection is
-//! VALUE_OUT_OF_RANGE.
+//! strictly. Error pairings follow Clause 15.9.1.3, which separates a
+//! malformed encoding from a well-formed value outside the property's range:
+//! a value that isn't this constructed type at all is INVALID_DATA_TYPE,
+//! bytes that don't decode as one complete `BACnetLandingCallStatus` are
+//! INVALID_DATA_ENCODING, and a well-formed call whose floor-number or
+//! destination exceeds an Unsigned8, or whose direction lies outside
+//! BACnetLiftCarDirection, is VALUE_OUT_OF_RANGE.
 
 use bacnet_encoding::constructed::{decode_landing_call_status, encode_landing_call_status};
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
@@ -54,13 +55,31 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<BACnetLandingCallStat
         }
         _ => return Err(common::invalid_data_type_error()),
     };
-    let (status, consumed) =
-        decode_landing_call_status(&bytes, 0).map_err(|_| common::invalid_data_encoding_error())?;
+    // The codec reports an oversized but well-formed member as PROPERTY /
+    // VALUE_OUT_OF_RANGE; every other failure is a malformed encoding.
+    let out_of_range = common::value_out_of_range_error();
+    let (status, consumed) = decode_landing_call_status(&bytes, 0).map_err(|error| {
+        if is_same_protocol_error(&error, &out_of_range) {
+            out_of_range
+        } else {
+            common::invalid_data_encoding_error()
+        }
+    })?;
     if consumed != bytes.len() {
         return Err(common::invalid_data_encoding_error());
     }
     validate(&status)?;
     Ok(status)
+}
+
+fn is_same_protocol_error(error: &Error, expected: &Error) -> bool {
+    matches!(
+        (error, expected),
+        (
+            Error::Protocol { class, code },
+            Error::Protocol { class: expected_class, code: expected_code },
+        ) if class == expected_class && code == expected_code
+    )
 }
 
 /// Refuse a direction outside BACnetLiftCarDirection: its named values, or

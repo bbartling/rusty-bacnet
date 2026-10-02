@@ -10,7 +10,7 @@
 //! plain concatenation of its elements.
 
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
-use bacnet_types::enums::LiftCarDirection;
+use bacnet_types::enums::{ErrorClass, ErrorCode, LiftCarDirection};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
@@ -62,13 +62,24 @@ pub fn encode_landing_call_status_list(
 /// Returns the value and the offset just past it. Decoding stops after the
 /// command member, or after floor-text `[3]` when that follows, so a caller
 /// that expects exactly one value must check the returned offset reaches the
-/// end of its data. Floor-number and destination must fit an Unsigned8, and a
-/// direction must fit 32 bits; the direction is otherwise kept as received,
-/// reserved and proprietary values included, for the receiver to judge.
+/// end of its data.
+///
+/// Two kinds of failure are kept apart, so a property writer can answer with
+/// the matching Clause 15.9.1.3 error. A malformed value (a missing, empty,
+/// truncated or misplaced member, or an undecodable floor-text) fails with
+/// [`Error::Decoding`] or [`Error::BufferTooShort`]. A value whose members are
+/// all well formed, but where floor-number or destination exceeds an
+/// Unsigned8 or the direction exceeds 32 bits, fails with [`Error::Protocol`]
+/// carrying PROPERTY / VALUE_OUT_OF_RANGE. A malformed member anywhere in the
+/// value takes precedence over an oversized one. Within 32 bits the direction
+/// is kept as received, reserved and proprietary values included, for the
+/// receiver to judge.
 pub fn decode_landing_call_status(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetLandingCallStatus, usize), Error> {
+    let mut in_range = true;
+
     let (tag, content) = tags::decode_tag(data, offset)?;
     if !tag.is_context(0) {
         return Err(Error::decoding(
@@ -77,22 +88,19 @@ pub fn decode_landing_call_status(
         ));
     }
     let (floor, offset) = member_content(data, content, tag.length)?;
-    let floor_number = primitives::decode_unsigned_u8(floor)
-        .map_err(|_| Error::decoding(content, "floor-number [0] must be an Unsigned8"))?;
+    let floor_number = narrow(unsigned_member(floor, content)?, &mut in_range);
 
     let (tag, content) = tags::decode_tag(data, offset)?;
     let (command, mut offset) = if tag.is_context(1) {
         let (raw, end) = member_content(data, content, tag.length)?;
-        let direction = primitives::decode_unsigned_u32(raw)
-            .map_err(|_| Error::decoding(content, "direction [1] must fit 32 bits"))?;
+        let direction: u32 = narrow(unsigned_member(raw, content)?, &mut in_range);
         (
             LandingCallCommand::Direction(LiftCarDirection::from_raw(direction)),
             end,
         )
     } else if tag.is_context(2) {
         let (raw, end) = member_content(data, content, tag.length)?;
-        let destination = primitives::decode_unsigned_u8(raw)
-            .map_err(|_| Error::decoding(content, "destination [2] must be an Unsigned8"))?;
+        let destination = narrow(unsigned_member(raw, content)?, &mut in_range);
         (LandingCallCommand::Destination(destination), end)
     } else {
         return Err(Error::decoding(
@@ -111,6 +119,9 @@ pub fn decode_landing_call_status(
         }
     }
 
+    if !in_range {
+        return Err(value_out_of_range_error());
+    }
     Ok((
         BACnetLandingCallStatus {
             floor_number,
@@ -119,6 +130,14 @@ pub fn decode_landing_call_status(
         },
         offset,
     ))
+}
+
+/// The error for a well-formed value with an oversized member.
+fn value_out_of_range_error() -> Error {
+    Error::Protocol {
+        class: ErrorClass::PROPERTY.to_raw() as u32,
+        code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+    }
 }
 
 /// Decode a complete BACnetLIST of `BACnetLandingCallStatus`.
@@ -133,6 +152,40 @@ pub fn decode_landing_call_status_list(data: &[u8]) -> Result<Vec<BACnetLandingC
         offset = end;
     }
     Ok(values)
+}
+
+/// The value of an Unsigned member's content octets, or `None` when the
+/// encoding is well formed but the value needs more than 64 bits. Empty
+/// content is malformed.
+fn unsigned_member(content: &[u8], at: usize) -> Result<Option<u64>, Error> {
+    if content.is_empty() {
+        return Err(Error::decoding(
+            at,
+            "landing call status Unsigned member has no content octets",
+        ));
+    }
+    let first = content.iter().position(|&octet| octet != 0);
+    let significant = first.map_or(&[][..], |first| &content[first..]);
+    if significant.len() > 8 {
+        return Ok(None);
+    }
+    Ok(Some(
+        significant
+            .iter()
+            .fold(0, |value, &octet| (value << 8) | u64::from(octet)),
+    ))
+}
+
+/// Narrow a decoded Unsigned to its member type, clearing `in_range` (and
+/// yielding a placeholder) when it doesn't fit.
+fn narrow<T: TryFrom<u64> + Default>(value: Option<u64>, in_range: &mut bool) -> T {
+    match value.map(T::try_from) {
+        Some(Ok(value)) => value,
+        _ => {
+            *in_range = false;
+            T::default()
+        }
+    }
 }
 
 /// The content octets of a primitive member and the offset just past them.

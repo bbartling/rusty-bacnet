@@ -161,6 +161,26 @@ fn landing_call_control_wp_refusals_preserve_the_last_call() {
             vec![0x09, 0x05, 0x1B, 0x01, 0x00, 0x00],
             ErrorCode::VALUE_OUT_OF_RANGE,
         ),
+        // Well-formed calls whose Unsigned members don't fit their types are
+        // out of range, not malformed (Clause 15.9.1.3).
+        (
+            "floor 300, direction UP",
+            None,
+            vec![0x0A, 0x01, 0x2C, 0x19, 0x03],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            "destination 256",
+            None,
+            vec![0x09, 0x05, 0x2A, 0x01, 0x00],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            "direction 2^32",
+            None,
+            vec![0x09, 0x05, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
         (
             "floor-number only",
             None,
@@ -168,9 +188,9 @@ fn landing_call_control_wp_refusals_preserve_the_last_call() {
             ErrorCode::INVALID_DATA_ENCODING,
         ),
         (
-            "floor above Unsigned8",
+            "oversized floor without a command",
             None,
-            vec![0x0A, 0x01, 0x00, 0x19, 0x03],
+            vec![0x0A, 0x01, 0x2C],
             ErrorCode::INVALID_DATA_ENCODING,
         ),
         (

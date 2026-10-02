@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
-use bacnet_types::enums::LiftCarDirection;
+use bacnet_types::enums::{ErrorClass, ErrorCode, LiftCarDirection};
 
 fn call(
     floor_number: u8,
@@ -12,6 +12,13 @@ fn call(
         command,
         floor_text: text.map(str::to_owned),
     }
+}
+
+/// The codec's error for a well-formed value with an oversized member.
+fn is_out_of_range(error: &Error) -> bool {
+    matches!(error, Error::Protocol { class, code }
+        if *class == ErrorClass::PROPERTY.to_raw() as u32
+            && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
 }
 
 fn encode(value: &BACnetLandingCallStatus) -> Vec<u8> {
@@ -117,15 +124,7 @@ fn landing_call_status_rejects_malformed_members() {
         ("opening tag for floor", &[0x0E, 0x09, 0x05, 0x0F]),
         ("truncated floor", &[0x09]),
         ("empty floor content", &[0x08, 0x19, 0x03]),
-        ("floor above Unsigned8", &[0x0A, 0x01, 0x00, 0x19, 0x03]),
-        (
-            "destination above Unsigned8",
-            &[0x09, 0x01, 0x2A, 0x01, 0x00],
-        ),
-        (
-            "direction above 32 bits",
-            &[0x09, 0x01, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
-        ),
+        ("empty direction content", &[0x09, 0x01, 0x18]),
         ("unknown command tag", &[0x09, 0x01, 0x49, 0x01]),
         ("truncated direction", &[0x09, 0x01, 0x1A, 0x04]),
         (
@@ -138,14 +137,82 @@ fn landing_call_status_rejects_malformed_members() {
         ),
     ];
     for (what, data) in cases {
-        assert!(
-            decode_landing_call_status(data, 0).is_err(),
-            "{what} must not decode"
-        );
-        assert!(
-            decode_landing_call_status_list(data).is_err(),
-            "{what} must not decode as a list"
-        );
+        let error = decode_landing_call_status(data, 0).expect_err(what);
+        assert!(!is_out_of_range(&error), "{what} is malformed: {error:?}");
+        let error = decode_landing_call_status_list(data).expect_err(what);
+        assert!(!is_out_of_range(&error), "{what} is malformed: {error:?}");
+    }
+}
+
+#[test]
+fn landing_call_status_reports_oversized_members_as_range_errors() {
+    // Well-formed members whose values don't fit their types are a range
+    // error, distinct from a malformed encoding.
+    let cases: &[(&str, &[u8])] = &[
+        ("floor 256", &[0x0A, 0x01, 0x00, 0x19, 0x03]),
+        ("floor 300", &[0x0A, 0x01, 0x2C, 0x19, 0x03]),
+        (
+            "floor 300 with floor-text",
+            &[0x0A, 0x01, 0x2C, 0x19, 0x03, 0x3A, 0x00, 0x4C],
+        ),
+        ("destination 256", &[0x09, 0x01, 0x2A, 0x01, 0x00]),
+        (
+            "direction 2^32",
+            &[0x09, 0x01, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+        ),
+        (
+            "direction wider than 64 bits",
+            &[
+                0x09, 0x01, 0x1D, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ],
+        ),
+    ];
+    for (what, data) in cases {
+        let error = decode_landing_call_status(data, 0).expect_err(what);
+        assert!(is_out_of_range(&error), "{what}: {error:?}");
+        let error = decode_landing_call_status_list(data).expect_err(what);
+        assert!(is_out_of_range(&error), "{what} as a list: {error:?}");
+    }
+    // A list fails on its first oversized element.
+    let error =
+        decode_landing_call_status_list(&[0x09, 0x01, 0x19, 0x03, 0x0A, 0x01, 0x2C, 0x19, 0x03])
+            .unwrap_err();
+    assert!(is_out_of_range(&error), "{error:?}");
+
+    // A malformed member anywhere in the value wins over an oversized one.
+    for data in [
+        &[0x0A, 0x01, 0x2C][..],
+        &[0x0A, 0x01, 0x2C, 0x49, 0x01][..],
+        &[0x0A, 0x01, 0x2C, 0x19, 0x03, 0x3A, 0x00][..],
+    ] {
+        let error = decode_landing_call_status(data, 0).unwrap_err();
+        assert!(!is_out_of_range(&error), "{data:02X?}: {error:?}");
+    }
+
+    // The limits themselves decode, including through leading zero octets.
+    for (data, expected) in [
+        (
+            &[0x0A, 0x00, 0xFF, 0x2A, 0x00, 0xFF][..],
+            call(255, LandingCallCommand::Destination(255), None),
+        ),
+        (
+            &[0x09, 0x01, 0x1C, 0xFF, 0xFF, 0xFF, 0xFF][..],
+            call(
+                1,
+                LandingCallCommand::Direction(LiftCarDirection::from_raw(u32::MAX)),
+                None,
+            ),
+        ),
+        (
+            &[
+                0x09, 0x01, 0x1D, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+            ][..],
+            call(1, LandingCallCommand::Direction(LiftCarDirection::UP), None),
+        ),
+    ] {
+        let (decoded, end) = decode_landing_call_status(data, 0).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(end, data.len());
     }
 }
 
