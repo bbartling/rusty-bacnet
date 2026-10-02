@@ -351,7 +351,7 @@ fn read_range_splits_framed_recipient_list_into_destinations() {
     let mut db = ObjectDatabase::new();
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     for process_identifier in 1..=3 {
-        nc.add_destination(destination(process_identifier));
+        nc.add_destination(destination(process_identifier)).unwrap();
     }
     let nc = add(&mut db, nc);
     let property = PropertyIdentifier::RECIPIENT_LIST;

@@ -67,7 +67,7 @@ impl Harness {
         let mut nc = NotificationClass::new(0, "NC-0").unwrap();
         nc.priority = [255, 255, 255];
         for destination in destinations {
-            nc.add_destination(destination);
+            nc.add_destination(destination).unwrap();
         }
         db.add(Box::new(nc)).unwrap();
         db.add(Box::new(

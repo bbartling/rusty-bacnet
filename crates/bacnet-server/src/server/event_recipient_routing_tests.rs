@@ -86,7 +86,7 @@ async fn distribute_with_clock_mode(
     let mut nc = NotificationClass::new(0, "NC-0").unwrap();
     nc.priority = priority;
     for destination in destinations {
-        nc.add_destination(destination);
+        nc.add_destination(destination).unwrap();
     }
     db.add(Box::new(nc)).unwrap();
     distribute_from_database(db).await
@@ -270,7 +270,7 @@ async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFram
             let mut nc = NotificationClass::new(0, "NC-0").unwrap();
             let mut destination = destination_for(address_recipient(0, &[]), false);
             destination.transitions = EventTransition::ToNormal.bit_mask();
-            nc.add_destination(destination);
+            nc.add_destination(destination).unwrap();
             db.add(Box::new(nc)).unwrap();
         }
         _ => unreachable!("test case is fixed"),

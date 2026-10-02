@@ -1,8 +1,63 @@
 //! Observe cache boundaries through terminal dispatch and subsequent sends.
 
 use super::*;
+use std::borrow::Cow;
 
 const ROUTER_B: &[u8] = &[10, 0, 0, 2, 0xBA, 0xC0];
+
+/// A custom Notification Class 0 serving any number of destinations. The
+/// built-in class holds at most `MAX_RECIPIENT_LIST_DESTINATIONS` (#1098),
+/// and the fan-out routes whatever list the class serves.
+struct WideClass(Vec<BACnetDestination>);
+
+impl BACnetObject for WideClass {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap()
+    }
+
+    fn object_name(&self) -> &str {
+        "NC-0"
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        match property {
+            PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
+            PropertyIdentifier::RECIPIENT_LIST => {
+                let mut list = BytesMut::new();
+                bacnet_encoding::constructed::encode_destination_list(&mut list, &self.0);
+                Ok(PropertyValue::ApplicationData(list.to_vec()))
+            }
+            _ => Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            }),
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        Cow::Borrowed(&[
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::RECIPIENT_LIST,
+        ])
+    }
+}
 
 async fn wait_for_frames(harness: &Harness, expected: usize) {
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -21,13 +76,19 @@ async fn wait_for_frames(harness: &Harness, expected: usize) {
 
 #[tokio::test]
 async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
-    let harness = Harness::new(
-        (1000..1065)
-            .map(|network| destination_for(address_recipient(network, RECIPIENT), true))
-            .collect(),
-        60_000,
-    )
-    .await;
+    // One destination per DNET, one more than the cache holds.
+    let harness = Harness::new(Vec::new(), 60_000).await;
+    {
+        let mut db = harness.db.write().await;
+        let class = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap();
+        db.remove(&class).unwrap();
+        db.add(Box::new(WideClass(
+            (1000..1065)
+                .map(|network| destination_for(address_recipient(network, RECIPIENT), true))
+                .collect(),
+        )))
+        .unwrap();
+    }
     harness.distribute().await;
     wait_for_frames(&harness, 65).await;
     assert!(harness.unicast_frames().is_empty());

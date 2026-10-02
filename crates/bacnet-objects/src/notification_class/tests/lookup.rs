@@ -210,7 +210,7 @@ fn lookup_distinguishes_configured_but_ineligible_destinations() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let mut destination = make_dest_device(10);
     destination.valid_days = DaysOfWeek::TUESDAY;
-    nc.add_destination(destination);
+    nc.add_destination(destination).unwrap();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(nc)).unwrap();
 
@@ -247,7 +247,7 @@ fn lookup_returns_selected_device_recipient_as_a_match_for_both_wrappers() {
         destination.issue_confirmed_notifications,
     );
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(destination);
+    nc.add_destination(destination).unwrap();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(nc)).unwrap();
 

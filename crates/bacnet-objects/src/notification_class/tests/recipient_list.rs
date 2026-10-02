@@ -35,7 +35,7 @@ fn recipient_address_preserves_network_number_all_forms() {
     // broadcast (net 65535, empty MAC), local (net 0), and remote (net 1000).
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let mac = MacAddr::from_slice(&[192u8, 168, 1, 100, 0xBA, 0xC0]);
-    nc.add_destination(make_dest_address(0xBAC0, &mac));
+    nc.add_destination(make_dest_address(0xBAC0, &mac)).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -65,12 +65,14 @@ fn recipient_address_preserves_network_number_all_forms() {
 
     // Broadcast / local / remote all survive a read-then-write.
     let mut nc2 = NotificationClass::new(2, "NC-2").unwrap();
-    nc2.add_destination(make_dest_address(0xFFFF, &[]));
-    nc2.add_destination(make_dest_address(0, &[0x0A, 0x00, 0x01, 0x01, 0xBA, 0xC0]));
+    nc2.add_destination(make_dest_address(0xFFFF, &[])).unwrap();
+    nc2.add_destination(make_dest_address(0, &[0x0A, 0x00, 0x01, 0x01, 0xBA, 0xC0]))
+        .unwrap();
     nc2.add_destination(make_dest_address(
         1000,
         &[0x0A, 0x00, 0x02, 0x01, 0xBA, 0xC0],
-    ));
+    ))
+    .unwrap();
     let val2 = nc2
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
         .unwrap();
@@ -100,9 +102,9 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
     // PROPERTY/PROPERTY_IS_NOT_AN_ARRAY, the same classification the service
     // handlers' is_array_property gate produces (Clause 15.5.1.3/15.9.1.3).
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(10));
-    nc.add_destination(make_dest_device(20));
-    nc.add_destination(make_dest_device(30));
+    nc.add_destination(make_dest_device(10)).unwrap();
+    nc.add_destination(make_dest_device(20)).unwrap();
+    nc.add_destination(make_dest_device(30)).unwrap();
 
     // Framed single destination at an index.
     let mut framed = bytes::BytesMut::new();

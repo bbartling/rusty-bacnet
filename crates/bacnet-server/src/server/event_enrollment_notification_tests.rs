@@ -315,9 +315,11 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             .unwrap();
         let mut replacement = NotificationClass::new(0, "NC-replaced").unwrap();
         replacement.ack_required = EventTransitionBits::empty();
-        replacement.add_destination(
-            crate::server::event_notifications_tests::local_broadcast_destination(),
-        );
+        replacement
+            .add_destination(
+                crate::server::event_notifications_tests::local_broadcast_destination(),
+            )
+            .unwrap();
         guard.add(Box::new(replacement)).unwrap();
     }
 
