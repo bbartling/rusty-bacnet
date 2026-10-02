@@ -71,8 +71,8 @@
 | `BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL` | Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924) | P1 | unsupported-by-design | 0 |
 | `BACNET-12-CHANNEL-WITHDRAWAL` | Clause 12.53 (pp. 508-517), Table 12-62 (pp. 509-510) | P1 | unsupported-by-design | 0 |
 | `BACNET-15-WRITEGROUP-SERVER-WITHDRAWAL` | Clause 15.11 (pp. 757-758); Clause 19.2.1.6 (p. 809) | P1 | unsupported-by-design | 0 |
-| `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 0 |
-| `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 and 12.17.9 Out_Of_Service (Loop Present_Value and Reliability); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-BINARY-LIGHTING-OPERATIONS` | Clause 12.55 and Table 12-70, including 12.55.4.1 and 12.55.10.1; Clause 19.2 command prioritization; Clause 21 BACnetBinaryLightingPV | P1 | supported-with-clause-evidence | 0 |
@@ -90,9 +90,9 @@
 | `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-LIST-ELEMENT-OUTBOUND-VALIDATION` | Clauses 15.1.1.1 and 15.2.1.1 (printed731/733, PDF733/735) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-15-LIST-ELEMENT-TARGET-KIND` | Clauses 15.1.1.3.1 and 15.2.1.3.1 with the service procedures of 15.1 and 15.2 (printed732/734, PDF734/736); Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); local licensed source inspected | P1 | supported-with-clause-evidence | 2 |
-| `BACNET-15-LIST-ELEMENT-SEMANTICS` | Clauses 15.1.1.3, 15.1.2, 15.2.1.3 and 15.2.2 (printed732-734, PDF734-736); Clause 12.1.5.2 (BACnetLIST elements); Clause 21 BACnet-Error and ChangeList-Error productions; local licensed source inspected | P1 | supported-with-clause-evidence | 4 |
+| `BACNET-15-LIST-ELEMENT-SEMANTICS` | Clauses 15.1.1.3, 15.1.2, 15.2.1.3 and 15.2.2 (printed732-734, PDF734-736); Clause 12.1.5.2 (BACnetLIST elements); Clause 21 BACnet-Error and ChangeList-Error productions; local licensed source inspected | P1 | supported-with-clause-evidence | 7 |
 | `BACNET-15-READ-RANGE-TARGET-KIND` | Clause 15.8 with its argument parameters, the 15.8.1.3 error table and the service procedure (printed 745 and 750-751, PDF 747 and 752-753); Clause 12.1.5.2; Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); Clause 12.11 Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; Clause 21 BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetCOVSubscription and BACnetCOVMultipleSubscription; local licensed source inspected | P1 | supported-with-clause-evidence | 3 |
-| `BACNET-15-WPM-OUTBOUND-VALIDATION` | Clause 15.10 and 15.10.3.2 / Table 15-17 (printed754-756/PDF756-758) | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-15-WPM-OUTBOUND-VALIDATION` | Clause 15.10 and 15.10.3.2 / Table 15-17 (printed754-756/PDF756-758) | P1 | supported-with-clause-evidence | 4 |
 | `BACNET-15-WPM-ORDERED-PREFIX-ERROR` | Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
@@ -101,7 +101,7 @@
 | `BACNET-19-COMMAND-SOURCE-TRACKING` | Clause 19.5.1 command source tracking and 19.5.1.3 source correction; Tables 12-3, 12-4, 12-8, 12-10, 12-22, 12-23; Clause 21 BACnetValueSource and BACnetTimeStamp | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-13-COV-OBJECT-CRITERIA` | Clause 13.1 and Table 13-1 (Loop and Staging rows) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15 | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-13-VALUE-SOURCE-COV` | Table 13-1 and Table 13-1a-2; Clause 19.5.2; Clauses 13.15, 13.16.3, 13.17.3.1.2.4 and 13.18.3.1.2.4 | P1 | supported-with-clause-evidence | 2 |
-| `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-21-CALENDAR-ENTRY-CHOICE` | Clause 21 BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, BACnetSpecialEvent, BACnetDailySchedule and BACnetTimeValue; Clauses 20.2.1.3.2 and 20.2.1.5; Clause 12.9 Date_List; Clause 12.24 Effective_Period, Weekly_Schedule and Exception_Schedule; Clauses 15.1.1.3, 15.2, 15.8 and 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-A-PICS` | Annex A | P1 | in-progress | 0 |
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | implementation-present-needs-conformance-tests | 1 |

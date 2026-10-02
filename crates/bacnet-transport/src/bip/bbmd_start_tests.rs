@@ -45,6 +45,13 @@ fn free_port() -> u16 {
 /// that loses the port goes again with a fresh port and a rebuilt transport, a
 /// bounded number of times; the last attempt's result is returned whatever it
 /// is. Removes the persisted BDT, if `build` set one, once each start returns.
+///
+/// The retry only sees a bind that fails. On macOS a socket holding the port on
+/// 127.0.0.1 shadows the transport's SO_REUSEADDR wildcard bind instead of
+/// failing it, and neither this helper nor the transport can detect that (see
+/// `port_ownership`); the port is then lost silently and the test fails on its
+/// own assertions. The window is the few microseconds between the probe and the
+/// bind.
 /// Gives back the transport, its port and the start's result.
 async fn start_on_free_port(
     build: impl Fn(u16) -> BipTransport,
@@ -215,44 +222,59 @@ async fn wildcard_bbmd_uses_its_own_bdt_row_as_origin_and_local_mac() {
 
 #[tokio::test]
 async fn wildcard_bbmd_with_several_own_rows_fails_start_and_keeps_its_config() {
-    let (mut bbmd, port, started) = start_on_free_port(|port| {
-        wildcard_bbmd(
-            port,
-            vec![row(Ipv4Addr::LOCALHOST, port), row(LAN, port)],
-            Some((vec![Ipv4Addr::LOCALHOST, LAN], Some(LAN))),
-        )
-    })
-    .await;
+    // The second half gives the port back and takes it again, which another
+    // process can win (#1032, #1068). A lost port reruns the test on a fresh
+    // one; a start that really leaked its port would fail every attempt.
+    const ATTEMPTS: usize = 8;
+    for attempt in 1..=ATTEMPTS {
+        let lost = |err: &std::io::Error| {
+            attempt < ATTEMPTS && crate::port_ownership::lost_to_another_socket(err)
+        };
+        let (mut bbmd, port, started) = start_on_free_port(|port| {
+            wildcard_bbmd(
+                port,
+                vec![row(Ipv4Addr::LOCALHOST, port), row(LAN, port)],
+                Some((vec![Ipv4Addr::LOCALHOST, LAN], Some(LAN))),
+            )
+        })
+        .await;
 
-    let err = started.unwrap_err();
+        let err = started.unwrap_err();
 
-    let text = err.to_string();
-    assert!(
-        text.contains("several local IPv4 addresses")
-            && text.contains("bind an explicit interface address"),
-        "{text}"
-    );
-    assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
-    assert!(bbmd.bbmd.is_none());
-    assert!(
-        bbmd.bbmd_config.is_some(),
-        "a failed start keeps the BBMD configuration"
-    );
-    assert_eq!(bbmd.local_mac(), [0; 6]);
+        let text = err.to_string();
+        assert!(
+            text.contains("several local IPv4 addresses")
+                && text.contains("bind an explicit interface address"),
+            "{text}"
+        );
+        assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
+        assert!(bbmd.bbmd.is_none());
+        assert!(
+            bbmd.bbmd_config.is_some(),
+            "a failed start keeps the BBMD configuration"
+        );
+        assert_eq!(bbmd.local_mac(), [0; 6]);
 
-    // The failed start released its port: a socket without address sharing
-    // can bind it, and a corrected retry starts on it.
-    drop(
-        std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
-            .expect("a failed start releases its port"),
-    );
-    bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
-    let _rx = bbmd.start().await.unwrap();
-    assert_eq!(
-        bbmd.local_mac(),
-        encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), port)
-    );
-    bbmd.stop().await.unwrap();
+        // The failed start released its port: a socket without address sharing
+        // can bind it, and a corrected retry starts on it.
+        match std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)) {
+            Ok(socket) => drop(socket),
+            Err(err) if lost(&err) => continue,
+            Err(err) => panic!("a failed start releases its port: {err}"),
+        }
+        bbmd.local_ipv4_for_test = Some(Ok((vec![Ipv4Addr::LOCALHOST], Some(LAN))));
+        let _rx = match bbmd.start().await {
+            Ok(rx) => rx,
+            Err(Error::Transport(ref err)) if lost(err) => continue,
+            Err(err) => panic!("the corrected retry starts: {err}"),
+        };
+        assert_eq!(
+            bbmd.local_mac(),
+            encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), port)
+        );
+        bbmd.stop().await.unwrap();
+        return;
+    }
 }
 
 #[tokio::test]

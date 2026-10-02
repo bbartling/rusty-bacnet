@@ -13,17 +13,14 @@ async fn endpoint_execution_view_covers_write_opt_in_and_custom_device_reader() 
 }
 
 async fn wire_contract(writes: bool, custom: bool) {
-    use std::net::{Ipv4Addr, UdpSocket};
-    let reservation = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = reservation.local_addr().unwrap().port();
-    drop(reservation);
+    use std::net::Ipv4Addr;
     let identity = crate::DeviceIdentity::new(123, 42).unwrap();
     let mut db = crate::identity::build_database_with_extra(&identity, vec![]).unwrap();
     if custom {
         db.add(Box::new(CustomDevice)).unwrap();
     }
     let mut endpoint =
-        crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST)
+        crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(db)
             .identity(identity)
@@ -33,6 +30,8 @@ async fn wire_contract(writes: bool, custom: bool) {
         endpoint = endpoint.with_device_writes(Arc::new(|_| true));
     }
     endpoint.start().await.unwrap();
+    // The endpoint bound port 0; the client talks to the port it actually got.
+    let port = endpoint.bip_local_address().unwrap().port();
     let mut client = bacnet_client::client::BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
