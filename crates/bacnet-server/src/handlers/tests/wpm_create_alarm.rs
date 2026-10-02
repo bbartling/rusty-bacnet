@@ -281,7 +281,11 @@ fn create_object_bad_initial_value_rolls_back() {
     let mut buf = BytesMut::new();
     req.encode(&mut buf);
 
-    assert!(handle_create_object(&mut db, &buf, &mut BytesMut::new()).is_err());
+    // The refusal names the initial value, the first (#1047).
+    assert_eq!(
+        list_refusal(handle_create_object(&mut db, &buf, &mut BytesMut::new())),
+        (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED, 1)
+    );
     assert_eq!(
         db.len(),
         before_count,

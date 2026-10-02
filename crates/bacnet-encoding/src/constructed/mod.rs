@@ -32,14 +32,17 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
+pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
 pub mod calendar;
 pub mod cov_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
+mod floor_pairs;
 pub mod landing_call_status;
 pub mod landing_door_status;
+pub mod lift_car_call_list;
 mod members;
 pub mod object_property_reference;
 pub mod recipient;
@@ -47,6 +50,7 @@ pub mod schedule;
 pub mod staging;
 mod value_source;
 
+pub use assigned_landing_calls::{decode_assigned_landing_calls, encode_assigned_landing_calls};
 pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
 pub use audit_record::{
     decode_audit_log_record, decode_audit_log_record_result_at, encode_audit_log_record,
@@ -57,8 +61,8 @@ pub use calendar::{
     encode_calendar_entry_list, encode_date_range,
 };
 pub use cov_subscription::{
-    encode_cov_multiple_subscription, encode_cov_multiple_subscription_list,
-    encode_cov_subscription, encode_cov_subscription_list,
+    decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
+    encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
 };
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
@@ -67,6 +71,7 @@ pub use landing_call_status::{
     encode_landing_call_status_list,
 };
 pub use landing_door_status::{decode_landing_door_status, encode_landing_door_status};
+pub use lift_car_call_list::{decode_lift_car_call_list, encode_lift_car_call_list};
 pub use object_property_reference::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,

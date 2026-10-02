@@ -4,9 +4,12 @@
 //! which is the car door count the application sets.
 
 use super::super::*;
-use super::{assert_invalid_data_type, assert_value_out_of_range};
+use super::{
+    assert_invalid_data_type, assert_property_error, assert_value_out_of_range, frame,
+    set_out_of_service,
+};
 use bacnet_types::constructed::{BACnetLandingDoorStatus, LandingDoor};
-use bacnet_types::enums::{DoorStatus, ErrorClass, ErrorCode};
+use bacnet_types::enums::{DoorStatus, ErrorCode};
 
 type P = PropertyIdentifier;
 
@@ -19,23 +22,8 @@ fn simulated_lift() -> LiftObject {
     lift
 }
 
-fn set_out_of_service(lift: &mut LiftObject, out_of_service: bool) {
-    lift.write_property(
-        P::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(out_of_service),
-        None,
-    )
-    .unwrap();
-}
-
 fn door(status: DoorStatus) -> PropertyValue {
     PropertyValue::Enumerated(status.to_raw())
-}
-
-/// A landing-doors frame as the service decoder hands it over.
-fn frame(bytes: &[u8]) -> PropertyValue {
-    PropertyValue::ApplicationData(bytes.to_vec())
 }
 
 fn landing(doors: &[(u8, DoorStatus)]) -> BACnetLandingDoorStatus {
@@ -47,16 +35,6 @@ fn landing(doors: &[(u8, DoorStatus)]) -> BACnetLandingDoorStatus {
                 door_status,
             })
             .collect(),
-    }
-}
-
-fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
-    match result {
-        Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}: {expected:?}");
-        }
-        other => panic!("{context}: expected PROPERTY/{expected:?}, got {other:?}"),
     }
 }
 

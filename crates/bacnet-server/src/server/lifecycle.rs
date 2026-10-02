@@ -694,7 +694,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // the EventNotification when the delay elapses. The per-write path
         // only *seeds* a pending transition (see `fire_event_notifications`);
         // this task is the sole confirmer, so repeated writes cannot shorten
-        // the delay (ASHRAE 135-2020 §13.2.4). Runs unconditionally like the
+        // the delay (ASHRAE 135-2020 Clause 13.3). Runs unconditionally like the
         // trend-log task — a no-pending tick is a cheap empty iteration.
         //
         // It is also what carries Reliability into event-state-detection. Per

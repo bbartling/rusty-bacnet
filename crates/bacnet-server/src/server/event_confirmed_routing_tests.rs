@@ -1,7 +1,7 @@
 //! Confirmed event notifications to remote-network recipients (#375).
 //!
-//! Clause 6.3 permits a confirmed PDU on a broadcast link DA when the
-//! DNET/DADR restricts the destination to one device, and Clause 6.5.3 names
+//! Clause 6.3 lets a confirmed PDU ride a broadcast link DA as long as the
+//! DNET/DADR names exactly one device, and Clause 6.5.3 names
 //! the broadcast DA as an initial send form before the router's MAC is
 //! known. What used to block this was correlation: the ack
 //! arrives from whichever router delivers it, so the transaction is keyed by

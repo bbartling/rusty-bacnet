@@ -507,9 +507,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// This is the per-write entry point: it seeds (or cancels) a pending
     /// delayed transition and fires immediately only when `Time_Delay == 0`.
     /// It never advances the `Time_Delay` countdown — repeated writes to the
-    /// same value do not shorten the delay (per ASHRAE 135-2020 §13.2.4 the
-    /// countdown advances once per elapsed second via
-    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
+    /// same value do not shorten the delay (ASHRAE 135-2020 Clause 13.3 counts
+    /// the delay in seconds, so the countdown advances once per elapsed second
+    /// via [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
     ///
     /// Returns `Some(TransitionOutcome)` whenever a transition is ready to be
     /// committed, or
@@ -718,8 +718,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// across evaluation cycles: the pending (delayed) transition countdown,
     /// the CHANGE_OF_VALUE detection baseline (the monitored sample at the
     /// latest NORMAL indication, per Clause 13.3.3), and
-    /// the value that caused the last transition to OFFNORMAL (Clause 13.3.2
-    /// condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
+    /// the monitored value behind the most recent OFFNORMAL transition (Clause
+    /// 13.3.2 condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
     /// it deliberately bypasses the network property model: none of the three
     /// slots is a BACnet property, and 135-2020 assigns their initialization
     /// to local matters.

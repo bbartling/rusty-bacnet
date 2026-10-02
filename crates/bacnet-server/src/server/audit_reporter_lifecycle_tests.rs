@@ -217,11 +217,16 @@ async fn audit_reporter_create_late_initial_value_decode_failure_is_silent_and_r
         };
         assert_eq!(error.invoke_id, 77);
         assert_eq!(error.service_choice, ConfirmedServiceChoice::CREATE_OBJECT);
+        // An encoding invalid for the property, at the second initial value
+        // (Clause 15.3.1.3, #1047).
         assert_eq!(
-            (error.error_class, error.error_code),
-            (ErrorClass::SERVICES, ErrorCode::OTHER)
+            bacnet_services::object_mgmt::CreateObjectError::try_from(&error).unwrap(),
+            bacnet_services::object_mgmt::CreateObjectError {
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::INVALID_DATA_ENCODING,
+                first_failed_element_number: 2,
+            }
         );
-        assert!(error.error_data.is_empty());
         {
             let db = fixture.server.db.read().await;
             assert_eq!(db.len(), initial_count);
@@ -325,7 +330,16 @@ async fn audit_reporter_lifecycle_execution_errors_preserve_results_and_create_r
         };
         assert_eq!(error.service_choice, service);
         assert_eq!((error.error_class, error.error_code), (class, code));
-        assert!(error.error_data.is_empty());
+        // CreateObject answers with a CreateObject-Error (#1047). Only the
+        // out-of-range Present_Value, the second initial value, names an
+        // element. DeleteObject keeps the plain form.
+        if service == ConfirmedServiceChoice::CREATE_OBJECT {
+            let body = bacnet_services::object_mgmt::CreateObjectError::try_from(&error).unwrap();
+            let element = u32::from(code == ErrorCode::VALUE_OUT_OF_RANGE) * 2;
+            assert_eq!(body.first_failed_element_number, element);
+        } else {
+            assert!(error.error_data.is_empty());
+        }
         settle().await;
         let records = notifications(&fixture.transport.sent);
         assert_eq!(records.len(), index + 1);

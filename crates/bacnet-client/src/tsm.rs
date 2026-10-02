@@ -64,9 +64,10 @@ pub enum TsmResponse {
         class: u32,
         /// Raw BACnetErrorCode enumeration value.
         code: u32,
-        /// First Failed Element Number when the PDU carried an AddListElement
-        /// or RemoveListElement ChangeList-Error; `None` for a plain error.
-        first_failed_element_number: Option<u32>,
+        /// What the PDU's structured Clause 21 body adds to the class and
+        /// code (ChangeList-Error, CreateObject-Error, WPM-Error and the
+        /// others); `None` for a plain error.
+        detail: Option<bacnet_types::error::ErrorDetail>,
     },
     /// Reject PDU.
     Reject {
@@ -86,18 +87,14 @@ pub enum TsmResponse {
 }
 
 impl TsmResponse {
-    /// The completion an Error PDU produces. A ChangeList-Error keeps its
-    /// First Failed Element Number; any other service-specific body, such as
-    /// WritePropertyMultiple's first failed write attempt, is reduced to the
-    /// class and code.
+    /// The completion an Error PDU produces. A structured body keeps its
+    /// detail, such as a ChangeList-Error's First Failed Element Number or
+    /// WritePropertyMultiple's first failed write attempt.
     pub(crate) fn from_error_pdu(pdu: &bacnet_encoding::apdu::ErrorPdu) -> Self {
         Self::Error {
             class: pdu.error_class.to_raw() as u32,
             code: pdu.error_code.to_raw() as u32,
-            first_failed_element_number:
-                bacnet_services::list_manipulation::ChangeListError::try_from(pdu)
-                    .ok()
-                    .map(|error| error.first_failed_element_number),
+            detail: bacnet_services::structured_error::detail(pdu),
         }
     }
 }

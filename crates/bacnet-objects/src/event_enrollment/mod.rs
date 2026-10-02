@@ -53,10 +53,10 @@ pub struct EventEnrollmentObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
-    /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): the
-    /// pTimeDelayNormal parameter for the object's event algorithm (Clause
-    /// 12.12). `None` is the not-configured case and takes on the
-    /// `Time_Delay` carried inside `event_parameters` (Table 12-15 maps
+    /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): Clause
+    /// 12.12 feeds this value to the enrollment's algorithm as its
+    /// pTimeDelayNormal input. `None` is the not-configured case and takes on
+    /// the `Time_Delay` carried inside `event_parameters` (Table 12-15 maps
     /// `Time_Delay` to pTimeDelay for every evaluated algorithm), following
     /// Clause 13.3's fallback from absent pTimeDelayNormal to pTimeDelay.
     time_delay_normal: Option<u32>,
@@ -92,8 +92,8 @@ impl EventEnrollmentObject {
             object_property_reference: None,
             event_state: EventState::NORMAL,
             event_enable: EventTransitionBits::all(),
-            // Clause 12.12 requires a TRUE flag for an event type that has
-            // never occurred on the object. That all-TRUE initial value
+            // Clause 12.12 starts each flag TRUE until a transition of its
+            // kind first happens on the object. That all-TRUE initial value
             // is also the initial condition the detection-disabled reset
             // restores, so `RESET_ACKED_TRANSITIONS` names it once.
             acked_transitions: Self::RESET_ACKED_TRANSITIONS,
@@ -116,14 +116,15 @@ impl EventEnrollmentObject {
     }
 
     /// `Acked_Transitions` in its initial condition: every transition flag TRUE,
-    /// meaning no event of that type has ever occurred (ASHRAE 135-2020
-    /// Clause 12.12).
+    /// the value a flag holds until its transition kind first occurs on the
+    /// object (ASHRAE 135-2020 Clause 12.12).
     const RESET_ACKED_TRANSITIONS: EventTransitionBits = EventTransitionBits::all();
 
-    /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
-    /// `Event_Detection_Enable` is FALSE: suppress transitions, restore NORMAL
-    /// in Event_State, and reset Event_Time_Stamps, Event_Message_Texts and
-    /// Acked_Transitions to their initial values.
+    /// Put the object in the state ASHRAE 135-2020 Clause 13.2.2.1 prescribes
+    /// for disabled detection (`Event_Detection_Enable` FALSE): Event_State
+    /// reads NORMAL, the three per-transition properties (Event_Time_Stamps,
+    /// Event_Message_Texts, Acked_Transitions) go back to their initial
+    /// values, and no transition is generated while detection stays off.
     ///
     /// The monitored-source identity, pending countdown, and both baselines
     /// are cleared too: they are extensions of the same event-state-detection

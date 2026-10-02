@@ -152,7 +152,19 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
         )
         .unwrap_err();
 
-        assert_protocol(error, ErrorClass::PROPERTY, code);
+        // The error names the second reference, the one refused (#1047).
+        assert!(
+            matches!(
+                &error,
+                Error::Structured { class, code: actual_code, detail }
+                    if *class == ErrorClass::PROPERTY.to_raw() as u32
+                        && *actual_code == code.to_raw() as u32
+                        && **detail == ErrorDetail::FirstFailedSubscription(
+                            BACnetObjectPropertyReference::new(oid, property.to_raw())
+                        )
+            ),
+            "{error:?}"
+        );
         assert!(table.is_empty());
     }
 }

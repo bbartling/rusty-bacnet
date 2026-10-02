@@ -34,17 +34,20 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
     db
 }
 
-/// The class, code and First Failed Element Number an AddListElement or
-/// RemoveListElement refusal goes out with: zero unless the handler named an
-/// element of the request.
+/// The class, code and First Failed Element Number an AddListElement,
+/// RemoveListElement or CreateObject refusal goes out with: zero unless the
+/// handler named an element of the request.
 fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
     let (class, code, element) = match result {
         Err(Error::Protocol { class, code }) => (class, code, 0),
-        Err(Error::ChangeList {
+        Err(Error::Structured {
             class,
             code,
-            first_failed_element_number,
-        }) => (class, code, first_failed_element_number),
+            detail,
+        }) => match *detail {
+            ErrorDetail::FirstFailedElementNumber(element) => (class, code, element),
+            other => panic!("expected an element number, got {other:?}"),
+        },
         other => panic!("expected a protocol refusal, got {other:?}"),
     };
     (

@@ -360,8 +360,8 @@ async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
 }
 
 /// Network 65535 with a zero-length MAC is a *global* broadcast, not a remote
-/// network that happens to be numbered 65535. Clause 6.3 uses DNET X'FFFF'
-/// for distribution across every router to every network.
+/// network that happens to be numbered 65535. Clause 6.3 reserves DNET
+/// X'FFFF' for the global form, which routers propagate everywhere.
 ///
 /// It needs its own send: `NetworkLayer::broadcast_to_network` rejects 0xFFFF
 /// ("reserved for global broadcasts; use broadcast_global_apdu instead"), so
@@ -472,8 +472,8 @@ async fn device_recipient_is_skipped_not_broadcast() {
     assert!(unicasts.is_empty());
 }
 
-/// Clause 6.3 permits network-layer multicast/broadcast destinations only
-/// for BACnet-Unconfirmed-Request-PDU among the BACnet APDU types.
+/// Clause 6.3 reserves network-layer broadcast and multicast addressing for
+/// unconfirmed requests: no other APDU type may be sent to such a destination.
 ///
 /// A recipient asking for confirmed notifications at a broadcast address is
 /// unsatisfiable — it is skipped rather than broadcast as a ConfirmedRequest

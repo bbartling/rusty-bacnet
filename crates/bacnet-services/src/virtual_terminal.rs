@@ -12,6 +12,10 @@ use bytes::BytesMut;
 
 use crate::common::{decode_application, MAX_DECODED_ITEMS};
 
+#[path = "virtual_terminal_error.rs"]
+mod error;
+pub use error::VTCloseError;
+
 /// Decode an application-tagged Unsigned that must fit in eight bits (Unsigned8).
 fn decode_app_u8(data: &[u8], offset: usize, what: &str) -> Result<(u8, usize), Error> {
     let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, what)?;
@@ -170,8 +174,8 @@ pub struct VTDataRequest {
     pub vt_session_identifier: u8,
     /// Octets of new data for the peer terminal.
     pub vt_new_data: Vec<u8>,
-    /// Sequence number that alternates between 0 (`false`) and 1 (`true`) with each new
-    /// VT-Data request on a session, letting the receiver detect repeats. It is sent as an
+    /// One-bit sequence number, 0 (`false`) or 1 (`true`), that the sender flips on every fresh
+    /// VT-Data request within a session so the receiver can spot a repeat. It is sent as an
     /// Unsigned, not as a Boolean.
     pub vt_data_flag: bool,
 }

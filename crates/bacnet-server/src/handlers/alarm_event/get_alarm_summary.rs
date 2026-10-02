@@ -80,8 +80,8 @@ impl AlarmSummaryProjection {
 
 /// Handle a GetAlarmSummary request.
 ///
-/// Clause 13.10 selects event-initiating objects whose Event_State is not
-/// NORMAL and whose Notify_Type is ALARM. As a local strict-projection policy,
+/// Clause 13.10 summarizes alarms only: objects with Notify_Type ALARM that
+/// are currently out of NORMAL. As a local strict-projection policy,
 /// malformed advertised candidate fields fail the service instead of being
 /// replaced with fabricated values.
 pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Result<(), Error> {

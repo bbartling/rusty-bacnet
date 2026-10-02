@@ -87,8 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which gains the optional property after Energy_Meter in its Property_List,
   property metadata, RPM ALL and OPTIONAL, and PICS rows (#1036). The new
   `EscalatorObject::set_energy_meter_ref` and `LiftObject::set_energy_meter_ref`
-  take a BACnetDeviceObjectReference to the object that indicates the
-  accumulated energy consumption, local or in another device: an Accumulator,
+  take a BACnetDeviceObjectReference naming the meter object that totals the
+  lift's or escalator's energy use, local or in another device: an Accumulator,
   Pulse Converter, Analog Input, Analog Value, Large Analog Value, Integer
   Value, Positive Integer Value or proprietary object type (128 to 1023, for
   vendor meters). Any other object type, or a device that
@@ -99,6 +99,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value but 0.0 fails with VALUE_OUT_OF_RANGE. Energy_Meter_Ref stays
   read-only over the network, since neither table gives it a write
   requirement, so a WriteProperty fails with WRITE_ACCESS_DENIED.
+
+- **Breaking Lift call, door-command and car-state rows (wire):** the Lift
+  object serves nine more optional rows of Clause 12.59, Table 12-77, each
+  with its table datatype (#1052): the BACnetARRAYs Assigned_Landing_Calls
+  (of BACnetAssignedLandingCalls), Making_Car_Call (of Unsigned8),
+  Registered_Car_Call (of BACnetLiftCarCallList) and Car_Door_Command (of
+  BACnetLiftCarDoorCommand), and Car_Assigned_Direction, Car_Door_Zone,
+  Car_Mode, Next_Stopping_Floor and Car_Drive_Status. On the wire, they join
+  Property_List, RPM ALL and OPTIONAL in table order, and the PICS. The four
+  arrays hold one element per car door, take an array index, and follow the
+  door count `set_car_door_status` sets: a new door starts with no calls, a
+  Making_Car_Call of 0 and a Car_Door_Command of NONE. A new Lift reads
+  UNKNOWN for Car_Assigned_Direction, Car_Mode and Car_Drive_Status, FALSE for
+  Car_Door_Zone and 1 for Next_Stopping_Floor. In service all nine are
+  read-only over the network, and the application sets them with new
+  `LiftObject` setters (`set_assigned_landing_calls`, `set_making_car_call`,
+  `set_registered_car_call`, `set_car_door_command`,
+  `set_car_assigned_direction`, `set_car_door_zone`, `set_car_mode`,
+  `set_next_stopping_floor` and `set_car_drive_status`) with matching
+  getters. While Out_Of_Service is TRUE they take WriteProperty, which items
+  (c) and (d) of the Lift's Out_Of_Service description ask for so a test tool
+  can simulate the car; an array takes the whole array or one element and,
+  like Car_Door_Status, keeps its size. A floor number above 255, a direction,
+  mode or drive status that is reserved or above 65535, or a door command
+  other than NONE, OPEN or CLOSE (BACnetLiftCarDoorCommand has no proprietary
+  range) fails with VALUE_OUT_OF_RANGE, a value of the wrong datatype with
+  INVALID_DATA_TYPE and an undecodable frame with INVALID_DATA_ENCODING, all
+  leaving the property unchanged. `bacnet-types` adds
+  `constructed::{BACnetAssignedLandingCalls, AssignedLandingCall,
+  BACnetLiftCarCallList}`; the first name returns, with its Clause 21 shape,
+  after #980 removed an unused type of that name. `bacnet-encoding` adds
+  `encode_assigned_landing_calls`, `decode_assigned_landing_calls`,
+  `encode_lift_car_call_list` and `decode_lift_car_call_list`.
 
 ### Changed
 
@@ -517,13 +550,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the request or its target was refused (authorization, unknown object or
   property, array index, not a list, write access). A peer that only parses the
   plain form no longer reads these errors. The client decodes the new form, which
-  it used to drop as undecodable, and returns the new
-  `Error::ChangeList { class, code, first_failed_element_number }`; a device
-  that still sends only a class and code returns `Error::Protocol` as before.
-  `TsmResponse::Error` gains `first_failed_element_number`, and
-  `bacnet_services::list_manipulation::ChangeListError` encodes and decodes the
-  body. In Python, `BacnetProtocolError` gains `first_failed_element_number`,
-  `None` for other errors.
+  it used to drop as undecodable, and returns `Error::Structured` with
+  `ErrorDetail::FirstFailedElementNumber` (the variant #1047 generalized); a
+  device that still sends only a class and code returns `Error::Protocol` as
+  before. `bacnet_services::list_manipulation::ChangeListError` encodes and
+  decodes the body. In Python, `BacnetProtocolError` gains
+  `first_failed_element_number`, `None` for other errors.
+
+- **Breaking Rust API:** the client decodes every other structured error body
+  of Clause 21 and reports its fields (#1047). A conformant peer's
+  CreateObject-Error, SubscribeCOVPropertyMultiple-Error,
+  ConfirmedPrivateTransfer-Error or VTClose-Error used to fail APDU decode, so
+  the request timed out instead of returning the error. `Error::ChangeList`
+  becomes `Error::Structured { class, code, detail: Box<ErrorDetail> }`, one
+  variant for every body. `ErrorDetail` has `FirstFailedElementNumber`
+  (ChangeList-Error, CreateObject-Error), `FirstFailedWriteAttempt`
+  (WritePropertyMultiple-Error, which the client used to reduce to the class
+  and code), `FirstFailedSubscription`, `PrivateTransfer { vendor_id,
+  service_number, error_parameters }` and `VtSessionIdentifiers`. A body with
+  no fields beyond the error (SubscribeCOVPropertyMultiple's general choice,
+  VTClose-Error without its list) stays `Error::Protocol`, and
+  `Error::protocol(class, code, detail)` builds either. `TsmResponse::Error`
+  carries `detail: Option<ErrorDetail>`. `bacnet_services` adds
+  `object_mgmt::CreateObjectError`,
+  `cov_multiple::SubscribeCOVPropertyMultipleError`,
+  `private_transfer::PrivateTransferError`, `virtual_terminal::VTCloseError`
+  and `structured_error::detail`, which reads the detail of any Error PDU.
+
+- **Breaking wire format:** the server answers CreateObject and
+  SubscribeCOVPropertyMultiple errors with their Clause 21 bodies instead of a
+  plain class and code (#1047). A CreateObject-Error carries the position,
+  counted from 1, of the initial value that could not be applied, or 0 when the
+  request or the object was refused (authorization, an identifier in use, an
+  unsupported type, no space). An initial value that does not decode is now
+  PROPERTY / INVALID_DATA_ENCODING at its position, where it was SERVICES /
+  OTHER. A SubscribeCOVPropertyMultiple-Error names the monitored object and
+  the property reference of a refused COV reference (unknown object, object or
+  property without COV, unknown property, index on a property that is not an
+  array, an oversized sample); a failure before the references are processed
+  (lifetime, notification delay, clock, authorization, capacity) is the general
+  choice, the class and code alone. A peer that only parses the plain form no
+  longer reads these errors. The server does not serve ConfirmedPrivateTransfer
+  or VT-Close, which it still rejects.
+
+- Python's `BacnetProtocolError` gains `first_failed_write_attempt` and
+  `first_failed_subscription` (object, property and index dicts, typed
+  `ObjectPropertyReference` in the stub), `vendor_id`, `service_number`,
+  `error_parameters` and `vt_session_identifiers` (#1047). Each is `None`
+  unless the device's error carried it, on the class as well as on raised
+  instances.
 
 - **Breaking list service behaviour:** AddListElement and RemoveListElement now
   compare whole elements and follow the add and remove rules of Clauses 15.1
@@ -642,15 +717,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   List_Of_Object_Property_References. Those two are now split into their
   elements, so By Position counts destinations and references. A list the
   server can't split returns SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-  and ReadProperty still reads it whole. That covers a vendor list held framed
-  and the standalone Device's COV subscription lists, whose live contents only
-  ReadProperty sees. An array index on a property that doesn't exist now
+  and ReadProperty still reads it whole. That covers a vendor list held framed;
+  the Device's COV subscription lists are paged since #1046, below. An array
+  index on a property that doesn't exist now
   reports UNKNOWN_PROPERTY instead of PROPERTY_IS_NOT_AN_ARRAY. By Sequence
   Number or By Time on a target that isn't a list now reports
   PROPERTY_IS_NOT_A_LIST instead of the range-type error. Log_Buffer reads and
   Calendar's Date_List are unchanged. The new
   `bacnet_encoding::constructed::decode_device_object_property_reference`
   decodes one element of a BACnetLIST of BACnetDeviceObjectPropertyReference.
+
+- ReadRange on the Device's Active_COV_Subscriptions and
+  Active_COV_Multiple_Subscriptions now pages the live subscriptions (#1046).
+  A running server answered SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+  because ReadRange read the Device object's empty placeholder while
+  ReadProperty read the server's COV table. ReadRange now reads through the
+  same Device view as ReadProperty, samples the COV table once per request
+  (after the database lock, in the server's lock order) and splits each list
+  into its BACnetCOVSubscription or BACnetCOVMultipleSubscription elements.
+  A page's items joined in order are a run of the ReadProperty value, also when
+  the byte cap shortens the page, and subscriptions that change during a
+  request don't tear it. The standalone `handle_read_range` pages the Device
+  object's empty lists as no items, as standalone `handle_read_property` reads
+  them. The new `bacnet_encoding::constructed::decode_cov_subscription` and
+  `decode_cov_multiple_subscription` decode one element of each list.
 
 - **Breaking Rust `subscribe_multiple` argument:** timestamped COV-multiple
   history that one notification cannot carry now goes out in several
@@ -2362,7 +2452,8 @@ certification claim.
   `set_max_record_count` (default 10,000, the service decoder's SEQUENCE OF
   ceiling, so a file at the cap still reads back) — that bound what a write
   can add without invalidating preloaded contents; a write past the cap is
-  refused `OBJECT / FILE_FULL`, Clause 18's "designed limit".
+  refused `OBJECT / FILE_FULL`, the Clause 18 code for a file that has reached
+  its built-in size limit.
 
 - `Time_Delay_Normal` (property 356) on the nine intrinsic-reporting object
   types (#225): Clause 13.3's second, normal-direction delay
@@ -2427,8 +2518,8 @@ certification claim.
     deprecated).
 
 - `Time_Delay_Normal` (property 356) on the Event Enrollment object
-  (#163): Table 12-14 carries it O-coded as the `pTimeDelayNormal`
-  parameter for the object's event algorithm. Read-back applies the
+  (#163): Table 12-14 lists it as optional (O), and it feeds the event
+  algorithm's `pTimeDelayNormal` input. Read-back applies the
   Clause 13.3 fallback (absent → the `Event_Parameters` `Time_Delay`),
   mirroring the intrinsic types; writes are accepted as Unsigned within
   the u32 span (writability is the Clause 12.1.2 option no table
@@ -2588,8 +2679,9 @@ certification claim.
   Clause 18), and a record write whose payload list is shorter than its
   'Record Count' is rejected `MISSING_REQUIRED_PARAMETER` before any record
   changes. A File object without storage is refused
-  `SERVICES / FILE_ACCESS_DENIED` directly after the lookup (the Clause
-  14.1 and 14.2 Service Procedures' "currently inaccessible" step), and the
+  `SERVICES / FILE_ACCESS_DENIED` directly after the lookup (the step in the
+  Clause 14.1 and 14.2 Service Procedures for a file that can't be reached
+  right now), and the
   write handler's `Read_Only` gate now fails closed when the property is
   unreadable. Previously reads returned empty data, stream writes failed
   `PROPERTY / WRITE_ACCESS_DENIED`, record writes acknowledged without
@@ -3056,8 +3148,8 @@ certification claim.
   evaluation whose result equaled the current state; it now
   distinguishes "the algorithm indicated a transition" from "no
   condition is true", and runs the actions for both: the SPECIFIC
-  returned state is stored in `Event_State` (it is not acceptable to
-  collapse HIGH_LIMIT/LOW_LIMIT into OFFNORMAL), and the corresponding
+  returned state is stored in `Event_State` (HIGH_LIMIT and LOW_LIMIT
+  must not be flattened to OFFNORMAL), and the corresponding
   `Acked_Transitions` bit is maintained per Clause 13.2.3 — cleared when
   the referenced Notification Class's `Ack_Required` marks the
   transition ack-owed, set otherwise (an unresolvable class reads as
@@ -3074,8 +3166,8 @@ certification claim.
 
 - Event Enrollment CHANGE_OF_VALUE evaluation now tracks the Clause
   13.3.3 detection baseline (#137) instead of comparing the absolute
-  monitored magnitude against the increment: the value captured at the
-  most recent transition to NORMAL is retained per enrollment and both
+  monitored magnitude against the increment: each enrollment keeps the
+  value it sampled when it last went to NORMAL, and both
   criteria compare against it — `|current − baseline| >= pIncrement` for
   REAL (a positive increment only), masked-bit change for BIT STRING.
   The algorithm's only indication is NORMAL→NORMAL (Figure 13-10), never
@@ -3112,9 +3204,9 @@ certification claim.
   a Clause 13.2.3 ack-owed bit could never be acknowledged. The object
   now implements the acknowledgment indication (unconditional,
   idempotent bit set per 13.2.3); a detection-disabled EE refuses with
-  OBJECT/NO_ALARM_CONFIGURED per Table 13-10 (the object exists but lacks,
-  or is not set up for, event generation), which also keeps Clause 12.12's
-  initial-condition `Acked_Transitions` invariant while disabled.
+  OBJECT/NO_ALARM_CONFIGURED per Table 13-10 (the code for an object that
+  exists but has no event generation set up), which also keeps Clause
+  12.12's initial-condition `Acked_Transitions` invariant while disabled.
 
 - WriteProperty and WritePropertyMultiple now decode the ENTIRE
   `propertyValue` payload instead of exactly one application-tagged
@@ -3242,10 +3334,11 @@ certification claim.
   and the commandable value-object types (Integer, Positive Integer and
   Large Analog scalars among them). Validation mirrors each type's
   Present_Value write — finite Real on the analog types (0..=100 for
-  Lighting Output), BinaryPV 0/1, Unsigned 1..=Number_Of_States (whose
-  shrink interplay stays "a local matter" per Clauses 12.19 / 12.22 and is
-  deliberately not auto-adjusted), BinaryLightingPV 0..=4, and the Access
-  Door's BACnetDoorValue production 0..=3 (lock, unlock, pulse-unlock,
+  Lighting Output), BinaryPV 0/1, Unsigned 1..=Number_Of_States (on a
+  shrink, Clauses 12.19 / 12.22 leave the stored value to the
+  implementation, and it is deliberately not auto-adjusted),
+  BinaryLightingPV 0..=4, and the Access Door's BACnetDoorValue
+  production 0..=3 (lock, unlock, pulse-unlock,
   extended-pulse-unlock) — and a store re-resolves Present_Value from the
   priority array, so an all-NULL array immediately adopts the new default
   while a live command still outranks it. The conformance tables (e.g.
@@ -3327,7 +3420,7 @@ certification claim.
   It is writable, and `is_writable_property` is overridden to match what dispatch accepts. The standard leaves how it is determined to the implementation, which on a device with no physical I/O leaves a network write as the only way to supply it. It initializes to each object's initial `Present_Value` (`0` for Binary Output, `1` for Multi-state Output) so a freshly constructed object reads as agreeing and starts in NORMAL rather than immediately in alarm.
 
   **The Multi-state Output value is deliberately not range-checked against `Number_Of_States`, unlike `Present_Value`.** Clause 12.19 answers an out-of-range `Feedback_Value` through `Reliability` (CONFIGURATION_ERROR on an in-service object) rather than by refusing the write. Rejecting the write would make that reliability unreachable. The asymmetry with `Present_Value` is intentional — `Present_Value` is commanded, so a value outside the state set is meaningless, whereas `Feedback_Value` reflects a sensed quantity that can legitimately fall outside it. Actually setting `CONFIGURATION_ERROR` (and `MULTI_STATE_OUT_OF_RANGE` for `Present_Value`) is unimplemented and tracked as #226; the accepting behavior is pinned by its own test so the check is not reinstated as an apparent oversight. The Binary Output check is a different thing and is kept: `BACnetBinaryPV` is a two-valued enumeration, so rejecting `2` enforces the datatype rather than a configurable range.
-- Add `Event_Detection_Enable` to Binary Output and Multi-state Output (ASHRAE 135-2020 Clause 12.7 Table 12-8 code **O4,6**, Clause 12.19 Table 12-22 code **O1,3**), **defaulting to FALSE**. Both clauses define the property identically, and both carry two footnotes: the property group is required when the object supports intrinsic reporting, and present only in that case. That pair is bidirectional — presence and support imply each other — so exposing this group is itself the declaration that these types support intrinsic reporting.
+- Add `Event_Detection_Enable` to Binary Output and Multi-state Output (ASHRAE 135-2020 Clause 12.7 Table 12-8 code **O4,6**, Clause 12.19 Table 12-22 code **O1,3**), **defaulting to FALSE**. Both clauses define the property identically, and both carry two footnotes: one makes the property group mandatory wherever intrinsic reporting is supported, and the other forbids it everywhere else. That pair is bidirectional — presence and support imply each other — so exposing this group is itself the declaration that these types support intrinsic reporting.
 
   **FALSE is a project choice the standard permits, not a value it specifies.** 135-2020 gives no default for this property for any object type, and Clause 15.3 leaves the initial values of properties not named in a CreateObject request to the implementation. The choice differs from the TRUE chosen for Event Enrollment earlier in this same unreleased block, and for the same stated reason: preserve each object type's prior behavior. Event Enrollment always detected, so TRUE preserved it; Binary Output and Multi-state Output could never detect at all, so FALSE preserves theirs.
 
@@ -3338,9 +3431,9 @@ certification claim.
   Multi-state Output had no `Event_Time_Stamps` property to reset at that point, although its footnote requires one once support is declared; adding storage without transition maintenance then would have left it stale after the first event, so it was tracked as #230 alongside #123 and #171 — and #230 is now closed by the `Event_Time_Stamps` entry above, whose stored initial conditions are correct until #123 populates them.
 - Split `read_event_properties!` / `write_event_properties!` into generic and analog halves — `read_generic_event_properties!`, `read_analog_event_properties!`, `write_generic_event_properties!`, `write_analog_event_properties!` — and wire the generic halves into Binary Output and Multi-state Output. The generic half covers `Event_State` (read-only), `Event_Enable`, `Notify_Type`, `Notification_Class`, `Time_Delay` and `Acked_Transitions`, all of which touch detector fields every detector carries; the analog half keeps `High_Limit`, `Low_Limit`, `Deadband` and `Limit_Enable`; the `Event_Time_Stamps` / `Event_Message_Texts` reads, analog-only at the time of this split, have since moved to the shared storage described under *Changed*. The analog types call both halves.
 
-  Without this the algorithm ran but could not be commissioned. Every detector defaults to `event_enable: 0`, and `Event_Enable` had only a read arm on these types, so all three transition bits were stuck false and no notification could ever reach the wire; `Time_Delay` and `Notify_Type` had no arm at all, so `pTimeDelay` was permanently 0. Clauses 12.7 and 12.19 are explicit that this is not a permitted restriction: a device may narrow the supported values of the property but must at least support all three bits set. Both objects' `Property_List` and `is_writable_property` now include the group. The same gap on Binary Input, Binary Value, Multi-state Input and Multi-state Value was tracked as #229, which the split unblocked; it is closed under *Fixed* below.
+  Without this the algorithm ran but could not be commissioned. Every detector defaults to `event_enable: 0`, and `Event_Enable` had only a read arm on these types, so all three transition bits were stuck false and no notification could ever reach the wire; `Time_Delay` and `Notify_Type` had no arm at all, so `pTimeDelay` was permanently 0. Clauses 12.7 and 12.19 rule that out: whatever subset of `Event_Enable` values a device chooses to accept, (T, T, T) has to be in it. Both objects' `Property_List` and `is_writable_property` now include the group. The same gap on Binary Input, Binary Value, Multi-state Input and Multi-state Value was tracked as #229, which the split unblocked; it is closed under *Fixed* below.
 
-  **`Acked_Transitions` is the one member of that group that stays read-only**, on every object type that uses either macro half. It is maintained by the alarm-acknowledgment process from event-state transitions and acknowledgment indications — the latter arriving from AcknowledgeAlarm or a local means — and an indication ORs the acknowledged bit in where a property write would assign — so a writable arm could both fabricate an acknowledgment and erase one, and GetAlarmSummary and GetEventInformation read the field straight off the object. It also carries the Clause 12.7 / 12.19 requirement that the field equal its initial condition while `Event_Detection_Enable` is FALSE, which an ungated write arm would be the only route to break. An intermediate revision of this change made it writable on the analog types; that was a regression against the denial they already had, and the mirror test `ai_is_writable_property_mirrors_write_property` — whose whole purpose is to keep `is_writable_property` and `write_property` in lock step — now asserts on this property, which it previously did not.
+  **`Acked_Transitions` is the one member of that group that stays read-only**, on every object type that uses either macro half. The alarm-acknowledgment process keeps it up to date from event-state transitions and from acknowledgments, which come in through AcknowledgeAlarm or through some action on the device itself — and an indication ORs the acknowledged bit in where a property write would assign — so a writable arm could both fabricate an acknowledgment and erase one, and GetAlarmSummary and GetEventInformation read the field straight off the object. It also carries the Clause 12.7 / 12.19 requirement that the field equal its initial condition while `Event_Detection_Enable` is FALSE, which an ungated write arm would be the only route to break. An intermediate revision of this change made it writable on the analog types; that was a regression against the denial they already had, and the mirror test `ai_is_writable_property_mirrors_write_property` — whose whole purpose is to keep `is_writable_property` and `write_property` in lock step — now asserts on this property, which it previously did not.
 - Add gated arms to `impl_intrinsic_reporting!`: a five-ident form for feedback-driven detectors and a four-ident form for detectors without feedback, both taking an `Event_Detection_Enable` field. Binary Output and Multi-state Output use the five-ident arm; the other seven intrinsic-reporting types use the four-ident arm. There is deliberately no ungated form: the former three-ident arm was removed later in this same unreleased block, and no feedback-without-gate arm is provided, because either would offer downstream implementors a supported way to wire detection permanently on — the exact defect the gate was added to fix.
 
 ### Fixed
@@ -3470,7 +3563,7 @@ certification claim.
 - Keep a refused `Out_Of_Service` write mutation-free. Within
   WritePropertyMultiple, a successful `Out_Of_Service` write and its resulting
   client-simulated `Reliability` state remain committed if a later write fails.
-- Re-enter FAULT when `Reliability` changes to a *different* fault value (ASHRAE 135-2020 Clause 13.2.2.1). The Fault state defines a ToFault transition that fires when reliability evaluation yields a different value that is not NO_FAULT_DETECTED, running the transition actions and re-entering the Fault state, and the same clause makes the transition actions apply even when the event state does not change. `fault_precedence` reduced reliability to a boolean on its first line and no detector retained the previous value, so a change from `OVER_RANGE` to `NO_SENSOR` while already in FAULT held silently and no `CHANGE_OF_RELIABILITY` notification was produced.
+- Re-enter FAULT when `Reliability` changes to a *different* fault value (ASHRAE 135-2020 Clause 13.2.2.1). The clause's state machine has a ToFault arc that loops on the Fault state: a switch from one fault `Reliability` value to another (anything but NO_FAULT_DETECTED) counts as a new transition into Fault, and the clause runs the transition actions for same-state transitions like this one too. `fault_precedence` reduced reliability to a boolean on its first line and no detector retained the previous value, so a change from `OVER_RANGE` to `NO_SENSOR` while already in FAULT held silently and no `CHANGE_OF_RELIABILITY` notification was produced.
 
   `FaultPrecedence` gains a `ReenterFault` variant, and each of the three detectors gains a `fault_reliability: Option<u32>` holding the value in force at the last entry to FAULT.
 
@@ -3485,11 +3578,11 @@ certification claim.
   #166 is the same normative requirement in the Event Enrollment evaluator and is **not** fixed here. It shares no code path — that evaluator has no fault branch, reads no `Reliability`, and its algorithm functions return an absolute `EventState` rather than an indication, so "nothing happened" and "a transition to the state I am already in" are the same value. Lifting its guard needs the per-enrollment change baseline from #137 first, which is recorded in a comment at the guard itself.
 - Stop the server's `FaultDetector` overwriting a `Reliability` the client owns. `FaultDetector::evaluate` swept every Analog Input, Analog Output and Analog Value, recomputed `Reliability` from `Min_Pres_Value`/`Max_Pres_Value`, and wrote the result without ever consulting `Out_Of_Service` — so a value written to simulate a fault was reset within one evaluation interval. It now skips out-of-service objects entirely: not compared, not written, and not represented in the returned `Vec<ReliabilityChange>`.
 
-  ASHRAE 135-2020 already says when the client owns the property. Clauses 12.2(b) and 12.3(b) require `Reliability` to be detached from the physical input (respectively output) while `Out_Of_Service` is TRUE, and 12.2(c) / 12.3(c) require it to be writable so specific conditions can be simulated or tested. Clause 12.4(b) states the writability half for Analog Value, which has no decoupling item because it has no physical point. Re-deriving the value in that state defeats a behavior the standard mandates.
+  ASHRAE 135-2020 already says when the client owns the property. While `Out_Of_Service` is TRUE, item (b) of Clauses 12.2 and 12.3 cuts `Reliability` loose from the physical input (or, for 12.3, output), and item (c) makes it writable so a client can stage test or simulation conditions. Clause 12.4(b) states the writability half for Analog Value, which has no decoupling item because it has no physical point. Re-deriving the value in that state defeats a behavior the standard mandates.
 
   **This became observable through #167.** Before that change `Reliability` did not drive `Event_State`, so the overwrite was silent; afterwards the 1-second re-derivation saw the reset value and emitted a spurious TO_NORMAL notification. The reach was limited by `enable_fault_detection` defaulting to `false`, so only deployments that opted into fault detection were affected.
 
-  The check is deliberately fail-open — an object that does not report `Out_Of_Service`, or reports it at an unexpected type, is still evaluated — so anything unusual keeps its prior behavior rather than silently losing fault detection. Event-state-detection is deliberately *not* skipped for out-of-service objects: Clause 12.2(d) requires functions that depend on `Present_Value` or `Reliability` to react to changes in them just as they would to real changes at the physical input, so a simulated `Reliability` still drives the object to FAULT. Only the overwrite stops.
+  The check is deliberately fail-open — an object that does not report `Out_Of_Service`, or reports it at an unexpected type, is still evaluated — so anything unusual keeps its prior behavior rather than silently losing fault detection. Event-state-detection is deliberately *not* skipped for out-of-service objects: under Clause 12.2(d), anything driven by `Present_Value` or `Reliability` has to treat a simulated value exactly like one that came from the hardware, so a simulated `Reliability` still drives the object to FAULT. Only the overwrite stops.
 
   Two larger defects in the same evaluator were found while confirming this against the standard and are tracked rather than folded in. The standard nowhere authorizes deriving `OVER_RANGE`/`UNDER_RANGE` from `Min_Pres_Value`/`Max_Pres_Value` — those describe the engineering range, and the mechanism it defines is the FAULT_OUT_OF_RANGE fault algorithm with its own fault limits — and Clause 12.3 gives Analog Output no authorization to apply a fault algorithm at all, though the sweep includes it (#231). And `Reliability_Evaluation_Inhibit`, the standard's own runtime override for stopping reliability-evaluation, is unimplemented on all nine object types (#232); note its semantics are not what the name suggests, since TRUE *forces* `NO_FAULT_DETECTED` rather than freezing the current value.
 - Apply the COMMAND_FAILURE event algorithm to Binary Output and Multi-state Output (ASHRAE 135-2020 Clauses 12.7 and 12.19), which both require intrinsic-reporting objects of that type to use the COMMAND_FAILURE algorithm. Both were wired to a `ChangeOfStateDetector`. On Binary Output the doc comment above the field already read "COMMAND_FAILURE event detector" — the intent was recorded and never implemented. `CommandFailureDetector` was fully written and wired to no object type at all; what blocked it was the missing `Feedback_Value` property to bind `pFeedbackValue` (added above) and a macro that structurally passed only two values to a three-input detector.
@@ -3502,7 +3595,7 @@ certification claim.
 
   Deferred rather than folded in, each tracked separately: the algorithm's separate `pTimeDelayNormal` return-to-normal delay, which no detector in the crate implements (#225 — today's single-delay behavior is conformant for the case where no value is available, since the standard then makes it take the value of `pTimeDelay`); the notification payload parameters (#135); and `Event_Detection_Enable`, required by the same conformance footnote across all nine intrinsic-reporting object types (#216). COMMAND_FAILURE produces only NORMAL and OFFNORMAL; FAULT continues to arrive through the shared reliability path.
 
-- Take the notification's Event Type from the object's event algorithm instead of guessing it from the states involved (ASHRAE 135-2020 Clauses 13.8.1.1 and 13.9.1.1). `EventStateChange::event_type()` returned `OUT_OF_RANGE` when either end of the transition was `HIGH_LIMIT` or `LOW_LIMIT` and `CHANGE_OF_STATE` otherwise — two of the roughly twenty `BACnetEventType` values, derived from `EventState`, which is a different axis entirely. Outside the FAULT cases, the Event Type should name the algorithm the object is configured with. For standard object types with intrinsic reporting that algorithm follows from the object type (Clause 13.2.2), and each algorithm maps to the `BACnetEventType` value of the same name (Clause 13.3).
+- Take the notification's Event Type from the object's event algorithm instead of guessing it from the states involved (ASHRAE 135-2020 Clauses 13.8.1.1 and 13.9.1.1). `EventStateChange::event_type()` returned `OUT_OF_RANGE` when either end of the transition was `HIGH_LIMIT` or `LOW_LIMIT` and `CHANGE_OF_STATE` otherwise — two of the roughly twenty `BACnetEventType` values, derived from `EventState`, which is a different axis entirely. Outside the FAULT cases, the Event Type should name the algorithm the object is configured with. For standard object types with intrinsic reporting that algorithm follows from the object type (Clause 13.2.2), and every algorithm has a namesake `BACnetEventType` value to report (Clause 13.3).
 
   `event_type()` now takes the algorithm as a **required parameter** and applies only the FAULT rule, returning the algorithm otherwise. Each detector carries its algorithm as a `pub const ALGORITHM` — `OutOfRangeDetector` → `OUT_OF_RANGE`, `ChangeOfStateDetector` → `CHANGE_OF_STATE`, `CommandFailureDetector` → `COMMAND_FAILURE` — and `fire()` computes the final value where both the algorithm and the transition are known. Making it a parameter rather than an inferred default is deliberate: a detector added later cannot silently fall back to a guess.
 
@@ -3528,7 +3621,7 @@ certification claim.
 
   **FAULT is modeled as a standing condition, not a latched state.** Clause 13.2.2 and the Fault state of Clause 13.2.2.1 both tie FAULT to the current `Reliability`: any value other than NO_FAULT_DETECTED means FAULT, for exactly as long as it lasts. So the FAULT determination is re-derived from the object's current `Reliability` on every evaluation and is never latched. (The #217 entry above later added a stored `fault_reliability` — that records the value at the last entry to FAULT so a *transition* can be edge-detected, and does not latch the determination itself.) That also means a `Reliability` set by *any* route reaches detection: the server's fault detector, a local write, or a network write, with no route needing to notify anything. `enable_fault_detection` (still `false` by default) therefore governs only whether `Reliability` is *derived* from limits, never whether an existing `Reliability` is honored.
 
-  **Reachable today on the three analog types only.** The detection wiring is applied uniformly to all nine intrinsically-reporting object types, but Binary and Multi-state objects expose no route that can set `Reliability` — no `RELIABILITY` write arm, no setter, and the server's `FaultDetector` iterates only the analog types — so their fault path is correct and inert. That is a pre-existing gap this change exposes rather than introduces, and it is tracked as #218. (The open question posed here — whether the standard makes `Reliability` writable only while `Out_Of_Service` is TRUE — was since settled: Clause 12.1.2 permits an O property to be writable at the implementor's option, and `Out_Of_Service` TRUE makes it *required* to be writable rather than being the only condition under which it is permitted.) Detection is also suspended while DeviceCommunicationControl is active, even though confirmed writes still execute (#220).
+  **Reachable today on the three analog types only.** The detection wiring is applied uniformly to all nine intrinsically-reporting object types, but Binary and Multi-state objects expose no route that can set `Reliability` — no `RELIABILITY` write arm, no setter, and the server's `FaultDetector` iterates only the analog types — so their fault path is correct and inert. That is a pre-existing gap this change exposes rather than introduces, and it is tracked as #218. (The open question posed here — whether the standard makes `Reliability` writable only while `Out_Of_Service` is TRUE — was since settled: Clause 12.1.2 lets an implementation make an O property writable if it chooses, and `Out_Of_Service` TRUE makes it *required* to be writable rather than being the only condition under which it is permitted.) Detection is also suspended while DeviceCommunicationControl is active, even though confirmed writes still execute (#220).
 
   **Recovery from FAULT enters NORMAL, not a state re-derived from the event algorithm.** Clause 13.2.2.1's Fault ToNormal transition fires when reliability evaluation reports NO_FAULT_DETECTED, performing its transition actions and entering Normal. This is worth stating plainly because the obvious implementation — treat FAULT as an overlay and fall back to the algorithm when it clears — is wrong: with a present value still out of range it produces a `FAULT -> HIGH_LIMIT` transition the state machine does not define. The algorithm gets to move the object out of NORMAL afterwards, under its own conditions and its own `Time_Delay`, so an out-of-range value is re-detected rather than swallowed.
 
@@ -3553,7 +3646,7 @@ certification claim.
 - Route `WriteProperty`, `WritePropertyMultiple`, `CreateObject` initial values, and the local `write_property_local` Python-binding writes of `OBJECT_NAME` through the `ObjectDatabase` name index. A duplicate name is now rejected up front with `DUPLICATE_NAME` (the database's `check_name_available` helper, previously dead code), and a successful rename refreshes the index via `update_name_index` so `find_by_name` resolves to the new name and the old name is freed for reuse. A successful `WritePropertyMultiple` rename remains indexed when a later write fails; the failed name attempt itself is mutation-free. `CreateObject` rolls back (removes the created object) when an `OBJECT_NAME` initial value collides. Previously, `write_property(OBJECT_NAME, …)` and `CreateObject` initial-value writes mutated the object's name field in place without touching the database secondary index, leaving stale lookups and allowing duplicates.
 - Fire COV (and event) notifications on local/internal property writes. The Python `write_property_local` path and direct object setters mutated objects without entering the server's post-write trigger path, so a subscription could observe a network mutation but not an equivalent local mutation. Local writes now go through `BACnetServer::write_local`, which applies the same post-write COV/event processing as the network dispatch loop (and respects DCC: notifications are skipped while communication is disabled). Low-level object setters (`set_present_value` and the like) remain notification-bypassing building blocks below the high-level server surface.
 - Apply a commandable `PRESENT_VALUE` WritePropertyMultiple prefix write to the requested priority-array slot and retain that exact slot if a later write fails. Ordered prefix execution does not synthesize a priority-16 command or rewrite the effective `PRESENT_VALUE`; a relinquished slot remains relinquished until a successful prefix write targets it. The earlier Unreleased rollback implementation and its readable-value fallback are superseded and are not active in Service 16.
-- Honor the intrinsic `Time_Delay` (ASHRAE 135-2020 §13.2.4) in the production `EventNotification` path. The production detectors (`OutOfRangeDetector`, `ChangeOfStateDetector`, `CommandFailureDetector`) mutated `event_state` eagerly and left their `time_delay` fields unused, so any nonzero `Time_Delay` was silently ignored — a transition fired on the first qualifying write instead of after the configured delay. The detectors now split evaluation into `probe` (per-write: seed a pending transition / cancel on revert / fire only when `Time_Delay == 0`; never decrement and never re-seed an existing transition to the same target) and `tick` (periodic: decrement the remaining delay / fire on expiry / cancel on revert). The server runs a 1-second `intrinsic_reporting_task` (with `MissedTickBehavior::Delay` so a delayed wake cannot burst-compress the countdown) that ticks every object, so the countdown advances per elapsed wall-clock second rather than per `evaluate()` call — repeated writes can neither shorten the delay nor pin it indefinitely (a `Time_Delay` is a debounce timer: a redundant write of the same qualifying value leaves the in-flight countdown untouched), and a condition that clears before the delay elapses cancels the pending transition with no notification and leaves `Event_State` at its confirmed (old) value. The notification bytes are unchanged; only their timing changes.
+- Honor the intrinsic `Time_Delay` (ASHRAE 135-2020 Clause 13.3) in the production `EventNotification` path. The production detectors (`OutOfRangeDetector`, `ChangeOfStateDetector`, `CommandFailureDetector`) mutated `event_state` eagerly and left their `time_delay` fields unused, so any nonzero `Time_Delay` was silently ignored — a transition fired on the first qualifying write instead of after the configured delay. The detectors now split evaluation into `probe` (per-write: seed a pending transition / cancel on revert / fire only when `Time_Delay == 0`; never decrement and never re-seed an existing transition to the same target) and `tick` (periodic: decrement the remaining delay / fire on expiry / cancel on revert). The server runs a 1-second `intrinsic_reporting_task` (with `MissedTickBehavior::Delay` so a delayed wake cannot burst-compress the countdown) that ticks every object, so the countdown advances per elapsed wall-clock second rather than per `evaluate()` call — repeated writes can neither shorten the delay nor pin it indefinitely (a `Time_Delay` is a debounce timer: a redundant write of the same qualifying value leaves the in-flight countdown untouched), and a condition that clears before the delay elapses cancels the pending transition with no notification and leaves `Event_State` at its confirmed (old) value. The notification bytes are unchanged; only their timing changes.
 - Reject `number_of_states == 0` at construction for the three multi-state object types (`MultiStateInput`, `MultiStateOutput`, `MultiStateValue`). The constructors previously accepted zero, initialized `PRESENT_VALUE` (and, for Output/Value, the relinquish default) to `1`, and built an empty `STATE_TEXT` list — leaving the initial value outside the accepted `1..=number_of_states` write range with no attainable value. `new(.., 0)` now returns `Error::OutOfRange`, enforced through a single shared `require_nonzero_states` guard so every caller (direct instantiation, the `CreateObject` factory, and tests) hits one boundary; the factory already passes a nonzero count and is unaffected. Boundary tests cover zero (rejected) and one state (initial and relinquish-default values stay in range).
 - Resolve the per-transition `Priority` and `Ack_Required` for an `EventNotification` from the referenced `NotificationClass` instead of a hardcoded branch (ASHRAE 135-2020 Clause 12.21). The production sender chose `Priority` from a normal/non-normal branch (200 for `TO_NORMAL`, 100 otherwise) and derived `Ack_Required` purely from `Notify_Type == ALARM`, so the class's configured `PRIORITY[TO_OFFNORMAL/TO_FAULT/TO_NORMAL]` and `ACK_REQUIRED[TO_OFFNORMAL/TO_FAULT/TO_NORMAL]` were never projected into outbound notifications and an `EVENT`-type notification always cleared `Ack_Required`. The notification now selects the array element for the current transition coordinate (via `resolve_transition_priority_ack`), with a shared `find_notification_class` lookup; when no matching class is configured it falls back to the BACnet defaults (`Priority = 255`, no ack) so the notification is still delivered rather than dropped. `Ack_Required` is still suppressed on the wire for `ACK_NOTIFICATION` (the field is only valid for `ALARM`/`EVENT`). Coverage spans offnormal, fault, and normal transitions plus the missing-class fallback.
 - Make NotificationClass recipient-list weekday and time-window semantics use one convention (ASHRAE 135-2020 Clause 12.21 / Clause 21.6). The `BACnetDestination.valid_days` field is a `BACnetDaysOfWeek` bit string defined as `BIT STRING { monday(0), …, sunday(6) }`; the in-memory value (`bit 0 = Monday`) already followed this, and the wire encoding packs the 7-bit day mask as `value << 1` with one unused bit (round-tripping within this codebase), but the unit tests used the opposite convention (`monday_bit = 0x02` "bit 1 = Monday", "Sunday = bit 0", "Saturday = bit 6") and the Mon–Fri fixture was actually Tue–Sat, so a caller following the tests would select different recipients than one following the docs/sender. The tests now use the spec convention (`bit 0 = Monday`), and the `get_notification_recipients` `today_bit` doc states it explicitly. A `to_time` earlier than `from_time` (e.g. 22:00–02:00) now denotes an overnight window active from `from` to midnight and again from midnight to `to` (previously such a window could never match because the filter required `from ≤ current ≤ to`). The sender also evaluates the day/time filters in the device's local time: it reads the Device object's `UTC_Offset` (signed minutes, Clause 12.32) and shifts the wall clock before deriving the day-of-week and time-of-day (via the new `local_day_and_time` helper), so `valid_days`/`from_time`/`to_time` are interpreted in the same frame the device's schedule uses; with the default `UTC_Offset` of 0 this is a no-op (UTC). New tests cover Sunday/Monday/weekend day bits, inclusive window boundaries, and midnight-crossing windows; the overnight coverage is proven to fail under the prior non-wrapping comparison.
@@ -3908,7 +4001,7 @@ Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, E
 - **Changed** all `ClientConfig` builders to use `builder_with_protocol_versions(&[&TLS13])` — spec requires TLS 1.3
 
 #### Ethernet — LLC Commands (Clause 7.1)
-- **Added** XID and TEST command/response handling — Clause 7.1 "shall" requirement
+- **Added** XID and TEST command/response handling, which Clause 7.1 makes mandatory
 - **Added** `build_xid_response()` and `build_test_response()` frame builders
 - **Added** `check_llc_control()` helper for raw LLC control byte inspection
 - **Changed** BPF filter widened to accept UI, XID, and TEST control bytes (was UI only)

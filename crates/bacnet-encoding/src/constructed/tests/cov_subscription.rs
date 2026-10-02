@@ -189,3 +189,132 @@ fn cov_multiple_subscription_list_is_bare_concatenation() {
     encode_cov_multiple_subscription_list(&mut empty, &[]);
     assert!(empty.is_empty());
 }
+
+// --- Element walkers (#1046): each golden vector above is one list element.
+
+#[test]
+fn cov_subscription_decodes_golden_elements() {
+    for (bytes, expected) in [
+        (DEVICE_SUBSCRIPTION, device_subscription()),
+        (ADDRESS_SUBSCRIPTION, address_subscription()),
+    ] {
+        assert_eq!(
+            decode_cov_subscription(bytes, 0).unwrap(),
+            (expected, bytes.len())
+        );
+    }
+}
+
+#[test]
+fn cov_subscription_list_walks_one_element_at_a_time() {
+    let list = [
+        DEVICE_SUBSCRIPTION,
+        ADDRESS_SUBSCRIPTION,
+        DEVICE_SUBSCRIPTION,
+    ]
+    .concat();
+    let mut offset = 0;
+    let mut decoded = Vec::new();
+    while offset < list.len() {
+        let (subscription, end) = decode_cov_subscription(&list, offset).unwrap();
+        decoded.push(subscription);
+        offset = end;
+    }
+    assert_eq!(
+        decoded,
+        vec![
+            device_subscription(),
+            address_subscription(),
+            device_subscription()
+        ]
+    );
+    assert_eq!(offset, list.len());
+}
+
+#[test]
+fn cov_subscription_truncations_fail_except_before_the_optional_increment() {
+    // Without its trailing [4] REAL the device element is still complete.
+    let without_increment = DEVICE_SUBSCRIPTION.len() - 5;
+    for len in 0..DEVICE_SUBSCRIPTION.len() {
+        let result = decode_cov_subscription(&DEVICE_SUBSCRIPTION[..len], 0);
+        if len == without_increment {
+            let (subscription, end) = result.unwrap();
+            assert_eq!((subscription.cov_increment, end), (None, len));
+        } else {
+            assert!(result.is_err(), "prefix {len}: {result:?}");
+        }
+    }
+    for len in 0..ADDRESS_SUBSCRIPTION.len() {
+        let result = decode_cov_subscription(&ADDRESS_SUBSCRIPTION[..len], 0);
+        assert!(result.is_err(), "prefix {len}: {result:?}");
+    }
+}
+
+#[test]
+fn cov_subscription_rejects_malformed_members() {
+    // A BOOLEAN contents octet other than 0 or 1.
+    let mut form = DEVICE_SUBSCRIPTION.to_vec();
+    assert_eq!(form[22..24], [0x29, 0x01]);
+    form[23] = 0x02;
+    // BACnetObjectPropertyReference has no [3] device member.
+    #[rustfmt::skip]
+    let device_reference = [
+        &DEVICE_SUBSCRIPTION[..11],
+        &[0x1E, 0x0C, 0x00, 0x40, 0x00, 0x03, 0x19, 0x57, 0x3C, 0x02, 0x00, 0x00, 0x07, 0x1F],
+        &[0x29, 0x00, 0x39, 0x00],
+    ]
+    .concat();
+    // An application-tagged value where the [0] recipient process opens.
+    let untagged = [0x21, 0x01];
+    for bytes in [&form[..], &device_reference, &untagged] {
+        let result = decode_cov_subscription(bytes, 0);
+        assert!(result.is_err(), "{bytes:02X?}: {result:?}");
+    }
+}
+
+#[test]
+fn cov_multiple_subscription_decodes_golden_elements_and_walks_a_list() {
+    for (bytes, expected) in [
+        (DEVICE_MULTIPLE, device_multiple()),
+        (ADDRESS_MULTIPLE, address_multiple()),
+    ] {
+        assert_eq!(
+            decode_cov_multiple_subscription(bytes, 0).unwrap(),
+            (expected, bytes.len())
+        );
+    }
+    let list = [ADDRESS_MULTIPLE, DEVICE_MULTIPLE].concat();
+    let (first, next) = decode_cov_multiple_subscription(&list, 0).unwrap();
+    let (second, end) = decode_cov_multiple_subscription(&list, next).unwrap();
+    assert_eq!((first, next), (address_multiple(), ADDRESS_MULTIPLE.len()));
+    assert_eq!((second, end), (device_multiple(), list.len()));
+}
+
+#[test]
+fn cov_multiple_subscription_rejects_truncation_and_malformed_members() {
+    // Every element ends with its closing [4] tag, so no prefix is complete.
+    for bytes in [DEVICE_MULTIPLE, ADDRESS_MULTIPLE] {
+        for len in 0..bytes.len() {
+            let result = decode_cov_multiple_subscription(&bytes[..len], 0);
+            assert!(result.is_err(), "prefix {len}: {result:?}");
+        }
+    }
+    let header = &ADDRESS_MULTIPLE[..20];
+    // A one-octet BOOLEAN form flag whose contents are neither 0 nor 1.
+    let mut form = ADDRESS_MULTIPLE.to_vec();
+    assert_eq!(form[14..16], [0x19, 0x00]);
+    form[15] = 0x05;
+    // A specification must open with its [0] monitored object identifier.
+    let stray = [header, &[0x4E, 0x29, 0x00, 0x4F]].concat();
+    // A COV reference must end with its [2] timestamped flag.
+    #[rustfmt::skip]
+    let untimestamped = [
+        header,
+        &[0x4E, 0x0C, 0x00, 0x80, 0x00, 0x03, 0x1E, 0x0E, 0x09, 0x6F, 0x0F, 0x1F, 0x4F],
+    ]
+    .concat();
+    for bytes in [&form, &stray, &untimestamped] {
+        let result = decode_cov_multiple_subscription(bytes, 0);
+        assert!(result.is_err(), "{bytes:02X?}: {result:?}");
+    }
+}

@@ -12,10 +12,10 @@ pub type EventEnrollmentMonitoredSource = (ObjectIdentifier, PropertyIdentifier,
 /// type because the driving mechanism differs: the server evaluator advances
 /// `remaining` once per *evaluation pass* (the `event_enrollment_task`
 /// interval, configurable via #133), whereas the intrinsic detectors tick on
-/// a fixed one-second task and seed from per-write probes. Clause 13.2.4
-/// semantics are shared — the observable `Event_State` holds at the confirmed
-/// state while the countdown runs, a reverted condition cancels without
-/// firing, and a redundant qualifying observation never re-seeds — but the
+/// a fixed one-second task and seed from per-write probes. The Clause 13.3
+/// delay semantics are shared — the observable `Event_State` holds at the
+/// confirmed state while the countdown runs, a reverted condition cancels
+/// without firing, and a redundant qualifying observation never re-seeds — but the
 /// two implementations do not share code across the objects/server boundary.
 ///
 /// In-memory only: like the intrinsic detectors' pending state and baselines,
@@ -67,8 +67,8 @@ pub struct EventEnrollmentEvalState {
     /// indication is implementation-defined: here it is `None` until the
     /// first sample, which establishes a baseline without a transition.
     pub cov_baseline: Option<PropertyValue>,
-    /// Domain-tagged identity of the monitored value that caused the last
-    /// transition to OFFNORMAL. CHANGE_OF_STATE condition (c) requires a
+    /// Domain-tagged identity of the monitored value behind the most recent
+    /// OFFNORMAL transition. CHANGE_OF_STATE condition (c) requires a
     /// re-indication only for a different alarm value; retaining the BACnet
     /// datatype keeps equal numeric values from different domains distinct.
     pub last_offnormal_value: Option<u64>,

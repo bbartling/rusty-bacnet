@@ -6,6 +6,9 @@ use bacnet_encoding::tags;
 use bacnet_types::error::Error;
 use bytes::{BufMut, BytesMut};
 
+mod error;
+pub use error::PrivateTransferError;
+
 // ---------------------------------------------------------------------------
 // PrivateTransferRequest
 // ---------------------------------------------------------------------------

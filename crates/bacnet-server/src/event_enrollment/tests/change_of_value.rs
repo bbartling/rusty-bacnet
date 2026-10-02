@@ -2,9 +2,9 @@
 //!
 //! Split out of `tests.rs` to keep every file under the 700-LOC cap.
 //!
-//! Clause 13.3.3 inducts only transitions to NORMAL, driven by a detection
-//! baseline sampled at each NORMAL indication and retained for comparisons
-//! until the next NORMAL indication. The pre-#137 implementation had no
+//! Clause 13.3.3 can only indicate transitions to NORMAL. Each one fixes a
+//! detection baseline, the sample at that moment, and later samples are
+//! measured against it until the next one. The pre-#137 implementation had no
 //! baseline and answered OFFNORMAL whenever `|value| >= increment` — a
 //! transition the algorithm cannot indicate, dropped again by the pre-#166
 //! same-state skip. These tests pin the baseline semantics instead: the
@@ -74,8 +74,8 @@ fn set_monitored(db: &mut ObjectDatabase, ai_oid: &ObjectIdentifier, value: f32)
 
 /// The FIRST observed sample initializes the detection baseline and never
 /// indicates a transition — even when its absolute value dwarfs the
-/// increment. Clause 13.3.3 leaves baseline initialization before the first
-/// NORMAL indication to the implementation.
+/// increment. Clause 13.3.3 does not say what the baseline is until NORMAL
+/// has been indicated once, so that choice is ours.
 /// (This test replaces the pre-#137 `|value| >= increment →
 /// OFFNORMAL` assertion; that behavior is what the issue removed.)
 #[test]
@@ -140,7 +140,7 @@ fn change_of_value_threshold_crossing_indicates_normal_to_normal() {
     // ...and the next indication is measured from 8.0, not from 3.0: a move
     // that would dwarf the ORIGINAL baseline but is sub-increment from the
     // new one indicates nothing. Note the baseline did NOT advance on that
-    // pass — it moves only when a transition to NORMAL is indicated.
+    // pass — only a NORMAL indication moves it.
     set_monitored(&mut db, &ai_oid, 12.9); // |12.9 - 8.0| = 4.9 < 5.0
     assert!(
         evaluate_event_enrollments(&mut db, 1).is_empty(),

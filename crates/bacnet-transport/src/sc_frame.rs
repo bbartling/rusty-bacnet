@@ -187,8 +187,9 @@ pub fn is_broadcast_vmac(vmac: &Vmac) -> bool {
 
 /// Check if a VMAC has the Clause H.7.3 Random-48 shape.
 ///
-/// A Random-48 VMAC is six octets with the least significant four bits of the
-/// first octet fixed at B'0010' (X'2'); the remaining 44 bits are random.
+/// The only fixed part of a Random-48 VMAC is the low nibble of its first
+/// octet, which is always X'2' (B'0010'). The other 44 bits are random, so
+/// that nibble is all this check can test.
 pub fn is_valid_random48_vmac(vmac: &Vmac) -> bool {
     vmac[0] & 0x0F == 0x02
 }

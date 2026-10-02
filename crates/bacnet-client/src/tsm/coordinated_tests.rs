@@ -466,7 +466,7 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
         let response = || TsmResponse::Error {
             class: 2,
             code: 40,
-            first_failed_element_number: None,
+            detail: None,
         };
         let wrong = error(ConfirmedServiceChoice::READ_PROPERTY);
         let matching = error(ConfirmedServiceChoice::WRITE_PROPERTY);
@@ -522,7 +522,7 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
             TsmResponse::Error {
                 class: 2,
                 code: 40,
-                first_failed_element_number: None
+                detail: None
             }
         ));
         assert_eq!(coordinator.active_count().unwrap(), 0);
