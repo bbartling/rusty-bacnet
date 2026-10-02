@@ -354,3 +354,52 @@ fn destination_network_number_over_unsigned16_rejected() {
     tags::encode_closing_tag(&mut buf, 1);
     assert!(decode_destination(&buf, 0).is_err());
 }
+
+/// An address recipient on network 1000 whose MAC is `len` octets.
+fn address_with_mac(len: usize) -> BACnetRecipient {
+    BACnetRecipient::Address(BACnetAddress {
+        network_number: 1000,
+        mac_address: bacnet_types::MacAddr::from_slice(&vec![0xA5; len]),
+    })
+}
+
+#[test]
+fn recipient_mac_longer_than_the_bound_rejected() {
+    // #1124: 18 octets, B/IPv6's IPv6 address and UDP port, is the longest
+    // MAC this stack uses (`BACnetAddress::MAX_MAC_LEN`). A configured
+    // recipient, alone or as a destination's, refuses one octet more.
+    let longest = address_with_mac(18);
+    let mut buf = BytesMut::new();
+    encode_recipient(&mut buf, &longest);
+    assert_eq!(
+        decode_configured_recipient(&buf, 0).unwrap(),
+        (longest, buf.len())
+    );
+    for len in [19, 64, 255] {
+        let mut buf = BytesMut::new();
+        encode_recipient(&mut buf, &address_with_mac(len));
+        assert!(
+            decode_configured_recipient(&buf, 0).is_err(),
+            "{len}-octet MAC"
+        );
+        // The generic codec still reads it: COV subscription lists and audit
+        // records report source addresses learned off the network.
+        assert_eq!(
+            decode_recipient(&buf, 0).unwrap(),
+            (address_with_mac(len), buf.len())
+        );
+        let too_long = BACnetDestination {
+            recipient: address_with_mac(len),
+            ..device_destination()
+        };
+        let mut one = BytesMut::new();
+        encode_destination(&mut one, &too_long);
+        assert!(decode_destination(&one, 0).is_err(), "{len}-octet MAC");
+        let mut list = BytesMut::new();
+        encode_destination_list(&mut list, &[device_destination(), too_long]);
+        assert!(
+            decode_destination_list(&list).is_err(),
+            "{len}-octet MAC in a list"
+        );
+    }
+}

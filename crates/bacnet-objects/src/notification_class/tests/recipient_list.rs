@@ -129,45 +129,6 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
         other => panic!("expected PROPERTY/PROPERTY_IS_NOT_AN_ARRAY, got {other:?}"),
     }
 
-    // Legacy flat single-entry shape (what an indexed network write decodes
-    // to) — rejected with the same classification.
-    let flat_single = PropertyValue::List(vec![
-        PropertyValue::BitString {
-            unused_bits: 1,
-            data: vec![0xFE],
-        },
-        PropertyValue::Time(make_time(0, 0)),
-        PropertyValue::Time(make_time(23, 59)),
-        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
-        PropertyValue::Unsigned(1),
-        PropertyValue::Boolean(false),
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![0xE0],
-        },
-    ]);
-    match nc
-        .write_property(
-            PropertyIdentifier::RECIPIENT_LIST,
-            Some(1),
-            flat_single,
-            None,
-        )
-        .unwrap_err()
-    {
-        Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
-            );
-        }
-        other => panic!("expected PROPERTY/PROPERTY_IS_NOT_AN_ARRAY, got {other:?}"),
-    }
-
     // The whole list is untouched.
     assert_eq!(nc.recipient_list.len(), 3);
     let instances: Vec<u32> = nc
@@ -378,37 +339,87 @@ fn recipient_list_framed_opening_without_closing_rejected() {
 
 #[test]
 fn write_recipient_list_rejects_malformed_address() {
-    // A malformed address recipient (wrong element count or field type) is
-    // rejected rather than silently dropping the network number.
-    let mk_entry = |recipient: PropertyValue| {
-        PropertyValue::List(vec![
-            PropertyValue::BitString {
-                unused_bits: 1,
-                data: vec![0b0111_1110],
-            },
-            PropertyValue::Time(make_time(0, 0)),
-            PropertyValue::Time(make_time(23, 59)),
-            recipient,
-            PropertyValue::Unsigned(1),
-            PropertyValue::Boolean(false),
-            PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![0b1110_0000],
-            },
-        ])
+    // A malformed address recipient (a missing member or a wrong member type)
+    // is rejected rather than silently dropping the network number.
+    let mk_entry = |address: &[u8]| {
+        let mut framed = bytes::BytesMut::new();
+        bacnet_encoding::primitives::encode_app_bit_string(&mut framed, 1, &[0b0111_1110]);
+        bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(0, 0));
+        bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(23, 59));
+        bacnet_encoding::tags::encode_opening_tag(&mut framed, 1);
+        framed.extend_from_slice(address);
+        bacnet_encoding::tags::encode_closing_tag(&mut framed, 1);
+        bacnet_encoding::primitives::encode_app_unsigned(&mut framed, 1);
+        bacnet_encoding::primitives::encode_app_boolean(&mut framed, false);
+        bacnet_encoding::primitives::encode_app_bit_string(&mut framed, 5, &[0b1110_0000]);
+        PropertyValue::ApplicationData(framed.to_vec())
     };
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let cases = [
-        mk_entry(PropertyValue::List(vec![PropertyValue::Unsigned(100)])),
-        mk_entry(PropertyValue::List(vec![
-            PropertyValue::Boolean(true),
-            PropertyValue::OctetString(vec![0x01]),
-        ])),
+        // The network number with no MAC.
+        mk_entry(&[0x21, 100]),
+        // A Boolean where the network number belongs.
+        mk_entry(&[0x11, 0x61, 0x01]),
     ];
     for bad in cases {
         let result = nc.write_property(PropertyIdentifier::RECIPIENT_LIST, None, bad, None);
         assert!(result.is_err(), "malformed address must be rejected");
     }
+    assert!(nc.recipient_list.is_empty());
+}
+
+#[test]
+fn recipient_list_flat_form_write_refused() {
+    // #1125: the pre-#152 flat layout (one `PropertyValue::List` of seven
+    // application values per destination) is no longer a Recipient_List
+    // value. It fails like any other wrong datatype, the stored list stays,
+    // and the routing filter no longer reads it.
+    let flat_entry = PropertyValue::List(vec![
+        PropertyValue::BitString {
+            unused_bits: 1,
+            data: vec![0b1111_1110],
+        },
+        PropertyValue::Time(make_time(0, 0)),
+        PropertyValue::Time(make_time(23, 59)),
+        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+        PropertyValue::Unsigned(1),
+        PropertyValue::Boolean(false),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0b1110_0000],
+        },
+    ]);
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    nc.add_destination(make_dest_device(10)).unwrap();
+    for (what, flat) in [
+        (
+            "one flat entry",
+            PropertyValue::List(vec![flat_entry.clone()]),
+        ),
+        ("an empty flat list", PropertyValue::List(Vec::new())),
+    ] {
+        match nc.write_property(PropertyIdentifier::RECIPIENT_LIST, None, flat, None) {
+            Err(Error::Protocol { class, code }) => assert_eq!(
+                (class, code),
+                (
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                ),
+                "{what}"
+            ),
+            other => panic!("{what}: expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        }
+        assert_eq!(nc.recipient_list(), [make_dest_device(10)], "{what}");
+    }
+    let flat = PropertyValue::List(vec![flat_entry]);
+    assert!(decode_destination_list_pv(&flat).is_err());
+    assert!(filter_recipient_list(
+        &flat,
+        EventTransition::ToOffnormal,
+        DaysOfWeek::MONDAY,
+        &make_time(12, 0),
+    )
+    .is_empty());
 }
 
 #[test]
@@ -420,25 +431,20 @@ fn written_valid_days_decodes_msb_first() {
     // this asymmetric byte can.
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap();
-    let entry = PropertyValue::List(vec![
-        PropertyValue::BitString {
-            unused_bits: 1,
-            data: vec![0b1000_0000], // Monday only
-        },
-        PropertyValue::Time(make_time(0, 0)),
-        PropertyValue::Time(make_time(23, 59)),
-        PropertyValue::ObjectIdentifier(dev_oid),
-        PropertyValue::Unsigned(7),
-        PropertyValue::Boolean(false),
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![0b1000_0000], // TO_OFFNORMAL only
-        },
-    ]);
+    let mut framed = bytes::BytesMut::new();
+    // Monday only.
+    bacnet_encoding::primitives::encode_app_bit_string(&mut framed, 1, &[0b1000_0000]);
+    bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(0, 0));
+    bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(23, 59));
+    bacnet_encoding::primitives::encode_ctx_object_id(&mut framed, 0, &dev_oid);
+    bacnet_encoding::primitives::encode_app_unsigned(&mut framed, 7);
+    bacnet_encoding::primitives::encode_app_boolean(&mut framed, false);
+    // TO_OFFNORMAL only.
+    bacnet_encoding::primitives::encode_app_bit_string(&mut framed, 5, &[0b1000_0000]);
     nc.write_property(
         PropertyIdentifier::RECIPIENT_LIST,
         None,
-        PropertyValue::List(vec![entry]),
+        PropertyValue::ApplicationData(framed.to_vec()),
         None,
     )
     .unwrap();

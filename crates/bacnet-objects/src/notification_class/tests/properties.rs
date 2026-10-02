@@ -291,7 +291,7 @@ fn write_recipient_list_clears_existing() {
     nc.write_property(
         PropertyIdentifier::RECIPIENT_LIST,
         None,
-        PropertyValue::List(vec![]),
+        PropertyValue::ApplicationData(Vec::new()),
         None,
     )
     .unwrap();

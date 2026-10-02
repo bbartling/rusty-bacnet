@@ -1622,8 +1622,21 @@ framing, through the shared `bacnet-encoding` codecs.
   NO_SPACE_TO_WRITE_PROPERTY naming the first destination past the cap, which
   AddListElement reports as NO_SPACE_TO_ADD_LIST_ELEMENT at the request element
   that brought it. `add_destination` returns `Result` and refuses past the cap
-  too, and `recipient_list()` reads the list. The codec is not a Notification
-  Forwarder object, which is unsupported.
+  too, and `recipient_list()` reads the list. An address recipient's MAC is at
+  most `BACnetAddress::MAX_MAC_LEN` (18) octets, the B/IPv6 form (#1124):
+  `decode_destination` reads the recipient with `decode_configured_recipient`,
+  which refuses a longer one, so a write fails with PROPERTY /
+  INVALID_DATA_TYPE and `add_destination` refuses it with the same code. The
+  Audit_Notification_Recipient has the same bound, refused there with PROPERTY /
+  INVALID_DATA_ENCODING. The generic `decode_recipient` takes any length, as
+  COV subscription lists and audit records report addresses learned off the
+  network. Only the framed form in `PropertyValue::ApplicationData` is a
+  Recipient_List value; the flat `PropertyValue::List` layout from before #152
+  is refused (#1125). Routing holds every Notification Class, a custom object
+  included, to the same cap: a class serving a longer list gets
+  `RecipientLookupOutcome::RecipientListTooLong`, and the transition reaches
+  none of its destinations. The codec is not a Notification Forwarder object,
+  which is unsupported.
 - **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
   alternatives round-trip. An alternative the stack does not model is kept as

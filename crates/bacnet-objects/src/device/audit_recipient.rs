@@ -1,6 +1,6 @@
 //! Device-owned recipient state and the synchronous runtime mutation capability.
 use super::*;
-use bacnet_types::constructed::BACnetRecipient;
+use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use std::sync::Weak;
 
 /// Actual remote requester context, supplied only after service authorization.
@@ -186,7 +186,7 @@ impl DeviceObject {
         let PropertyValue::ApplicationData(bytes) = value else {
             return Err(property_error(ErrorCode::INVALID_DATA_TYPE));
         };
-        let (new, end) = bacnet_encoding::constructed::decode_recipient(&bytes, 0)
+        let (new, end) = bacnet_encoding::constructed::decode_configured_recipient(&bytes, 0)
             .map_err(|_| property_error(ErrorCode::INVALID_DATA_ENCODING))?;
         if end != bytes.len() {
             return Err(property_error(ErrorCode::INVALID_DATA_ENCODING));
@@ -201,13 +201,22 @@ impl DeviceObject {
     }
 }
 
+/// A recipient the property can hold: a concrete Device, or an address whose
+/// MAC is within the configured-recipient bound. Provisioning checks the MAC
+/// here because nothing decodes it on the way in (#1124); a write already has.
 fn validate_recipient(recipient: &BACnetRecipient) -> Result<(), Error> {
-    if let BACnetRecipient::Device(oid) = recipient {
-        if oid.object_type() != ObjectType::DEVICE
-            || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE
+    match recipient {
+        BACnetRecipient::Device(oid)
+            if oid.object_type() != ObjectType::DEVICE
+                || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE =>
         {
-            return Err(property_error(ErrorCode::INVALID_DATA_ENCODING));
+            Err(property_error(ErrorCode::INVALID_DATA_ENCODING))
         }
+        BACnetRecipient::Address(address)
+            if address.mac_address.len() > BACnetAddress::MAX_MAC_LEN =>
+        {
+            Err(property_error(ErrorCode::INVALID_DATA_ENCODING))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }

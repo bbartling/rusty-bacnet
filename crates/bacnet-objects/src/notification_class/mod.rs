@@ -16,11 +16,10 @@
 //! outside the `[from, to]` interval; see `time_in_window`.
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
-use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
+use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Time};
-use bacnet_types::MacAddr;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
@@ -85,10 +84,15 @@ impl NotificationClass {
 
     /// Add a destination to the recipient list.
     ///
-    /// Refuses, as a network write would, a destination past the
+    /// Refuses, as a network write would, an address recipient whose MAC is
+    /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets (PROPERTY /
+    /// INVALID_DATA_TYPE, #1124) and a destination past the
     /// [`MAX_RECIPIENT_LIST_DESTINATIONS`] cap (RESOURCES /
     /// NO_SPACE_TO_WRITE_PROPERTY).
+    ///
+    /// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
     pub fn add_destination(&mut self, dest: BACnetDestination) -> Result<(), Error> {
+        recipient_list::check_added(&dest)?;
         if self.recipient_list.len() >= MAX_RECIPIENT_LIST_DESTINATIONS {
             return Err(recipient_list::no_space_error());
         }
@@ -385,6 +389,11 @@ pub enum RecipientLookupOutcome {
     RecipientListUnavailable,
     /// The complete recipient-list value could not be decoded.
     RecipientListInvalid,
+    /// The class serves more than [`MAX_RECIPIENT_LIST_DESTINATIONS`]
+    /// destinations, which only a custom Notification Class object can do.
+    /// No destination is selected: a transition never reaches only part of a
+    /// list (#1124).
+    RecipientListTooLong,
     /// The class contains a valid list with zero configured destinations.
     NoConfiguredDestinations,
     /// Destinations are configured, but none is eligible for this selection.
@@ -402,8 +411,11 @@ pub enum RecipientLookupOutcome {
 ///
 /// A malformed complete list returns
 /// [`RecipientListInvalid`](RecipientLookupOutcome::RecipientListInvalid);
-/// no decodable prefix is selected. Every non-matched outcome is fail-closed
-/// and names no implicit destination.
+/// no decodable prefix is selected. A list longer than
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`] returns
+/// [`RecipientListTooLong`](RecipientLookupOutcome::RecipientListTooLong)
+/// without decoding the destinations past the cap. Every non-matched outcome
+/// is fail-closed and names no implicit destination.
 pub fn lookup_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
@@ -418,8 +430,9 @@ pub fn lookup_notification_recipients(
     else {
         return RecipientLookupOutcome::RecipientListUnavailable;
     };
-    let Ok(destinations) = decode_destination_list_pv(&recipient_list_value) else {
-        return RecipientLookupOutcome::RecipientListInvalid;
+    let destinations = match routed_destinations(&recipient_list_value) {
+        Ok(destinations) => destinations,
+        Err(outcome) => return outcome,
     };
     if destinations.is_empty() {
         return RecipientLookupOutcome::NoConfiguredDestinations;
@@ -450,6 +463,7 @@ pub fn get_notification_recipients(
         RecipientLookupOutcome::NotificationClassMissing
         | RecipientLookupOutcome::RecipientListUnavailable
         | RecipientLookupOutcome::RecipientListInvalid
+        | RecipientLookupOutcome::RecipientListTooLong
         | RecipientLookupOutcome::NoConfiguredDestinations
         | RecipientLookupOutcome::NoMatchingDestinations => Vec::new(),
     }
@@ -459,9 +473,9 @@ pub fn get_notification_recipients(
 ///
 /// This source-compatible wrapper delegates to
 /// [`lookup_notification_recipients`]. It preserves `None` for an invalid or
-/// undecodable complete list and `Some([])` for missing class, property-read
-/// failure, configured empty, and no-match outcomes. Successful matches return
-/// `Some(recipients)`.
+/// undecodable complete list, and a list past the cap, and `Some([])` for
+/// missing class, property-read failure, configured empty, and no-match
+/// outcomes. Successful matches return `Some(recipients)`.
 pub fn get_notification_recipients_strict(
     db: &ObjectDatabase,
     notification_class: u32,
@@ -470,7 +484,8 @@ pub fn get_notification_recipients_strict(
     current_time: &Time,
 ) -> Option<Vec<(BACnetRecipient, u32, bool)>> {
     match lookup_notification_recipients(db, notification_class, transition, today, current_time) {
-        RecipientLookupOutcome::RecipientListInvalid => None,
+        RecipientLookupOutcome::RecipientListInvalid
+        | RecipientLookupOutcome::RecipientListTooLong => None,
         RecipientLookupOutcome::Matched(recipients) => Some(recipients),
         RecipientLookupOutcome::NotificationClassMissing
         | RecipientLookupOutcome::RecipientListUnavailable
@@ -479,89 +494,17 @@ pub fn get_notification_recipients_strict(
     }
 }
 
-/// Decode ONE legacy flat `Recipient_List` entry (the pre-#152
-/// application-tagged layout: seven `PropertyValue` fields in declaration
-/// order, the address recipient as
-/// `List[Unsigned network_number, OctetString mac]`).
-///
-/// Shared by the write path (where `None` aborts the whole write) and the
-/// recipient filter (where a malformed entry is skipped): the two must not
-/// grow apart again.
-fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestination> {
-    if fields.len() < 7 {
-        return None;
-    }
-    // [0] valid_days: BitString (7 bits, 1 unused)
-    let valid_days = match &fields[0] {
-        PropertyValue::BitString { data, .. } if !data.is_empty() => DaysOfWeek::from_bacnet(data),
-        _ => return None,
-    };
-    // [1] from_time
-    let from_time = match fields[1] {
-        PropertyValue::Time(t) => t,
-        _ => return None,
-    };
-    // [2] to_time
-    let to_time = match fields[2] {
-        PropertyValue::Time(t) => t,
-        _ => return None,
-    };
-    // [3] recipient: Device (ObjectIdentifier) or Address
-    // (List[Unsigned network_number, OctetString mac]).
-    let recipient = match &fields[3] {
-        PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
-        PropertyValue::List(items) if items.len() == 2 => {
-            let network_number = match &items[0] {
-                PropertyValue::Unsigned(v) => *v as u16,
-                _ => return None,
-            };
-            let mac_address = match &items[1] {
-                PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
-                _ => return None,
-            };
-            BACnetRecipient::Address(BACnetAddress {
-                network_number,
-                mac_address,
-            })
-        }
-        _ => return None,
-    };
-    // [4] process_identifier
-    let process_identifier = match fields[4] {
-        PropertyValue::Unsigned(v) => u32::try_from(v).ok()?,
-        _ => return None,
-    };
-    // [5] issue_confirmed_notifications
-    let issue_confirmed_notifications = match fields[5] {
-        PropertyValue::Boolean(b) => b,
-        _ => return None,
-    };
-    // [6] transitions: BitString (3 bits, 5 unused)
-    let transitions = match &fields[6] {
-        PropertyValue::BitString { data, .. } if !data.is_empty() => {
-            EventTransitionBits::from_bacnet(data)
-        }
-        _ => return None,
-    };
-    Some(BACnetDestination {
-        valid_days,
-        from_time,
-        to_time,
-        recipient,
-        process_identifier,
-        issue_confirmed_notifications,
-        transitions,
-    })
-}
-
 /// Strictly decode a `RECIPIENT_LIST` property value into its destinations.
 ///
-/// Framed wire form ([`PropertyValue::ApplicationData`]): the strict
-/// `BACnetLIST of BACnetDestination` codec. Legacy flat form
-/// ([`PropertyValue::List`]): [`destination_from_flat_fields`]. Either way,
-/// the FIRST malformed destination (or trailing bytes) fails the whole
-/// decode — a prefix-tolerant walk would silently route notifications to
-/// only a subset of the configured recipients (review blocker).
+/// Only the framed wire form ([`PropertyValue::ApplicationData`]) is a
+/// Recipient_List value (#1125). The FIRST malformed destination (or trailing
+/// bytes) fails the whole decode: a prefix-tolerant walk would silently route
+/// notifications to only a subset of the configured recipients.
+///
+/// This applies no cap beyond the codec's own item limit. GetEnrollmentSummary
+/// reads membership from the list as configured; routing goes through
+/// [`routed_destinations`], which holds every class to
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`].
 pub(super) fn decode_destination_list_pv(
     value: &PropertyValue,
 ) -> Result<Vec<BACnetDestination>, Error> {
@@ -569,22 +512,28 @@ pub(super) fn decode_destination_list_pv(
         PropertyValue::ApplicationData(bytes) => {
             bacnet_encoding::constructed::decode_destination_list(bytes)
         }
-        PropertyValue::List(entries) => entries
-            .iter()
-            .map(|entry| match entry {
-                PropertyValue::List(fields) => destination_from_flat_fields(fields)
-                    .ok_or_else(|| Error::decoding(0, "Recipient_List: malformed legacy entry")),
-                _ => Err(Error::decoding(
-                    0,
-                    "Recipient_List: entry is not a field list",
-                )),
-            })
-            .collect(),
         _ => Err(Error::decoding(
             0,
-            "Recipient_List: expected framed application data or a legacy list",
+            "Recipient_List: expected framed application data",
         )),
     }
+}
+
+/// Decode a `RECIPIENT_LIST` value for routing: the framed form only, at most
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`] destinations, all or nothing (#1124).
+/// The error is the lookup outcome that names why nothing is routed.
+fn routed_destinations(
+    value: &PropertyValue,
+) -> Result<Vec<BACnetDestination>, RecipientLookupOutcome> {
+    let PropertyValue::ApplicationData(bytes) = value else {
+        return Err(RecipientLookupOutcome::RecipientListInvalid);
+    };
+    recipient_list::decode_capped(bytes).map_err(|error| match error {
+        recipient_list::CappedListError::Malformed => RecipientLookupOutcome::RecipientListInvalid,
+        recipient_list::CappedListError::PastTheCap(_) => {
+            RecipientLookupOutcome::RecipientListTooLong
+        }
+    })
 }
 
 /// Filter decoded destinations by day, time, and transition — the shared
@@ -614,19 +563,19 @@ fn filter_destinations(
 
 /// Filter an encoded `RECIPIENT_LIST` property value by day, time, and transition.
 ///
-/// Parses the value as returned by `read_property(RECIPIENT_LIST)` — the
-/// framed `BACnetLIST of BACnetDestination` form, or the legacy flat form —
-/// and returns only those recipients matching the given filters. A list
-/// that fails to decode (even partially) yields NO recipients: routing
-/// fails closed rather than notifying a silently-truncated prefix of the
-/// configured destinations.
+/// Parses the value as returned by `read_property(RECIPIENT_LIST)`, the
+/// framed `BACnetLIST of BACnetDestination` form, and returns only those
+/// recipients matching the given filters. A list that fails to decode (even
+/// partially), or holds more than [`MAX_RECIPIENT_LIST_DESTINATIONS`]
+/// destinations, yields NO recipients: routing fails closed rather than
+/// notifying a silently-truncated prefix of the configured destinations.
 pub fn filter_recipient_list(
     recipient_list_value: &PropertyValue,
     transition: EventTransition,
     today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    let Ok(destinations) = decode_destination_list_pv(recipient_list_value) else {
+    let Ok(destinations) = routed_destinations(recipient_list_value) else {
         return Vec::new();
     };
     filter_destinations(destinations, transition, today, current_time)
