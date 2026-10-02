@@ -44,6 +44,34 @@ pub trait ClockReader: Send + Sync {
     fn read_clock(&self) -> Option<ClockFrame>;
 }
 
+/// The local date and time to stamp on a BACnetDateTime property when an
+/// object changes it: the Device clock's current frame, or a date and time
+/// with every field unspecified when there is no clock or its frame is not a
+/// valid actual date and time.
+pub(crate) fn stamp_datetime(clock: Option<&dyn ClockReader>) -> (Date, Time) {
+    match clock.and_then(ClockReader::read_clock) {
+        Some(frame) if frame.is_valid_actual_datetime() => (frame.local_date, frame.local_time),
+        _ => UNSPECIFIED_DATETIME,
+    }
+}
+
+/// A BACnetDateTime with every field unspecified, the value of a timestamp
+/// that has never been set.
+pub(crate) const UNSPECIFIED_DATETIME: (Date, Time) = (
+    Date {
+        year: Date::UNSPECIFIED,
+        month: Date::UNSPECIFIED,
+        day: Date::UNSPECIFIED,
+        day_of_week: Date::UNSPECIFIED,
+    },
+    Time {
+        hour: Time::UNSPECIFIED,
+        minute: Time::UNSPECIFIED,
+        second: Time::UNSPECIFIED,
+        hundredths: Time::UNSPECIFIED,
+    },
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -345,11 +345,13 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(12.5), None)
                 .unwrap();
+            object.add_pulses(7).unwrap();
             object
                 .write_property(P::SCALE_FACTOR, None, PropertyValue::Real(2.5), None)
                 .unwrap();
+            // 5 / 2.5 takes 2 off Count: 7 becomes 5.
             object
-                .write_property(P::ADJUST_VALUE, None, PropertyValue::Real(0.5), None)
+                .write_property(P::ADJUST_VALUE, None, PropertyValue::Real(5.0), None)
                 .unwrap();
             object
                 .write_property(P::COV_INCREMENT, None, PropertyValue::Real(0.5), None)
@@ -371,9 +373,13 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         // Independent application-value bytes pin the existing projection.
-        // 12.5f32 encodes as 0x41480000, 2.5f32 as 0x40200000, 0.5f32 as
-        // 0x3F000000. The Accumulator(23) instance-1 reference encodes as
-        // 0xC4 0x05 0xC0 0x00 0x01 followed by enumerated 85 (0x91 0x55).
+        // 12.5f32 encodes as 0x41480000, 2.5f32 as 0x40200000, 5.0f32 as
+        // 0x40A00000, 0.5f32 as 0x3F000000. The Accumulator(23) instance-1
+        // reference encodes as 0xC4 0x05 0xC0 0x00 0x01 followed by
+        // enumerated 85 (0x91 0x55). With no Device clock the two
+        // BACnetDateTime rows are an all-unspecified Date (0xA4) then Time
+        // (0xB4).
+        const UNSPECIFIED: &[u8] = &[0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF];
         let input_reference: &[u8] = if configured {
             &[0xC4, 0x05, 0xC0, 0x00, 0x01, 0x91, 0x55]
         } else {
@@ -420,13 +426,41 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
                 P::ADJUST_VALUE,
                 None,
                 Ok(if configured {
-                    &[0x44, 0x3F, 0x00, 0x00, 0x00]
+                    &[0x44, 0x40, 0xA0, 0x00, 0x00]
                 } else {
                     &[0x44, 0, 0, 0, 0]
                 }),
             ),
             (
                 P::ADJUST_VALUE,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::COUNT,
+                None,
+                Ok(if configured { &[0x21, 5] } else { &[0x21, 0] }),
+            ),
+            (P::COUNT, Some(1), Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
+            (P::UPDATE_TIME, None, Ok(UNSPECIFIED)),
+            (
+                P::UPDATE_TIME,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::COUNT_CHANGE_TIME, None, Ok(UNSPECIFIED)),
+            (
+                P::COUNT_CHANGE_TIME,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::COUNT_BEFORE_CHANGE,
+                None,
+                Ok(if configured { &[0x21, 7] } else { &[0x21, 0] }),
+            ),
+            (
+                P::COUNT_BEFORE_CHANGE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
@@ -441,6 +475,12 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
             ),
             (
                 P::COV_INCREMENT,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::COV_PERIOD, None, Ok(&[0x21, 0])),
+            (
+                P::COV_PERIOD,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
@@ -490,25 +530,31 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 0x1C, 0x91, 0x55, 0x91, 0x75, 0x91, 0xBC, 0x91, 0xB0, 0x91, 0x16, 0x91,
-                    0xB5, 0x91, 0x6F, 0x91, 0x24, 0x91, 0x51, 0x91, 0x67,
+                    0x91, 0x1C, 0x91, 0x55, 0x91, 0x75, 0x91, 0xBC, 0x91, 0xB0, 0x91, 0xB1, 0x91,
+                    0xBD, 0x91, 0xB3, 0x91, 0xB2, 0x91, 0x16, 0x91, 0xB4, 0x91, 0xB5, 0x91, 0x6F,
+                    0x91, 0x24, 0x91, 0x51, 0x91, 0x67,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 16])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x1C])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0x55])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 0x75])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 0xBC])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 0xB0])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 0x16])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 0xB5])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 0x6F])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 0x24])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 0x51])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 0x67])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 0xB1])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 0xBD])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 0xB3])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 0xB2])),
+            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 0x16])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 0xB4])),
+            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 0xB5])),
+            (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 0x6F])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 0x24])),
+            (P::PROPERTY_LIST, Some(15), Ok(&[0x91, 0x51])),
+            (P::PROPERTY_LIST, Some(16), Ok(&[0x91, 0x67])),
             (
                 P::PROPERTY_LIST,
-                Some(12),
+                Some(17),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -516,15 +562,19 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Unserved Table 12-27 rows stay unknown; the array gate runs first.
-            (P::COUNT, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (P::COUNT, Some(1), Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
-            (P::UPDATE_TIME, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // Unserved optional Table 12-27 rows stay unknown; the array gate
+            // runs first.
             (
-                P::COUNT_BEFORE_CHANGE,
+                P::NOTIFICATION_CLASS,
                 None,
                 Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
+            (
+                P::NOTIFICATION_CLASS,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::HIGH_LIMIT, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         assert_cases(&db, oid, cases);
     }

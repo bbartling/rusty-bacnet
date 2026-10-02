@@ -23,11 +23,12 @@ use crate::property_metadata::{
 // commandable write arms. These properties are Always writable.
 // Priority_Array is intentionally read-only under §19.2.1; its slots change
 // through prioritized Present_Value commands, not direct property writes.
-// Only implemented rows are described. Units (table R on Integer,
-// Positive-Integer, and Large Analog Value) stays absent by design: adding
-// rows without dispatch would break the readable-rows contract. Bit_Text,
-// Alarm_Value, Fault/High/Low_Limit, event/intrinsic, value-source, and audit
-// rows stay absent until dispatch exists. Value types are not createable at
+// Only implemented rows are described. Integer, Positive Integer and Large
+// Analog Value also serve Units, which Tables 12-50, 12-51 and 12-46 code R
+// (#1092): RequiredRead/ReadOnly, set locally through `set_units`, as on the
+// analog objects. Bit_Text, Alarm_Value, Fault/High/Low_Limit,
+// event/intrinsic, value-source, and audit rows stay absent until dispatch
+// exists. Value types are not createable at
 // runtime (the network factory builds only the eight analog/binary/
 // multi-state input/output/value types), so the is_createable=false default
 // holds with no override.
@@ -40,6 +41,7 @@ pub(crate) const INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -54,6 +56,7 @@ pub(crate) const POSITIVE_INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -68,6 +71,7 @@ pub(crate) const LARGE_ANALOG_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),

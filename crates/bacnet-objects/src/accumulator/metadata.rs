@@ -1,72 +1,56 @@
-use super::{AccumulatorObject, PulseConverterObject};
+use super::AccumulatorObject;
 use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::property_metadata::{
-    PropertyConformance::{Optional, RequiredRead, RequiredWrite},
+    PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
+    PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Canonical effective rows for the Accumulator pair (ASHRAE 135-2020; PDF = printed + 2):
-// - Accumulator (type 23, §12.61 Table 12-79; printed pp. 601-609 / PDF pp. 603-611)
-// - Pulse Converter (type 24, §12.23 Table 12-27; printed pp. 301-307 / PDF pp. 303-309)
-// Order preserves each legacy projection; PROPERTY_LIST is appended so the
+// Canonical effective rows for the Accumulator (type 23, ASHRAE 135-2020
+// §12.61 Table 12-79; printed pp. 601-609 / PDF pp. 603-611). The Pulse
+// Converter keeps its own rows in pulse_converter/metadata.rs.
+// Order preserves the legacy projection; PROPERTY_LIST is appended so the
 // projection helper omits it while required_properties keeps it. Only
-// implemented rows are described: table rows the objects do not serve
-// (Accumulator Device_Type, Value_Change_Time, Logging_Record,
-// Logging_Object, High/Limit rows, Limit_Enable, Count-adjacent rows,
-// event/intrinsic/audit/tag/profile rows; Pulse Converter Count,
-// Update_Time, Count_Change_Time, Count_Before_Change, COV_Period,
-// event/intrinsic/audit/tag/profile rows) stay absent until dispatch exists.
+// implemented rows are described: table rows the object does not serve
+// (Device_Type, Value_Change_Time, Logging_Record, Logging_Object,
+// High/Limit rows, Limit_Enable, event/intrinsic/audit/tag/profile rows) stay
+// absent until dispatch exists.
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
-// WRITE_ACCESS_DENIED (neither object has a write_object_name arm).
+// WRITE_ACCESS_DENIED (the object has no write_object_name arm).
 // Description carries the table O code with a routed CharacterString write
 // arm, so Optional/Always. Out_Of_Service carries the table R code with the
 // routed Boolean arm, so RequiredRead/Always.
 // Table-R served rows with no network write route stay RequiredRead/ReadOnly;
 // table-R rows with a write arm are RequiredRead/Always. Table-O served rows
 // are Optional, with Always exactly where dispatch accepts the write
-// (Accumulator Max_Pres_Value is table R with an arm, so
-// RequiredRead/Always; Pulse_Rate and Limit_Monitoring_Interval are table O
-// with arms, so Optional/Always; Prescale, Reliability, Value_Before_Change,
-// and Value_Set have no arm, so Optional/ReadOnly).
-// Accumulator Present_Value is the one deliberate dispatch-first deviation:
-// Table 12-79 codes it R with footnote 1, and both that footnote and §12.61
-// require it to accept writes while Out_Of_Service is TRUE, but the write arm
+// (Max_Pres_Value is table R with an arm, so RequiredRead/Always; Pulse_Rate
+// and Limit_Monitoring_Interval are table O with arms, so Optional/Always;
+// Prescale, Reliability, Value_Before_Change, and Value_Set have no arm, so
+// Optional/ReadOnly).
+// Present_Value is the one deliberate dispatch-first deviation: Table 12-79
+// codes it R with footnote 1, and both that footnote and §12.61 require it to
+// accept writes while Out_Of_Service is TRUE, but the write arm
 // unconditionally denies it and no Value_Set mechanism advances it, so the
 // metadata mirrors dispatch as RequiredRead/ReadOnly rather than advertising
 // a route that does not exist. Pulse_Rate is served as Real while Table 12-79
 // types it Unsigned, and Status_Flags is computed with event_state=0 by the
 // shared common arm even though the object owns an Event_State field; both
-// quirks are preserved, not fixed, by this migration. Pulse Converter
-// Present_Value carries the table R code with footnote 1 and §12.23 requires
-// it to accept writes while Out_Of_Service is TRUE; dispatch gates it behind
-// Out_Of_Service (in-service writes are denied before value validation), so
-// RequiredRead/WhenOutOfService (D5 clause-backed, preserved exactly).
-// Adjust_Value carries the table W code with a routed Real arm, so
-// RequiredWrite/Always. Scale_Factor is table R with an arm
-// (RequiredRead/Always); Input_Reference and COV_Increment are table O with
-// arms (Optional/Always; COV_Increment footnote 2 ties it to COV reporting,
-// which the object provides via supports_cov and cov_increment). Writability
-// otherwise mirrors dispatch exactly: the Pulse Converter is_writable
-// override ({PV, SCALE_FACTOR, ADJUST_VALUE, INPUT_REFERENCE, DESCRIPTION,
-// OUT_OF_SERVICE, COV_INCREMENT}) translated one row at a time and then
-// deleted, so PICS writable flags are unchanged. Presence is None throughout:
-// the implementation models no commandable, intrinsic-reporting, or
-// paired-text gating on this family. The pair is not createable at runtime
-// (the network factory builds only the eight analog/binary/multi-state
-// input/output/value types, so the is_createable=false default holds) and
-// remains deleteable (delete denies only Device and NetworkPort, so the
-// is_deleteable=true default holds); neither needs an override. Array gating
-// keeps the default: Property_List admits an index (BACnetARRAY per Tables
-// 12-79/12-27) while every other served row rejects one. COV keeps its
-// overrides: supports_cov=true on both objects plus cov_increment()=Some on
-// Pulse Converter, and the COV gating path (read_property plus
-// supports_cov_property to supports_cov) never consults metadata.
+// quirks are preserved, not fixed, by this migration. Presence is None
+// throughout: the implementation models no commandable, intrinsic-reporting,
+// or paired-text gating. The object is not createable at runtime (the network
+// factory builds only the eight analog/binary/multi-state input/output/value
+// types, so the is_createable=false default holds) and remains deleteable
+// (delete denies only Device and NetworkPort, so the is_deleteable=true
+// default holds); neither needs an override. Array gating keeps the default:
+// Property_List admits an index (BACnetARRAY per Table 12-79) while every
+// other served row rejects one. COV keeps its supports_cov=true override, and
+// the COV gating path (read_property plus supports_cov_property to
+// supports_cov) never consults metadata.
 const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -88,32 +72,8 @@ const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-const PULSE_CONVERTER_BASE: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
-    PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, WhenOutOfService),
-    PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::SCALE_FACTOR, RequiredRead, None, Always),
-    PropertyMetadata::new(P::ADJUST_VALUE, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
-    PropertyMetadata::new(P::INPUT_REFERENCE, Optional, None, Always),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
-];
-
 pub(super) fn for_accumulator_object(_object: &AccumulatorObject) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(ACCUMULATOR_BASE)
-}
-
-pub(super) fn for_pulse_converter_object(
-    _object: &PulseConverterObject,
-) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(PULSE_CONVERTER_BASE)
 }
 
 #[cfg(test)]
@@ -121,9 +81,9 @@ mod tests {
     use super::*;
     use crate::property_metadata::PropertyWriteCapability;
     use crate::traits::BACnetObject;
-    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
     use bacnet_types::error::Error;
-    use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+    use bacnet_types::primitives::PropertyValue;
     use std::collections::HashSet;
 
     fn assert_error(error: Error, expected: ErrorCode) {
@@ -155,11 +115,7 @@ mod tests {
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
             let expected = if required.contains(&row.property_identifier) {
-                if row.property_identifier == P::ADJUST_VALUE {
-                    RequiredWrite
-                } else {
-                    RequiredRead
-                }
+                RequiredRead
             } else {
                 Optional
             };
@@ -258,57 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list() {
-        let object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
-        let all = [
-            P::OBJECT_IDENTIFIER,
-            P::OBJECT_NAME,
-            P::DESCRIPTION,
-            P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
-            P::UNITS,
-            P::SCALE_FACTOR,
-            P::ADJUST_VALUE,
-            P::COV_INCREMENT,
-            P::INPUT_REFERENCE,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
-        ];
-        let required = [
-            P::OBJECT_IDENTIFIER,
-            P::OBJECT_NAME,
-            P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
-            P::UNITS,
-            P::SCALE_FACTOR,
-            P::ADJUST_VALUE,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
-            P::PROPERTY_LIST,
-        ];
-        assert_exact_sets(&object, &all, &required);
-        assert_indexed_property_list(&object, &all);
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Real(0.0)
-        );
-        assert_eq!(
-            object.read_property(P::SCALE_FACTOR, None).unwrap(),
-            PropertyValue::Real(1.0)
-        );
-        assert_eq!(
-            object.read_property(P::INPUT_REFERENCE, None).unwrap(),
-            PropertyValue::Null
-        );
-        assert_eq!(object.cov_increment(), Some(0.0));
-        assert!(!object.is_array_property(P::INPUT_REFERENCE));
-        assert!(!object.is_array_property(P::PRESENT_VALUE));
-    }
-
-    #[test]
     fn property_metadata_accumulator_write_capabilities_match_dispatch() {
         let writable = [
             P::DESCRIPTION,
@@ -380,128 +285,6 @@ mod tests {
             );
             assert_eq!(object.property_metadata().as_ref(), original);
         }
-    }
-
-    #[test]
-    fn property_metadata_pulse_converter_write_capabilities_match_dispatch() {
-        let always = [
-            P::DESCRIPTION,
-            P::OUT_OF_SERVICE,
-            P::SCALE_FACTOR,
-            P::ADJUST_VALUE,
-            P::INPUT_REFERENCE,
-            P::COV_INCREMENT,
-        ];
-        for out_of_service in [false, true] {
-            let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
-            object
-                .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
-            let original = object.property_metadata().into_owned();
-            for row in &original {
-                let p = row.property_identifier;
-                let capability = if always.contains(&p) {
-                    PropertyWriteCapability::Always
-                } else if p == P::PRESENT_VALUE {
-                    PropertyWriteCapability::WhenOutOfService
-                } else {
-                    PropertyWriteCapability::ReadOnly
-                };
-                assert_eq!(row.write_capability, capability, "{p:?}");
-                assert_eq!(
-                    object.is_writable_property(p),
-                    capability.is_writable(),
-                    "{p:?}"
-                );
-                let value = object.read_property(p, None).unwrap();
-                let result = object.write_property(p, None, value, None);
-                if capability == PropertyWriteCapability::Always
-                    || (capability == PropertyWriteCapability::WhenOutOfService && out_of_service)
-                {
-                    result.unwrap();
-                } else {
-                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
-                }
-            }
-            // Object_Name has no network write route: a rename falls through
-            // to WRITE_ACCESS_DENIED even with a well-formed value.
-            assert!(!object.is_writable_property(P::OBJECT_NAME));
-            assert_error(
-                object
-                    .write_property(
-                        P::OBJECT_NAME,
-                        None,
-                        PropertyValue::CharacterString("renamed".into()),
-                        None,
-                    )
-                    .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-            assert_eq!(object.property_metadata().as_ref(), original);
-        }
-    }
-
-    #[test]
-    fn property_metadata_pulse_converter_present_value_oos_gate_pins() {
-        // In-service writes are denied before value validation (D5): even a
-        // mistyped or non-finite value reports WRITE_ACCESS_DENIED, not a
-        // datatype or range error, and the stored value is untouched.
-        let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
-        assert!(object.is_writable_property(P::PRESENT_VALUE));
-        for value in [
-            PropertyValue::Real(12.5),
-            PropertyValue::Unsigned(12),
-            PropertyValue::Real(f32::NAN),
-        ] {
-            assert_error(
-                object
-                    .write_property(P::PRESENT_VALUE, None, value, None)
-                    .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-        }
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Real(0.0)
-        );
-        // Out of service, a finite Real round-trips; mistyped and
-        // non-finite values are rejected past the gate.
-        object
-            .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
-            .unwrap();
-        object
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(12.5), None)
-            .unwrap();
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Real(12.5)
-        );
-        assert_error(
-            object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(12), None)
-                .unwrap_err(),
-            ErrorCode::INVALID_DATA_TYPE,
-        );
-        assert_error(
-            object
-                .write_property(
-                    P::PRESENT_VALUE,
-                    None,
-                    PropertyValue::Real(f32::INFINITY),
-                    None,
-                )
-                .unwrap_err(),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        );
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Real(12.5)
-        );
     }
 
     #[test]
@@ -604,115 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
-        for out_of_service in [false, true] {
-            let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
-            object
-                .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
-            object
-                .write_property(P::SCALE_FACTOR, None, PropertyValue::Real(2.5), None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::SCALE_FACTOR, None).unwrap(),
-                PropertyValue::Real(2.5)
-            );
-            object
-                .write_property(P::ADJUST_VALUE, None, PropertyValue::Real(0.5), None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::ADJUST_VALUE, None).unwrap(),
-                PropertyValue::Real(0.5)
-            );
-            object
-                .write_property(P::COV_INCREMENT, None, PropertyValue::Real(0.5), None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::COV_INCREMENT, None).unwrap(),
-                PropertyValue::Real(0.5)
-            );
-            assert_eq!(object.cov_increment(), Some(0.5));
-            // Non-finite and negative values are refused without touching state.
-            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                for p in [P::SCALE_FACTOR, P::ADJUST_VALUE] {
-                    assert_error(
-                        object
-                            .write_property(p, None, PropertyValue::Real(value), None)
-                            .unwrap_err(),
-                        ErrorCode::VALUE_OUT_OF_RANGE,
-                    );
-                }
-                assert_error(
-                    object
-                        .write_property(P::COV_INCREMENT, None, PropertyValue::Real(value), None)
-                        .unwrap_err(),
-                    ErrorCode::VALUE_OUT_OF_RANGE,
-                );
-            }
-            assert_error(
-                object
-                    .write_property(P::COV_INCREMENT, None, PropertyValue::Real(-1.0), None)
-                    .unwrap_err(),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            );
-            assert_eq!(
-                object.read_property(P::SCALE_FACTOR, None).unwrap(),
-                PropertyValue::Real(2.5)
-            );
-            // Input_Reference stores a local reference verbatim and Null clears it.
-            let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
-            let prop_raw = P::PRESENT_VALUE.to_raw();
-            let reference = PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ]);
-            object
-                .write_property(P::INPUT_REFERENCE, None, reference.clone(), None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::INPUT_REFERENCE, None).unwrap(),
-                reference
-            );
-            object
-                .write_property(P::INPUT_REFERENCE, None, PropertyValue::Null, None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::INPUT_REFERENCE, None).unwrap(),
-                PropertyValue::Null
-            );
-            // Mistyped values are rejected without changing state.
-            for (p, value) in [
-                (P::SCALE_FACTOR, PropertyValue::Unsigned(1)),
-                (P::ADJUST_VALUE, PropertyValue::Unsigned(1)),
-                (P::COV_INCREMENT, PropertyValue::Null),
-                (P::INPUT_REFERENCE, PropertyValue::Unsigned(1)),
-                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
-            ] {
-                assert_error(
-                    object.write_property(p, None, value, None).unwrap_err(),
-                    ErrorCode::INVALID_DATA_TYPE,
-                );
-            }
-            // Rows with no network write route deny even their readback.
-            for p in [P::UNITS, P::STATUS_FLAGS, P::EVENT_STATE, P::RELIABILITY] {
-                let value = object.read_property(p, None).unwrap();
-                assert_error(
-                    object.write_property(p, None, value, None).unwrap_err(),
-                    ErrorCode::WRITE_ACCESS_DENIED,
-                );
-                assert!(!object.is_writable_property(p));
-            }
-        }
-    }
-
-    #[test]
-    fn property_metadata_accumulator_pair_unserved_rows_stay_unknown() {
+    fn property_metadata_accumulator_unserved_rows_stay_unknown() {
         fn assert_unserved(object: &mut dyn BACnetObject, p: P) {
             assert!(!object.is_writable_property(p));
             assert_error(
@@ -732,11 +407,5 @@ mod tests {
         assert_unserved(&mut acc, P::DEVICE_TYPE);
         assert_unserved(&mut acc, P::VALUE_CHANGE_TIME);
         assert_unserved(&mut acc, P::COUNT);
-        // Table 12-27 R rows with no read arm (plus an Accumulator row).
-        let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
-        assert_unserved(&mut pc, P::COUNT);
-        assert_unserved(&mut pc, P::UPDATE_TIME);
-        assert_unserved(&mut pc, P::COUNT_BEFORE_CHANGE);
-        assert_unserved(&mut pc, P::DEVICE_TYPE);
     }
 }
