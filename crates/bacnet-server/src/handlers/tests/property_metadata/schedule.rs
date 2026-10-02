@@ -17,10 +17,12 @@ fn schedule_object(configuration: u8, out_of_service: bool) -> ScheduleObject {
             day: 14,
             day_of_week: 1,
         };
-        object.set_effective_period(BACnetDateRange {
-            start_date: date,
-            end_date: date,
-        });
+        object
+            .set_effective_period(BACnetDateRange {
+                start_date: date,
+                end_date: date,
+            })
+            .unwrap();
         let entries: Vec<_> = (0..32)
             .map(|minute| BACnetTimeValue {
                 time: Time {
@@ -29,19 +31,21 @@ fn schedule_object(configuration: u8, out_of_service: bool) -> ScheduleObject {
                     second: 0,
                     hundredths: 0,
                 },
-                value: vec![0x21, minute],
+                value: PropertyValue::Unsigned(u64::from(minute)),
             })
             .collect();
         if configuration & 1 != 0 {
-            object.set_weekly_schedule(0, entries.clone());
-            object.set_weekly_schedule(6, entries.clone());
+            object.set_weekly_schedule(0, entries.clone()).unwrap();
+            object.set_weekly_schedule(6, entries.clone()).unwrap();
         }
         if configuration & 2 != 0 {
-            object.add_exception(BACnetSpecialEvent {
-                period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::Date(date)),
-                list_of_time_values: entries,
-                event_priority: 3,
-            });
+            object
+                .add_exception(BACnetSpecialEvent {
+                    period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::Date(date)),
+                    list_of_time_values: entries,
+                    event_priority: 3,
+                })
+                .unwrap();
         }
         object.add_object_property_reference(BACnetObjectPropertyReference::new(
             ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),

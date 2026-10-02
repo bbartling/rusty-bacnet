@@ -1660,12 +1660,30 @@ Rust construction APIs; Python constructors retain their current defaults.
 
 `ScheduleObject::add_object_property_reference` retains a complete local
 `BACnetObjectPropertyReference`, including its optional target array index.
-The public `BACnetObject::tick_schedule` hook now returns
-`Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)>`; custom overrides
-must return the full references instead of object/property pairs. Endpoint
-forwarding and server execution preserve those coordinates. A failed target
-write does not prevent subsequent target writes. The current profile is
-local-only, with read-only `Priority_For_Writing` fixed at 16.
+`ScheduleObject::evaluate(today, time, calendar_active)` calculates
+Present_Value as Clause 12.24.4 orders it (#1028): within Effective_Period, the
+best-priority special event in effect whose current value is not NULL (an
+inline calendar entry matching `today`, or a referenced Calendar that is TRUE),
+then today's weekly entry if not NULL, then Schedule_Default; outside the
+period it returns `None`. Time-values are typed (`BACnetTimeValue::value` is a
+primitive `PropertyValue`), so Present_Value and the target writes carry the
+scheduled value's own datatype. The public `BACnetObject::tick_schedule(today,
+time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
+references): a changed value, or any value on entering the Effective_Period
+(start-up included). The server writes it to every reference at
+`Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, network
+read-only, default 16); a NULL relinquishes that slot. A failed target write
+does not prevent subsequent target writes. `set_weekly_schedule`,
+`add_exception` and `set_effective_period` return `Result` and refuse
+non-primitive values, non-specific or repeated times, out-of-range priorities
+and calendar entries.
+
+`CalendarObject` evaluates Present_Value from the bound Device clock's local
+date on every read (#1029): TRUE when any Date_List entry matches, FALSE
+without a clock. `set_present_value` is gone; `is_active_on(day)` answers for
+any `bacnet_types::calendar::SpecificDate`. `add_date_entry` returns `Result`
+and refuses out-of-range entries, as Date_List writes do. Date matching for
+both objects lives in `bacnet_types::calendar`.
 
 `List_Of_Object_Property_References` now reads as `PropertyValue::ApplicationData`
 containing concatenated bare context-tagged local DeviceObjectPropertyReference

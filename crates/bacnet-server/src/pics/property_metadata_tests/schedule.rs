@@ -39,22 +39,26 @@ fn pics_schedule_property_metadata_is_exact() {
                     second: 0,
                     hundredths: 0,
                 },
-                value: vec![0x21, 42],
+                value: PropertyValue::Unsigned(42),
             }];
             if configuration & 1 != 0 {
-                object.set_weekly_schedule(0, entries.clone());
+                object.set_weekly_schedule(0, entries.clone()).unwrap();
             }
             if configuration & 2 != 0 {
-                object.add_exception(BACnetSpecialEvent {
-                    period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::Date(Date {
-                        year: 126,
-                        month: 9,
-                        day: 14,
-                        day_of_week: 1,
-                    })),
-                    list_of_time_values: entries,
-                    event_priority: 3,
-                });
+                object
+                    .add_exception(BACnetSpecialEvent {
+                        period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::Date(
+                            Date {
+                                year: 126,
+                                month: 9,
+                                day: 14,
+                                day_of_week: 1,
+                            },
+                        )),
+                        list_of_time_values: entries,
+                        event_priority: 3,
+                    })
+                    .unwrap();
             }
             object
                 .write_property(

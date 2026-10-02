@@ -418,10 +418,10 @@ mod tests {
                 .unwrap(),
             PropertyValue::Time(frame.local_time)
         );
-        assert_eq!(
-            crate::schedule::current_time_components(frame),
-            Some((3, 9, 15))
-        );
+        let (today, now) = crate::schedule::schedule_instant(frame).unwrap();
+        assert_eq!(today.to_date(), frame.local_date);
+        assert_eq!(today.weekday(), 4);
+        assert_eq!(now, frame.local_time);
         assert_eq!(
             frame.day_of_week(),
             Some(bacnet_types::bitstring::DaysOfWeek::THURSDAY)
