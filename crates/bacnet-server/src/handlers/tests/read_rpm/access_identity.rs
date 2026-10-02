@@ -129,14 +129,18 @@ fn write_common(object: &mut dyn BACnetObject, configured: bool) {
             None,
         )
         .unwrap();
-    object
-        .write_property(
-            P::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(configured),
-            None,
-        )
-        .unwrap();
+    // Of the quartet, only Credential Data Input has Out_Of_Service (Table
+    // 12-43); the other three tables have none (#1064).
+    if object.object_identifier().object_type() == ObjectType::CREDENTIAL_DATA_INPUT {
+        object
+            .write_property(
+                P::OUT_OF_SERVICE,
+                None,
+                PropertyValue::Boolean(configured),
+                None,
+            )
+            .unwrap();
+    }
 }
 
 fn status_flags_bytes(configured: bool) -> &'static [u8] {
@@ -203,17 +207,14 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::STATUS_FLAGS, None, Ok(status_flags_bytes(configured))),
+            // No Out_Of_Service row (#1064), so the flag stays clear.
+            (P::STATUS_FLAGS, None, Ok(status_flags_bytes(false))),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(out_of_service_bytes(configured)),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
@@ -230,20 +231,19 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x92, 0x01, 0x08, 0x92, 0x01, 0x00, 0x92, 0x01, 0x01, 0x91, 111,
-                    0x91, 81, 0x91, 103,
+                    0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 6])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x08])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x00])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x01])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(8),
+                Some(7),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -283,9 +283,6 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
         let mut object = AccessUserObject::new(7, "USER-7").unwrap();
         if configured {
             object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-                .unwrap();
-            object
                 .write_property(P::USER_TYPE, None, PropertyValue::Enumerated(2), None)
                 .unwrap();
         }
@@ -295,11 +292,9 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
         db.add(Box::new(object)).unwrap();
         // Credentials is BACnetLIST and rejects any index.
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (
-                P::PRESENT_VALUE,
-                None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
-            ),
+            // Table 12-38 has no Present_Value or Assigned_Access_Rights
+            // (#1064).
+            (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PRESENT_VALUE,
                 Some(0),
@@ -326,23 +321,24 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ASSIGNED_ACCESS_RIGHTS, None, Ok(&[0x21, 0])),
+            (
+                P::ASSIGNED_ACCESS_RIGHTS,
+                None,
+                Err(ErrorCode::UNKNOWN_PROPERTY),
+            ),
             (
                 P::ASSIGNED_ACCESS_RIGHTS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::STATUS_FLAGS, None, Ok(status_flags_bytes(configured))),
+            // No Out_Of_Service row (#1064), so the flag stays clear.
+            (P::STATUS_FLAGS, None, Ok(status_flags_bytes(false))),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(out_of_service_bytes(configured)),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
@@ -358,22 +354,18 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x92, 0x01, 0x3E, 0x92, 0x01, 0x09, 0x92, 0x01, 0x00, 0x91,
-                    111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x92, 0x01, 0x3E, 0x92, 0x01, 0x09, 0x91, 111, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 5])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x3E])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x09])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x00])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x3E])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x09])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 111])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(9),
+                Some(6),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -441,17 +433,14 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::STATUS_FLAGS, None, Ok(status_flags_bytes(configured))),
+            // No Out_Of_Service row (#1064), so the flag stays clear.
+            (P::STATUS_FLAGS, None, Ok(status_flags_bytes(false))),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(out_of_service_bytes(configured)),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
@@ -468,20 +457,19 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x92, 0x01, 0x43, 0x92, 0x01, 0x2E, 0x92, 0x01, 0x20, 0x91, 111,
-                    0x91, 81, 0x91, 103,
+                    0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 6])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x43])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x2E])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x20])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(8),
+                Some(7),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

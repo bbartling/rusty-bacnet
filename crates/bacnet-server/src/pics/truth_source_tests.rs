@@ -518,15 +518,16 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyIdentifier::DESCRIPTION,
                 PropertyValue::CharacterString("d".into()),
             ),
-            (
-                PropertyIdentifier::OUT_OF_SERVICE,
-                PropertyValue::Boolean(true),
-            ),
         ],
         &[
             (
                 PropertyIdentifier::OBJECT_NAME,
                 PropertyValue::CharacterString("renamed".into()),
+            ),
+            // Table 12-5 has no Out_Of_Service or Present_Value (#1064).
+            (
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(true),
             ),
             (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(1.0)),
             (PropertyIdentifier::MINIMUM_VALUE, PropertyValue::Real(1.0)),
@@ -563,13 +564,12 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
 
     let cases = [
         (
+            // Table 12-31 has no Log_Interval or Out_Of_Service (#1064).
             ObjectType::EVENT_LOG,
             &[
                 PropertyIdentifier::LOG_ENABLE,
-                PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
             ][..],
         ),

@@ -10,9 +10,8 @@
 //! - CredentialDataInput (type 37)
 
 use bacnet_types::enums::{
-    AccessEvent, AccessUserType, AccessZoneOccupancyState, BinaryPV, DoorAlarmState,
-    DoorSecuredStatus, DoorStatus, DoorValue, EventState, LockStatus, ObjectType,
-    PropertyIdentifier, Reliability,
+    AccessEvent, AccessUserType, BinaryPV, DoorAlarmState, DoorSecuredStatus, DoorStatus,
+    DoorValue, EventState, LockStatus, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};

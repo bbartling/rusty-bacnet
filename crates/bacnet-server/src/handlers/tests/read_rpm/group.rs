@@ -128,14 +128,17 @@ fn write_common(object: &mut dyn BACnetObject, configured: bool) {
             None,
         )
         .unwrap();
-    object
-        .write_property(
-            P::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(configured),
-            None,
-        )
-        .unwrap();
+    // Only Global Group has Out_Of_Service (Table 12-57).
+    if object.object_identifier().object_type() == ObjectType::GLOBAL_GROUP {
+        object
+            .write_property(
+                P::OUT_OF_SERVICE,
+                None,
+                PropertyValue::Boolean(configured),
+                None,
+            )
+            .unwrap();
+    }
 }
 
 #[test]
@@ -185,51 +188,34 @@ fn rpm_group_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
+            // Table 12-17 has no Status_Flags, Out_Of_Service or Reliability
+            // (#1064).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
+            (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::RELIABILITY,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::PROPERTY_LIST,
-                None,
-                Ok(&[0x91, 28, 0x91, 53, 0x91, 85, 0x91, 111, 0x91, 81, 0x91, 103]),
-            ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 6])),
+            (P::PROPERTY_LIST, None, Ok(&[0x91, 28, 0x91, 53, 0x91, 85])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 3])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 53])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(7),
+                Some(4),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -421,31 +407,21 @@ fn rpm_structured_view_indexed_reads_and_bytes_are_unchanged() {
             (P::SUBORDINATE_LIST, Some(1), Ok(subordinates)),
             (P::SUBORDINATE_ANNOTATIONS, None, Ok(annotations)),
             (P::SUBORDINATE_ANNOTATIONS, Some(0), Ok(annotations)),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
+            // Table 12-34 has no Status_Flags, Out_Of_Service or Reliability
+            // (#1064).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
+            (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::RELIABILITY,
                 Some(0),
@@ -454,23 +430,17 @@ fn rpm_structured_view_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::PROPERTY_LIST,
                 None,
-                Ok(&[
-                    0x91, 28, 0x91, 208, 0x91, 207, 0x91, 211, 0x91, 210, 0x91, 111, 0x91, 81,
-                    0x91, 103,
-                ]),
+                Ok(&[0x91, 28, 0x91, 208, 0x91, 207, 0x91, 211, 0x91, 210]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 5])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 208])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 207])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 211])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 210])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(9),
+                Some(6),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

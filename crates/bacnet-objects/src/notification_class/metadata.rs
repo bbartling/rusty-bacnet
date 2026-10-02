@@ -9,8 +9,9 @@ use crate::property_metadata::{
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Preserve the implemented rows and their legacy order. The compatibility
-// status rows are optional; base conformance does not imply a write route.
+// Preserve the implemented rows and their legacy order. The status rows are
+// optional; base conformance does not imply a write route. Table 12-24 has no
+// Out_Of_Service, so there is no such row (#1064).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -18,7 +19,6 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::NOTIFICATION_CLASS, RequiredRead, None, Always),
     PropertyMetadata::new(P::PRIORITY, RequiredRead, None, ReadOnly),
@@ -47,7 +47,6 @@ mod tests {
         P::OBJECT_TYPE,
         P::STATUS_FLAGS,
         P::EVENT_STATE,
-        P::OUT_OF_SERVICE,
         P::RELIABILITY,
         P::NOTIFICATION_CLASS,
         P::PRIORITY,
@@ -107,7 +106,6 @@ mod tests {
             P::DESCRIPTION,
             P::STATUS_FLAGS,
             P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
             P::NOTIFICATION_CLASS,
             P::PRIORITY,
@@ -121,7 +119,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
-            PropertyValue::Unsigned(9)
+            PropertyValue::Unsigned(8)
         );
         for (index, value) in wire.iter().enumerate() {
             assert_eq!(
@@ -132,92 +130,82 @@ mod tests {
             );
         }
         assert_error(
-            object
-                .read_property(P::PROPERTY_LIST, Some(10))
-                .unwrap_err(),
+            object.read_property(P::PROPERTY_LIST, Some(9)).unwrap_err(),
             ErrorCode::INVALID_ARRAY_INDEX,
         );
     }
 
     #[test]
     fn property_metadata_notification_class_write_capabilities_match_dispatch() {
-        for out_of_service in [false, true] {
-            let mut object = NotificationClass::new(7, "NC-7").unwrap();
-            object
-                .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
-            let original = object.property_metadata().into_owned();
-            for row in &original {
-                let p = row.property_identifier;
-                let capability = match p {
-                    P::DESCRIPTION
-                    | P::OUT_OF_SERVICE
-                    | P::NOTIFICATION_CLASS
-                    | P::RECIPIENT_LIST => Always,
-                    _ => ReadOnly,
-                };
-                assert_eq!(row.write_capability, capability, "{p:?}");
-                assert_eq!(object.is_writable_property(p), capability.is_writable());
-                let value = object.read_property(p, None).unwrap();
-                let result = object.write_property(p, None, value, None);
-                if capability == Always {
-                    result.unwrap();
-                } else {
-                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
-                }
+        let mut object = NotificationClass::new(7, "NC-7").unwrap();
+        let original = object.property_metadata().into_owned();
+        for row in &original {
+            let p = row.property_identifier;
+            let capability = match p {
+                P::DESCRIPTION | P::NOTIFICATION_CLASS | P::RECIPIENT_LIST => Always,
+                _ => ReadOnly,
+            };
+            assert_eq!(row.write_capability, capability, "{p:?}");
+            assert_eq!(object.is_writable_property(p), capability.is_writable());
+            let value = object.read_property(p, None).unwrap();
+            let result = object.write_property(p, None, value, None);
+            if capability == Always {
+                result.unwrap();
+            } else {
+                assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
             }
+        }
+        object
+            .write_property(
+                P::NOTIFICATION_CLASS,
+                None,
+                PropertyValue::Unsigned(99),
+                None,
+            )
+            .unwrap();
+        object.set_description("configured class");
+        object.priority = [12, 34, 56];
+        object.ack_required = EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL;
+        assert_eq!(object.object_identifier().instance_number(), 7);
+        assert_eq!(
+            object.read_property(P::NOTIFICATION_CLASS, None).unwrap(),
+            PropertyValue::Unsigned(99)
+        );
+        assert!(object.is_array_property(P::PRIORITY));
+        assert!(!object.is_array_property(P::ACK_REQUIRED));
+        assert!(!object.is_array_property(P::RECIPIENT_LIST));
+        assert_error(
             object
                 .write_property(
-                    P::NOTIFICATION_CLASS,
-                    None,
-                    PropertyValue::Unsigned(99),
+                    P::RECIPIENT_LIST,
+                    Some(0),
+                    PropertyValue::ApplicationData(vec![]),
                     None,
                 )
-                .unwrap();
-            object.set_description("configured class");
-            object.priority = [12, 34, 56];
-            object.ack_required =
-                EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL;
-            assert_eq!(object.object_identifier().instance_number(), 7);
-            assert_eq!(
-                object.read_property(P::NOTIFICATION_CLASS, None).unwrap(),
-                PropertyValue::Unsigned(99)
+                .unwrap_err(),
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        );
+        // Table 12-24 has no Out_Of_Service (#1064).
+        for p in [
+            P::PRESENT_VALUE,
+            P::PRIORITY_ARRAY,
+            P::ALL,
+            P::OUT_OF_SERVICE,
+        ] {
+            assert!(!object.is_writable_property(p));
+            assert_error(
+                object.read_property(p, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
             );
-            assert!(object.is_array_property(P::PRIORITY));
-            assert!(!object.is_array_property(P::ACK_REQUIRED));
-            assert!(!object.is_array_property(P::RECIPIENT_LIST));
             assert_error(
                 object
-                    .write_property(
-                        P::RECIPIENT_LIST,
-                        Some(0),
-                        PropertyValue::ApplicationData(vec![]),
-                        None,
-                    )
+                    .write_property(p, None, PropertyValue::Null, None)
                     .unwrap_err(),
-                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                ErrorCode::UNKNOWN_PROPERTY,
             );
-            for p in [P::PRESENT_VALUE, P::PRIORITY_ARRAY, P::ALL] {
-                assert!(!object.is_writable_property(p));
-                assert_error(
-                    object.read_property(p, None).unwrap_err(),
-                    ErrorCode::UNKNOWN_PROPERTY,
-                );
-                assert_error(
-                    object
-                        .write_property(p, None, PropertyValue::Null, None)
-                        .unwrap_err(),
-                    ErrorCode::UNKNOWN_PROPERTY,
-                );
-            }
-            assert_eq!(object.property_metadata().as_ref(), original);
-            assert_eq!(object.property_list().as_ref(), ALL);
-            assert_eq!(object.required_properties().as_ref(), REQUIRED);
         }
+        assert_eq!(object.property_metadata().as_ref(), original);
+        assert_eq!(object.property_list().as_ref(), ALL);
+        assert_eq!(object.required_properties().as_ref(), REQUIRED);
     }
 }

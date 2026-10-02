@@ -10,7 +10,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
-use crate::common::{self, read_common_properties};
+use crate::common::{self, read_common_properties, read_identity_properties};
 use crate::traits::BACnetObject;
 
 mod metadata;
@@ -28,9 +28,6 @@ pub struct GroupObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: Reliability,
     /// The list of group member object identifiers.
     pub list_of_group_members: Vec<ObjectIdentifier>,
     /// The last read results for each member (populated externally).
@@ -45,9 +42,6 @@ impl GroupObject {
             oid,
             name: name.into(),
             description: String::new(),
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED,
             list_of_group_members: Vec::new(),
             present_value: Vec::new(),
         })
@@ -79,7 +73,8 @@ impl BACnetObject for GroupObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-17 has no Status_Flags, Reliability or Out_Of_Service (#1064).
+        if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
         match property {
@@ -106,11 +101,6 @@ impl BACnetObject for GroupObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -269,9 +259,6 @@ pub struct StructuredViewObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: Reliability,
     /// Node type enumeration value (per BACnetNodeType).
     pub node_type: u32,
     /// Node subtype — optional character string.
@@ -290,9 +277,6 @@ impl StructuredViewObject {
             oid,
             name: name.into(),
             description: String::new(),
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED,
             node_type: 0,
             node_subtype: String::new(),
             subordinate_list: Vec::new(),
@@ -321,7 +305,8 @@ impl BACnetObject for StructuredViewObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-34 has no Status_Flags, Reliability or Out_Of_Service (#1064).
+        if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
         match property {
@@ -357,11 +342,6 @@ impl BACnetObject for StructuredViewObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -459,7 +439,8 @@ mod tests {
         let props = g.property_list();
         assert!(props.contains(&PropertyIdentifier::LIST_OF_GROUP_MEMBERS));
         assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
-        assert!(props.contains(&PropertyIdentifier::STATUS_FLAGS));
+        // Table 12-17 has no Status_Flags (#1064).
+        assert!(!props.contains(&PropertyIdentifier::STATUS_FLAGS));
     }
 
     // -----------------------------------------------------------------------

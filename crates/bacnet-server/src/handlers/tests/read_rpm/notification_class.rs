@@ -65,17 +65,17 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
         (
             P::PROPERTY_LIST,
             None,
+            // Table 12-24 has no Out_Of_Service (#1064).
             Ok(&[
-                0x91, 28, 0x91, 111, 0x91, 36, 0x91, 81, 0x91, 103, 0x91, 17, 0x91, 86, 0x91, 1,
-                0x91, 102,
+                0x91, 28, 0x91, 111, 0x91, 36, 0x91, 103, 0x91, 17, 0x91, 86, 0x91, 1, 0x91, 102,
             ]),
         ),
-        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 9])),
+        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
         (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-        (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 102])),
+        (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 102])),
         (
             P::PROPERTY_LIST,
-            Some(10),
+            Some(9),
             Err(ErrorCode::INVALID_ARRAY_INDEX),
         ),
     ];
