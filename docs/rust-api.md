@@ -2175,11 +2175,15 @@ Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
 without timestamps is never repeated as history, and its current row carries no
-time even when that selector did not qualify. A history row is dropped only when
+time even when that selector did not qualify. Conversely, when a sibling reference
+carries a coordinate explicitly subscribed with timestamps in a round where that
+selector conveys no change, the row is timed with the selector's newest change,
+which the store keeps after delivery; a companion that already carries a time keeps
+it. A history row is dropped only when
 the next row for its coordinate repeats it exactly (overlapping selectors of one
 change, or an unchanged companion); a value that returns after a different one
 within the same clock tick stays. The header timestamp names
-the latest timestamped change conveyed. The initial report after admission or
+the latest timestamped change conveyed, a selector's kept newest change included. The initial report after admission or
 re-subscription is stamped with the Device time of admission; this is a local
 convention, since no change has been observed yet. A renewal keeps changes not yet
 conveyed, including those of a notification that fails during the renewal.

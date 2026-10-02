@@ -1,7 +1,7 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
 use super::cov_clock::cov_multiple_datetime;
-use super::multiple_items::build_items;
+use super::multiple_items::{build_items, Coordinate, LastChange};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{TimedChange, TimedClaim};
@@ -182,7 +182,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
-            let (retained, untimed) = {
+            let (retained, untimed, stamped) = {
                 let table = cov_table.read().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
@@ -310,7 +310,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     claim.add(other.key().clone(), incarnation, changes);
                     retained.push((other.clone(), Vec::new(), last, completion, remaining));
                 }
-                (retained, untimed)
+                // Live timestamped references that convey no change now keep
+                // stamping their field with their newest change (#987).
+                let mut stamped: HashMap<Coordinate, LastChange> = HashMap::new();
+                for other in table.multiple_context_references(&context) {
+                    if !other.timestamped
+                        || retained.iter().any(|(kept, ..)| kept.key() == other.key())
+                        || table
+                            .remaining_lifetime(other, now)
+                            .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                            .is_none()
+                    {
+                        continue;
+                    }
+                    if let Some(last) = store.lock().last_change(other.key(), other.generation()) {
+                        stamped.insert(
+                            (
+                                other.monitored_object_identifier,
+                                other.monitored_property,
+                                other.monitored_property_array_index,
+                            ),
+                            last,
+                        );
+                    }
+                }
+                (retained, untimed, stamped)
             };
             let claim = claim.as_mut().expect("claim created under the table guard");
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
@@ -326,12 +350,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // the larger form) by discarding the oldest queued history; the
             // latest change of every reference is always kept.
             let notification = loop {
+                let (items, stamp) = build_items(claim, &parts, &reads, &untimed, &stamped);
+                // The header names the newest change whose time is conveyed,
+                // claimed now or stamped from an earlier one.
+                let timestamp = claim
+                    .newest()
+                    .into_iter()
+                    .chain(stamp)
+                    .max_by_key(|(seq, _)| *seq)
+                    .map(|(_, frame)| cov_multiple_datetime(frame));
                 let notification = COVNotificationMultipleRequest {
                     subscriber_process_identifier: representative.subscriber_process_identifier,
                     initiating_device_identifier: device_oid,
                     time_remaining,
-                    timestamp: claim.last_frame().map(cov_multiple_datetime),
-                    list_of_cov_notifications: build_items(claim, &parts, &reads, &untimed),
+                    timestamp,
+                    list_of_cov_notifications: items,
                 };
                 let mut encoded = BytesMut::new();
                 let fits = notification.encode(&mut encoded).is_err()

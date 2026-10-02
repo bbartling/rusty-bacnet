@@ -359,6 +359,11 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
             v.property_identifier
         );
     }
+    let pv_time = values
+        .iter()
+        .find(|v| v.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+        .unwrap()
+        .time_of_change;
     let pv_before = baseline(&f, &pv).await;
     state
         .lock()
@@ -373,10 +378,16 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
         panic!()
     };
     let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
-    assert!(report.list_of_cov_notifications[0]
-        .list_of_values
-        .iter()
-        .all(|v| v.time_of_change.is_none()));
+    // The unqualified timestamped PV selector adds no companion timestamps,
+    // but its own field, carried by the Value_Source report, keeps the time
+    // of the selector's last change (#987).
+    for v in &report.list_of_cov_notifications[0].list_of_values {
+        let expected = (v.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+            .then_some(pv_time)
+            .flatten();
+        assert_eq!(v.time_of_change, expected, "{:?}", v.property_identifier);
+    }
+    assert_eq!(report.timestamp.map(|(_, time)| Some(time)), Some(pv_time));
     assert_eq!(baseline(&f, &pv).await, pv_before);
     assert!(baseline(&f, &source).await.unwrap().command().is_some());
     f.finish(false).await;

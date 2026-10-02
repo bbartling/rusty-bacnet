@@ -1,7 +1,8 @@
 //! Item assembly for one COV-multiple notification: queued timestamped history
 //! followed by one current value per coordinate.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -13,16 +14,22 @@ use crate::cov::CovSubscriptionSnapshot;
 /// Object, property and index of a subscribed coordinate.
 pub(super) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
 
+/// Sequence and clock frame of a timestamped reference's newest change.
+pub(super) type LastChange = (u64, ClockFrame);
+
 /// Build the items conveyed for `retained` references. Untimestamped
 /// references supply their prepared current values; timestamped references
 /// supply their claimed changes. `untimed` holds coordinates the context
-/// explicitly subscribes without timestamps.
+/// explicitly subscribes without timestamps, and `stamped` the coordinates of
+/// timestamped references that convey no change now, with their newest one.
+/// Returns the items and the newest of those changes whose time they carry.
 pub(super) fn build_items(
     claim: &TimedClaim,
     retained: &[(&CovSubscriptionSnapshot, &[COVNotificationValue])],
     reads: &MultipleReads,
     untimed: &HashSet<Coordinate>,
-) -> Vec<COVNotificationItem> {
+    stamped: &HashMap<Coordinate, LastChange>,
+) -> (Vec<COVNotificationItem>, Option<LastChange>) {
     let mut items: Vec<COVNotificationItem> = Vec::new();
     let item_for = |items: &mut Vec<COVNotificationItem>, oid: ObjectIdentifier| {
         items
@@ -121,6 +128,31 @@ pub(super) fn build_items(
                 .flatten();
         }
     }
+    // An explicit timestamped selector that conveys no change this round
+    // still owes its field a time when a sibling carries that field without
+    // one: the time the selector last saw the field change (§13.17.3.1.2.4;
+    // #987). A companion that already carries a time keeps it.
+    let mut stamp: Option<LastChange> = None;
+    for (index, item) in items.iter_mut().enumerate() {
+        let oid = item.monitored_object_identifier;
+        for value in &mut item.list_of_values[start(index)..] {
+            let coordinate = (
+                oid,
+                Some(value.property_identifier),
+                value.property_array_index,
+            );
+            let Some(&(seq, frame)) = stamped.get(&coordinate) else {
+                continue;
+            };
+            if value.time_of_change.is_none() {
+                value.time_of_change = Some(frame.local_time);
+                stamp = Some(match stamp {
+                    Some(newest) if newest.0 > seq => newest,
+                    _ => (seq, frame),
+                });
+            }
+        }
+    }
     // An explicit untimestamped selector governs its coordinate whether or not
     // it qualified this round, over any timestamped companion (§13.17.3.1.2.4).
     for (index, item) in items.iter_mut().enumerate() {
@@ -139,7 +171,7 @@ pub(super) fn build_items(
         item.list_of_values =
             collapse_repeats(std::mem::take(&mut item.list_of_values), start(index));
     }
-    items
+    (items, stamp)
 }
 
 /// Drop each history row (the first `history` values) whose next row for the

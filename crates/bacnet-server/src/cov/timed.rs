@@ -123,6 +123,11 @@ struct TimedHistory {
     /// Latest observation already captured or conveyed; the next change
     /// qualifies against it rather than the last completed delivery.
     baseline: Option<CovObservation>,
+    /// Sequence and clock frame of the newest change captured or conveyed,
+    /// kept once it is delivered and across renewals: the time an explicit
+    /// timestamped selector still reports for its field in a round it did
+    /// not change in (#987).
+    last_change: Option<(u64, ClockFrame)>,
     /// Sequence of the newest captured or conveyed change.
     latest: u64,
     /// Sequence of the newest delivered change. An older change returned by
@@ -277,6 +282,7 @@ impl TimedHistories {
                 incarnation,
                 generation,
                 baseline: None,
+                last_change: None,
                 latest: 0,
                 committed: 0,
                 delay,
@@ -327,6 +333,16 @@ impl TimedHistories {
         self.history(key, generation)?.baseline.as_ref()
     }
 
+    /// Sequence and clock frame of the newest change a live generation's
+    /// reference captured or conveyed, delivered or not.
+    pub(crate) fn last_change(
+        &self,
+        key: &CovSubscriptionKey,
+        generation: u64,
+    ) -> Option<(u64, ClockFrame)> {
+        self.history(key, generation)?.last_change
+    }
+
     /// Queue a captured change and make it the reference's baseline, evicting
     /// older pending changes if the context bound is exceeded. Returns `false`
     /// when the generation is no longer live and nothing was queued.
@@ -356,6 +372,7 @@ impl TimedHistories {
         self.next_seq += 1;
         if let Some(history) = self.history_mut(key, generation) {
             history.baseline = Some(change.observation.clone());
+            history.last_change = Some((change.seq, change.frame));
             history.latest = change.seq;
         }
         change
@@ -668,13 +685,13 @@ impl TimedClaim {
         all
     }
 
-    /// Clock frame of the most recently captured claimed change.
-    pub(crate) fn last_frame(&self) -> Option<ClockFrame> {
+    /// Sequence and clock frame of the most recently captured claimed change.
+    pub(crate) fn newest(&self) -> Option<(u64, ClockFrame)> {
         self.changes
             .iter()
             .filter_map(|(_, _, changes)| changes.last())
             .max_by_key(|change| change.seq)
-            .map(|change| change.frame)
+            .map(|change| (change.seq, change.frame))
     }
 
     /// The notification carrying these changes was delivered: retire them.
