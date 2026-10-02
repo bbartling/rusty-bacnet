@@ -5,7 +5,8 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::{Error, ErrorDetail};
 use pyo3::create_exception;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
 
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
 
@@ -15,6 +16,33 @@ create_exception!(rusty_bacnet, BacnetProtocolError, BacnetError);
 create_exception!(rusty_bacnet, BacnetTimeoutError, BacnetError);
 create_exception!(rusty_bacnet, BacnetRejectError, BacnetError);
 create_exception!(rusty_bacnet, BacnetAbortError, BacnetError);
+
+/// `BacnetTransportError`, built at first use: pyo3's `create_exception!`
+/// takes one base, and this class derives from both `BacnetError` and
+/// `OSError` (#1120).
+static TRANSPORT_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+/// `errno` module names for the `io::ErrorKind`s that have a counterpart,
+/// used when the error did not come from the operating system. The module
+/// resolves each name to this platform's value (Windows reports the Winsock
+/// codes), so `e.errno == errno.EADDRINUSE` holds everywhere.
+const KIND_ERRNO_NAMES: [(std::io::ErrorKind, &str); 15] = [
+    (std::io::ErrorKind::AddrInUse, "EADDRINUSE"),
+    (std::io::ErrorKind::AddrNotAvailable, "EADDRNOTAVAIL"),
+    (std::io::ErrorKind::ConnectionRefused, "ECONNREFUSED"),
+    (std::io::ErrorKind::ConnectionReset, "ECONNRESET"),
+    (std::io::ErrorKind::ConnectionAborted, "ECONNABORTED"),
+    (std::io::ErrorKind::NotConnected, "ENOTCONN"),
+    (std::io::ErrorKind::PermissionDenied, "EACCES"),
+    (std::io::ErrorKind::NotFound, "ENOENT"),
+    (std::io::ErrorKind::AlreadyExists, "EEXIST"),
+    (std::io::ErrorKind::BrokenPipe, "EPIPE"),
+    (std::io::ErrorKind::TimedOut, "ETIMEDOUT"),
+    (std::io::ErrorKind::WouldBlock, "EAGAIN"),
+    (std::io::ErrorKind::Interrupted, "EINTR"),
+    (std::io::ErrorKind::InvalidInput, "EINVAL"),
+    (std::io::ErrorKind::HostUnreachable, "EHOSTUNREACH"),
+];
 
 /// The `BacnetProtocolError` attributes a structured Clause 21 error body
 /// fills in. Each is `None` unless the body carried it, including on the
@@ -79,8 +107,56 @@ pub fn to_py_err(err: Error) -> PyErr {
             });
             py_err
         }
+        Error::Transport(io) => transport_error(io),
         _ => BacnetError::new_err(err.to_string()),
     }
+}
+
+/// `BacnetTransportError` for an `io::Error`: `errno` is the operating
+/// system's code when the error carries one, else the code for its kind where
+/// one exists, else `None`. `strerror` is the error's message. Falls back to
+/// a plain `BacnetError` when Python is finalizing.
+fn transport_error(io: std::io::Error) -> PyErr {
+    let message = io.to_string();
+    crate::py_async::attach(|py| {
+        let errno = io.raw_os_error().or_else(|| kind_errno(py, io.kind()));
+        let class = transport_error_type(py)?.bind(py);
+        let instance = match errno {
+            Some(errno) => class.call1((errno, &message))?,
+            None => class.call1((&message,))?,
+        };
+        Ok(PyErr::from_value(instance))
+    })
+    .unwrap_or_else(|_| BacnetError::new_err(message))
+}
+
+fn kind_errno(py: Python<'_>, kind: std::io::ErrorKind) -> Option<i32> {
+    let name = KIND_ERRNO_NAMES.iter().find(|(k, _)| *k == kind)?.1;
+    py.import("errno").ok()?.getattr(name).ok()?.extract().ok()
+}
+
+fn transport_error_type(py: Python<'_>) -> PyResult<&Py<PyType>> {
+    TRANSPORT_ERROR.get_or_try_init(py, || {
+        let builtins = py.import("builtins")?;
+        let bases = PyTuple::new(
+            py,
+            [
+                py.get_type::<BacnetError>().into_any(),
+                builtins.getattr("OSError")?,
+            ],
+        )?;
+        let namespace = PyDict::new(py);
+        namespace.set_item("__module__", "rusty_bacnet")?;
+        namespace.set_item(
+            "__doc__",
+            "A transport I/O failure: a bind, listen, dial or socket error. \
+             Also an OSError, with errno and strerror from the underlying error.",
+        )?;
+        let class = builtins
+            .getattr("type")?
+            .call1(("BacnetTransportError", bases, namespace))?;
+        Ok(class.cast_into::<PyType>()?.unbind())
+    })
 }
 
 fn protocol_error(message: String, class: u32, code: u32, detail: Option<ErrorDetail>) -> PyErr {
@@ -165,6 +241,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("BacnetRejectError", m.py().get_type::<BacnetRejectError>())?;
     m.add("BacnetAbortError", m.py().get_type::<BacnetAbortError>())?;
+    m.add(
+        "BacnetTransportError",
+        transport_error_type(m.py())?.bind(m.py()),
+    )?;
     Ok(())
 }
 
@@ -263,6 +343,51 @@ mod tests {
                 .extract()
                 .unwrap();
             assert_eq!(sessions, [1, 4]);
+        });
+    }
+
+    #[test]
+    fn transport_errors_are_oserrors_with_errno() {
+        Python::initialize();
+        Python::attach(|py| {
+            let errno = |error: &PyErr| -> Option<i32> {
+                error.value(py).getattr("errno").unwrap().extract().unwrap()
+            };
+            let os_error = std::io::Error::from_raw_os_error(98);
+            let from_os = to_py_err(Error::Transport(os_error));
+            assert!(from_os.is_instance(py, transport_error_type(py).unwrap().bind(py)));
+            assert!(from_os.is_instance_of::<BacnetError>(py));
+            assert!(from_os.is_instance_of::<pyo3::exceptions::PyOSError>(py));
+            assert_eq!(errno(&from_os), Some(98));
+            assert!(!from_os.value(py).getattr("strerror").unwrap().is_none());
+
+            // No OS code: the kind's errno, resolved by Python's errno module.
+            let from_kind = to_py_err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "hub bind",
+            )));
+            let expected: i32 = py
+                .import("errno")
+                .unwrap()
+                .getattr("EADDRINUSE")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(errno(&from_kind), Some(expected));
+            assert_eq!(
+                from_kind
+                    .value(py)
+                    .getattr("strerror")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "hub bind"
+            );
+
+            // A kind with no counterpart leaves errno None.
+            let other = to_py_err(Error::Transport(std::io::Error::other("closed")));
+            assert!(other.is_instance(py, transport_error_type(py).unwrap().bind(py)));
+            assert_eq!(errno(&other), None);
         });
     }
 }
