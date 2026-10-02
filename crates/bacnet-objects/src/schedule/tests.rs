@@ -314,7 +314,7 @@ fn schedule_opr_list_add_and_read() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let r = BACnetObjectPropertyReference::new(oid, PropertyIdentifier::PRESENT_VALUE.to_raw());
-    sched.add_object_property_reference(r.clone());
+    sched.add_object_property_reference(r.clone()).unwrap();
 
     let val = sched
         .read_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES, None)
@@ -330,14 +330,18 @@ fn schedule_opr_list_multiple_references() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
     let oid1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let oid2 = ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 5).unwrap();
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        oid1,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        oid2,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
+    sched
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            oid1,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
+    sched
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            oid2,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
 
     let val = sched
         .read_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES, None)

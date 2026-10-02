@@ -1724,7 +1724,10 @@ Loop's measured input has its own route,
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
 `ScheduleObject::add_object_property_reference` retains a complete local
-`BACnetObjectPropertyReference`, including its optional target array index.
+`BACnetObjectPropertyReference`, including its optional target array index;
+`set_object_property_references` replaces the whole list. Both return `Result`
+and refuse a list past 1,024 references (RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY).
 `ScheduleObject::evaluate(today, time, calendar_active)` calculates
 Present_Value as Clause 12.24.4 orders it (#1028): within Effective_Period, the
 best-priority special event in effect whose current value is not NULL (an
@@ -1736,8 +1739,8 @@ scheduled value's own datatype. The public `BACnetObject::tick_schedule(today,
 time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
 references): a changed value, or any value on entering the Effective_Period
 (start-up included). The server writes it to every reference at
-`Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, network
-read-only, default 16); a NULL relinquishes that slot. A failed target write
+`Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, default
+16); a NULL relinquishes that slot. A failed target write
 does not prevent subsequent target writes. `set_weekly_schedule`,
 `add_exception` and `set_effective_period` return `Result` and refuse
 non-primitive values, non-specific or repeated times, out-of-range priorities
@@ -1755,17 +1758,37 @@ NO_SPACE_TO_WRITE_PROPERTY). After a WriteProperty, WritePropertyMultiple or
 evaluation at once, as the tick would, and fans COV out for the targets it
 writes. Reliability is CONFIGURATION_ERROR, with FAULT in Status_Flags, while
 the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
-are not all of one datatype (#1056); the Schedule still writes its references.
-Whether each referenced property accepts that datatype is not checked.
+are not all of one datatype (#1056), or while a referenced property refused a
+value of that datatype at its last write (#1086); the Schedule still writes its
+references. The server reports each write's per-target result through the
+public `BACnetObject::complete_schedule_write(write, outcomes)` hook, one
+`ScheduleTargetOutcome` (`Accepted`, `DatatypeRefused` for INVALID_DATA_TYPE or
+DATATYPE_NOT_SUPPORTED, `Failed` otherwise) per reference. A refusal clears
+when that target later takes a value or leaves the list; a NULL, or an
+out-of-service value of another datatype, counts for nothing.
+
+List_Of_Object_Property_References and Priority_For_Writing are
+network-writable too (#1088), through the setters' checks. The list is written
+whole, as the bytes a read returns; a member naming a Device is refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, since the Schedule writes only local
+targets. After a change the next pass sends the current Present_Value to the new
+list at the new priority (in service only inside Effective_Period; out of
+service at once), and relinquishes, with a NULL at the old priority, each slot
+the Schedule holds that the change leaves behind: a dropped reference, or every
+reference when the priority moves. A Schedule holds slots from a write of a
+non-NULL value until it leaves its Effective_Period, so one out of season
+clears nothing another Schedule may own.
 
 While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
 primitive value, NULL included (INVALID_DATA_TYPE otherwise, and
 WRITE_ACCESS_DENIED in service), and the tick leaves it alone. Every accepted
 write goes on to the references at `Priority_For_Writing`, a NULL
 relinquishing, in the pass the committed write triggers. The public
-`BACnetObject::take_simulated_schedule_write()` hook hands that write to the
-pass once, before `tick_schedule`, and needs no clock, so a value written on
-the object directly goes out at the next tick. When Out_Of_Service returns to
+`BACnetObject::take_owed_schedule_writes()` hook hands the pass what a Schedule
+owes outside its calculation, once and before `tick_schedule`: the
+relinquishing NULLs a change of references or priority owes, then that
+written value. It needs no clock, so a value written on the object directly
+goes out at the next tick. When Out_Of_Service returns to
 FALSE the evaluation runs at once and takes over. A special event's priority is
 a `u64` (`BACnetSpecialEvent::event_priority`): the shared codec decodes any
 Unsigned there, and the object refuses one outside 1 to 16 with

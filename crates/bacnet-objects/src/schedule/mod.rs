@@ -26,10 +26,11 @@ mod evaluation;
 mod metadata;
 mod out_of_service;
 mod reliability;
+mod targets;
 mod writes;
 
 pub use calendar::CalendarObject;
-pub use evaluation::ScheduleWrite;
+pub use evaluation::{ScheduleTargetOutcome, ScheduleWrite};
 
 // ---------------------------------------------------------------------------
 // Schedule (type 17)
@@ -48,14 +49,18 @@ pub use evaluation::ScheduleWrite;
 ///
 /// Time-values and Schedule_Default hold values of a primitive datatype; the
 /// setters refuse anything else. Weekly_Schedule, Exception_Schedule,
-/// Effective_Period and Schedule_Default are network-writable, through the
-/// same checks as the setters; after such a write the bundled server runs the
-/// evaluation again at once.
+/// Effective_Period, Schedule_Default, List_Of_Object_Property_References and
+/// Priority_For_Writing are network-writable, through the same checks as the
+/// setters; after such a write the bundled server runs the evaluation again
+/// at once. A change to the references or the priority sends the current
+/// value to the new targets and relinquishes the slots it leaves behind (see
+/// [`set_object_property_references`](Self::set_object_property_references)).
 ///
 /// Reliability is CONFIGURATION_ERROR while the non-NULL values in the two
-/// schedules and Schedule_Default are not all of one datatype (Clause
-/// 12.24.13), re-checked on every change to them. Such a schedule still
-/// evaluates and writes its references.
+/// schedules and Schedule_Default are not all of one datatype, or while a
+/// referenced property refused the schedule's datatype at its last write
+/// (Clause 12.24.13). Such a schedule still evaluates and writes its
+/// references.
 ///
 /// While Out_Of_Service is TRUE the calculation leaves Present_Value alone and
 /// a client may write it instead; each such write goes on to the references
@@ -73,8 +78,12 @@ pub struct ScheduleObject {
     /// (Out_Of_Service TRUE); restored on the return to service.
     reliability_before_out_of_service: Option<Reliability>,
     /// Whether the current CONFIGURATION_ERROR was raised by this object's
-    /// own consistency check, which may then clear it.
+    /// own consistency check, either half, which may then clear it.
     owns_configuration_error: bool,
+    /// References whose last write of a value in the schedule's datatype
+    /// failed for its datatype: the reference half of the consistency check
+    /// (`reliability.rs`, #1086).
+    refusing_references: Vec<BACnetObjectPropertyReference>,
     status_flags: StatusFlags,
     /// 7-day weekly schedule: index 0 = Monday, index 6 = Sunday.
     weekly_schedule: [Vec<BACnetTimeValue>; 7],
@@ -91,6 +100,14 @@ pub struct ScheduleObject {
     /// A Present_Value written while Out_Of_Service is TRUE that has not been
     /// sent to the references yet.
     simulated_write: Option<PropertyValue>,
+    /// The slots this Schedule's value holds on its targets (`targets.rs`).
+    held: Option<targets::HeldCommand>,
+    /// NULL writes owed to the slots a change of the references or the
+    /// priority left behind.
+    relinquish_owed: Vec<ScheduleWrite>,
+    /// A change of the references or the priority owes the current
+    /// Present_Value to the new list at the new priority.
+    rewrite_owed: bool,
 }
 
 impl ScheduleObject {
@@ -117,6 +134,7 @@ impl ScheduleObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             owns_configuration_error: false,
+            refusing_references: Vec::new(),
             status_flags: StatusFlags::empty(),
             weekly_schedule: [vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
             exception_schedule: Vec::new(),
@@ -128,6 +146,9 @@ impl ScheduleObject {
             priority_for_writing: 16, // default: lowest priority
             in_effective_period: false,
             simulated_write: None,
+            held: None,
+            relinquish_owed: Vec::new(),
+            rewrite_owed: false,
         })
     }
 
@@ -187,17 +208,60 @@ impl ScheduleObject {
 
     /// Set Priority_For_Writing, 1 (highest) to 16 (VALUE_OUT_OF_RANGE
     /// otherwise).
+    ///
+    /// The current value then goes to the references at the new priority,
+    /// and the slots held at the old one are relinquished, as for
+    /// [`set_object_property_references`](Self::set_object_property_references).
     pub fn set_priority_for_writing(&mut self, priority: u8) -> Result<(), Error> {
         if !(1..=16).contains(&priority) {
             return Err(common::value_out_of_range_error());
         }
         self.priority_for_writing = priority;
+        self.targets_changed();
         Ok(())
     }
 
     /// Append a local target reference, retaining its optional array index.
-    pub fn add_object_property_reference(&mut self, r: BACnetObjectPropertyReference) {
+    ///
+    /// Refuses a reference past the 1,024-member cap (RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY). The new member gets the current value as
+    /// [`set_object_property_references`](Self::set_object_property_references)
+    /// describes.
+    pub fn add_object_property_reference(
+        &mut self,
+        r: BACnetObjectPropertyReference,
+    ) -> Result<(), Error> {
+        if self.list_of_object_property_references.len() >= targets::MAX_REFERENCES {
+            return Err(writes::no_space_error());
+        }
         self.list_of_object_property_references.push(r);
+        self.targets_changed();
+        Ok(())
+    }
+
+    /// Replace List_Of_Object_Property_References with local target
+    /// references, each retaining its optional array index.
+    ///
+    /// Refuses more than 1,024 references (RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY), leaving the list unchanged. Once
+    /// accepted, the next schedule pass sends the current Present_Value to
+    /// every reference at Priority_For_Writing, if the object is writing at
+    /// all: in service only inside Effective_Period. It also relinquishes, with
+    /// a NULL at the priority it filled, each slot this Schedule holds on a
+    /// reference the change drops. A Schedule holds a slot from a write of a
+    /// value other than NULL until it leaves its Effective_Period; one outside
+    /// it relinquishes nothing, so as not to clear the command of another
+    /// Schedule in season on the same targets (Clause 12.24.6).
+    pub fn set_object_property_references(
+        &mut self,
+        references: Vec<BACnetObjectPropertyReference>,
+    ) -> Result<(), Error> {
+        if references.len() > targets::MAX_REFERENCES {
+            return Err(writes::no_space_error());
+        }
+        self.list_of_object_property_references = references;
+        self.targets_changed();
+        Ok(())
     }
 
     /// Read the current present_value.
@@ -360,6 +424,18 @@ impl BACnetObject for ScheduleObject {
             }
             return self.write_effective_period(value);
         }
+        if property == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES {
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            return self.write_object_property_references(value);
+        }
+        if property == PropertyIdentifier::PRIORITY_FOR_WRITING {
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            return self.write_priority_for_writing(value);
+        }
         if property == PropertyIdentifier::SCHEDULE_DEFAULT {
             if array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
@@ -451,8 +527,16 @@ impl BACnetObject for ScheduleObject {
         Ok(self.recompute_reliability())
     }
 
-    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
-        self.take_simulated_write()
+    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
+        self.take_owed_writes()
+    }
+
+    fn complete_schedule_write(
+        &mut self,
+        write: &ScheduleWrite,
+        outcomes: &[ScheduleTargetOutcome],
+    ) -> bool {
+        self.complete_write(write, outcomes)
     }
 
     fn tick_schedule(
@@ -467,22 +551,20 @@ impl BACnetObject for ScheduleObject {
             return None;
         }
         let Some(value) = self.evaluate(today, time, calendar_active) else {
+            // Inactive: nothing is written, and the slots the last value
+            // filled are no longer this Schedule's to relinquish
+            // (`targets.rs`). Entering the period writes anyway.
             self.in_effective_period = false;
+            self.rewrite_owed = false;
+            self.held = None;
             return None;
         };
         let entered = !std::mem::replace(&mut self.in_effective_period, true);
-        if !entered && value == self.present_value {
+        if !entered && !self.rewrite_owed && value == self.present_value {
             return None;
         }
-        self.present_value = value;
-        if self.list_of_object_property_references.is_empty() {
-            return None;
-        }
-        Some(ScheduleWrite {
-            value: self.present_value.clone(),
-            priority: self.priority_for_writing,
-            references: self.list_of_object_property_references.clone(),
-        })
+        self.present_value = value.clone();
+        self.command(value)
     }
 }
 
@@ -500,6 +582,9 @@ mod out_of_service_tests;
 
 #[cfg(test)]
 mod reliability_tests;
+
+#[cfg(test)]
+mod targets_tests;
 
 #[cfg(test)]
 mod write_tests;

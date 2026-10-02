@@ -11,9 +11,11 @@
 //! to a calculated change, so the written value goes on to
 //! List_Of_Object_Property_References at Priority_For_Writing, a NULL
 //! relinquishing. The object keeps the value owed and the server collects it
-//! through `take_simulated_schedule_write` in the pass that also carries the
+//! through `take_owed_schedule_writes` in the pass that also carries the
 //! calculated writes: at once after the write commits, or at the next tick
-//! for a write made on the object directly. Local choices:
+//! for a write made on the object directly. A change of the references or
+//! the priority while out of service owes the current value the same way
+//! (`targets.rs`). Local choices:
 //!
 //! - Every accepted write is owed, even of the value already held, so the
 //!   targets end up holding what Present_Value reads.
@@ -29,14 +31,16 @@
 //!
 //! Present_Value is not among the properties Reliability's consistency check
 //! covers (Clause 12.24.13), so a written value of another datatype raises no
-//! fault, and a Reliability the client simulates meanwhile is left as it is.
-//! A written value reaches the targets whatever Reliability holds, as
-//! calculated values do.
+//! fault, even when a target refuses it; a target refusing one of the
+//! schedule's own datatype counts as a calculated refusal would
+//! (`reliability.rs`). A Reliability the client simulates meanwhile is left
+//! as it is. A written value reaches the targets whatever Reliability holds,
+//! as calculated values do.
 
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::{ScheduleObject, ScheduleWrite};
+use super::ScheduleObject;
 use crate::common;
 
 impl ScheduleObject {
@@ -58,19 +62,5 @@ impl ScheduleObject {
         self.present_value = value.clone();
         self.simulated_write = Some(value);
         Ok(())
-    }
-
-    /// The write a client's Present_Value owes the references, once; `None`
-    /// when nothing is owed or there are no references.
-    pub(super) fn take_simulated_write(&mut self) -> Option<ScheduleWrite> {
-        let value = self.simulated_write.take()?;
-        if self.list_of_object_property_references.is_empty() {
-            return None;
-        }
-        Some(ScheduleWrite {
-            value,
-            priority: self.priority_for_writing,
-            references: self.list_of_object_property_references.clone(),
-        })
     }
 }

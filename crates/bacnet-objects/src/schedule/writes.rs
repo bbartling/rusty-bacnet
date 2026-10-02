@@ -82,8 +82,10 @@ fn chunks(value: PropertyValue) -> Result<Vec<Vec<u8>>, Error> {
 /// Decode every element in `value`, back to back within each chunk.
 ///
 /// `starts` says whether a tag can begin an element of the property's
-/// datatype; `decode` is the shared codec for one element.
-fn decode_elements<T>(
+/// datatype; `decode` is the shared codec for one element. An element that
+/// starts with any other tag is INVALID_DATA_TYPE, one that doesn't decode
+/// INVALID_DATA_ENCODING.
+pub(super) fn decode_elements<T>(
     value: PropertyValue,
     starts: fn(&Tag) -> bool,
     decode: ElementDecoder<T>,

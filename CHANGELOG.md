@@ -107,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     misconfigured Schedule keeps writing its references: Clause 12.24.4 makes
     those writes unconditional, and a target that can't take a value refuses
     only that write. Whether each referenced property accepts the datatype is
-    not checked yet.
+    judged from the writes (#1086, below).
 
 - **Schedule Present_Value while Out_Of_Service (wire):** a Schedule's
   Present_Value is now writable while Out_Of_Service is TRUE, and each
@@ -126,10 +126,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before the return still goes out first.
   - A Reliability simulated meanwhile doesn't hold the write back, and the
     written value's datatype doesn't count towards CONFIGURATION_ERROR.
-  - New public hook `BACnetObject::take_simulated_schedule_write`, which the
+  - New public hook `BACnetObject::take_owed_schedule_writes` (named
+    `take_simulated_schedule_write` until #1088 widened it), which the
     schedule pass calls before `tick_schedule`. A value written on the
     object directly, outside the server's write paths, goes out at the next
     tick; it needs no valid Device clock.
+
+- **Schedule reference and priority writes, and the reference half of
+  Reliability (wire, breaking):** List_Of_Object_Property_References and
+  Priority_For_Writing are now network-writable, and a target that refuses
+  the schedule's datatype faults the Schedule (#1088, #1086).
+  - WriteProperty, WritePropertyMultiple and `write_local` take
+    Priority_For_Writing as an Unsigned from 1 to 16 (VALUE_OUT_OF_RANGE
+    otherwise), and the reference list whole, in the form a read returns. A
+    member that names a Device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the
+    error Clause 12.24.10 gives a Schedule that writes only objects in its
+    own device, as this one does; a member of another datatype is
+    INVALID_DATA_TYPE, a malformed one INVALID_DATA_ENCODING, and more than
+    1,024 members RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A refused write
+    changes nothing. Before, both properties answered WRITE_ACCESS_DENIED;
+    the PICS now lists them writable. AddListElement and RemoveListElement
+    still can't edit the list.
+  - After a change, the pass the write triggers sends the current
+    Present_Value to the new list at the new priority, if the Schedule is
+    writing at all (in service, only inside Effective_Period). It also
+    relinquishes, with a NULL at the old priority, every slot the Schedule
+    holds that the change leaves behind: a dropped reference, or every
+    reference when the priority moves. A Schedule holds a slot from a write of
+    a non-NULL value until it leaves its Effective_Period, so a Schedule out
+    of season clears nothing that another Schedule on the same targets may now
+    command (Clause 12.24.6).
+  - Reliability is also CONFIGURATION_ERROR while a referenced property
+    refused, with INVALID_DATA_TYPE or DATATYPE_NOT_SUPPORTED, the last value
+    of the schedule's datatype written to it. The fault shows at the first
+    such write, clears when that target takes a value or leaves the list, and
+    combines with the contents check under the same rule: the object clears
+    only a fault it raised. A NULL, or a value of another datatype written
+    while Out_Of_Service, counts for nothing. The Schedule keeps writing its
+    other targets.
+  - Breaking: `ScheduleObject::add_object_property_reference` returns
+    `Result` (the 1,024 cap), and `set_object_property_references` replaces
+    the list. `BACnetObject::take_owed_schedule_writes` returns every owed
+    write, relinquishments first, as a `Vec`. The new
+    `BACnetObject::complete_schedule_write` hook takes one
+    `ScheduleTargetOutcome` per reference after each write; the bundled
+    server calls it.
 
 - Staging objects support COV (#988). A SubscribeCOV notification carries
   Present_Value, Status_Flags and Present_Stage, and goes out when
