@@ -15,15 +15,16 @@ use super::metadata;
 /// BACnet AlertEnrollment object (type 52).
 ///
 /// Provides the Alert Enrollment property surface from ASHRAE 135-2020 Table
-/// 12-61. `Present_Value` identifies the object that last provided an alert;
-/// recording that source does not itself evaluate or generate an event.
+/// 12-61. `Present_Value` names whichever object most recently handed this
+/// enrollment an alert to distribute; recording that source does not itself
+/// evaluate or generate an event.
 pub struct AlertEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     /// Event_State; NORMAL while event detection is disabled.
     pub(super) event_state: EventState,
-    /// Object that last provided an alert.
+    /// Source of the most recent alert handed to this enrollment.
     pub present_value: ObjectIdentifier,
     /// Whether event detection is enabled.
     ///
@@ -47,8 +48,8 @@ pub struct AlertEnrollmentObject {
 }
 
 impl AlertEnrollmentObject {
-    /// Create a new AlertEnrollment object with the object that most recently
-    /// provided an alert.
+    /// Create a new AlertEnrollment object whose Present_Value starts as
+    /// `initial_source`, the latest alert source.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
@@ -70,7 +71,7 @@ impl AlertEnrollmentObject {
         })
     }
 
-    /// Record the object that most recently provided an alert.
+    /// Record `source` as the object behind the latest alert.
     ///
     /// This source-ownership hook updates only `Present_Value`; it does not
     /// evaluate an alert, change event/acknowledgement history, or generate a

@@ -705,8 +705,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// across evaluation cycles: the pending (delayed) transition countdown,
     /// the CHANGE_OF_VALUE detection baseline (the monitored sample at the
     /// latest NORMAL indication, per Clause 13.3.3), and
-    /// the value that caused the last transition to OFFNORMAL (Clause 13.3.2
-    /// condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
+    /// the monitored value behind the most recent OFFNORMAL transition (Clause
+    /// 13.3.2 condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
     /// it deliberately bypasses the network property model: none of the three
     /// slots is a BACnet property, and 135-2020 assigns their initialization
     /// to local matters.
