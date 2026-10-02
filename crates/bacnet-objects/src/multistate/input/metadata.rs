@@ -420,18 +420,22 @@ mod tests {
             object
                 .write_property(P::ALARM_VALUES, None, at_cap.clone(), None)
                 .unwrap();
-            for (index, value, class, code) in [
+            // A refused element is named by its position (#1048): the
+            // out-of-range second value, and the first value past the cap.
+            for (index, value, class, code, element) in [
                 (
                     Some(0),
                     PropertyValue::List(vec![]),
                     ErrorClass::PROPERTY,
                     ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                    None,
                 ),
                 (
                     None,
                     PropertyValue::Unsigned(1),
                     ErrorClass::PROPERTY,
                     ErrorCode::INVALID_DATA_TYPE,
+                    None,
                 ),
                 (
                     None,
@@ -441,6 +445,7 @@ mod tests {
                     ]),
                     ErrorClass::PROPERTY,
                     ErrorCode::VALUE_OUT_OF_RANGE,
+                    Some(2),
                 ),
                 (
                     None,
@@ -450,13 +455,23 @@ mod tests {
                     ]),
                     ErrorClass::RESOURCES,
                     ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+                    Some(crate::multistate::MAX_ALARM_VALUES as u32 + 1),
                 ),
             ] {
-                assert!(
-                    matches!(object.write_property(P::ALARM_VALUES, index, value, None),
-                    Err(Error::Protocol { class: actual_class, code: actual_code })
-                    if actual_class == u32::from(class.to_raw()) && actual_code == u32::from(code.to_raw()))
-                );
+                let result = object.write_property(P::ALARM_VALUES, index, value, None);
+                match element {
+                    Some(position) => crate::common::assert_list_element_refused(
+                        result,
+                        class,
+                        code,
+                        position,
+                        &format!("{code:?}"),
+                    ),
+                    None => assert!(
+                        matches!(result, Err(Error::Protocol { class: actual_class, code: actual_code })
+                        if actual_class == u32::from(class.to_raw()) && actual_code == u32::from(code.to_raw()))
+                    ),
+                }
                 assert_eq!(object.read_property(P::ALARM_VALUES, None).unwrap(), at_cap);
             }
             object

@@ -482,14 +482,17 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             ),
             ErrorCode::INVALID_DATA_TYPE,
         );
-        assert_property_error(
+        crate::common::assert_list_element_refused(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUES,
                 None,
                 PropertyValue::List(vec![PropertyValue::Enumerated(2)]),
                 None,
             ),
+            ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_TYPE,
+            1,
+            "a mistyped element",
         );
         assert_eq!(
             object
@@ -498,14 +501,17 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             value,
             "a rejected wrong-element write must preserve the prior list"
         );
-        assert_property_error(
+        crate::common::assert_list_element_refused(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUES,
                 None,
                 PropertyValue::List(vec![PropertyValue::Unsigned(u32::MAX as u64 + 1)]),
                 None,
             ),
+            ErrorClass::PROPERTY,
             ErrorCode::VALUE_OUT_OF_RANGE,
+            1,
+            "an overflowing element",
         );
         assert_eq!(
             object
@@ -532,16 +538,14 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
                 .map(|value| PropertyValue::Unsigned(value as u64))
                 .collect(),
         );
-        match object
-            .write_property(PropertyIdentifier::ALARM_VALUES, None, overlong, None)
-            .unwrap_err()
-        {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                assert_eq!(code, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32);
-            }
-            other => panic!("expected resource-cap error, got {other:?}"),
-        }
+        // The first value past the cap is the one that does not fit.
+        crate::common::assert_list_element_refused(
+            object.write_property(PropertyIdentifier::ALARM_VALUES, None, overlong, None),
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+            MAX_ALARM_VALUES as u32 + 1,
+            "one value over the cap",
+        );
         assert_eq!(
             object
                 .read_property(PropertyIdentifier::ALARM_VALUES, None)

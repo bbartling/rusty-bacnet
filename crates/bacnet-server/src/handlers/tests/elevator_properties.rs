@@ -308,21 +308,24 @@ fn wp_lift_passenger_alarm_and_fault_signals_take_their_table_datatypes() {
     write(&mut db, oid, faults, set).unwrap();
     let stored = [0x91, 0x05, 0x92, 0x04, 0x00];
     assert_eq!(read_wire(&db, oid, faults), stored);
-    for (value, context) in [
-        (PropertyValue::Enumerated(17), "reserved 17"),
-        (PropertyValue::Enumerated(65_536), "above 65535"),
+    // The Lift names the element it refuses (#1048); a lone value is the
+    // first, a repeat the second.
+    for (value, element, context) in [
+        (PropertyValue::Enumerated(17), 1, "reserved 17"),
+        (PropertyValue::Enumerated(65_536), 1, "above 65535"),
         (
             PropertyValue::List(vec![
                 PropertyValue::Enumerated(4),
                 PropertyValue::Enumerated(4),
             ]),
+            2,
             "duplicate",
         ),
     ] {
-        assert_property_error(
-            write(&mut db, oid, faults, value),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-            context,
+        assert_eq!(
+            list_refusal(write(&mut db, oid, faults, value)),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, element),
+            "{context}"
         );
         assert_eq!(read_wire(&db, oid, faults), stored, "{context}");
     }

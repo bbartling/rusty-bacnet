@@ -150,40 +150,52 @@ fn date_list_write_property_takes_every_choice() {
 fn date_list_write_property_refuses_other_datatypes_and_bad_encodings() {
     let (mut db, oid) = calendar_db(&typed());
     let before = read_wire(&db, oid);
-    for (what, value, expected) in [
+    // The Calendar names the entry it refuses (#1048). A lone application
+    // value decodes as itself, holding no entry, so it names none.
+    for (what, value, expected, entry) in [
         // The application-tagged forms Date_List used to read as.
         (
             "application Date",
             &[0xA4, 126, 9, 14, 1][..],
             ErrorCode::INVALID_DATA_TYPE,
+            0,
         ),
         (
             "application Octet String",
             &[0x63, 0xFF, 0xFF, 1],
             ErrorCode::INVALID_DATA_TYPE,
+            0,
         ),
         (
             "a good entry, then unknown alternative [3]",
             &[0x0C, 126, 9, 14, 1, 0x3B, 0xFF, 0xFF, 1],
             ErrorCode::INVALID_DATA_TYPE,
+            2,
         ),
         (
             "date [0] with three octets",
             &[0x0B, 126, 9, 14],
             ErrorCode::INVALID_DATA_ENCODING,
+            1,
         ),
         (
             "weekNDay [2] with four octets",
             &[0x2C, 0xFF, 0xFF, 1, 0],
             ErrorCode::INVALID_DATA_ENCODING,
+            1,
         ),
         (
             "date-range [1] holding context-tagged dates",
             &[0x1E, 0x0C, 126, 1, 1, 4, 0x1C, 126, 12, 31, 4, 0x1F],
             ErrorCode::INVALID_DATA_ENCODING,
+            1,
         ),
     ] {
-        assert_property_error(write(&mut db, oid, value), expected, what);
+        assert_eq!(
+            list_refusal(write(&mut db, oid, value)),
+            (ErrorClass::PROPERTY, expected, entry),
+            "{what}"
+        );
         assert_eq!(read_wire(&db, oid), before, "{what} changed Date_List");
     }
 }
@@ -326,12 +338,15 @@ fn date_list_refuses_out_of_range_entries_over_every_write_service() {
         ("weekNDay week-of-month 10", &[0x2B, 0xFF, 10, 0xFF]),
         ("weekNDay month 0", &[0x2B, 0, 0xFF, 1]),
     ] {
-        // A good entry ahead of the bad one does not save the request.
+        // A good entry ahead of the bad one does not save the request. The
+        // Calendar names the bad one, entry 2 (#1048); WriteProperty and
+        // WritePropertyMultiple carry no element number on the wire.
         let elements = [MONDAYS, bad].concat();
-        assert_property_error(
-            write(&mut db, oid, &elements),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-            &format!("WriteProperty: {what}"),
+        let out_of_range = (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2);
+        assert_eq!(
+            list_refusal(write(&mut db, oid, &elements)),
+            out_of_range,
+            "WriteProperty: {what}"
         );
         let mut request = BytesMut::new();
         WritePropertyMultipleRequest {
@@ -347,16 +362,16 @@ fn date_list_refuses_out_of_range_entries_over_every_write_service() {
         }
         .encode(&mut request)
         .unwrap();
-        assert_property_error(
-            handle_write_property_multiple(&mut db, &request).map(|_| ()),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-            &format!("WritePropertyMultiple: {what}"),
+        assert_eq!(
+            list_refusal(handle_write_property_multiple(&mut db, &request).map(|_| ())),
+            out_of_range,
+            "WritePropertyMultiple: {what}"
         );
         // AddListElement names the offending entry, the second, though the
         // first is the one the list would gain first.
         assert_eq!(
             list_refusal(edit(&mut db, oid, &elements, false)),
-            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2),
+            out_of_range,
             "AddListElement: {what}"
         );
         // RemoveListElement has no VALUE_OUT_OF_RANGE (Clause 15.2.1.3.1).
