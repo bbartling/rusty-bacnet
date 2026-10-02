@@ -2149,6 +2149,44 @@ state = await server.comm_state()
 # 0 = Enable, 1 = Disable, 2 = DisableInitiation
 ```
 
+#### `cov_counters() -> CovCounters`
+
+Sample the server's COV telemetry: a dict holding every field of the Rust
+`CovCounters` under the same name, typed as the `CovCounters` TypedDict in the
+stub. `subscriptions_active` is a gauge; the other fields are running totals
+that start at zero on each `start()`. Each field is read on its own, so one
+sample is not an atomic aggregate. Like `comm_state()`, it raises
+`RuntimeError` before start and after stop.
+
+```python
+counters = await server.cov_counters()
+counters["subscriptions_active"]          # subscriptions held now
+counters["subscriptions_rejected_quota"]  # refused by the per-peer quota
+counters["notifications_throttled_peer"]  # skipped at the confirmed in-flight limit
+counters["timed_changes_dropped"]         # timestamped COV-multiple changes lost
+```
+
+| Field | Counts |
+|---|---|
+| `subscriptions_active` | Subscriptions held now |
+| `subscriptions_created` | Subscriptions admitted (a renewal is not a new one) |
+| `subscriptions_rejected_quota` | Refusals by the per-peer subscription quota |
+| `subscriptions_rejected_capacity` | Refusals by the global or reserved capacity |
+| `subscriptions_rejected_indefinite` | Refusals of indefinite lifetimes, by policy or the per-peer indefinite quota |
+| `subscriptions_cancelled` | Subscriptions explicitly cancelled |
+| `subscriptions_purged` | Expired subscriptions removed |
+| `notifications_sent` | Notifications sent, confirmed and unconfirmed |
+| `notifications_confirmed` | Confirmed notifications sent |
+| `notifications_unconfirmed` | Unconfirmed notifications sent |
+| `notification_bytes_sent` | APDU bytes of the notifications in `notifications_sent` |
+| `notifications_throttled_fanout` | Notifications not sent because the per-event count or byte budget ran out |
+| `notifications_throttled_peer` | Confirmed notifications not sent because the peer was at its in-flight limit |
+| `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, the running signal for a subscriber whose maximum APDU can't hold one |
+| `untimed_references_oversized` | Each COV-multiple report that left out an untimestamped reference too large for one notification |
+
+The binding builds the dict from an exhaustive pattern over the Rust struct, so
+a counter added in Rust must be added here before the bindings compile.
+
 #### `local_address() -> str`
 
 Get the server's bound address after start.
