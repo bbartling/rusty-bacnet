@@ -17,3 +17,15 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 fail-fast = false
 failure-output = "immediate-final"
 final-status-level = "leak"
+
+# The B/IP broadcast observers bind an ephemeral port with SO_REUSEADDR so the
+# node under test can share it. On Linux, two such sockets in concurrent test
+# processes can be handed the same port, and each test then reads the other's
+# broadcasts (a Network-Number-Is 77 seen where 78 was expected). Run every
+# test that uses an observer one at a time.
+[test-groups]
+bip-broadcast-observers = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(bip_network_numbers) | binary(client_bip_network_numbers)'
+test-group = 'bip-broadcast-observers'
