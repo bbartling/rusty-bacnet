@@ -63,6 +63,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bacnet_types::data_link::DataLink` names a data link (B/IP, B/IPv6, MS/TP,
   SC, Ethernet, loopback) and displays its short name (#956).
 
+- **Energy_Meter_Ref on the Escalator and Lift (API and wire):** the
+  application can now set the Energy_Meter_Ref of an Escalator, and of a Lift,
+  which gains the optional property after Energy_Meter in its Property_List,
+  property metadata, RPM ALL and OPTIONAL, and PICS rows (#1036). The new
+  `EscalatorObject::set_energy_meter_ref` and `LiftObject::set_energy_meter_ref`
+  take a BACnetDeviceObjectReference to the object that indicates the
+  accumulated energy consumption, local or in another device: an Accumulator,
+  Pulse Converter, Analog Input, Analog Value, Large Analog Value, Integer
+  Value or Positive Integer Value. Any other object type, or a device that
+  isn't a Device object, is refused with VALUE_OUT_OF_RANGE. A reference to
+  instance 4194303 clears it, and `energy_meter_ref()` reads it back. While a
+  reference is set, Energy_Meter reads 0.0, as the Lift and Escalator
+  descriptions require: setting one zeroes the reading, and a write of any
+  value but 0.0 fails with VALUE_OUT_OF_RANGE. Energy_Meter_Ref stays
+  read-only over the network, since neither table gives it a write
+  requirement, so a WriteProperty fails with WRITE_ACCESS_DENIED.
+
 ### Changed
 
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
@@ -552,6 +569,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BACnetDeviceObjectReference, uninitialized (instance 4194303), instead of an
   empty OctetString. The rows are listed in table order in Property_List, the
   property metadata, RPM ALL, REQUIRED and OPTIONAL, and the PICS.
+
+- **Breaking Elevator Group Group_Members by array index (wire):** a read of
+  the Elevator Group's Group_Members with an array index now answers as a
+  BACnetARRAY should (#1034). Index 0 is the member count, index n the n-th
+  member, and an index past the last member fails with INVALID_ARRAY_INDEX.
+  Before, every index returned the whole list.
+
+- The Lift object's Car_Door_Status and Landing_Door_Status now take
+  WriteProperty while Out_Of_Service is TRUE, so a test tool can simulate the
+  car, as the Lift's Out_Of_Service description asks (#1035). A write sets the
+  whole array or one element; Car_Door_Status elements are BACnetDoorStatus
+  values and Landing_Door_Status elements BACnetLandingDoorStatus frames. The
+  size, the car door count, stays the application's: a write of index 0 fails
+  with WRITE_ACCESS_DENIED, a whole array of another size with
+  VALUE_OUT_OF_RANGE, and an index past the last door with
+  INVALID_ARRAY_INDEX, so the two arrays keep the same size. A reserved door
+  status or a floor number above 255 fails with VALUE_OUT_OF_RANGE and an
+  undecodable frame with INVALID_DATA_ENCODING, all without changing either
+  array. In service both stay read-only and refuse writes with
+  WRITE_ACCESS_DENIED. Their property metadata and PICS rows now mark them
+  writable while out of service. The Lift's other status properties, and all
+  of the Escalator's, already took writes. `decode_landing_door_status` in
+  `bacnet-encoding` now reports a well-formed floor number above 255 or door
+  status above 32 bits as `Error::OutOfRange`, as `decode_landing_call_status`
+  does, instead of a decoding error.
 
 - In a timestamped COV-multiple report, a field subscribed with timestamps no
   longer goes out without a Time_Of_Change (#987). Before, when its own selector
