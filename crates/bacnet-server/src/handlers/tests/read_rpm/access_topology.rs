@@ -293,10 +293,11 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x91, 231, 0x91, 233, 0x91, 235, 0x91, 226, 0x91, 228,
-                    0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36, 0x91, 87, 0x91, 104,
+                    0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36, 0x91, 87, 0x91, 104, 0x91, 230, 0x91,
+                    227, 0x91, 229, 0x92, 0x01, 0xAF,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 13])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 17])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 231])),
@@ -310,9 +311,11 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 36])),
             (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 87])),
             (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 104])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 230])),
+            (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0xAF])),
             (
                 P::PROPERTY_LIST,
-                Some(14),
+                Some(18),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -320,22 +323,31 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Unserved Table 12-30 rows stay unknown.
-            (P::DOOR_PULSE_TIME, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // The required rows #1073 added: the default times in tenths
+            // of a second, and the priority Present_Value comes from.
+            (P::DOOR_PULSE_TIME, None, Ok(&[0x21, 50])),
             (
                 P::DOOR_PULSE_TIME,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::DOOR_EXTENDED_PULSE_TIME, None, Ok(&[0x21, 150])),
+            (P::DOOR_OPEN_TOO_LONG_TIME, None, Ok(&[0x22, 0x01, 0x2C])),
             (
                 P::CURRENT_COMMAND_PRIORITY,
                 None,
-                Err(ErrorCode::UNKNOWN_PROPERTY),
+                Ok(if configured { &[0x21, 8] } else { &[0x00] }),
             ),
             (
                 P::CURRENT_COMMAND_PRIORITY,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            // Door_Unlock_Delay_Time is a Table 12-30 O row with no read arm.
+            (
+                P::DOOR_UNLOCK_DELAY_TIME,
+                None,
+                Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
         ];
         assert_cases(&db, oid, cases);
