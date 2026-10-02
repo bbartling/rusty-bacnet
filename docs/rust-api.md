@@ -1576,8 +1576,9 @@ framing, through the shared `bacnet-encoding` codecs.
   (Clause 12.21). Each element is a seven-member sequence in the Clause 21
   order: a days-of-week set and a time window, then the recipient, process
   identifier, confirmation flag and event transitions. The recipient is a
-  CHOICE: a device identifier or a network address. Decoding is strict, and a malformed stored list fails closed with no
-  partial delivery. Indexed writes are refused. The codec is not a Notification
+  CHOICE: a device identifier or a network address. Decoding is strict, and a
+  malformed stored list fails closed with no partial delivery. Indexed writes
+  are refused. The codec is not a Notification
   Forwarder object, which is unsupported.
 - **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled

@@ -36,7 +36,7 @@ LEDGER = ROOT / "docs" / "conformance" / "bacnet-135-2020.json"
 FIELDS = ("positive_tests", "negative_tests")
 FENCE = "`" * 3
 BARE_OK = {"CHANGELOG.md"}
-TEST_ATTR =re.compile(r"#\[\s*(?:[\w:]+::)?(?:test|rstest|test_case|wasm_bindgen_test)\b")
+TEST_ATTR = re.compile(r"#\[\s*(?:[\w:]+::)?(?:test|rstest|test_case|wasm_bindgen_test)\b")
 
 
 @lru_cache(maxsize=None)

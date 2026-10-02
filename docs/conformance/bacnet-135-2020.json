@@ -222,7 +222,7 @@
    "public_claims": [
     "docs/mutation-policy.md#local-mutation-authorization",
     "docs/python-api.md#bacnetserver",
-    "docs/rust-api.md#accepted-direct-tls-identity"
+    "docs/rust-api.md#building-a-server"
    ],
    "notes": "Refs #768. Keyword-only mutation_policy accepts permissive (native default) or deny_all and stores the native enum. Invalid strings/type fail synchronously before transport preparation or startup drain. The generic builder owns one gate across transports; installed B/IP tests cover exact denial and unchanged property/object/list/file state, denied COV, default/explicit permissive writes, remote reads and trusted local writes. Native tests retain exhaustive ten-service policy/authorizer/counter coverage. No Python callbacks, duplicate gate, certificate principal or broader clause qualification. DCC, ReinitializeDevice, LifeSafety, Audit and endpoint Device-write authorization remain separate; #524 remains open. Global evidence pins and existing row statuses are unchanged."
   },
