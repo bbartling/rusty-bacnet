@@ -2814,9 +2814,9 @@ like other SC-only configuration. All old positional slots, including heartbeat,
 IPv6, and server passwords, are unchanged. Existing SC callers must add the new
 keyword even when using the old positional credentials.
 
-Base Standard 135-2020 AB.1.5.3 calls for generation before first deployment,
-durable storage across restarts, and the same device UUID for the device's
-lifetime. **The caller owns all of this provisioning and persistence.** Load the
+Base Standard 135-2020 AB.1.5.3 wants a device's UUID created once, before the
+device is first installed, kept in storage that survives a restart, and never
+changed afterwards. **The caller owns all of this provisioning and persistence.** Load the
 same stored bytes into every fresh hub/client/server object; do not call `uuid4()` or
 otherwise generate a new ID during startup. The library does not choose a path,
 store UUIDs, or detect a changed UUID without application-owned history. It cannot

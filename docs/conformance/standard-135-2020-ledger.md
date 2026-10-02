@@ -417,8 +417,8 @@ choices, durable delivery and broader Audit review remain open under #345.
 
 Scoped correction to `BACNET-AB-SC-CONNECTION-STATE` (Refs #733). Base
 135-2020 AB.3.3 (printed 1395 / PDF 1397) requires
-COMMUNICATION/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (`7/45`) when the node does
-not support accepting direct connections. An accepting node may ACK an empty
+COMMUNICATION/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (`7/45`) from a node that
+cannot take inbound direct connections. An accepting node may ACK an empty
 URI list. The 2024-04-29 errata makes no relevant correction.
 
 [Node admission](../../crates/bacnet-transport/src/sc/address_resolution.rs)

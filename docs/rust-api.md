@@ -1697,7 +1697,7 @@ with `PROPERTY_IS_NOT_AN_ARRAY`. This correction adds no source-origin hooks.
 `AlertEnrollmentObject::new` now requires the initial
 `bacnet_types::primitives::ObjectIdentifier` reported by `Present_Value`.
 This is an intentional breaking correction: migrate two-argument callers by
-passing the object that most recently provided an alert. Use
+passing the identifier of the latest alert source. Use
 `record_alert_source(source)` to update only that source identity; the helper
 does not evaluate an alert or update event, timestamp, acknowledgement, or
 notification state. The served Table 12-61 surface no longer includes the
