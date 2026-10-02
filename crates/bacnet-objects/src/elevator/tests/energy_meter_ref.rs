@@ -142,6 +142,9 @@ fn set_energy_meter_ref_takes_local_and_remote_meter_objects() {
             (ObjectType::INTEGER_VALUE, [0x0B, 0x40]),
             (ObjectType::LARGE_ANALOG_VALUE, [0x0B, 0x80]),
             (ObjectType::POSITIVE_INTEGER_VALUE, [0x0C, 0x00]),
+            // Proprietary object types: vendor meters.
+            (ObjectType::from_raw(128), [0x20, 0x00]),
+            (ObjectType::from_raw(1023), [0xFF, 0xC0]),
         ] {
             let meter = reference(None, object_type, 5);
             object.set_energy_meter_ref(meter.clone()).unwrap();
@@ -184,7 +187,6 @@ fn set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically() {
             reference(None, ObjectType::TREND_LOG, 1),
             reference(None, ObjectType::ELEVATOR_GROUP, 1),
             reference(None, ObjectType::LIFT, 1),
-            reference(None, ObjectType::from_raw(128), 1),
             // Not a meter type even with the no-object instance.
             reference(None, ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE),
             // The device of a reference must be a Device object.

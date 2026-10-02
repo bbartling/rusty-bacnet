@@ -71,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   take a BACnetDeviceObjectReference to the object that indicates the
   accumulated energy consumption, local or in another device: an Accumulator,
   Pulse Converter, Analog Input, Analog Value, Large Analog Value, Integer
-  Value or Positive Integer Value. Any other object type, or a device that
+  Value, Positive Integer Value or proprietary object type (128 to 1023, for
+  vendor meters). Any other object type, or a device that
   isn't a Device object, is refused with VALUE_OUT_OF_RANGE. A reference to
   instance 4194303 clears it, and `energy_meter_ref()` reads it back. While a
   reference is set, Energy_Meter reads 0.0, as the Lift and Escalator
