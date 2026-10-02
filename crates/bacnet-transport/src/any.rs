@@ -6,7 +6,7 @@
 use bacnet_types::error::Error;
 use tokio::sync::mpsc;
 
-use crate::bip::BipTransport;
+use crate::bip::{AsBip, BipTransport};
 #[cfg(feature = "ipv6")]
 use crate::bip6::Bip6Transport;
 use crate::loopback::LoopbackTransport;
@@ -281,6 +281,41 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
     }
 }
 
+impl<S: SerialPort + 'static> AnyTransport<S> {
+    /// Name of the data link this variant carries, for errors.
+    fn data_link(&self) -> &'static str {
+        match self {
+            Self::Bip(_) => "BACnet/IP",
+            Self::Mstp(_) => "MS/TP",
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(_) => "BACnet/IPv6",
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(_) => "BACnet Ethernet",
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(_) => "BACnet/SC",
+            Self::Loopback(_) => "loopback",
+        }
+    }
+}
+
+impl<S: SerialPort + 'static> AsBip for AnyTransport<S> {
+    /// The [`Bip`](Self::Bip) variant's transport.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedTransport`] naming the variant's data link for
+    /// every other variant.
+    fn as_bip(&self) -> Result<&BipTransport, Error> {
+        match self {
+            Self::Bip(transport) => Ok(transport),
+            other => Err(Error::UnsupportedTransport {
+                required: "BACnet/IP",
+                actual: other.data_link(),
+            }),
+        }
+    }
+}
+
 impl<S: SerialPort> From<BipTransport> for AnyTransport<S> {
     fn from(t: BipTransport) -> Self {
         Self::Bip(Box::new(t))
@@ -373,6 +408,26 @@ mod tests {
         let any: AnyTransport<LoopbackSerial> = bip.into();
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
+    }
+
+    #[test]
+    fn as_bip_lends_the_bip_variant_and_names_any_other_data_link() {
+        let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
+        let any: AnyTransport<LoopbackSerial> = bip.into();
+        let lent = any.as_bip().expect("the Bip variant lends its transport");
+        assert_eq!(lent.local_mac(), any.local_mac());
+
+        let (serial, _) = LoopbackSerial::pair();
+        let mstp: AnyTransport<LoopbackSerial> =
+            MstpTransport::new(serial, MstpConfig::default()).into();
+        let (loopback, _) = LoopbackTransport::pair(vec![1], vec![2]);
+        let loopback: AnyTransport<LoopbackSerial> = loopback.into();
+        for (any, actual) in [(mstp, "MS/TP"), (loopback, "loopback")] {
+            assert!(matches!(
+                any.as_bip(),
+                Err(Error::UnsupportedTransport { required: "BACnet/IP", actual: a }) if a == actual
+            ));
+        }
     }
 
     #[test]

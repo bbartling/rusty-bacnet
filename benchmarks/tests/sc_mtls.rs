@@ -14,6 +14,8 @@ use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
+#[path = "sc_mtls/client_handles.rs"]
+mod client_handles;
 #[path = "sc_mtls/node_identity.rs"]
 mod node_identity;
 #[path = "sc_mtls/node_reconnect.rs"]

@@ -67,8 +67,13 @@ use bacnet_types::error::Error;
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
 // Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
-// RoutedPathCapacityExceeded, Encoding, etc.
+// RoutedPathCapacityExceeded, UnsupportedTransport, Encoding, etc.
 ```
+
+`Error::UnsupportedTransport { required, actual }` reports an operation the
+endpoint's data link cannot carry, such as a BBMD request through an
+`AnyTransport` that is not B/IP. Both fields are short data-link names such as
+`"BACnet/IP"` and `"MS/TP"`, and nothing was sent.
 
 `Error::RoutedPathTooLong { dnet }` identifies the destination network from a
 matching network-layer rejection; it does not claim an exact supported length.
@@ -1312,6 +1317,12 @@ let transport: AnyTransport<NoSerial> = AnyTransport::Bip(Box::new(bip_transport
 
 Variants: `Bip` (boxed), `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 
+`bacnet_transport::bip::AsBip` lends the `BipTransport` underneath a transport
+that may carry BACnet/IP. `BipTransport` always lends itself; `AnyTransport`
+lends its `Bip` variant and returns `Error::UnsupportedTransport` naming the
+data link for every other variant. The client's BBMD helpers take any transport
+with `AsBip`, and a wrapper transport can implement it by delegating.
+
 ### BBMD
 
 ```rust
@@ -1851,6 +1862,55 @@ let client = BACnetClient::sc_builder()
 
 Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
 `generic_builder()` with a prebuilt transport.
+
+### Transport access and BBMD helpers
+
+`client.transport()` borrows the transport a built client owns, whichever
+builder made it. The transport lives in the client's network layer for the
+client's whole life, so this is a shared borrow: the transport's `start` and
+`stop` stay with the client. What you take from it can outlive the borrow,
+which suits a long-lived UI:
+
+```rust
+// BACnet/SC (sc_builder): an owned watch receiver, and a drop-count snapshot.
+let mut state = sc_client.transport().connection_state_changes();
+tokio::spawn(async move {
+    while state.changed().await.is_ok() {
+        let connected = *state.borrow_and_update() == ScConnectionState::Connected;
+        // update the status bar
+    }
+});
+let drops = sc_client.transport().npdu_drop_counts();
+
+// B/IP (bip_builder): counter snapshots to poll, and the BBMD state if any.
+let management = bip_client.transport().management_counters();
+let fanout = bip_client.transport().fanout_counters();
+let fdt = bip_client.transport().fdt_counters().await; // None unless a BBMD
+let bbmd = bip_client.transport().bbmd_state().cloned(); // Option<Arc<Mutex<BbmdState>>>
+
+// MS/TP: the same counts-only handle you can take before handing the transport over.
+let diagnostics = mstp_client.transport().diagnostics();
+```
+
+The management, FDT and fanout counters count what this transport does as a
+BBMD (ACKs sent, registrations admitted, broadcasts forwarded). A client from
+`bip_builder()` is never a BBMD, so its counters stay at zero; a client built
+with `generic_builder()` over a BBMD-mode `BipTransport` reports live values.
+
+The BBMD helpers (`read_bdt`, `write_bdt`, `read_fdt`, `delete_fdt_entry`,
+`register_foreign_device_bvlc`) work on any client whose transport implements
+`AsBip`: a client over `BipTransport`, or one over `AnyTransport` whose variant
+is `Bip`. On any other variant they return `Error::UnsupportedTransport`
+before sending anything:
+
+```rust
+let client = BACnetClient::generic_builder()
+    .transport(AnyTransport::<NoSerial>::from(BipTransport::new(ip, 0, broadcast)))
+    .build()
+    .await?;
+let bdt = client.read_bdt(&bbmd_mac).await?;
+let counters = client.transport().as_bip()?.management_counters();
+```
 
 ### Routed Confirmed-Request Limits
 
@@ -2989,6 +3049,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Abort { reason }` | Remote device aborted request |
 | `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
 | `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
+| `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Encoding(msg)` | Malformed packet |
 | `Error::Io(io_error)` | Transport I/O failure |
 
@@ -3323,7 +3384,9 @@ ingress even when writes are disabled. WP opt-in accepts RP or RP+WP declaration
 and commits RP+WP only after all validation succeeds. ClientOnly creates no
 responder and retains its services vector as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
-registration) stay on `BipTransport`; the endpoint BBMD setters only stage
+registration) stay on `BipTransport` and on `BACnetClient` over B/IP (see
+[Transport access and BBMD helpers](#transport-access-and-bbmd-helpers));
+the endpoint BBMD setters only stage
 pre-start state. Local Number controls have the bounded wire coverage above;
 broader BBMD/foreign administration remains experimental.
 BIPv6/Ethernet have no endpoint builder — keep the standalone path there and

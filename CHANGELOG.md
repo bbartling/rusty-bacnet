@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux from sysfs. The release smoke test calls it on every platform, which on
   macOS proves the wheels' IOKit and CoreFoundation links at run time (#951).
 
+- `BACnetClient::transport()` borrows the transport a built client owns, so the
+  BACnet/SC connection-state watch and NPDU drop counts, the B/IP management,
+  FDT and fanout counters and BBMD state, and the MS/TP diagnostics handle are
+  reachable after `build()`, whichever builder made the client. The watch
+  receiver, diagnostics handle and BBMD state `Arc` are owned and outlive the
+  borrow, and `stop()` still takes the transport back. The new
+  `bacnet_transport::bip::AsBip` trait lends the `BipTransport` beneath a
+  transport: `BipTransport` lends itself, and `AnyTransport` lends its `Bip`
+  variant (#956).
+
 ### Changed
 
 - Alarm and event service types use the enumerations and bit strings that
@@ -268,6 +278,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BACnetServer::builder()` aliases. Rust callers must use `bip_builder()` for
   B/IP; builder options/defaults, SC/generic builders and Python constructors
   are unchanged (#873).
+
+- **Breaking `Error` variant and BBMD helper bounds:**
+  `bacnet_types::error::Error` gains `UnsupportedTransport { required, actual }`,
+  so an exhaustive match on `Error` needs a new arm. The `BACnetClient` BBMD
+  helpers (`read_bdt`, `write_bdt`, `read_fdt`, `delete_fdt_entry`,
+  `register_foreign_device_bvlc`) move from `BACnetClient<BipTransport>` to any
+  `BACnetClient<T>` whose transport implements `AsBip`. Calls on a B/IP client
+  compile unchanged. On a client over `AnyTransport` they work for the `Bip`
+  variant and return `Error::UnsupportedTransport` for any other, before
+  sending anything (#956).
 
 ### Fixed
 

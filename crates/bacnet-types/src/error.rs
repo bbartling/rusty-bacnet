@@ -69,6 +69,16 @@ pub enum Error {
         capacity: usize,
     },
 
+    /// The endpoint's transport cannot carry the requested operation, such as
+    /// a BBMD management request through a data link other than BACnet/IP.
+    #[error("operation needs a {required} transport, but this one is {actual}")]
+    UnsupportedTransport {
+        /// Data link the operation needs, such as `"BACnet/IP"`.
+        required: &'static str,
+        /// Data link the endpoint uses, such as `"MS/TP"`.
+        actual: &'static str,
+    },
+
     /// Error encoding a PDU.
     #[error("encoding error: {0}")]
     Encoding(String),
@@ -182,5 +192,17 @@ mod tests {
     fn routed_path_capacity_display_preserves_bound() {
         let err = Error::RoutedPathCapacityExceeded { capacity: 256 };
         assert!(err.to_string().contains("256"));
+    }
+
+    #[test]
+    fn unsupported_transport_display_names_both_data_links() {
+        let err = Error::UnsupportedTransport {
+            required: "BACnet/IP",
+            actual: "MS/TP",
+        };
+        assert_eq!(
+            err.to_string(),
+            "operation needs a BACnet/IP transport, but this one is MS/TP"
+        );
     }
 }
