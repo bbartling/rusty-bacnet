@@ -1,4 +1,5 @@
 use super::*;
+use crate::cov::MultipleRefusal;
 use bacnet_services::common::PropertyReference;
 use bacnet_services::cov_multiple::{COVReference, COVSubscriptionSpecification};
 
@@ -59,7 +60,8 @@ fn subscribe_cov_property_multiple_rejects_invalid_service_parameters() {
     for (lifetime, max_notification_delay) in [(Some(300), None), (None, Some(10))] {
         let buf = encode_unchecked(&specs, lifetime, max_notification_delay);
         let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
-            .unwrap_err();
+            .unwrap_err()
+            .error;
         assert!(matches!(
             err,
             Error::Reject { reason }
@@ -75,7 +77,8 @@ fn subscribe_cov_property_multiple_rejects_invalid_service_parameters() {
     ] {
         let buf = encode_unchecked(&specs, lifetime, max_notification_delay);
         let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
-            .unwrap_err();
+            .unwrap_err()
+            .error;
         match err {
             Error::Protocol { class, code } => {
                 assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
@@ -144,7 +147,7 @@ fn subscribe_cov_property_multiple_context_delay_is_last_write_wins_per_form() {
         let buf = encode_unchecked(&specs, Some(lifetime), Some(delay));
         assert!(matches!(
             handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf),
-            Err(Error::Protocol { code, .. })
+            Err(MultipleRefusal { error: Error::Protocol { code, .. }, refused: None, .. })
                 if code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
         ));
     }
@@ -200,10 +203,12 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
     let mut buf = BytesMut::new();
     subscribe.encode(&mut buf).unwrap();
 
-    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
+    // A request-level refusal: nothing processed, nothing kept.
+    let refusal = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
         .unwrap_err();
+    assert!(refusal.refused.is_none() && refusal.committed.is_empty());
     assert!(matches!(
-        err,
+        refusal.error,
         Error::Protocol { class, code }
             if class == ErrorClass::SERVICES.to_raw() as u32
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32

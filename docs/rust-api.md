@@ -2241,7 +2241,18 @@ source decoding does, before purging or modifying subscriptions. Invalid routed
 input is never reinterpreted as a direct peer.
 
 `subscribe_multiple` takes an explicit `&SubscriberEndpoint` route after the context
-argument and validates it against the recipient and proposals.
+argument and validates it against the recipient and proposals. It admits the
+proposals in request order, checking the recipient's quota and the table's
+capacity one proposal at a time; a renewal or a repeat of an earlier proposal
+takes no slot. The first proposal that does not fit fails the call with a
+`MultipleRefusal` that carries the RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT
+error, its position and the snapshots kept for the proposals before it, which
+renewed the context as an accepted request would (#1058, #1059). When that is
+the first proposal, or the request fails as a whole (identity or route
+mismatch, generation exhaustion), `refused` is `Some(0)` or `None` and nothing
+changes. The SubscribeCOVPropertyMultiple handler sends the kept references'
+initial notifications along with the error that names the refused one
+(Clause 13.16.2).
 `CovSubscription::endpoint()` on subscription data (also available through accepted
 snapshots) reports its captured delivery route.
 

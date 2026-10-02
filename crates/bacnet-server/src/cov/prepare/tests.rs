@@ -289,6 +289,8 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
     )
     .unwrap()
     .remove(0);
+    // Each refused reference comes first, so the renewal after it is never
+    // processed and the context keeps its lifetime (#1058).
     for increment in [None, Some(0.5)] {
         let error = crate::handlers::handle_subscribe_cov_property_multiple_request_endpoint(
             &mut table,
@@ -298,13 +300,14 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
             None,
             request(
                 vec![
-                    (PropertyIdentifier::PRESENT_VALUE, None),
                     (CUSTOM, increment),
+                    (PropertyIdentifier::PRESENT_VALUE, None),
                 ],
                 600,
             ),
         )
-        .unwrap_err();
+        .unwrap_err()
+        .error;
         assert!(
             matches!(&error, Error::Structured { class, code, detail }
                 if *class == ErrorClass::PROPERTY.to_raw() as u32
@@ -350,11 +353,12 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         None,
         None,
         request(
-            vec![(PropertyIdentifier::PRESENT_VALUE, None), (VARIABLE, None)],
+            vec![(VARIABLE, None), (PropertyIdentifier::PRESENT_VALUE, None)],
             600,
         ),
     )
-    .unwrap_err();
+    .unwrap_err()
+    .error;
     assert!(
         matches!(&error, Error::Structured { class, code, detail }
             if *class == ErrorClass::RESOURCES.to_raw() as u32
