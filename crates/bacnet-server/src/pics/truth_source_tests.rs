@@ -451,6 +451,8 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
     ]);
 
     let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    // Count must cover the adjustment below: 2.0 / 1.5 takes one pulse off.
+    pc.add_pulses(1).unwrap();
     assert_exactly(
         &mut pc,
         "PC",

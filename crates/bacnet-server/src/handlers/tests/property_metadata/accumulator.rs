@@ -21,9 +21,11 @@ fn accumulator_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
             None,
         )
         .unwrap();
+        pc.add_pulses(7).unwrap();
         pc.write_property(P::SCALE_FACTOR, None, PropertyValue::Real(2.5), None)
             .unwrap();
-        pc.write_property(P::ADJUST_VALUE, None, PropertyValue::Real(0.5), None)
+        // 5 / 2.5 takes 2 off Count, filling Count_Before_Change.
+        pc.write_property(P::ADJUST_VALUE, None, PropertyValue::Real(5.0), None)
             .unwrap();
         pc.write_property(P::COV_INCREMENT, None, PropertyValue::Real(0.5), None)
             .unwrap();
@@ -99,7 +101,12 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::UNITS,
             P::SCALE_FACTOR,
             P::ADJUST_VALUE,
+            P::COUNT,
+            P::UPDATE_TIME,
+            P::COUNT_CHANGE_TIME,
+            P::COUNT_BEFORE_CHANGE,
             P::COV_INCREMENT,
+            P::COV_PERIOD,
             P::INPUT_REFERENCE,
             P::STATUS_FLAGS,
             P::EVENT_STATE,
@@ -121,6 +128,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         _ => vec![
             P::DESCRIPTION,
             P::COV_INCREMENT,
+            P::COV_PERIOD,
             P::INPUT_REFERENCE,
             P::RELIABILITY,
         ],

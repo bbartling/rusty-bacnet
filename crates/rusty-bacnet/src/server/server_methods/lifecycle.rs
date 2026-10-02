@@ -108,6 +108,7 @@ impl BACnetServer {
         let atomic_write_file_budget = self.atomic_write_file_budget;
         let read_range_budget = self.read_range_budget;
         let get_event_information_budget = self.get_event_information_budget;
+        let cov_policy = self.cov_policy.clone();
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
         self.forwarding_configuration_started
@@ -241,6 +242,7 @@ impl BACnetServer {
                 .atomic_write_file_budget(atomic_write_file_budget)
                 .read_range_budget(read_range_budget)
                 .get_event_information_budget(get_event_information_budget)
+                .cov_policy(cov_policy)
                 .transport(transport);
             if let Some(sink) = audit_notification_sink {
                 builder = builder.audit_notification_sink(sink.object_id);
