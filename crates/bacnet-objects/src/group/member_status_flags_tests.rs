@@ -17,6 +17,11 @@ fn flags(octet: u8) -> PropertyValue {
     }
 }
 
+/// A successful read of a member's Status_Flags, as the group stores it.
+fn held(octet: u8) -> AccessResult {
+    AccessResult::Value(flags(octet))
+}
+
 fn member(instance: u32, property: PropertyIdentifier) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
         object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap(),
@@ -66,11 +71,11 @@ fn member_status_flags_is_the_or_of_the_status_flags_members() {
         member(4, PropertyIdentifier::STATUS_FLAGS),
     ];
     group.present_value = vec![
-        flags(IN_ALARM),
+        held(IN_ALARM),
         // A bit string held for a member that is not Status_Flags is ignored.
-        flags(OVERRIDDEN),
-        flags(FAULT | OUT_OF_SERVICE),
-        flags(0),
+        held(OVERRIDDEN),
+        held(FAULT | OUT_OF_SERVICE),
+        held(0),
     ];
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
@@ -89,19 +94,19 @@ fn member_status_flags_follows_each_present_value_update() {
         member(1, PropertyIdentifier::STATUS_FLAGS),
         member(2, PropertyIdentifier::STATUS_FLAGS),
     ];
-    group.present_value = vec![flags(0), flags(OVERRIDDEN)];
+    group.present_value = vec![held(0), held(OVERRIDDEN)];
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
         flags(OVERRIDDEN)
     );
 
-    group.present_value[0] = flags(FAULT);
+    group.present_value[0] = held(FAULT);
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
         flags(FAULT | OVERRIDDEN)
     );
 
-    group.present_value[1] = flags(0);
+    group.present_value[1] = held(0);
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
         flags(FAULT)
@@ -118,13 +123,16 @@ fn values_that_are_not_status_flags_bit_strings_add_nothing() {
     ];
     // The third member has no stored value yet, and a stored value with no
     // member behind it is not a member's Status_Flags.
-    group.present_value = vec![PropertyValue::Null, PropertyValue::Enumerated(1)];
+    group.present_value = vec![
+        AccessResult::Value(PropertyValue::Null),
+        AccessResult::Value(PropertyValue::Enumerated(1)),
+    ];
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
         flags(0)
     );
     group.group_members.truncate(1);
-    group.present_value = vec![flags(0), flags(IN_ALARM)];
+    group.present_value = vec![held(0), held(IN_ALARM)];
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
         flags(0)
@@ -132,10 +140,35 @@ fn values_that_are_not_status_flags_bit_strings_add_nothing() {
 }
 
 #[test]
+fn a_status_flags_member_whose_read_failed_adds_nothing() {
+    let mut group = GlobalGroupObject::new(1, "GG-1").unwrap();
+    group.group_members = vec![
+        member(1, PropertyIdentifier::STATUS_FLAGS),
+        member(2, PropertyIdentifier::STATUS_FLAGS),
+        member(3, PropertyIdentifier::STATUS_FLAGS),
+    ];
+    // The second member's read failed and the third has not been read: only
+    // the first member's flags count.
+    group.present_value = vec![
+        held(OVERRIDDEN),
+        AccessResult::Error {
+            class: ErrorClass::DEVICE,
+            code: ErrorCode::UNKNOWN_DEVICE,
+        },
+    ];
+    assert_eq!(
+        read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
+        flags(OVERRIDDEN)
+    );
+    group.present_value[0] = AccessResult::NOT_INITIALIZED;
+    assert_eq!(group.member_status_flags(), StatusFlags::empty());
+}
+
+#[test]
 fn member_alarms_leave_the_groups_own_event_state_and_status_flags_alone() {
     let mut group = GlobalGroupObject::new(1, "GG-1").unwrap();
     group.group_members = vec![member(1, PropertyIdentifier::STATUS_FLAGS)];
-    group.present_value = vec![flags(IN_ALARM | FAULT)];
+    group.present_value = vec![held(IN_ALARM | FAULT)];
     assert_eq!(
         read(&group, PropertyIdentifier::MEMBER_STATUS_FLAGS),
         flags(IN_ALARM | FAULT)

@@ -28,6 +28,8 @@ pub use lift::{
     AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLandingCallStatus,
     BACnetLandingDoorStatus, BACnetLiftCarCallList, LandingCallCommand, LandingDoor,
 };
+mod property_access;
+pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod staging;
 pub use staging::BACnetStageLimitValue;
 
