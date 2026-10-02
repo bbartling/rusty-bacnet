@@ -151,6 +151,54 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// Whether one authentication factor of an Access Credential may be used,
+    /// and if not why: the disable member of each Authentication_Factors
+    /// element (Table 12-40; Clause 21 production). ASHRAE owns 0 to 63 and
+    /// 64 to 65535 are open to vendors.
+    pub struct AccessAuthenticationFactorDisable(u32);
+
+    const NONE = 0;
+    const DISABLED = 1;
+    const DISABLED_LOST = 2;
+    const DISABLED_STOLEN = 3;
+    const DISABLED_DAMAGED = 4;
+    const DISABLED_DESTROYED = 5;
+}
+
+bacnet_enum! {
+    /// The format of an authentication factor's value (Clause 21 production;
+    /// Annex P describes each format). The production is closed: it has no
+    /// vendor range.
+    pub struct AuthenticationFactorType(u32);
+
+    const UNDEFINED = 0;
+    const ERROR = 1;
+    const CUSTOM = 2;
+    const SIMPLE_NUMBER16 = 3;
+    const SIMPLE_NUMBER32 = 4;
+    const SIMPLE_NUMBER56 = 5;
+    const SIMPLE_ALPHA_NUMERIC = 6;
+    const ABA_TRACK2 = 7;
+    const WIEGAND26 = 8;
+    const WIEGAND37 = 9;
+    const WIEGAND37_FACILITY = 10;
+    const FACILITY16_CARD32 = 11;
+    const FACILITY32_CARD32 = 12;
+    const FASC_N = 13;
+    const FASC_N_BCD = 14;
+    const FASC_N_LARGE = 15;
+    const FASC_N_LARGE_BCD = 16;
+    const GSA75 = 17;
+    const CHUID = 18;
+    const CHUID_FULL = 19;
+    const GUID = 20;
+    const CBEFF_A = 21;
+    const CBEFF_B = 22;
+    const CBEFF_C = 23;
+    const USER_PASSWORD = 24;
+}
+
+bacnet_enum! {
     /// BACnet authentication status: the Access Point object's
     /// Authentication_Status property (Table 12-36; Clause 21 production).
     pub struct AuthenticationStatus(u32);

@@ -164,11 +164,21 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = AccessCredentialObject::new(7, "CRED-7").unwrap();
         if configured {
+            // Credential_Disable DISABLE adds DISABLED (0) to
+            // Reason_For_Disable, which makes the status INACTIVE (#1073).
             object
                 .write_property(
-                    P::CREDENTIAL_STATUS,
+                    P::CREDENTIAL_DISABLE,
                     None,
                     PropertyValue::Enumerated(1),
+                    None,
+                )
+                .unwrap();
+            object
+                .write_property(
+                    P::GLOBAL_IDENTIFIER,
+                    None,
+                    PropertyValue::Unsigned(77),
                     None,
                 )
                 .unwrap();
@@ -177,35 +187,35 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
-        // Authentication_Factors is BACnetLIST and rejects any index.
+        // Independent application-value bytes pin the projection. The two
+        // BACnetARRAYs admit an index (empty here, so only the size reads);
+        // Reason_For_Disable is a BACnetLIST and rejects one. Both window
+        // ends read as the open all-X'FF' date and time.
+        let open_window: &[u8] = &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (
                 P::CREDENTIAL_STATUS,
                 None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+                Ok(if configured { &[0x91, 0] } else { &[0x91, 1] }),
             ),
             (
                 P::CREDENTIAL_STATUS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ASSIGNED_ACCESS_RIGHTS, None, Ok(&[0x21, 0])),
+            (P::ASSIGNED_ACCESS_RIGHTS, None, Ok(EMPTY)),
+            (P::ASSIGNED_ACCESS_RIGHTS, Some(0), Ok(&[0x21, 0])),
             (
                 P::ASSIGNED_ACCESS_RIGHTS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Some(1),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (P::AUTHENTICATION_FACTORS, None, Ok(EMPTY)),
-            (
-                P::AUTHENTICATION_FACTORS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::AUTHENTICATION_FACTORS, Some(0), Ok(&[0x21, 0])),
             (
                 P::AUTHENTICATION_FACTORS,
                 Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             // No Out_Of_Service row (#1064), so the flag stays clear.
             (P::STATUS_FLAGS, None, Ok(status_flags_bytes(false))),
@@ -227,23 +237,55 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (
+                P::GLOBAL_IDENTIFIER,
+                None,
+                Ok(if configured { &[0x21, 77] } else { &[0x21, 0] }),
+            ),
+            (
+                P::GLOBAL_IDENTIFIER,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::REASON_FOR_DISABLE,
+                None,
+                Ok(if configured { &[0x91, 0] } else { EMPTY }),
+            ),
+            (
+                P::REASON_FOR_DISABLE,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::ACTIVATION_TIME, None, Ok(open_window)),
+            (
+                P::ACTIVATION_TIME,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::EXPIRATION_TIME, None, Ok(open_window)),
+            (
+                P::CREDENTIAL_DISABLE,
+                None,
+                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+            ),
+            (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
                     0x91, 28, 0x92, 0x01, 0x08, 0x92, 0x01, 0x00, 0x92, 0x01, 0x01, 0x91, 111,
-                    0x91, 103,
+                    0x91, 103, 0x92, 0x01, 0x43, 0x92, 0x01, 0x2F, 0x91, 0xFE, 0x92, 0x01, 0x0E,
+                    0x92, 0x01, 0x07,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 6])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x08])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x00])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x01])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x43])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 0xFE])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[0x92, 0x01, 0x07])),
             (
                 P::PROPERTY_LIST,
-                Some(7),
+                Some(12),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -251,27 +293,15 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Present_Value is no Table 12-40 row (#979); Global_Identifier
-            // is the Table 12-40 W row with no read arm; Activation_Time is
-            // the Table 12-40 R row with no read arm.
+            // Present_Value is no Table 12-40 row (#979); Days_Remaining is
+            // a Table 12-40 O row with no read arm.
             (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PRESENT_VALUE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::GLOBAL_IDENTIFIER, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::GLOBAL_IDENTIFIER,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::ACTIVATION_TIME, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::ACTIVATION_TIME,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::DAYS_REMAINING, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         assert_cases(&db, oid, cases);
     }
@@ -321,6 +351,9 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // Assigned_Access_Rights is a BACnetARRAY on the one table that
+            // has it (Table 12-40), so the index passes the gate and the
+            // user answers that it has no such property.
             (
                 P::ASSIGNED_ACCESS_RIGHTS,
                 None,
@@ -329,7 +362,7 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::ASSIGNED_ACCESS_RIGHTS,
                 Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
             // No Out_Of_Service row (#1064), so the flag stays clear.
             (P::STATUS_FLAGS, None, Ok(status_flags_bytes(false))),

@@ -18,9 +18,13 @@ use crate::property_metadata::{
 // legacy rows (Lift FLOOR_NUMBER precedent) so the served projection gains
 // exactly three rows, and Property_List is appended so the projection helper
 // omits it while required_properties keeps it. Only implemented rows are
-// described: table rows the objects do not serve (Door pulse/unlock timers,
-// Current_Command_Priority, Authentication_Status, Occupancy_State,
-// event/intrinsic/audit/tag/profile rows) stay absent until dispatch exists.
+// described: table rows the objects do not serve (Door_Unlock_Delay_Time,
+// Authentication_Status, Occupancy_State, event/intrinsic/audit/tag/profile
+// rows) stay absent until dispatch exists. The required door rows #1073
+// added follow Relinquish_Default: Door_Pulse_Time, Door_Extended_Pulse_Time
+// and Door_Open_Too_Long_Time carry the table R code with routed Unsigned32
+// arms, so RequiredRead/Always, and Current_Command_Priority, derived from
+// the priority array, is RequiredRead/ReadOnly.
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
@@ -30,7 +34,7 @@ use crate::property_metadata::{
 // Boolean arm, so RequiredRead/Always.
 // Door Present_Value carries the table W code (commandable) with the
 // priority-slot write arm, so RequiredWrite/Always. Relinquish_Default
-// carries the table R code with the 0..=3 setter arm, so
+// carries the table R code with the LOCK/UNLOCK setter arm, so
 // RequiredRead/Always. Priority_Array and Event_State are served readable
 // rows with no write arm, so RequiredRead/ReadOnly. Door_Status, Lock_Status,
 // Secured_Status, Door_Alarm_State, and Door_Members carry the table O code
@@ -78,6 +82,10 @@ const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
+    PropertyMetadata::new(P::DOOR_PULSE_TIME, RequiredRead, None, Always),
+    PropertyMetadata::new(P::DOOR_EXTENDED_PULSE_TIME, RequiredRead, None, Always),
+    PropertyMetadata::new(P::DOOR_OPEN_TOO_LONG_TIME, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -229,6 +237,10 @@ mod tests {
             P::EVENT_STATE,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
+            P::DOOR_PULSE_TIME,
+            P::DOOR_EXTENDED_PULSE_TIME,
+            P::DOOR_OPEN_TOO_LONG_TIME,
+            P::CURRENT_COMMAND_PRIORITY,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -241,6 +253,10 @@ mod tests {
             P::EVENT_STATE,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
+            P::DOOR_PULSE_TIME,
+            P::DOOR_EXTENDED_PULSE_TIME,
+            P::DOOR_OPEN_TOO_LONG_TIME,
+            P::CURRENT_COMMAND_PRIORITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -275,6 +291,25 @@ mod tests {
         );
         assert!(!object.is_array_property(P::DOOR_MEMBERS));
         assert!(!object.is_array_property(P::DOOR_STATUS));
+        // The #1073 rows: the three times in tenths of a second, and no
+        // command priority while Present_Value is the default.
+        for (p, tenths) in [
+            (P::DOOR_PULSE_TIME, 50),
+            (P::DOOR_EXTENDED_PULSE_TIME, 150),
+            (P::DOOR_OPEN_TOO_LONG_TIME, 300),
+        ] {
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::Unsigned(tenths)
+            );
+            assert!(!object.is_array_property(p));
+        }
+        assert_eq!(
+            object
+                .read_property(P::CURRENT_COMMAND_PRIORITY, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
     }
 
     #[test]
@@ -418,6 +453,9 @@ mod tests {
                     P::OUT_OF_SERVICE,
                     P::PRESENT_VALUE,
                     P::RELINQUISH_DEFAULT,
+                    P::DOOR_PULSE_TIME,
+                    P::DOOR_EXTENDED_PULSE_TIME,
+                    P::DOOR_OPEN_TOO_LONG_TIME,
                 ],
             ),
             (
@@ -518,9 +556,9 @@ mod tests {
                 object.read_property(P::PRESENT_VALUE, None).unwrap(),
                 PropertyValue::Enumerated(0)
             );
-            // Relinquish_Default admits the four BACnetDoorValue productions
+            // Relinquish_Default admits LOCK and UNLOCK (Clause 12.26.11)
             // and resolves Present_Value anew from the empty array.
-            for raw in [0u32, 1, 2, 3] {
+            for raw in [0u32, 1] {
                 object
                     .write_property(
                         P::RELINQUISH_DEFAULT,
@@ -546,17 +584,19 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            assert_error(
-                object
-                    .write_property(
-                        P::RELINQUISH_DEFAULT,
-                        None,
-                        PropertyValue::Enumerated(4),
-                        None,
-                    )
-                    .unwrap_err(),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            );
+            for raw in [2, 3, 4] {
+                assert_error(
+                    object
+                        .write_property(
+                            P::RELINQUISH_DEFAULT,
+                            None,
+                            PropertyValue::Enumerated(raw),
+                            None,
+                        )
+                        .unwrap_err(),
+                    ErrorCode::VALUE_OUT_OF_RANGE,
+                );
+            }
             assert_eq!(
                 object.read_property(P::RELINQUISH_DEFAULT, None).unwrap(),
                 PropertyValue::Enumerated(1)
@@ -565,6 +605,7 @@ mod tests {
             for (p, value) in [
                 (P::PRESENT_VALUE, PropertyValue::Real(1.0)),
                 (P::RELINQUISH_DEFAULT, PropertyValue::Real(1.0)),
+                (P::DOOR_PULSE_TIME, PropertyValue::Real(1.0)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
@@ -589,6 +630,7 @@ mod tests {
                 P::EVENT_STATE,
                 P::STATUS_FLAGS,
                 P::RELIABILITY,
+                P::CURRENT_COMMAND_PRIORITY,
             ] {
                 let value = object.read_property(p, None).unwrap();
                 assert_error(
@@ -694,13 +736,11 @@ mod tests {
             );
         }
 
-        // Door pulse/unlock timers and Current_Command_Priority are Table
-        // 12-30 rows with no read arm.
+        // Door_Unlock_Delay_Time and Masked_Alarm_Values are Table 12-30 O
+        // rows with no read arm.
         let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
-        assert_unserved(&mut door, P::DOOR_PULSE_TIME);
-        assert_unserved(&mut door, P::DOOR_EXTENDED_PULSE_TIME);
         assert_unserved(&mut door, P::DOOR_UNLOCK_DELAY_TIME);
-        assert_unserved(&mut door, P::CURRENT_COMMAND_PRIORITY);
+        assert_unserved(&mut door, P::MASKED_ALARM_VALUES);
         // Authentication_Status is the Table 12-36 R row with no read arm;
         // Present_Value is no Table 12-36 row (#1064).
         let mut point = AccessPointObject::new(1, "AP-1").unwrap();

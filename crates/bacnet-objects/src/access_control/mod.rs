@@ -24,6 +24,7 @@ use crate::traits::BACnetObject;
 
 mod credential;
 mod credential_data_input;
+mod credential_rules;
 mod door;
 mod metadata_identity;
 mod metadata_topology;
@@ -39,6 +40,10 @@ pub use rights::*;
 pub use user::*;
 pub use zone::*;
 
+#[cfg(test)]
+mod credential_tests;
+#[cfg(test)]
+mod door_pulse_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

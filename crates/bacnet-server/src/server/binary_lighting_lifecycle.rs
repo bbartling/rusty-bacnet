@@ -2,6 +2,13 @@ use super::cov_fanout::CovFanout;
 use super::*;
 use tokio::time::{Instant, MissedTickBehavior};
 
+/// Spawn the task that drives every object's monotonic operation deadlines.
+///
+/// It is generic over objects: each wake asks every object to expire what is
+/// due (`advance_monotonic_time_internal`) and to report its next deadline,
+/// then fans COV out from a snapshot of each object that changed. Binary
+/// Lighting Output egress and Access Door pulse relock (#1073) both run on
+/// it; the name predates the door.
 pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     monotonic_origin: Instant,
