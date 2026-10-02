@@ -375,8 +375,10 @@ pub(super) fn active_rows(ack: &ReadPropertyMultipleACK) -> Vec<Vec<u8>> {
 }
 
 /// Independent test decoder for a `BACnetLIST of BACnetCOVSubscription`
-/// (Clause 21): `[0] BACnetRecipientProcess`, `[1] BACnetObjectPropertyReference`,
-/// `[2] BOOLEAN`, `[3] Unsigned`, `[4] REAL OPTIONAL`, concatenated bare.
+/// (Clause 21), entries concatenated bare. Each entry is read as the recipient
+/// process in an opening/closing `[0]` frame, the monitored reference in a
+/// `[1]` frame, then primitive `[2]` (confirmed flag) and `[3]` (time
+/// remaining), and finally `[4]` (the REAL increment) only when it is present.
 pub(super) fn decode_subscriptions(data: &[u8]) -> Vec<BACnetCOVSubscription> {
     fn primitive(data: &[u8], pos: usize, number: u8) -> (&[u8], usize) {
         let (tag, start) = tags::decode_tag(data, pos).unwrap();
@@ -558,10 +560,13 @@ pub(super) fn rows(ack: &ReadPropertyMultipleACK, property: PropertyIdentifier) 
 }
 
 /// Independent test decoder for a `BACnetLIST of BACnetCOVMultipleSubscription`
-/// (Clause 21): `[0]` BACnetRecipientProcess, `[1]` BOOLEAN, `[2]` Unsigned,
-/// `[3]` Unsigned and `[4]` SEQUENCE OF { `[0]` BACnetObjectIdentifier, `[1]`
-/// SEQUENCE OF { `[0]` BACnetPropertyReference, `[1]` REAL OPTIONAL, `[2]`
-/// BOOLEAN } }, entries concatenated bare. Every level must be consumed.
+/// (Clause 21), entries concatenated bare. Each entry is read as the recipient
+/// process in a `[0]` frame, primitive `[1]` (confirmed flag), `[2]` (time
+/// remaining) and `[3]` (maximum notification delay), then a `[4]` frame of
+/// per-object items. An item is the object identifier at `[0]` plus a `[1]`
+/// frame of references; a reference is a `[0]`-framed property reference, the
+/// REAL increment at `[1]` only when present, and the timestamped flag at
+/// `[2]`. Every level must be consumed.
 pub(super) fn decode_contexts(data: &[u8]) -> Vec<BACnetCOVMultipleSubscription> {
     fn primitive(data: &[u8], pos: usize, number: u8) -> (&[u8], usize) {
         let (tag, start) = tags::decode_tag(data, pos).unwrap();
