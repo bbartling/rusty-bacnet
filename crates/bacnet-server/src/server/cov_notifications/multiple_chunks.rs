@@ -18,8 +18,9 @@
 //! references apart where its item alone does not fit (#1038). Each of those
 //! notifications completes only the references it carries, and any value a
 //! sibling's time stamps there belongs to a change already conveyed. A
-//! reference whose values fit no notification alone is left out and logged;
-//! it is evaluated again at its next fanout.
+//! reference whose values fit no notification alone is left out, logged and
+//! counted in `CovCounters::untimed_references_oversized` (#1066); it is
+//! evaluated again at its next fanout.
 use std::collections::HashSet;
 
 use bacnet_services::cov_multiple::{
@@ -299,7 +300,7 @@ type Untimed<'a> = (&'a CovSubscriptionSnapshot, &'a [COVNotificationValue]);
 /// left, in as few notifications of current state as fit `limit`: runs of
 /// whole object items, and one object's references apart where its item does
 /// not fit alone. A reference whose values fit no notification alone is left
-/// out and not owed (#1038).
+/// out and counted, not owed (#1038, #1066).
 fn untimed_parts(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
     // Untimestamped references by object, in the order they were retained.
     let mut objects: Vec<Vec<Untimed<'_>>> = Vec::new();
@@ -357,7 +358,8 @@ fn untimed_parts(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usiz
             }
         })
         .collect();
-    // What is left fits no notification: owing it would retry it for good.
+    // What is left fits no notification: owing it would retry it for good,
+    // so it is counted and given up instead.
     claim.forgo_untimed();
     parts
 }

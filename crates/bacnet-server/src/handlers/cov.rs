@@ -7,6 +7,30 @@ fn cov_property_error(code: ErrorCode) -> Error {
     }
 }
 
+/// A refusal of one COV reference of a SubscribeCOVPropertyMultiple request,
+/// which names the monitored object and the reference's property and array
+/// index: the first-failed-subscription form of its error (Clause 13.16.2).
+fn subscription_error(
+    error: Error,
+    monitored: ObjectIdentifier,
+    reference: &bacnet_services::common::PropertyReference,
+) -> Error {
+    match error {
+        Error::Protocol { class, code } | Error::Structured { class, code, .. } => Error::protocol(
+            class,
+            code,
+            Some(ErrorDetail::FirstFailedSubscription(
+                BACnetObjectPropertyReference {
+                    object_identifier: monitored,
+                    property_identifier: reference.property_identifier.to_raw(),
+                    property_array_index: reference.property_array_index,
+                },
+            )),
+        ),
+        other => other,
+    }
+}
+
 fn validate_cov_property(
     object: &dyn bacnet_objects::traits::BACnetObject,
     property: PropertyIdentifier,
@@ -347,25 +371,37 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     let mut subscriptions = Vec::new();
 
     for spec in &request.list_of_cov_subscription_specifications {
+        let monitored = spec.monitored_object_identifier;
+        // A refusal of the object is a refusal of its first COV reference,
+        // the first one that could not be processed.
+        let refuse_object = |class: ErrorClass, code: ErrorCode| {
+            let error = Error::Protocol {
+                class: class.to_raw() as u32,
+                code: code.to_raw() as u32,
+            };
+            match spec.list_of_cov_references.first() {
+                Some(first) => subscription_error(error, monitored, &first.monitored_property),
+                None => error,
+            }
+        };
         let object = db
-            .get(&spec.monitored_object_identifier)
-            .ok_or(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-            })?;
+            .get(&monitored)
+            .ok_or_else(|| refuse_object(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
 
         if !object.supports_cov() {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
-            });
+            return Err(refuse_object(
+                ErrorClass::OBJECT,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            ));
         }
 
         for cov_ref in &spec.list_of_cov_references {
             let property_identifier = cov_ref.monitored_property.property_identifier;
             let property_array_index = cov_ref.monitored_property.property_array_index;
 
-            validate_cov_property(object, property_identifier, property_array_index)?;
+            validate_cov_property(object, property_identifier, property_array_index).map_err(
+                |error| subscription_error(error, monitored, &cov_ref.monitored_property),
+            )?;
 
             let subscription = CovSubscription {
                 subscriber_mac: subscriber_mac.clone(),

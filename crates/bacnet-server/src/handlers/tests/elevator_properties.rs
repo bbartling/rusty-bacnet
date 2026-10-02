@@ -2,13 +2,16 @@
 //! ReadProperty: the Elevator Group's Table 12-76 property set (#997) and
 //! indexed Group_Members (#1034), the Lift's Car_Moving_Direction domain
 //! (#998), the Lift and Escalator Table 12-77 / 12-78 rows and datatypes
-//! (#1021, #1022), the Lift's out-of-service door simulation (#1035), and
-//! Energy_Meter_Ref (#1036).
+//! (#1021, #1022), the Lift's out-of-service door simulation (#1035),
+//! Energy_Meter_Ref (#1036), and, in `lift_simulation`, the Lift's call,
+//! command and car-state rows (#1052).
 
 use super::*;
 use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject};
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{DoorStatus, LiftCarDirection, LiftFault};
+
+mod lift_simulation;
 
 fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) {
     let oid = object.object_identifier();

@@ -82,7 +82,7 @@ pub enum BACnetEventParameter {
         time_delay: u32,
         /// `bitmask [1] BIT STRING` — bits of interest.
         bitmask: (u8, Vec<u8>),
-        /// `list-of-bitstring-values [2] SEQUENCE OF BIT STRING` — alarm values.
+        /// `list-of-bitstring-values [2]`, a list of bit strings — alarm values.
         list_of_values: Vec<(u8, Vec<u8>)>,
     },
     /// `change-of-state [1]`: report when the monitored value matches a
@@ -90,7 +90,7 @@ pub enum BACnetEventParameter {
     ChangeOfState {
         /// `time-delay [0] Unsigned` — debounce seconds.
         time_delay: u32,
-        /// `list-of-values [1] SEQUENCE OF BACnetPropertyStates` — alarm values.
+        /// `list-of-values [1]`, a list of [`BACnetPropertyStates`] — alarm values.
         list_of_values: Vec<BACnetPropertyStates>,
     },
     /// `change-of-value [2]`: report on a bitmask or increment change.
@@ -134,7 +134,7 @@ pub enum BACnetEventParameter {
         vendor_id: u16,
         /// `extended-event-type [1] Unsigned`.
         extended_event_type: u32,
-        /// Encoded `parameters [2] SEQUENCE OF CHOICE` items, without the
+        /// Encoded `parameters [2]` list items (each a CHOICE), without the
         /// enclosing tag pair.
         parameters: Vec<u8>,
     },

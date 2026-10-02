@@ -108,3 +108,5 @@ mod routing_alarm;
 mod segmentation_rx;
 #[path = "server/segmentation_tx.rs"]
 mod segmentation_tx;
+#[path = "server/structured_errors.rs"]
+mod structured_errors;

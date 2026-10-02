@@ -29,7 +29,7 @@
 //! fresh `ceil` conversion, like the intrinsic detectors.
 //!
 //! Transition actions (#166): an *indicated* transition executes Clause
-//! 13.2.2.1.4's actions even when it does not change the event state — the
+//! 13.2.2.1.4's actions even when its target equals the current state — the
 //! specific returned state is stored in `Event_State`, the corresponding
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
@@ -721,9 +721,9 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             match &mut eval_state.pending {
                 // In flight to the same target under the same condition: the
                 // countdown advances; a redundant qualifying observation does
-                // NOT re-seed it (Clause 13.2.4's debounce semantics, the same
-                // rule the intrinsic detectors document at
-                // `OutOfRangeDetector::probe`).
+                // NOT re-seed it (Clause 13.3 counts the delay from when the
+                // condition began to hold, the same rule the intrinsic
+                // detectors document at `OutOfRangeDetector::probe`).
                 Some(p) if p.state == ind.target && p.condition == ind.condition => {
                     p.remaining = p.remaining.saturating_sub(1);
                     eval_state_dirty = true;

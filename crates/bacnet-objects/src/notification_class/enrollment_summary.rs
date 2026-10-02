@@ -42,8 +42,8 @@ impl fmt::Display for EnrollmentSummaryClassProjectionError {
 
 /// Resolve one exact Notification Class and its current summary values.
 ///
-/// The event-initiating object's `Notification_Class` value is the instance
-/// number of the Notification Class object to resolve. The resolved object's
+/// The `Notification_Class` value read from the object raising the event
+/// names, by instance, which Notification Class object to resolve. The resolved object's
 /// own `Notification_Class` property is unrelated to that identity and is not
 /// read. Recipient membership intentionally ignores delivery-time eligibility,
 /// transition bits, and confirmed mode.

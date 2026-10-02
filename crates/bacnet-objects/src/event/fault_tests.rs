@@ -348,9 +348,9 @@ fn command_failure_reenters_fault_only_when_reliability_changes() {
 
 #[test]
 fn recovery_from_fault_enters_normal_not_the_algorithm_state() {
-    // THE keystone assertion. Clause 13.2.2.1 (Fault, ToNormal) runs the
-    // transition actions and enters Normal when reliability evaluation
-    // returns NO_FAULT_DETECTED.
+    // THE keystone assertion. In Clause 13.2.2.1 (Fault, ToNormal), the way
+    // out of Fault leads to Normal, with its transition actions, once
+    // reliability evaluation is back to NO_FAULT_DETECTED.
     //
     // Issue #167's own "Suggested direction" proposed re-deriving the state from
     // the event algorithm here. That would yield HIGH_LIMIT, because the present
@@ -390,7 +390,8 @@ fn algorithm_reasserts_offnormal_after_recovery() {
 fn recovery_honors_time_delay_on_the_subsequent_offnormal_transition() {
     // The delay applies to the algorithm's transition out of NORMAL, not to the
     // recovery itself — the shape Clause 13.2.2.1.5 uses for the analogous
-    // inhibit case, where the condition must hold for its regular time delay.
+    // inhibit case, where a condition must persist for the full configured
+    // delay again before it produces a transition.
     let mut det = detector();
     det.time_delay = 3;
     det.probe(99.0, OVER_RANGE);

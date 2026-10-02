@@ -8,7 +8,7 @@ use bacnet_encoding::constructed::{
 use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, ErrorDetail};
 use bytes::BytesMut;
 
 /// Formal service-16 Result(-) body with the first failed write coordinate.
@@ -86,6 +86,18 @@ impl TryFrom<&ErrorPdu> for WritePropertyMultipleError {
     }
 }
 
+impl From<WritePropertyMultipleError> for Error {
+    fn from(error: WritePropertyMultipleError) -> Self {
+        Error::protocol(
+            error.error_class.to_raw() as u32,
+            error.error_code.to_raw() as u32,
+            Some(ErrorDetail::FirstFailedWriteAttempt(
+                error.first_failed_write_attempt,
+            )),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +148,13 @@ mod tests {
         assert_eq!(pdu.invoke_id, 9);
         assert_eq!(pdu.error_data[0], 0x0e);
         assert_eq!(WritePropertyMultipleError::try_from(&pdu).unwrap(), error);
+        assert!(matches!(
+            Error::from(error.clone()),
+            Error::Structured { class: 2, code: 40, detail }
+                if *detail == ErrorDetail::FirstFailedWriteAttempt(
+                    error.first_failed_write_attempt.clone()
+                )
+        ));
     }
 
     #[test]

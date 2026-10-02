@@ -400,12 +400,24 @@ fn subscribe_cov_property_multiple_invalid_property_is_atomic() {
 
     let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
         .unwrap_err();
+    // The error names the failed reference, the second (#1047).
     match err {
-        Error::Protocol { class, code } => {
+        Error::Structured {
+            class,
+            code,
+            detail,
+        } => {
             assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
             assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+            assert_eq!(
+                *detail,
+                ErrorDetail::FirstFailedSubscription(BACnetObjectPropertyReference::new(
+                    oid,
+                    PropertyIdentifier::PRIORITY_ARRAY.to_raw()
+                ))
+            );
         }
-        other => panic!("expected UNKNOWN_PROPERTY protocol error, got {other:?}"),
+        other => panic!("expected UNKNOWN_PROPERTY structured error, got {other:?}"),
     }
     assert!(table.is_empty());
 }

@@ -44,8 +44,8 @@ fn crc16_clause9_data_vector_01_00() {
 
 #[test]
 fn crc16_annex_g_data_vector() {
-    // Annex G: data 01 22 30 has complemented CRC 0xBD10,
-    // transmitted least-significant octet first as 10 BD.
+    // Annex G: data 01 22 30 has complemented CRC 0xBD10, which goes on
+    // the wire low octet first: 10 BD.
     assert_eq!(crc16(&[0x01, 0x22, 0x30]), 0xBD10);
     let with_crc = [0x01, 0x22, 0x30, 0x10, 0xBD];
     assert!(crc16_valid(&with_crc));

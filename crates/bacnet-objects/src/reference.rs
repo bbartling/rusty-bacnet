@@ -26,7 +26,7 @@
 //!
 //! Error pairings follow Clause 15.9.1.3 and the object's existing arms: a
 //! value of the wrong BACnet datatype is PROPERTY / INVALID_DATA_TYPE, and a
-//! framed form whose encoding is not valid for the production is PROPERTY /
+//! framed form the production's codec rejects is PROPERTY /
 //! INVALID_DATA_ENCODING.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;

@@ -22,6 +22,7 @@ pub mod private_transfer;
 pub mod read_property;
 pub mod read_range;
 pub mod rpm;
+pub mod structured_error;
 pub mod text_message;
 pub mod virtual_terminal;
 pub mod who_am_i;

@@ -11,8 +11,8 @@ use serde::Deserialize;
 bacnet_enum! {
     /// BACnet engineering units (Clause 21).
     ///
-    /// Values 0-255 and 47808-49999 are reserved for ASHRAE;
-    /// 256-47807 and 50000-65535 may be used by vendors (Clause 23).
+    /// ASHRAE owns 0-255 and 47808-49999. Vendor units go in 256-47807 or
+    /// 50000-65535, following the extension rules of Clause 23.
     pub struct EngineeringUnits(u32);
 
     // Acceleration

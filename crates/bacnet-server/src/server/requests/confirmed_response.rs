@@ -2,6 +2,7 @@ use super::*;
 use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
 use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_property::ReadPropertyRequest;
+use bacnet_types::error::ErrorDetail;
 
 /// ReadProperty under the narrow responder's actual RP[/WP] execution profile.
 pub(super) async fn read_property_response(
@@ -141,20 +142,22 @@ pub(super) fn error_apdu_from_error(
         });
     }
     let (error_class, error_code) = error_fields(error);
+    let detail = match error {
+        Error::Structured { detail, .. } => Some(detail.as_ref()),
+        _ => None,
+    };
+    // Only an element refusal names an element; a refusal of the request or
+    // its target (authorization, object, property, index, list-ness, an
+    // object the server cannot create) carries zero (Clauses 15.1.1.3.1,
+    // 15.2.1.3.1 and 15.3.1.3).
+    let first_failed_element_number = match detail {
+        Some(ErrorDetail::FirstFailedElementNumber(number)) => *number,
+        _ => 0,
+    };
+    // These services answer every error with their Clause 21 production.
     if service_choice == ConfirmedServiceChoice::ADD_LIST_ELEMENT
         || service_choice == ConfirmedServiceChoice::REMOVE_LIST_ELEMENT
     {
-        // Both list services answer every error with a ChangeList-Error
-        // (Clause 21). Only an element refusal names an element; a refusal of
-        // the request or its target (authorization, object, property, index,
-        // list-ness) carries zero (Clauses 15.1.1.3.1 and 15.2.1.3.1).
-        let first_failed_element_number = match error {
-            Error::ChangeList {
-                first_failed_element_number,
-                ..
-            } => *first_failed_element_number,
-            _ => 0,
-        };
         return Apdu::Error(
             bacnet_services::list_manipulation::ChangeListError {
                 error_class,
@@ -162,6 +165,32 @@ pub(super) fn error_apdu_from_error(
                 first_failed_element_number,
             }
             .to_error_pdu(invoke_id, service_choice),
+        );
+    }
+    if service_choice == ConfirmedServiceChoice::CREATE_OBJECT {
+        return Apdu::Error(
+            bacnet_services::object_mgmt::CreateObjectError {
+                error_class,
+                error_code,
+                first_failed_element_number,
+            }
+            .to_error_pdu(invoke_id),
+        );
+    }
+    if service_choice == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE {
+        // A refusal of one COV reference names it; any failure before the
+        // references are processed is the general choice (Clause 13.16.2).
+        let first_failed_subscription = match detail {
+            Some(ErrorDetail::FirstFailedSubscription(reference)) => Some(reference.clone()),
+            _ => None,
+        };
+        return Apdu::Error(
+            bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleError {
+                error_class,
+                error_code,
+                first_failed_subscription,
+            }
+            .to_error_pdu(invoke_id),
         );
     }
     Apdu::Error(ErrorPdu {
@@ -175,7 +204,7 @@ pub(super) fn error_apdu_from_error(
 
 pub(in crate::server) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } | Error::ChangeList { class, code, .. } => (
+        Error::Protocol { class, code } | Error::Structured { class, code, .. } => (
             ErrorClass::from_raw(*class as u16),
             ErrorCode::from_raw(*code as u16),
         ),

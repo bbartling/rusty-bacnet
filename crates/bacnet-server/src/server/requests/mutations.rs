@@ -371,9 +371,13 @@ impl Request<'_> {
             // Initial application values are decoded inside the handler, possibly
             // after earlier values were applied. Rollback is already complete;
             // malformed values remain invalid requests, not auditable executions.
-            if let Err(error @ Error::Decoding { .. }) = &result {
-                return self.error::<T>(error);
-            }
+            let result = match result {
+                Ok(()) => Ok(()),
+                Err(handlers::CreateObjectRefusal::Malformed(error)) => {
+                    return self.error::<T>(&error)
+                }
+                Err(handlers::CreateObjectRefusal::Failed(error)) => Err(error),
+            };
             // Decode failures are not execution outcomes. No await separates the
             // completed mutation (including rollback) from audit admission.
             if let Ok(request) = CreateObjectRequest::decode(&self.req.service_request) {

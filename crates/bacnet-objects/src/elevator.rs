@@ -5,7 +5,7 @@
 //! - LiftObject (type 59) — Clause 12.59
 
 use bacnet_types::constructed::BACnetLandingCallStatus;
-use bacnet_types::enums::{LiftGroupMode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{LiftCarDirection, LiftGroupMode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::{borrow::Cow, collections::HashSet, hash::Hash};
@@ -13,6 +13,8 @@ use std::{borrow::Cow, collections::HashSet, hash::Hash};
 use crate::common;
 use crate::traits::BACnetObject;
 
+mod car_state;
+mod door_values;
 mod doors;
 mod energy_meter;
 mod escalator;
@@ -32,6 +34,22 @@ pub use lift::LiftObject;
 /// VALUE_OUT_OF_RANGE.
 fn named_or_proprietary<T: Copy + PartialEq>(named: &[(&str, T)], value: T, raw: u32) -> bool {
     named.iter().any(|&(_, named)| named == value) || (1024..=65_535).contains(&raw)
+}
+
+/// Whether `direction` is in BACnetLiftCarDirection, the datatype of
+/// Car_Moving_Direction, Car_Assigned_Direction and the direction of each
+/// landing call.
+fn direction_in_range(direction: &LiftCarDirection) -> bool {
+    named_or_proprietary(LiftCarDirection::ALL_NAMED, *direction, direction.to_raw())
+}
+
+/// `value`, or VALUE_OUT_OF_RANGE when `in_range` refuses it.
+fn checked<T>(value: T, in_range: fn(&T) -> bool) -> Result<T, Error> {
+    if in_range(&value) {
+        Ok(value)
+    } else {
+        Err(common::value_out_of_range_error())
+    }
 }
 
 /// Decode a Fault_Signals write, a BACnetLIST of one of this family's fault
@@ -119,8 +137,9 @@ impl ElevatorGroupObject {
         self.machine_room_id
     }
 
-    /// Set the Positive Integer Value object whose Present_Value holds the
-    /// number of the machine room this group is in (Clause 12.58).
+    /// Choose which Positive Integer Value object supplies this group's
+    /// machine-room number; clients read the number from that object's
+    /// Present_Value (Clause 12.58).
     ///
     /// Machine_Room_ID is read-only over the network, so this is the only way
     /// to change it. A reference to any other object type is refused with

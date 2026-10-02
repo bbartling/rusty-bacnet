@@ -343,6 +343,10 @@ impl SubscribeCOVPropertyMultipleRequest {
 mod notification;
 pub use notification::*;
 
+#[path = "cov_multiple_error.rs"]
+mod error;
+pub use error::SubscribeCOVPropertyMultipleError;
+
 #[cfg(test)]
 #[path = "cov_multiple_width_tests.rs"]
 mod width_tests;

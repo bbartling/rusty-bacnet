@@ -180,17 +180,8 @@ pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, 
         TsmResponse::Error {
             class,
             code,
-            first_failed_element_number: None,
-        } => Err(Error::Protocol { class, code }),
-        TsmResponse::Error {
-            class,
-            code,
-            first_failed_element_number: Some(first_failed_element_number),
-        } => Err(Error::ChangeList {
-            class,
-            code,
-            first_failed_element_number,
-        }),
+            detail,
+        } => Err(Error::protocol(class, code, detail)),
         TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
         TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
         TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
@@ -933,6 +924,8 @@ mod segmented_response_admission_tests;
 mod segmented_response_capacity_tests;
 #[cfg(test)]
 mod segmented_timeout_tests;
+#[cfg(test)]
+mod structured_error_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

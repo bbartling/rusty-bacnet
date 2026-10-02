@@ -2191,7 +2191,18 @@ except BacnetError as e:
     print(f"BACnet error: {e}")
 ```
 
-`BacnetProtocolError` has `error_class` and `error_code` integer attributes, and `first_failed_element_number`, which is an integer for an AddListElement or RemoveListElement ChangeList-Error and `None` for every other error. `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
+`BacnetProtocolError` has `error_class` and `error_code` integer attributes. Some services answer with a structured error body (Clause 21) that adds fields; each attribute below is `None` unless the device's error carried it:
+
+| Attribute | Set by | Value |
+|-----------|--------|-------|
+| `first_failed_element_number` | AddListElement/RemoveListElement ChangeList-Error, CreateObject-Error | Position, from 1, of the list element or initial value that failed; 0 when the request failed for another reason |
+| `first_failed_write_attempt` | WritePropertyMultiple-Error | `{"object_identifier", "property_identifier", "property_array_index"}` of the first write that failed |
+| `first_failed_subscription` | SubscribeCOVPropertyMultiple-Error about one COV reference | The same dict for the refused reference; `None` for a general failure |
+| `vendor_id`, `service_number` | ConfirmedPrivateTransfer-Error | The private service the error answers |
+| `error_parameters` | ConfirmedPrivateTransfer-Error | Encoded vendor-defined error parameters (`bytes`), when present |
+| `vt_session_identifiers` | VT-Close error that lists them | Local identifiers of the sessions that could not be closed |
+
+`BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
 
 ---
 
@@ -2814,9 +2825,9 @@ like other SC-only configuration. All old positional slots, including heartbeat,
 IPv6, and server passwords, are unchanged. Existing SC callers must add the new
 keyword even when using the old positional credentials.
 
-Base Standard 135-2020 AB.1.5.3 calls for generation before first deployment,
-durable storage across restarts, and the same device UUID for the device's
-lifetime. **The caller owns all of this provisioning and persistence.** Load the
+Base Standard 135-2020 AB.1.5.3 wants a device's UUID created once, before the
+device is first installed, kept in storage that survives a restart, and never
+changed afterwards. **The caller owns all of this provisioning and persistence.** Load the
 same stored bytes into every fresh hub/client/server object; do not call `uuid4()` or
 otherwise generate a new ID during startup. The library does not choose a path,
 store UUIDs, or detect a changed UUID without application-owned history. It cannot

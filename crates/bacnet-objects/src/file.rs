@@ -138,7 +138,7 @@ pub enum FileWriteStart {
 ///   legal and yields an empty window. The built-in empty file reports
 ///   `end_of_file` TRUE there; non-empty files report FALSE for such a window.
 /// - OBJECT / FILE_FULL when a write would grow the file past the
-///   implementation's designed limit (Clause 14.2.4.1; Clause 18).
+///   most this implementation can hold (Clause 14.2.4.1; Clause 18).
 /// - SERVICES / INVALID_FILE_ACCESS_METHOD when the method does not match
 ///   the object's `File_Access_Method`; only a genuine mismatch, never a
 ///   missing implementation, reports this.

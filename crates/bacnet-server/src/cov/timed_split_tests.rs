@@ -266,7 +266,12 @@ fn an_admission_without_a_known_maximum_apdu_keeps_the_one_advertised_before() {
 
 #[test]
 fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
-    let (store, _) = store(8, 4);
+    let (store, counters) = store(8, 4);
+    let oversized = || {
+        counters
+            .untimed_references_oversized
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
     let (a, b) = (key(1, 1), key(1, 2));
     store.lock().reset_untimed(&a, 1, 10);
     store.lock().reset_untimed(&b, 1, 10);
@@ -295,11 +300,17 @@ fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
     // carrying it is delivered, whichever report takes it.
     drop(claim_of(&[(&b, 1, Some(since))]));
     assert_eq!(store.lock().take_owed(&b, 1), Some(since));
-    // Values that fit no notification are given up, not owed.
+    // Values that fit no notification are given up and counted, not owed
+    // (#1066); nothing else above counted.
+    assert_eq!(oversized(), 0);
     let mut claim = claim_of(&[(&b, 1, Some(since))]);
     claim.forgo_untimed();
+    assert_eq!(oversized(), 1, "one reference left out");
+    claim.forgo_untimed();
+    assert_eq!(oversized(), 1, "counted once");
     drop(claim.owing());
     assert_eq!(store.lock().take_owed(&b, 1), None);
+    assert_eq!(dropped(&counters), 0, "no timestamped change dropped");
     // A renewed or cancelled reference owes nothing.
     let claim = claim_of(&[(&a, 1, None), (&b, 1, Some(since))]);
     store.lock().reset_untimed(&b, 2, 10);
