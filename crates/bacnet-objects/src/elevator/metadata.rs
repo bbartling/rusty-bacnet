@@ -11,20 +11,19 @@ use crate::property_metadata::{
 
 // Canonical effective rows for the Elevator trio (ASHRAE 135-2020; PDF = printed + 2):
 // - ElevatorGroup (type 57, §12.58 Table 12-76; printed p. 578 / PDF p. 580)
-// - Lift (type 59, §12.59 Table 12-77; printed pp. 582-583 / PDF pp. 584-585)
+// - Lift (type 59, §12.59 Table 12-77; printed pp. 583-584 / PDF pp. 585-586)
 // - Escalator (type 58, §12.60 Table 12-78; printed p. 594 / PDF p. 596)
-// Order preserves each legacy projection; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Lift
-// FLOOR_NUMBER (readable but unlisted, aliasing Tracking_Value) is appended
-// after the legacy rows (LoadControl EVENT_STATE precedent) so the served
-// projection gains exactly one row. ElevatorGroup Machine_Room_ID follows
-// Object_Type, its Table 12-76 neighbour among the served rows (#997). Only
-// implemented rows are described: table rows the objects do not serve
-// (ElevatorGroup audit/tag/profile rows; Escalator Elevator_Group, Group_ID,
-// Installation_ID, event/intrinsic/audit/tag/profile rows; Lift
-// Elevator_Group, Group_ID, Installation_ID, Passenger_Alarm, Fault_Signals,
-// door/deck/call/event/intrinsic/audit/tag/profile rows) stay absent until
-// dispatch exists.
+// ElevatorGroup keeps its legacy order with Machine_Room_ID after
+// Object_Type, its Table 12-76 neighbour among the served rows (#997). Lift
+// and Escalator list their rows in table order (#1021, #1022). PROPERTY_LIST
+// is last so the projection helper omits it while required_properties keeps
+// it. Only implemented rows are described: table rows the objects do not
+// serve (ElevatorGroup audit/tag/profile rows; Escalator event, intrinsic,
+// audit, tag and profile rows; Lift Car_Door_Text, call, door-command,
+// Car_Mode, Next_Stopping_Floor, Energy_Meter_Ref, drive, deck, event,
+// intrinsic, audit, tag and profile rows) stay absent until dispatch exists.
+// Every Lift and Escalator row the objects serve is a table row: the Lift's
+// former Tracking_Value and Floor_Number are gone (#1021).
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
@@ -33,16 +32,18 @@ use crate::property_metadata::{
 // network write route stay RequiredRead/ReadOnly; table-R rows with a write
 // arm are RequiredRead/Always. Table-O served rows are Optional, with Always
 // exactly where dispatch accepts the write.
+// Elevator_Group, Group_ID and Installation_ID are R rows of both Tables
+// 12-77 and 12-78. They are application-owned and read-only over the
+// network (membership.rs), unlike the Elevator Group's own writable Group_ID.
+// The Lift's Car_Load_Units (O, present exactly when Car_Load is) and its
+// per-door arrays Car_Door_Status and Landing_Door_Status are likewise set
+// through Rust setters only.
 // Table 12-76 has no Status_Flags, Out_Of_Service, or Reliability row, so
 // ElevatorGroup serves none of them (#997, as #984 did for Calendar). Lift and
 // Escalator Tables 12-77/12-78 do list them (Status_Flags R, Out_Of_Service
 // R, Reliability O): Status_Flags and Reliability are RequiredRead/ReadOnly
 // and Optional/ReadOnly, and Out_Of_Service is RequiredRead/Always through
-// its routed Boolean arm. Tracking_Value is served with a write arm but
-// appears in neither Table 12-77 production nor the Lift property
-// descriptions, so it stays Optional/Always rather than advertising a
-// required row the table does not define; Floor_Number mirrors its
-// Tracking_Value readback with no write arm, so Optional/ReadOnly.
+// its routed Boolean arm.
 // Writability is Always, never WhenOutOfService: the Lift §12.59 and
 // Escalator §12.60 Out_Of_Service descriptions gate simulation writes behind
 // Out_Of_Service TRUE (items (c)-(e)), but dispatch routes every write arm
@@ -50,13 +51,16 @@ use crate::property_metadata::{
 // metadata mirrors dispatch rather than the OOS-gate paragraph.
 // Presence is None throughout: the implementation models no
 // lift-group-conditional, intrinsic-reporting, or paired-text gating on this
-// family. The trio is not createable at runtime (the network factory builds
-// only the eight analog/binary/multi-state input/output/value types, so the
+// family, and Car_Load and Car_Load_Units are always served together. The
+// trio is not createable at runtime (the network factory builds only the
+// eight analog/binary/multi-state input/output/value types, so the
 // is_createable=false default holds) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
-// neither needs an override. Array gating, writability, and COV also keep
-// their defaults: Group_Members admits an index (BACnetARRAY per Tables
-// 12-57/12-76) while every other served row rejects one.
+// neither needs an override. COV keeps its default. Group_Members admits an
+// index through the array default (BACnetARRAY per Table 12-76); the Lift
+// overrides is_array_property so Floor_Text, Car_Door_Status and
+// Landing_Door_Status (BACnetARRAYs of Table 12-77) admit one too. Every
+// other served row rejects an index.
 const ELEVATOR_GROUP_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -74,38 +78,45 @@ const ELEVATOR_GROUP_BASE: &[PropertyMetadata] = &[
 const ESCALATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::ESCALATOR_MODE, Optional, None, Always),
-    PropertyMetadata::new(P::FAULT_SIGNALS, Optional, None, Always),
-    PropertyMetadata::new(P::ENERGY_METER, Optional, None, Always),
-    PropertyMetadata::new(P::ENERGY_METER_REF, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
+    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::ELEVATOR_GROUP, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::GROUP_ID, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::INSTALLATION_ID, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::POWER_MODE, Optional, None, Always),
     PropertyMetadata::new(P::OPERATION_DIRECTION, RequiredRead, None, Always),
-    PropertyMetadata::new(P::PASSENGER_ALARM, RequiredRead, None, Always),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::ESCALATOR_MODE, Optional, None, Always),
+    PropertyMetadata::new(P::ENERGY_METER, Optional, None, Always),
+    PropertyMetadata::new(P::ENERGY_METER_REF, Optional, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::FAULT_SIGNALS, Optional, None, Always),
+    PropertyMetadata::new(P::PASSENGER_ALARM, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
 const LIFT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::TRACKING_VALUE, Optional, None, Always),
+    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
+    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::ELEVATOR_GROUP, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::GROUP_ID, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::INSTALLATION_ID, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::FLOOR_TEXT, Optional, None, ReadOnly),
     PropertyMetadata::new(P::CAR_POSITION, RequiredRead, None, Always),
     PropertyMetadata::new(P::CAR_MOVING_DIRECTION, RequiredRead, None, Always),
     PropertyMetadata::new(P::CAR_DOOR_STATUS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::CAR_LOAD, Optional, None, Always),
-    PropertyMetadata::new(P::LANDING_DOOR_STATUS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::FLOOR_TEXT, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::ENERGY_METER, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CAR_LOAD_UNITS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::PASSENGER_ALARM, RequiredRead, None, Always),
+    PropertyMetadata::new(P::ENERGY_METER, Optional, None, Always),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::FLOOR_NUMBER, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::FAULT_SIGNALS, RequiredRead, None, Always),
+    PropertyMetadata::new(P::LANDING_DOOR_STATUS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -130,6 +141,7 @@ mod tests {
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{
         ErrorClass, ErrorCode, EscalatorFault, EscalatorMode, EscalatorOperationDirection,
+        LiftCarDirection, LiftFault,
     };
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
@@ -245,30 +257,37 @@ mod tests {
     #[test]
     fn property_metadata_escalator_exact_sets_readable_rows_and_indexed_list() {
         let object = EscalatorObject::new(1, "ESC-1").unwrap();
+        // Table 12-78 order.
         let all = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::ESCALATOR_MODE,
-            P::FAULT_SIGNALS,
-            P::ENERGY_METER,
-            P::ENERGY_METER_REF,
+            P::DESCRIPTION,
+            P::STATUS_FLAGS,
+            P::ELEVATOR_GROUP,
+            P::GROUP_ID,
+            P::INSTALLATION_ID,
             P::POWER_MODE,
             P::OPERATION_DIRECTION,
-            P::PASSENGER_ALARM,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
+            P::ESCALATOR_MODE,
+            P::ENERGY_METER,
+            P::ENERGY_METER_REF,
             P::RELIABILITY,
+            P::OUT_OF_SERVICE,
+            P::FAULT_SIGNALS,
+            P::PASSENGER_ALARM,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
-            P::OPERATION_DIRECTION,
-            P::PASSENGER_ALARM,
             P::STATUS_FLAGS,
+            P::ELEVATOR_GROUP,
+            P::GROUP_ID,
+            P::INSTALLATION_ID,
+            P::OPERATION_DIRECTION,
             P::OUT_OF_SERVICE,
+            P::PASSENGER_ALARM,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -277,63 +296,75 @@ mod tests {
             object.read_property(P::ESCALATOR_MODE, None).unwrap(),
             PropertyValue::Enumerated(EscalatorMode::UNKNOWN.to_raw())
         );
+        // An uninitialized BACnetDeviceObjectReference: object-identifier [1]
+        // Accumulator (23) instance 4194303, no device-identifier.
         assert_eq!(
             object.read_property(P::ENERGY_METER_REF, None).unwrap(),
-            PropertyValue::OctetString(vec![])
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0xFF, 0xFF, 0xFF])
         );
         // Fault_Signals is BACnetLIST (Table 12-78), so an index is rejected.
-        assert!(!object.is_array_property(P::FAULT_SIGNALS));
+        for p in all {
+            assert!(!object.is_array_property(p), "{p:?}");
+        }
     }
 
     #[test]
     fn property_metadata_lift_exact_sets_readable_rows_and_indexed_list() {
         let object = LiftObject::new(1, "LIFT-1", 3).unwrap();
+        // Table 12-77 order.
         let all = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::TRACKING_VALUE,
+            P::DESCRIPTION,
+            P::STATUS_FLAGS,
+            P::ELEVATOR_GROUP,
+            P::GROUP_ID,
+            P::INSTALLATION_ID,
+            P::FLOOR_TEXT,
             P::CAR_POSITION,
             P::CAR_MOVING_DIRECTION,
             P::CAR_DOOR_STATUS,
             P::CAR_LOAD,
-            P::LANDING_DOOR_STATUS,
-            P::FLOOR_TEXT,
+            P::CAR_LOAD_UNITS,
+            P::PASSENGER_ALARM,
             P::ENERGY_METER,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
-            P::FLOOR_NUMBER,
+            P::OUT_OF_SERVICE,
+            P::FAULT_SIGNALS,
+            P::LANDING_DOOR_STATUS,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
+            P::STATUS_FLAGS,
+            P::ELEVATOR_GROUP,
+            P::GROUP_ID,
+            P::INSTALLATION_ID,
             P::CAR_POSITION,
             P::CAR_MOVING_DIRECTION,
             P::CAR_DOOR_STATUS,
-            P::STATUS_FLAGS,
+            P::PASSENGER_ALARM,
             P::OUT_OF_SERVICE,
+            P::FAULT_SIGNALS,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
-        // Floor_Number aliases Tracking_Value from a fresh object.
-        assert_eq!(
-            object.read_property(P::FLOOR_NUMBER, None).unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-        assert_eq!(
-            object.read_property(P::LANDING_DOOR_STATUS, None).unwrap(),
-            PropertyValue::Unsigned(3)
-        );
-        // Floor_Text, Car_Door_Status, and Landing_Door_Status are
-        // BACnetARRAY in Table 12-77 but keep the default index rejection
-        // (no array override on this family).
-        assert!(!object.is_array_property(P::FLOOR_TEXT));
-        assert!(!object.is_array_property(P::CAR_DOOR_STATUS));
-        assert!(!object.is_array_property(P::LANDING_DOOR_STATUS));
+        // Floor_Text, Car_Door_Status and Landing_Door_Status are the
+        // BACnetARRAYs of Table 12-77 the object serves; every other row
+        // rejects an index.
+        let arrays = [P::FLOOR_TEXT, P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS];
+        for p in all {
+            assert_eq!(object.is_array_property(p), arrays.contains(&p), "{p:?}");
+        }
+        for p in arrays {
+            assert!(matches!(
+                object.read_property(p, Some(0)).unwrap(),
+                PropertyValue::Unsigned(_)
+            ));
+        }
     }
 
     #[test]
@@ -368,10 +399,12 @@ mod tests {
                 &[
                     P::DESCRIPTION,
                     P::OUT_OF_SERVICE,
-                    P::TRACKING_VALUE,
                     P::CAR_POSITION,
                     P::CAR_MOVING_DIRECTION,
                     P::CAR_LOAD,
+                    P::PASSENGER_ALARM,
+                    P::ENERGY_METER,
+                    P::FAULT_SIGNALS,
                 ],
             ),
         ];
@@ -630,93 +663,77 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            // Tracking_Value and Car_Position store Unsigned verbatim, and
-            // Floor_Number keeps aliasing Tracking_Value after the write.
-            for (p, raw) in [(P::TRACKING_VALUE, 5), (P::CAR_POSITION, 2)] {
-                object
-                    .write_property(p, None, PropertyValue::Unsigned(raw), None)
-                    .unwrap();
-                assert_eq!(
-                    object.read_property(p, None).unwrap(),
-                    PropertyValue::Unsigned(raw)
-                );
-            }
-            assert_eq!(
-                object.read_property(P::FLOOR_NUMBER, None).unwrap(),
-                PropertyValue::Unsigned(5)
-            );
-            // Car_Moving_Direction admits BACnetLiftCarDirection and refuses
-            // its reserved range (lift_car_moving_direction.rs covers the rest).
-            object
-                .write_property(
+            // Each routed arm stores a value of its table datatype verbatim.
+            for (p, value) in [
+                (P::CAR_POSITION, PropertyValue::Unsigned(255)),
+                (
                     P::CAR_MOVING_DIRECTION,
-                    None,
-                    PropertyValue::Enumerated(4),
-                    None,
-                )
-                .unwrap();
-            assert_error(
+                    PropertyValue::Enumerated(LiftCarDirection::DOWN.to_raw()),
+                ),
+                (P::CAR_LOAD, PropertyValue::Real(312.5)),
+                (P::PASSENGER_ALARM, PropertyValue::Boolean(true)),
+                (P::ENERGY_METER, PropertyValue::Real(-1.5)),
+                (
+                    P::FAULT_SIGNALS,
+                    PropertyValue::List(vec![
+                        PropertyValue::Enumerated(LiftFault::POSITION_LOST.to_raw()),
+                        PropertyValue::Enumerated(1024),
+                    ]),
+                ),
+            ] {
                 object
-                    .write_property(
-                        P::CAR_MOVING_DIRECTION,
-                        None,
-                        PropertyValue::Enumerated(6),
-                        None,
-                    )
-                    .unwrap_err(),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            );
-            assert_eq!(
-                object.read_property(P::CAR_MOVING_DIRECTION, None).unwrap(),
-                PropertyValue::Enumerated(4)
-            );
-            // Car_Load admits 0..=100 percent and refuses the rest.
-            object
-                .write_property(P::CAR_LOAD, None, PropertyValue::Unsigned(50), None)
-                .unwrap();
-            assert_error(
-                object
-                    .write_property(P::CAR_LOAD, None, PropertyValue::Unsigned(101), None)
-                    .unwrap_err(),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            );
-            assert_eq!(
-                object.read_property(P::CAR_LOAD, None).unwrap(),
-                PropertyValue::Unsigned(50)
-            );
+                    .write_property(p, None, value.clone(), None)
+                    .unwrap_or_else(|e| panic!("{p:?} must accept {value:?}: {e:?}"));
+                assert_eq!(object.read_property(p, None).unwrap(), value, "{p:?}");
+            }
+            // Out-of-range values fail atomically (the per-property suites in
+            // tests/lift_properties.rs cover each domain).
+            for (p, value) in [
+                (P::CAR_POSITION, PropertyValue::Unsigned(256)),
+                (P::CAR_MOVING_DIRECTION, PropertyValue::Enumerated(6)),
+                (P::CAR_LOAD, PropertyValue::Real(f32::NAN)),
+                (P::ENERGY_METER, PropertyValue::Real(f32::INFINITY)),
+                (P::FAULT_SIGNALS, PropertyValue::Enumerated(17)),
+            ] {
+                let before = object.read_property(p, None).unwrap();
+                assert_error(
+                    object.write_property(p, None, value, None).unwrap_err(),
+                    ErrorCode::VALUE_OUT_OF_RANGE,
+                );
+                assert_eq!(object.read_property(p, None).unwrap(), before, "{p:?}");
+            }
             // Mistyped values are rejected without changing state.
             for (p, value) in [
-                (P::TRACKING_VALUE, PropertyValue::Enumerated(5)),
                 (P::CAR_POSITION, PropertyValue::Enumerated(2)),
                 (P::CAR_MOVING_DIRECTION, PropertyValue::Unsigned(2)),
-                (P::CAR_LOAD, PropertyValue::Real(50.0)),
+                (P::CAR_LOAD, PropertyValue::Unsigned(50)),
+                (P::PASSENGER_ALARM, PropertyValue::Enumerated(1)),
+                (P::ENERGY_METER, PropertyValue::Unsigned(1)),
+                (P::FAULT_SIGNALS, PropertyValue::Unsigned(1)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                 (
                     P::OUT_OF_SERVICE,
                     PropertyValue::CharacterString("invalid".into()),
                 ),
             ] {
+                let before = object.read_property(p, None).unwrap();
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),
                     ErrorCode::INVALID_DATA_TYPE,
                 );
+                assert_eq!(object.read_property(p, None).unwrap(), before, "{p:?}");
             }
-            // Floor_Number is readable but has no write arm: even its own
-            // readback is denied on write.
-            assert!(!object.is_writable_property(P::FLOOR_NUMBER));
-            assert_error(
-                object
-                    .write_property(P::FLOOR_NUMBER, None, PropertyValue::Unsigned(5), None)
-                    .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-            // Car_Door_Status, Landing_Door_Status, Floor_Text, and
-            // Energy_Meter have no network write route.
+            // The membership rows, Floor_Text, the door arrays and
+            // Car_Load_Units have no network write route: even their
+            // read-back values are denied.
             for p in [
-                P::CAR_DOOR_STATUS,
-                P::LANDING_DOOR_STATUS,
+                P::ELEVATOR_GROUP,
+                P::GROUP_ID,
+                P::INSTALLATION_ID,
                 P::FLOOR_TEXT,
-                P::ENERGY_METER,
+                P::CAR_DOOR_STATUS,
+                P::CAR_LOAD_UNITS,
+                P::LANDING_DOOR_STATUS,
             ] {
                 let value = object.read_property(p, None).unwrap();
                 assert_error(
@@ -749,20 +766,22 @@ mod tests {
         assert_unserved(&mut group, P::STATUS_FLAGS);
         assert_unserved(&mut group, P::OUT_OF_SERVICE);
         assert_unserved(&mut group, P::RELIABILITY);
-        // Elevator_Group, Group_ID, and Installation_ID are Table 12-78 R
-        // rows with no read arm on Escalator.
+        // Escalator: a Lift-only row, and Table 12-78 rows it doesn't serve.
         let mut escalator = EscalatorObject::new(1, "ESC-1").unwrap();
-        assert_unserved(&mut escalator, P::ELEVATOR_GROUP);
-        assert_unserved(&mut escalator, P::GROUP_ID);
-        assert_unserved(&mut escalator, P::INSTALLATION_ID);
-        // Elevator_Group, Group_ID, and Installation_ID are Table 12-77 R
-        // rows with no read arm on Lift; Passenger_Alarm (R) and
-        // Fault_Signals (R) likewise have no Lift arm.
+        for p in [P::CAR_POSITION, P::EVENT_STATE, P::TIME_DELAY] {
+            assert_unserved(&mut escalator, p);
+        }
+        // Lift: Tracking_Value and Floor_Number aren't Table 12-77 rows
+        // (#1021), and Car_Mode and Energy_Meter_Ref are optional rows it
+        // doesn't serve.
         let mut lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
-        assert_unserved(&mut lift, P::ELEVATOR_GROUP);
-        assert_unserved(&mut lift, P::GROUP_ID);
-        assert_unserved(&mut lift, P::INSTALLATION_ID);
-        assert_unserved(&mut lift, P::PASSENGER_ALARM);
-        assert_unserved(&mut lift, P::FAULT_SIGNALS);
+        for p in [
+            P::TRACKING_VALUE,
+            P::FLOOR_NUMBER,
+            P::CAR_MODE,
+            P::ENERGY_METER_REF,
+        ] {
+            assert_unserved(&mut lift, p);
+        }
     }
 }

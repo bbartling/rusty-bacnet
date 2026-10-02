@@ -177,7 +177,20 @@ pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, 
     match response {
         TsmResponse::SimpleAck => Ok(Bytes::new()),
         TsmResponse::ComplexAck { service_data } => Ok(service_data),
-        TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
+        TsmResponse::Error {
+            class,
+            code,
+            first_failed_element_number: None,
+        } => Err(Error::Protocol { class, code }),
+        TsmResponse::Error {
+            class,
+            code,
+            first_failed_element_number: Some(first_failed_element_number),
+        } => Err(Error::ChangeList {
+            class,
+            code,
+            first_failed_element_number,
+        }),
         TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
         TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
         TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
@@ -880,6 +893,8 @@ mod cov_tests;
 mod device_events_tests;
 #[cfg(test)]
 mod event_notification_tests;
+#[cfg(test)]
+mod list_error_tests;
 #[cfg(test)]
 mod list_validation_tests;
 #[cfg(test)]

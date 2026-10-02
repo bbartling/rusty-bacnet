@@ -5,6 +5,7 @@
 
 use super::super::*;
 use super::{assert_invalid_data_type, assert_value_out_of_range};
+use bacnet_types::enums::LiftCarDirection;
 
 const CMD: PropertyIdentifier = PropertyIdentifier::CAR_MOVING_DIRECTION;
 

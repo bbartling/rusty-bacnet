@@ -290,6 +290,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now check out with LF line endings on every OS (`.gitattributes`), so
   Windows checkouts match the repository (#950).
 
+- CI's per-crate default-features check (clippy and rustdoc for each published
+  crate on its own, plus `no_std` `bacnet-types`) now runs for Windows
+  (`x86_64-pc-windows-msvc`) and macOS (`aarch64-apple-darwin`) as well as
+  Linux, cross-checked on the Linux runner, so code and docs behind a platform
+  `cfg` are checked with default features too. `scripts/ci/check-default-features.sh`
+  takes target triples, and one cargo run per crate checks them side by side,
+  which adds seconds rather than a minute per target (#981). Before it builds,
+  the native Windows job disables and stops the Inventory and Compatibility
+  Appraisal service (`InventorySvc`), which started the Compatibility
+  Appraiser's `CompatTelRunner.exe` several times a job, and any running copy
+  of it. Its bursts on every CPU could blow a test's timing budget (#1003).
+
 - The pinned development, CI and release toolchain moves from Rust 1.97.1 to
   1.99.0 (`rust-toolchain.toml`, the CI image, which also takes rustup 1.29.1,
   the Docker example and the docs); the MSRV stays 1.93. Clippy 1.99's new
@@ -340,6 +352,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagnostics()` (#956).
 
 ### Fixed
+
+- **Breaking wire format and Rust API:** AddListElement and RemoveListElement
+  now answer every error with a ChangeList-Error, which carries the First
+  Failed Element Number, instead of a plain class and code (#1026). The number
+  is the position, counted from 1, of the request element that failed, or 0
+  when the request or its target was refused (authorization, unknown object or
+  property, array index, not a list, write access). A peer that only parses the
+  plain form no longer reads these errors. The client decodes the new form, which
+  it used to drop as undecodable, and returns the new
+  `Error::ChangeList { class, code, first_failed_element_number }`; a device
+  that still sends only a class and code returns `Error::Protocol` as before.
+  `TsmResponse::Error` gains `first_failed_element_number`, and
+  `bacnet_services::list_manipulation::ChangeListError` encodes and decodes the
+  body. In Python, `BacnetProtocolError` gains `first_failed_element_number`,
+  `None` for other errors.
+
+- **Breaking list service behaviour:** AddListElement and RemoveListElement now
+  compare whole elements and follow the add and remove rules of Clauses 15.1
+  and 15.2 (#1027). AddListElement leaves an element that is already present as
+  it is, a repeat within the request included, instead of appending a second
+  copy. RemoveListElement refuses the whole request with SERVICES /
+  LIST_ELEMENT_NOT_FOUND when any element is absent, instead of skipping it,
+  and with PROPERTY / INVALID_DATA_TYPE when an element's datatype differs from
+  the stored elements', and removes nothing in either case. This holds for
+  lists of values, Recipient_List destinations and Calendar Date_List entries.
+  An element the server cannot decode, or that the object refuses, is reported
+  with its position as above. Adding a fault that Escalator Fault_Signals
+  already holds now succeeds and changes nothing, where it was refused as out
+  of range.
+
+- **Breaking Python panic exception:** a Python process that used the bindings
+  no longer segfaults at exit while a Tokio thread completes an awaited
+  future, such as `stop()` (#1002). Completing a future calls
+  `loop.call_soon_threadsafe`, which releases the GIL after queueing the
+  callback; the main thread could finish the program in that window, and
+  CPython 3.12 and 3.13 end a thread that takes the GIL back during
+  finalization, unwinding it through Rust frames that then dropped Python
+  objects without the GIL (51 of 800 fresh processes that exit right after
+  `await server.stop()` on the CI image under load, and none of 800 with this
+  fix). The bindings now bridge Tokio futures to asyncio themselves
+  (`py_async`) instead of through `pyo3-async-runtimes`, which is no longer a
+  dependency. Binding threads touch Python only through an exit gate, and an
+  `atexit` hook, which runs before finalization starts, closes it and waits
+  for them with the GIL released. A future requested after that hook raises
+  `RuntimeError` instead of never completing. A Rust panic in an async method
+  now raises PyO3's `PanicException`, as a panic in a synchronous method does,
+  instead of `pyo3_async_runtimes.RustPanic`; `PanicException` derives from
+  `BaseException`, so `except Exception` no longer catches it.
+
+- The Python B/IP endpoint tests bind port 0 and read the bound port back from
+  `local_address()` instead of probing a free port on 127.0.0.1 first. B/IP
+  binds the wildcard address, so a port free on loopback could be in use there,
+  and any process could take it between the probe and the bind (#993). The
+  audit-policy endpoint test does the same, and the `server_only` endpoint
+  example, which needs its port before it starts, now probes the wildcard
+  address.
 
 - **Breaking Calendar and Schedule wire format (and Rust API):** Calendar's
   Date_List now carries each BACnetCalendarEntry under its Clause 21 CHOICE
@@ -436,6 +504,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the one already known), and
   `CovSubscriptionSnapshot::subscriber_max_apdu` reports it.
 
+- **COV-multiple split order (wire behaviour):** a timestamped COV-multiple
+  report too large for one notification now splits strictly in capture order,
+  each reference's latest change included (#1008). Before, every reference's
+  latest change stayed in the last notification with the untimestamped values.
+  A context with many references could still send that notification over the
+  smaller of the local and subscriber maximum APDU, and a reference's only
+  change could arrive after newer changes of another reference. Now each
+  notification carries the next run of changes, oldest first, and the last one
+  carries the untimestamped values with the newest changes that still fit. A
+  reference whose latest change went out earlier completes its observation
+  when that notification is sent, or acknowledged when confirmed; in the last
+  notification, a sibling carrying its field times it as #987 describes. A
+  change too large for any notification on its own is now dropped and counted
+  even when it is a reference's latest, since no report could deliver it and a
+  confirmed context would keep retrying it. Only the untimestamped values,
+  which still go together in the last notification, can exceed the limit; that
+  is logged. An unconfirmed report that stops partway now completes the
+  references whose latest change it already sent.
+
 - **Breaking Elevator Group landing calls (API and wire format):** the
   Elevator Group object's Landing_Call_Control and Landing_Calls now carry
   BACnetLandingCallStatus values, as Clause 12.58 (Table 12-76) and Clause 21
@@ -486,6 +573,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   VALUE_OUT_OF_RANGE, leaving the stored value unchanged. A new Lift now reads
   STOPPED (2), as intended, instead of NONE (1). The value is stored as
   `LiftCarDirection`, as #932 did for the other enumerated fields.
+
+- **Breaking Lift property set (API and wire format):** the Lift object now
+  serves its rows of Clause 12.59, Table 12-77, with their table datatypes
+  (#1021). On the wire: Car_Position is an Unsigned8, so a write above 255
+  fails with VALUE_OUT_OF_RANGE and keeps the value. Car_Load is a REAL
+  instead of an Unsigned percentage capped at 100; it takes any finite value
+  and refuses NaN and infinities with VALUE_OUT_OF_RANGE. Car_Door_Status is a
+  BACnetARRAY of BACnetDoorStatus instead of an empty list of Unsigned, and a
+  new Lift has one car door with status UNKNOWN. Landing_Door_Status is a
+  BACnetARRAY of BACnetLandingDoorStatus, one element per car door, instead of
+  an Unsigned floor count. Floor_Text, Car_Door_Status and Landing_Door_Status
+  now take an array index. Tracking_Value and Floor_Number, which the table
+  doesn't define, are gone, and ReadProperty or WriteProperty on them fails
+  with PROPERTY / UNKNOWN_PROPERTY. The Lift gains the required
+  Elevator_Group, Group_ID, Installation_ID, Passenger_Alarm and Fault_Signals,
+  and Car_Load_Units, which must be present with Car_Load. Passenger_Alarm (a
+  Boolean, FALSE at first) and Fault_Signals (a BACnetLIST of BACnetLiftFault
+  that refuses reserved, oversized and repeated faults) take writes, as
+  Energy_Meter now does too. The rows are listed in table order in
+  Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL, and
+  the PICS. In the Rust API: Elevator_Group, Group_ID, Installation_ID,
+  Car_Load_Units, Car_Door_Status and Landing_Door_Status are read-only over
+  the network and set with new `LiftObject` setters. `set_elevator_group`
+  refuses any object type but Elevator Group, `set_car_load_units` a value
+  above 65535, `set_car_door_status` a reserved door status, and
+  `set_landing_door_status` a size other than Car_Door_Status's;
+  `set_car_door_status` also resizes Landing_Door_Status to the new door
+  count. `bacnet-types` adds `constructed::{BACnetLandingDoorStatus,
+  LandingDoor}` and `bacnet-encoding` adds `encode_landing_door_status` and
+  `decode_landing_door_status`.
+
+- **Breaking Escalator property set (wire):** the Escalator object gains the
+  required Elevator_Group, Group_ID and Installation_ID of Clause 12.60,
+  Table 12-78 (#1022). Elevator_Group names Elevator Group instance 4194303
+  until the application sets one, and Group_ID and Installation_ID are
+  Unsigned8 values that start at 0. All three are read-only over the network
+  and set with the new `EscalatorObject::set_elevator_group`, `set_group_id`
+  and `set_installation_id`. Energy_Meter_Ref is now a
+  BACnetDeviceObjectReference, uninitialized (instance 4194303), instead of an
+  empty OctetString. The rows are listed in table order in Property_List, the
+  property metadata, RPM ALL, REQUIRED and OPTIONAL, and the PICS.
 
 - In a timestamped COV-multiple report, a field subscribed with timestamps no
   longer goes out without a Time_Of_Change (#987). Before, when its own selector

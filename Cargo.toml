@@ -72,7 +72,6 @@ socket2 = "0.6"
 # maturin turns on extension-module for wheel builds (crates/rusty-bacnet/pyproject.toml);
 # without it, cargo links libpython so the crate's own tests can run (#919).
 pyo3 = { version = "0.29", features = ["multiple-pymethods"] }
-pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
 # No TLS features: BACnet/SC runs its own tokio-rustls handshake against the
 # configured trust anchors and hands tungstenite the TLS stream. A tungstenite
 # TLS feature would add native root loading, which links Apple's Security

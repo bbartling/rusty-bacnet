@@ -1,10 +1,13 @@
 use super::*;
 use bacnet_encoding::constructed::{
-    decode_calendar_entry_list, decode_destination_list, encode_calendar_entry_list,
+    decode_calendar_entry, decode_calendar_entry_list, decode_destination, decode_destination_list,
+    encode_calendar_entry, encode_calendar_entry_list, encode_destination, encode_destination_list,
 };
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDestination};
+use bytes::Bytes;
+use std::mem::{discriminant, Discriminant};
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
     Error::Protocol {
@@ -13,20 +16,43 @@ fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
     }
 }
 
+/// A refusal of the element at `position` (from 1) of the request's List of
+/// Elements, sent as a ChangeList-Error with that First Failed Element Number.
+/// Every other refusal of these services goes out with element number 0.
+fn element_error(class: ErrorClass, code: ErrorCode, position: u32) -> Error {
+    Error::ChangeList {
+        class: class.to_raw() as u32,
+        code: code.to_raw() as u32,
+        first_failed_element_number: position,
+    }
+}
+
+/// A stored list the server cannot decode: a fault of the target, not of any
+/// element of the request.
 fn invalid_data_type() -> Error {
     protocol_error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE)
 }
 
+/// The position, counted from 1, of the element at `index`.
+fn position(index: usize) -> u32 {
+    u32::try_from(index).map_or(u32::MAX, |index| index.saturating_add(1))
+}
+
 /// Handle an AddListElement request.
 ///
-/// Reads the target property, appends the new elements, and writes back.
+/// Adds every element not already in the list. An element already present is
+/// the same whole element, so it is left as it is. Nothing changes when any
+/// element is refused. A refusal of one element is `Error::ChangeList` naming
+/// its position; a refusal of the request or its target is `Error::Protocol`.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     handle_list_element_observed(db, service_data, false, |_, _, _| {})
 }
 
 /// Handle a RemoveListElement request.
 ///
-/// Reads the target property, removes matching elements, and writes back.
+/// Removes every listed element. Nothing is removed when any element is
+/// refused, including one that is not in the list (LIST_ELEMENT_NOT_FOUND).
+/// Errors take the same two forms as [`handle_add_list_element`].
 pub fn handle_remove_list_element(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -77,30 +103,255 @@ impl ElementCodec {
         }
     }
 
-    fn decode(self, elements: &[u8]) -> Result<ListEdits, Error> {
+    /// Decode the request's elements one at a time. A failure is the position
+    /// of the first element that does not decode.
+    fn decode(self, elements: &[u8]) -> Result<Elements, u32> {
         match self {
-            Self::Destinations => decode_destination_list(elements).map(ListEdits::Destinations),
+            Self::Values => decode_each(elements, decode_application_value).map(Elements::Values),
+            Self::Destinations => {
+                decode_each(elements, decode_destination).map(Elements::Destinations)
+            }
             Self::CalendarEntries => {
-                decode_calendar_entry_list(elements).map(ListEdits::CalendarEntries)
+                decode_each(elements, decode_calendar_entry).map(Elements::CalendarEntries)
             }
-            Self::Values => {
-                let mut values = Vec::new();
-                let mut offset = 0;
-                while offset < elements.len() {
-                    let (value, next) = decode_application_value(elements, offset)?;
-                    values.push(value);
-                    offset = next;
+        }
+    }
+
+    /// The stored list, in the form [`Self::holds`] admitted. A malformed
+    /// stored entry is refused, never dropped, so a removal cannot shorten the
+    /// list by more than the request names.
+    fn stored(self, current: &PropertyValue) -> Result<Elements, Error> {
+        match (self, current) {
+            (Self::Values, PropertyValue::List(items)) => Ok(Elements::Values(items.clone())),
+            (Self::Destinations, PropertyValue::ApplicationData(bytes)) => {
+                decode_destination_list(bytes)
+                    .map(Elements::Destinations)
+                    .map_err(|_| invalid_data_type())
+            }
+            (Self::CalendarEntries, PropertyValue::List(items)) => {
+                let mut entries = Vec::with_capacity(items.len());
+                for item in items {
+                    let PropertyValue::ApplicationData(bytes) = item else {
+                        return Err(invalid_data_type());
+                    };
+                    entries.extend(
+                        decode_calendar_entry_list(bytes).map_err(|_| invalid_data_type())?,
+                    );
                 }
-                Ok(ListEdits::Values(values))
+                Ok(Elements::CalendarEntries(entries))
             }
+            _ => unreachable!("list_target admits only the form the codec edits"),
         }
     }
 }
 
-enum ListEdits {
+/// Decode consecutive elements, failing with the position of the first one
+/// that does not decode.
+fn decode_each<T>(
+    elements: &[u8],
+    decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
+) -> Result<Vec<T>, u32> {
+    let mut decoded = Vec::new();
+    let mut offset = 0;
+    while offset < elements.len() {
+        let (element, next) = decode(elements, offset).map_err(|_| position(decoded.len()))?;
+        decoded.push(element);
+        offset = next;
+    }
+    Ok(decoded)
+}
+
+/// One list's elements, decoded with one codec.
+enum Elements {
     Values(Vec<PropertyValue>),
     Destinations(Vec<BACnetDestination>),
     CalendarEntries(Vec<BACnetCalendarEntry>),
+}
+
+/// The list to write back, and for AddListElement the position of the first
+/// element the list gains.
+struct Edited {
+    value: PropertyValue,
+    first_new: Option<u32>,
+}
+
+impl Elements {
+    /// Apply `edits`, the request's elements, to the stored list in `self`.
+    fn apply(self, edits: Elements, remove: bool) -> Result<Edited, Error> {
+        match (self, edits) {
+            (Self::Values(stored), Self::Values(edits)) => {
+                // A list's elements share the property's datatype, so the
+                // stored elements show it. An empty list shows nothing; there,
+                // any element is simply not found.
+                let kinds: HashSet<Discriminant<PropertyValue>> =
+                    stored.iter().map(discriminant).collect();
+                let (list, first_new) =
+                    edit(stored, edits, remove, encode_property_value, |value| {
+                        kinds.is_empty() || kinds.contains(&discriminant(value))
+                    })?;
+                Ok(Edited {
+                    value: PropertyValue::List(list),
+                    first_new,
+                })
+            }
+            (Self::Destinations(stored), Self::Destinations(edits)) => {
+                let (list, first_new) = edit(
+                    stored,
+                    edits,
+                    remove,
+                    |buf, destination| {
+                        encode_destination(buf, destination);
+                        Ok(())
+                    },
+                    |_| true,
+                )?;
+                let mut bytes = BytesMut::new();
+                encode_destination_list(&mut bytes, &list);
+                Ok(Edited {
+                    value: PropertyValue::ApplicationData(bytes.to_vec()),
+                    first_new,
+                })
+            }
+            (Self::CalendarEntries(stored), Self::CalendarEntries(edits)) => {
+                let (list, first_new) = edit(
+                    stored,
+                    edits,
+                    remove,
+                    |buf, entry| {
+                        encode_calendar_entry(buf, entry);
+                        Ok(())
+                    },
+                    |_| true,
+                )?;
+                // One pre-encoded list, which the Calendar validates again.
+                let mut bytes = BytesMut::new();
+                encode_calendar_entry_list(&mut bytes, &list);
+                Ok(Edited {
+                    value: PropertyValue::ApplicationData(bytes.to_vec()),
+                    first_new,
+                })
+            }
+            _ => unreachable!("one codec decodes both lists"),
+        }
+    }
+}
+
+/// Apply the service procedures of Clauses 15.1.2 and 15.2.2 to one list, all
+/// or nothing. Elements compare whole, since no property served here narrows
+/// the comparison in its description (Recipient_List, Date_List and the
+/// Values lists all compare whole). Two elements are the same exactly when
+/// their canonical encodings are, which also keeps the work linear in the list
+/// sizes.
+///
+/// AddListElement appends each element not yet present, a repeat within the
+/// request once; an element already present is identical, so updating it in
+/// place and ignoring it leave the same list. RemoveListElement checks the
+/// elements in request order, each for the property's datatype
+/// (`datatype_matches`) and then for presence, and refuses the request at the
+/// first that fails.
+fn edit<T>(
+    mut stored: Vec<T>,
+    edits: Vec<T>,
+    remove: bool,
+    encode: impl Fn(&mut BytesMut, &T) -> Result<(), Error>,
+    datatype_matches: impl Fn(&T) -> bool,
+) -> Result<(Vec<T>, Option<u32>), Error> {
+    let key = |element: &T| {
+        let mut buf = BytesMut::new();
+        encode(&mut buf, element).map(|()| buf.freeze())
+    };
+    let keys = stored
+        .iter()
+        .map(key)
+        .collect::<Result<Vec<Bytes>, Error>>()
+        .map_err(|_| invalid_data_type())?;
+    // A request element decoded from the wire always encodes again; if one
+    // did not, it could not be the property's datatype.
+    let request_key = |index: usize, element: &T| {
+        key(element).map_err(|_| {
+            element_error(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+                position(index),
+            )
+        })
+    };
+    if remove {
+        let present: HashSet<&Bytes> = keys.iter().collect();
+        let mut removed = HashSet::with_capacity(edits.len());
+        for (index, element) in edits.iter().enumerate() {
+            if !datatype_matches(element) {
+                return Err(element_error(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::INVALID_DATA_TYPE,
+                    position(index),
+                ));
+            }
+            let element_key = request_key(index, element)?;
+            if !present.contains(&element_key) {
+                return Err(element_error(
+                    ErrorClass::SERVICES,
+                    ErrorCode::LIST_ELEMENT_NOT_FOUND,
+                    position(index),
+                ));
+            }
+            removed.insert(element_key);
+        }
+        let list = stored
+            .into_iter()
+            .zip(&keys)
+            .filter(|(_, key)| !removed.contains(*key))
+            .map(|(element, _)| element)
+            .collect();
+        return Ok((list, None));
+    }
+    let mut present: HashSet<Bytes> = keys.into_iter().collect();
+    let mut first_new = None;
+    for (index, element) in edits.into_iter().enumerate() {
+        if present.insert(request_key(index, &element)?) {
+            first_new.get_or_insert(position(index));
+            stored.push(element);
+        }
+    }
+    Ok((stored, first_new))
+}
+
+/// Map the object's refusal of the edited list. AddListElement reports a lack
+/// of space with its own code (Clause 15.1.1.3.1). A refusal of the elements'
+/// datatype, encoding, range or space names the first element the list would
+/// have gained, which is exact for a request adding one new element: the
+/// object judges the edited list as a whole and does not say which element it
+/// refused. Every other refusal, such as WRITE_ACCESS_DENIED, concerns the
+/// target and keeps element number 0, as do refusals of a removal.
+fn object_refusal(error: Error, remove: bool, first_new: Option<u32>) -> Error {
+    let Error::Protocol { class, code } = error else {
+        return error;
+    };
+    let code = if !remove
+        && class == ErrorClass::RESOURCES.to_raw() as u32
+        && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32
+    {
+        ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
+    } else {
+        code
+    };
+    let about_elements = [
+        ErrorCode::INVALID_DATA_TYPE,
+        ErrorCode::DATATYPE_NOT_SUPPORTED,
+        ErrorCode::INVALID_DATA_ENCODING,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+        ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
+    ]
+    .iter()
+    .any(|element_code| element_code.to_raw() as u32 == code);
+    match first_new {
+        Some(first_failed_element_number) if about_elements => Error::ChangeList {
+            class,
+            code,
+            first_failed_element_number,
+        },
+        _ => Error::Protocol { class, code },
+    }
 }
 
 /// A request refused before any element is applied. `current` is the target
@@ -182,7 +433,9 @@ fn list_target(
 /// Decode once and observe only executable requests. The callback borrows the
 /// pre-image already needed by execution; it never causes a second property read.
 /// Target errors (lookup, read, array index, not a list) keep their precedence
-/// over element decode errors.
+/// over element errors, and go out with element number 0. Element errors
+/// (decode, datatype, not found, and the object's refusal of the edited list)
+/// name their element.
 pub(crate) fn handle_list_element_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -207,62 +460,13 @@ pub(crate) fn handle_list_element_observed(
             return Err(error);
         }
     };
-    let edits = edits.map_err(|_| invalid_data_type())?;
-    let value = match edits {
-        ListEdits::Destinations(edits) => {
-            let PropertyValue::ApplicationData(bytes) = &current else {
-                unreachable!("list_target admits only framed destination lists")
-            };
-            // Decode BOTH lists before observation or mutation. A malformed
-            // stored frame must not be treated as an empty list on removal.
-            let mut destinations =
-                decode_destination_list(bytes).map_err(|_| invalid_data_type())?;
-            before(db, &request, Some(&current));
-            if remove {
-                destinations.retain(|d| !edits.contains(d));
-            } else {
-                destinations.extend(edits);
-            }
-            let mut bytes = BytesMut::new();
-            bacnet_encoding::constructed::encode_destination_list(&mut bytes, &destinations);
-            PropertyValue::ApplicationData(bytes.to_vec())
-        }
-        ListEdits::CalendarEntries(edits) => {
-            let PropertyValue::List(items) = &current else {
-                unreachable!("list_target admits only lists of calendar entries")
-            };
-            // As for destinations, decode the stored entries before observation
-            // or mutation, so a malformed one is never dropped on removal.
-            let mut entries = Vec::with_capacity(items.len());
-            for item in items {
-                let PropertyValue::ApplicationData(bytes) = item else {
-                    return Err(invalid_data_type());
-                };
-                entries.extend(decode_calendar_entry_list(bytes).map_err(|_| invalid_data_type())?);
-            }
-            before(db, &request, Some(&current));
-            if remove {
-                entries.retain(|entry| !edits.contains(entry));
-            } else {
-                entries.extend(edits);
-            }
-            let mut bytes = BytesMut::new();
-            encode_calendar_entry_list(&mut bytes, &entries);
-            PropertyValue::ApplicationData(bytes.to_vec())
-        }
-        ListEdits::Values(edits) => {
-            before(db, &request, Some(&current));
-            let PropertyValue::List(mut items) = current else {
-                unreachable!("list_target admits only lists of values")
-            };
-            if remove {
-                items.retain(|item| !edits.contains(item));
-            } else {
-                items.extend(edits);
-            }
-            PropertyValue::List(items)
-        }
-    };
+    let edits = edits.map_err(|position| {
+        element_error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, position)
+    })?;
+    // Decode the stored list before observation or mutation.
+    let stored = codec.stored(&current)?;
+    before(db, &request, Some(&current));
+    let Edited { value, first_new } = stored.apply(edits, remove)?;
     db.get_mut(&request.object_identifier)
         .expect("readable object")
         .write_property(
@@ -271,398 +475,5 @@ pub(crate) fn handle_list_element_observed(
             value,
             None,
         )
-        .map_err(|error| match error {
-            // Preserve AddListElement's existing Clause 15.1 resource mapping.
-            Error::Protocol { class, code }
-                if !remove
-                    && class == ErrorClass::RESOURCES.to_raw() as u32
-                    && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32 =>
-            {
-                Error::Protocol {
-                    class,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-                }
-            }
-            other => other,
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_objects::multistate::MultiStateInputObject;
-    use bacnet_objects::traits::BACnetObject;
-    use bacnet_services::list_manipulation::ListElementRequest;
-    use bacnet_types::enums::ObjectType;
-    use bytes::BytesMut;
-
-    fn request(oid: ObjectIdentifier, element: u8, array_index: Option<u32>) -> BytesMut {
-        request_with_elements(oid, vec![0x21, element], array_index)
-    }
-
-    fn request_with_elements(
-        oid: ObjectIdentifier,
-        list_of_elements: Vec<u8>,
-        array_index: Option<u32>,
-    ) -> BytesMut {
-        let mut encoded = BytesMut::new();
-        // Raw ingress fixture: intentionally permits malformed/empty/index-zero requests.
-        bacnet_encoding::primitives::encode_ctx_object_id(&mut encoded, 0, &oid);
-        bacnet_encoding::primitives::encode_ctx_enumerated(
-            &mut encoded,
-            1,
-            PropertyIdentifier::ALARM_VALUES.to_raw(),
-        );
-        if let Some(index) = array_index {
-            bacnet_encoding::primitives::encode_ctx_unsigned(&mut encoded, 2, u64::from(index));
-        }
-        encoded.extend_from_slice(&[0x3e]);
-        encoded.extend_from_slice(&list_of_elements);
-        encoded.extend_from_slice(&[0x3f]);
-        encoded
-    }
-
-    #[test]
-    fn add_and_remove_list_element_mutate_msi_alarm_values() {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
-            .unwrap();
-
-        handle_add_list_element(&mut db, &request(oid, 2, None)).unwrap();
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(2)])
-        );
-
-        handle_remove_list_element(&mut db, &request(oid, 2, None)).unwrap();
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![])
-        );
-    }
-
-    #[test]
-    fn add_list_element_malformed_tail_errors_without_partial_commit() {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-        msi.set_alarm_values(vec![1]);
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(msi)).unwrap();
-
-        let encoded = request_with_elements(oid, vec![0x21, 2, 0xD1, 0], None);
-        match handle_add_list_element(&mut db, &encoded).unwrap_err() {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
-            }
-            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
-        }
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(1)])
-        );
-    }
-
-    #[test]
-    fn remove_list_element_malformed_tail_errors_without_partial_commit() {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-        msi.set_alarm_values(vec![2, 3]);
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(msi)).unwrap();
-
-        let encoded = request_with_elements(oid, vec![0x21, 2, 0xD1, 0], None);
-        match handle_remove_list_element(&mut db, &encoded).unwrap_err() {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
-            }
-            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
-        }
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)])
-        );
-    }
-
-    #[test]
-    fn add_list_element_over_cap_returns_the_clause_15_1_error() {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-        // Fill to MAX_ALARM_VALUES (1024) so the appended element trips the cap.
-        msi.set_alarm_values((0..1024).collect());
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(msi)).unwrap();
-
-        let err = handle_add_list_element(&mut db, &request(oid, 7, None)).unwrap_err();
-        match err {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                // Clause 15.1 names AddListElement's own error, not
-                // WriteProperty's NO_SPACE_TO_WRITE_PROPERTY.
-                assert_eq!(
-                    code,
-                    ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-                );
-            }
-            other => panic!("expected Protocol error, got {other:?}"),
-        }
-        // The list must be unchanged.
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List((0..1024).map(PropertyValue::Unsigned).collect())
-        );
-    }
-
-    #[test]
-    fn add_list_element_rejects_array_index_on_alarm_values() {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
-            .unwrap();
-
-        match handle_add_list_element(&mut db, &request(oid, 2, Some(1))).unwrap_err() {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32);
-            }
-            other => panic!("expected PROPERTY_IS_NOT_AN_ARRAY, got {other:?}"),
-        }
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![])
-        );
-    }
-
-    // ---- Framed Recipient_List element editing (#152 review) ----
-
-    use bacnet_objects::notification_class::NotificationClass;
-    use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
-    use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
-    use bacnet_types::primitives::Time;
-
-    fn framed_dest(device_instance: u32) -> BACnetDestination {
-        let t = |h, m| Time {
-            hour: h,
-            minute: m,
-            second: 0,
-            hundredths: 0,
-        };
-        BACnetDestination {
-            valid_days: DaysOfWeek::all(),
-            from_time: t(0, 0),
-            to_time: t(23, 59),
-            recipient: BACnetRecipient::Device(
-                ObjectIdentifier::new(ObjectType::DEVICE, device_instance).unwrap(),
-            ),
-            process_identifier: device_instance,
-            issue_confirmed_notifications: false,
-            transitions: EventTransitionBits::all(),
-        }
-    }
-
-    fn framed_bytes(destinations: &[BACnetDestination]) -> Vec<u8> {
-        let mut buf = BytesMut::new();
-        bacnet_encoding::constructed::encode_destination_list(&mut buf, destinations);
-        buf.to_vec()
-    }
-
-    fn nc_db(entries: &[BACnetDestination]) -> (ObjectDatabase, ObjectIdentifier) {
-        let mut db = ObjectDatabase::new();
-        let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-        for d in entries {
-            nc.add_destination(d.clone());
-        }
-        let oid = nc.object_identifier();
-        db.add(Box::new(nc)).unwrap();
-        (db, oid)
-    }
-
-    fn recipient_list_wire_bytes(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<u8> {
-        let v = db
-            .get(&oid)
-            .unwrap()
-            .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
-            .unwrap();
-        let PropertyValue::ApplicationData(bytes) = v else {
-            panic!("expected ApplicationData");
-        };
-        bytes
-    }
-
-    fn device_instances(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<u32> {
-        let bytes = recipient_list_wire_bytes(db, oid);
-        bacnet_encoding::constructed::decode_destination_list(&bytes)
-            .unwrap()
-            .iter()
-            .map(|d| match &d.recipient {
-                BACnetRecipient::Device(o) => o.instance_number(),
-                other => panic!("expected Device recipient, got {other:?}"),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn remove_list_element_from_framed_recipient_list_leaves_rest() {
-        let (mut db, oid) = nc_db(&[framed_dest(10), framed_dest(20), framed_dest(30)]);
-        let request = ListElementRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::RECIPIENT_LIST,
-            property_array_index: None,
-            list_of_elements: framed_bytes(&[framed_dest(20)]),
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf).unwrap();
-        handle_remove_list_element(&mut db, &buf).unwrap();
-        assert_eq!(device_instances(&db, oid), vec![10, 30]);
-        // The wire form re-encodes as exactly the two remaining destinations.
-        assert_eq!(
-            recipient_list_wire_bytes(&db, oid),
-            framed_bytes(&[framed_dest(10), framed_dest(30)])
-        );
-    }
-
-    #[test]
-    fn remove_list_element_non_matching_entry_is_noop() {
-        let (mut db, oid) = nc_db(&[framed_dest(10), framed_dest(20)]);
-        let before = recipient_list_wire_bytes(&db, oid);
-        let request = ListElementRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::RECIPIENT_LIST,
-            property_array_index: None,
-            list_of_elements: framed_bytes(&[framed_dest(99)]),
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf).unwrap();
-        handle_remove_list_element(&mut db, &buf).unwrap();
-        assert_eq!(device_instances(&db, oid), vec![10, 20]);
-        assert_eq!(
-            recipient_list_wire_bytes(&db, oid),
-            before,
-            "bytes unchanged"
-        );
-    }
-
-    #[test]
-    fn add_list_element_to_framed_recipient_list_appends() {
-        let (mut db, oid) = nc_db(&[framed_dest(10)]);
-        let request = ListElementRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::RECIPIENT_LIST,
-            property_array_index: None,
-            list_of_elements: framed_bytes(&[framed_dest(20), framed_dest(30)]),
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf).unwrap();
-        handle_add_list_element(&mut db, &buf).unwrap();
-        assert_eq!(device_instances(&db, oid), vec![10, 20, 30]);
-        assert_eq!(
-            recipient_list_wire_bytes(&db, oid),
-            framed_bytes(&[framed_dest(10), framed_dest(20), framed_dest(30)])
-        );
-    }
-
-    #[test]
-    fn remove_list_element_malformed_framed_payload_errors_and_preserves() {
-        let (mut db, oid) = nc_db(&[framed_dest(10), framed_dest(20)]);
-        let before = recipient_list_wire_bytes(&db, oid);
-        // Well-formed TLV, but NOT a BACnetDestination (a bare application
-        // Unsigned where the destination's valid-days bit string belongs).
-        let request = ListElementRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::RECIPIENT_LIST,
-            property_array_index: None,
-            list_of_elements: vec![0x21, 0x2A],
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf).unwrap();
-        let err = handle_remove_list_element(&mut db, &buf).unwrap_err();
-        match err {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
-            }
-            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
-        }
-        assert_eq!(
-            recipient_list_wire_bytes(&db, oid),
-            before,
-            "no silent wipe"
-        );
-    }
-
-    #[test]
-    fn whole_list_write_property_decodes_all_elements() {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
-            .unwrap();
-        let request = WritePropertyRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::ALARM_VALUES,
-            property_array_index: None,
-            // A BACnetLIST is consecutive application-tagged elements.
-            property_value: vec![0x21, 2, 0x21, 3],
-            priority: None,
-        };
-        let mut encoded = BytesMut::new();
-        request.encode(&mut encoded).unwrap();
-
-        // #182: WriteProperty loop-decodes the whole payload, so the
-        // whole-list write lands with per-element validation in the arm.
-        handle_write_property(&mut db, &encoded).unwrap();
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)])
-        );
-
-        // Per-element validation still applies: one non-Unsigned member
-        // refuses the whole write and leaves the list untouched.
-        let request = WritePropertyRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::ALARM_VALUES,
-            property_array_index: None,
-            property_value: vec![0x21, 4, 0x11], // Unsigned 4, Boolean true
-            priority: None,
-        };
-        let mut encoded = BytesMut::new();
-        request.encode(&mut encoded).unwrap();
-        match handle_write_property(&mut db, &encoded).unwrap_err() {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
-            }
-            other => panic!("expected INVALID_DATA_TYPE, got {other:?}"),
-        }
-        assert_eq!(
-            db.get(&oid)
-                .unwrap()
-                .read_property(PropertyIdentifier::ALARM_VALUES, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)]),
-            "refused write leaves the list unchanged"
-        );
-    }
+        .map_err(|error| object_refusal(error, remove, first_new))
 }

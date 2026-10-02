@@ -1,6 +1,6 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
-use super::multiple_chunks::{request_limit, split, untimed_octets, Envelope, ReportContent};
+use super::multiple_chunks::{request_limit, split, untimed_octets, Envelope, Part, ReportContent};
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
@@ -106,7 +106,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
         let mut claim: Option<TimedClaim> = None;
-        let (chunks, notification, last_notified, representative) = {
+        let (parts, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
             // identity, the clock sample for any current-state fallback and
             // every value. Producers capture under the database write guard,
@@ -336,14 +336,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let subscriber_max_apdu = table
                     .multiple_context_references(&context)
                     .find_map(|sub| sub.subscriber_max_apdu());
-                // Live timestamped references that convey no change now still
-                // time their field when a sibling carries it (#987).
-                let conveying: HashSet<_> = retained.iter().map(|(sub, ..)| sub.key()).collect();
+                // A live timestamped reference that conveys no change in the
+                // last notification still times its field when a sibling
+                // carries it (#987). Changes drained now can all go out in an
+                // earlier part (#1008), so every live one is an owner; one
+                // whose latest change the last notification carries times
+                // its field itself.
                 let owners: HashMap<Coordinate, (crate::cov::CovSubscriptionKey, u64)> = table
                     .multiple_context_references(&context)
                     .filter(|other| {
                         other.timestamped
-                            && !conveying.contains(other.key())
                             && table
                                 .remaining_lifetime(other, now)
                                 .and_then(crate::cov::CovTimeRemaining::wire_seconds)
@@ -362,7 +364,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .collect();
                 (retained, untimed, subscriber_max_apdu, owners, store)
             };
-            let claim = claim.as_mut().expect("claim created under the table guard");
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
                 return;
             };
@@ -410,12 +411,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 untimed: &untimed,
                 stamp: &stamp,
             };
-            let (chunks, notification) = split(&content, claim, limit);
+            let claim = claim.take().expect("claim created under the table guard");
+            let parts = split(&content, claim, limit);
             let last_notified: Vec<_> = retained
                 .into_iter()
                 .map(|(sub, _, baseline, completion, _)| (sub, baseline, completion))
                 .collect();
-            (chunks, notification, last_notified, representative)
+            (parts, last_notified, representative)
         };
 
         // From the final live decision through fresh admission there is no await.
@@ -429,37 +431,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if representative.issue_confirmed_notifications {
             let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
                 .expect("validated local APDU capacity");
-            let mut chunks = chunks.into_iter();
-            let (notification, observations, claim, deferred): (_, Vec<_>, _, Vec<_>) =
-                match chunks.next() {
-                    // Everything fits one notification.
-                    None => (notification, last_notified, claim.take(), Vec::new()),
-                    // Only the oldest history goes now. The rest returns to its
-                    // queue, uncounted, once this report holds the context, and
-                    // the Ack's follow-up sends the next part (#986).
-                    Some(first) => {
-                        let carried = first
-                            .claim
-                            .last_changes()
-                            .filter_map(|(key, change)| {
-                                let (sub, _, completion) =
-                                    last_notified.iter().find(|(sub, _, _)| sub.key() == key)?;
-                                Some((sub.clone(), change.observation().clone(), *completion))
-                            })
-                            .collect();
-                        // Deferred, not dropped: requeueing them must not let
-                        // the bound evict what this report planned to send.
-                        let deferred = chunks
-                            .map(|chunk| chunk.claim.without_eviction())
-                            .chain(claim.take().map(TimedClaim::without_eviction));
-                        (
-                            first.notification,
-                            carried,
-                            Some(first.claim),
-                            deferred.collect(),
-                        )
-                    }
-                };
+            let mut parts = parts.into_iter();
+            // Every change was too large to send, and nothing else changed.
+            let Some(first) = parts.next() else {
+                return;
+            };
+            // Only the oldest part goes now. The rest returns to its queue,
+            // uncounted, once this report holds the context, and the Ack's
+            // follow-up sends the next part (#986). Deferred, not dropped:
+            // requeueing them must not let the bound evict what this report
+            // planned to send.
+            let deferred = parts.map(|part| part.claim.without_eviction()).collect();
+            let observations = carried(&first, &last_notified, true);
+            let notification = first.notification;
             Self::send_confirmed_cov(
                 handles,
                 budget,
@@ -477,7 +461,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .into_iter()
                         .map(|(sub, observation, _)| (sub, observation))
                         .collect(),
-                    claim,
+                    claim: Some(first.claim),
                     deferred,
                 },
                 |invoke_id| {
@@ -490,25 +474,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
             .await;
         } else {
-            // Every part goes out now, oldest history first, each retired as
+            // Every part goes out now, oldest changes first, each retired as
             // it is sent. A failure or an exhausted budget stops the rest,
             // which returns to its queue for a later notification (#986).
-            let parts = chunks
-                .into_iter()
-                .map(|chunk| (chunk.notification, Some(chunk.claim)))
-                .chain(std::iter::once((notification, claim.take())));
-            for (notification, claim) in parts {
+            let mut delivered = Vec::new();
+            for part in parts {
                 // Communication may have been restricted since the fanout began
                 // (Clause 16.1). Stop; re-enabling it rearms the backstop, which
                 // sends the parts left queued.
                 if handles.ctx.comm_state.load(Ordering::Acquire) >= 1 {
-                    return;
+                    break;
                 }
-                let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
+                let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&part.notification) {
                     Ok(buf) => buf,
                     Err(e) => {
                         warn!(error = %e, "Failed to encode unconfirmed COVNotificationMultiple");
-                        return;
+                        break;
                     }
                 };
 
@@ -516,7 +497,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     counters
                         .notifications_throttled_fanout
                         .fetch_add(1, Ordering::Relaxed);
-                    return;
+                    break;
                 }
 
                 counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
@@ -529,19 +510,50 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 if let Err(e) = Self::send_cov_apdu(network, &buf, &representative, false).await {
                     warn!(error = %e, "Failed to send COVNotificationMultiple");
-                    return;
+                    break;
                 }
-                if let Some(claim) = claim {
-                    claim.commit();
+                // A reference whose latest change this part carried is
+                // complete once it is sent, whatever becomes of the parts
+                // after it (#1008).
+                delivered.extend(carried(&part, &last_notified, false));
+                part.claim.commit();
+            }
+            if !delivered.is_empty() {
+                let mut table = cov_table.write().await;
+                for (snapshot, pv, completion) in delivered {
+                    table.complete_observation(&snapshot, completion, pv);
                 }
             }
-            // The last part carried every reference's current state.
-            let mut table = cov_table.write().await;
-            for (snapshot, pv, completion) in &last_notified {
-                table.complete_observation(snapshot, *completion, pv.clone());
-            }
-            drop(table);
             drop(turn);
         }
     }
+}
+
+/// A reference a report carries, with the observation its delivery
+/// establishes and the ticket that completes it.
+type Carried = (
+    CovSubscriptionSnapshot,
+    crate::cov::CovObservation,
+    crate::cov::PreparedCovCompletion,
+);
+
+/// The references `part` completes, each with its observation: those it
+/// finishes, at their latest drained change or prepared state, and, when
+/// `every` (a confirmed part's Ack completes all it carries), each other
+/// timestamped reference at the last change of it the part carries.
+fn carried(part: &Part, last_notified: &[Carried], every: bool) -> Vec<Carried> {
+    last_notified
+        .iter()
+        .filter_map(|(sub, baseline, completion)| {
+            if part.finishes.contains(sub.key()) {
+                return Some((sub.clone(), baseline.clone(), *completion));
+            }
+            let (_, change) = part
+                .claim
+                .last_changes()
+                .filter(|_| every)
+                .find(|(key, _)| *key == sub.key())?;
+            Some((sub.clone(), change.observation().clone(), *completion))
+        })
+        .collect()
 }

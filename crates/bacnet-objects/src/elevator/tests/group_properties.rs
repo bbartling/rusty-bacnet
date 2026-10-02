@@ -4,7 +4,7 @@
 
 use super::super::*;
 use super::assert_value_out_of_range;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
 
 const MACHINE_ROOM_ID: PropertyIdentifier = PropertyIdentifier::MACHINE_ROOM_ID;
 const GROUP_ID: PropertyIdentifier = PropertyIdentifier::GROUP_ID;

@@ -1,14 +1,17 @@
 //! Splitting one COV-multiple report into notifications that each fit the
-//! subscriber's maximum APDU (135-2020 §13.1, §13.18.1.1; #986).
+//! subscriber's maximum APDU (135-2020 §13.1, §13.18.1.1; #986, #1008).
 //!
-//! The report's last notification carries each timestamped reference's latest
-//! change and the untimestamped values, with as much of the newest queued
-//! history as still fits. The rest of the history goes out first, oldest
-//! first, in as few notifications as fit. A history change that does not fit
-//! a notification even alone is dropped and counted, since every attempt to
-//! send it would fail. Latest changes are never split or dropped, so the last
-//! notification may still exceed the limit, as an unsplit one would; that is
-//! logged (#1008 tracks splitting them too).
+//! The report's timestamped changes go out strictly in capture order, each
+//! reference's latest change included. The last notification carries the
+//! untimestamped values with as many of the newest changes as still fit, and
+//! the older changes go out first, oldest first, in as few notifications as
+//! fit. A reference whose latest change goes out early conveys no change in
+//! the last notification, where a sibling carrying its field times it as for
+//! any reference that conveys no change (#987). A change that does not fit a
+//! notification even alone, latest or not, is dropped and counted, since
+//! every attempt to send it would fail. Only the untimestamped values, which
+//! stay together in the last notification, can still exceed the limit; that
+//! is logged.
 use std::collections::HashSet;
 
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationMultipleRequest};
@@ -17,9 +20,10 @@ use bytes::BytesMut;
 use tracing::warn;
 
 use super::cov_clock::cov_multiple_datetime;
-use super::multiple_items::{build_items, Coordinate, History, Retained, Stamp};
+use super::multiple_items::{build_items, Coordinate, History, Latest, Retained, Stamp};
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{value_len, TimedClaim, ITEM_FRAMING};
+use crate::cov::CovSubscriptionKey;
 
 /// Octets of an unsegmented confirmed request header: type and flags, maximum
 /// segments and APDU, invoke ID and service choice.
@@ -50,11 +54,14 @@ impl Envelope {
     }
 }
 
-/// A notification that goes out before the report's last one, with the
-/// history it retires once delivered.
-pub(super) struct Chunk {
+/// One notification of a report, with the changes it retires once delivered.
+pub(super) struct Part {
     pub(super) notification: COVNotificationMultipleRequest,
     pub(super) claim: TimedClaim,
+    /// References whose observation this part's delivery completes: each
+    /// timestamped reference whose latest drained change it carries, and, in
+    /// the last part, every untimestamped reference.
+    pub(super) finishes: HashSet<CovSubscriptionKey>,
 }
 
 /// Service-request octets one notification may take: the smaller of the local
@@ -88,40 +95,56 @@ pub(super) fn untimed_octets(retained: &Retained<'_>) -> usize {
         .sum()
 }
 
-/// What one report's notifications carry besides the claimed history.
+/// What one report's notifications carry besides the claimed changes.
 pub(super) struct ReportContent<'a> {
     pub(super) envelope: &'a Envelope,
     pub(super) retained: &'a Retained<'a>,
     pub(super) reads: &'a MultipleReads,
     pub(super) untimed: &'a HashSet<Coordinate>,
-    /// Times a field of a timestamped reference that conveys no change now,
-    /// carried by a sibling (#987). Only the last notification has such
-    /// current values.
+    /// Times a field of a timestamped reference that conveys no change in the
+    /// last notification, carried by a sibling (#987). Only the last
+    /// notification has such current values.
     pub(super) stamp: &'a Stamp<'a>,
 }
 
 impl ReportContent<'_> {
-    /// History-only notification of `history`, named after its last change.
-    fn history(&self, claim: &TimedClaim, history: &History<'_>) -> COVNotificationMultipleRequest {
-        let timestamp = history.last().map(|(_, change)| change.frame());
-        let (items, _) = build_items(claim, history, None, self.reads, self.untimed, self.stamp);
-        self.envelope.notification(timestamp, items)
-    }
-
-    /// The report's last notification: `history`, then every reference's
-    /// current state. Its header names the newest change whose time it
-    /// carries, claimed now or kept by a reference that conveys no change.
-    fn last(&self, claim: &TimedClaim, history: &History<'_>) -> COVNotificationMultipleRequest {
-        let (items, stamped) = build_items(
-            claim,
-            history,
-            Some(self.retained),
+    /// Notification of `changes` as history only, named after its last.
+    fn history(&self, changes: &History<'_>) -> COVNotificationMultipleRequest {
+        let timestamp = changes.last().map(|(_, change)| change.frame());
+        let (items, _) = build_items(
+            changes,
+            None,
+            &Latest::new(),
             self.reads,
             self.untimed,
             self.stamp,
         );
-        let newest = claim
-            .newest()
+        self.envelope.notification(timestamp, items)
+    }
+
+    /// The report's last notification. Of `changes`, in capture order, each
+    /// reference's last is its current state and the others are history;
+    /// the untimestamped values follow. Its header names the newest change
+    /// whose time it carries, claimed now or kept by a reference that conveys
+    /// no change.
+    fn last(&self, changes: &History<'_>) -> COVNotificationMultipleRequest {
+        let latest: Latest<'_> = changes.iter().copied().collect();
+        let history: Vec<_> = changes
+            .iter()
+            .copied()
+            .filter(|(key, change)| latest[key].seq() != change.seq())
+            .collect();
+        let (items, stamped) = build_items(
+            &history,
+            Some(self.retained),
+            &latest,
+            self.reads,
+            self.untimed,
+            self.stamp,
+        );
+        let newest = changes
+            .last()
+            .map(|(_, change)| (change.seq(), change.frame()))
             .into_iter()
             .chain(stamped)
             .max_by_key(|(seq, _)| *seq)
@@ -143,66 +166,102 @@ fn fits(notification: &COVNotificationMultipleRequest, limit: usize) -> bool {
 }
 
 /// Split the report `claim` conveys into notifications of at most `limit`
-/// service-request octets. Returns the notifications that go first, oldest
-/// history first, each with the claim it retires, and the last notification,
-/// whose changes stay in `claim`.
-pub(super) fn split(
-    content: &ReportContent<'_>,
-    claim: &mut TimedClaim,
-    limit: usize,
-) -> (Vec<Chunk>, COVNotificationMultipleRequest) {
-    // Each part as its count of the oldest remaining history changes, and
+/// service-request octets, in the order they go out: the oldest changes
+/// first, each part with the claim it retires, and last the notification
+/// with the untimestamped values and the newest changes, left out when it
+/// would carry nothing.
+pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
+    // Each earlier part as its count of the oldest remaining changes, and
     // whether that one change cannot fit a notification on its own.
-    let parts = {
-        let history = claim.earlier();
-        let whole = content.last(claim, &history);
+    let plan = {
+        let changes = claim.in_order();
+        let whole = content.last(&changes);
         // A notification that does not encode is reported by its send.
-        if history.is_empty() || encoded_len(&whole).is_none_or(|len| len <= limit) {
+        if changes.is_empty() || encoded_len(&whole).is_none_or(|len| len <= limit) {
             warn_oversized(&whole, limit);
-            return (Vec::new(), whole);
+            return finish(content, Vec::new(), whole, claim);
         }
-        // Moving more of the oldest history out never grows the rest, so the
-        // fewest changes to move out can be found by bisection.
-        let moved = smallest(history.len(), |count| {
-            fits(&content.last(claim, &history[count..]), limit)
+        // Moving more of the oldest changes out never grows the rest, so the
+        // fewest to move out can be found by bisection. Moving all of them
+        // leaves the untimestamped values alone, or nothing, which is left
+        // out and so always fits.
+        let moved = smallest(changes.len(), |count| {
+            let last = content.last(&changes[count..]);
+            last.list_of_cov_notifications.is_empty() || fits(&last, limit)
         });
-        let mut parts = Vec::new();
+        let mut plan = Vec::new();
         let mut start = 0;
         while start < moved {
-            let alone = |end: usize| fits(&content.history(claim, &history[start..end]), limit);
+            let alone = |end: usize| fits(&content.history(&changes[start..end]), limit);
             let end = largest(start + 1, moved, alone);
-            parts.push((end - start, end == start + 1 && !alone(end)));
+            plan.push((end - start, end == start + 1 && !alone(end)));
             start = end;
         }
-        parts
+        plan
     };
-    let mut chunks = Vec::new();
-    for (count, too_large) in parts {
-        let part = claim.split_earliest(count);
+    let mut parts = Vec::new();
+    for (count, too_large) in plan {
+        let part = claim.split_oldest(count);
         if too_large {
             part.discard("a timestamped change exceeds the notification size on its own");
             continue;
         }
-        let notification = content.history(&part, &part.earlier());
-        chunks.push(Chunk {
-            notification,
-            claim: part,
-        });
+        parts.push((content.history(&part.in_order()), part));
     }
-    let last = content.last(claim, &claim.earlier());
+    let last = content.last(&claim.in_order());
     warn_oversized(&last, limit);
-    (chunks, last)
+    finish(content, parts, last, claim)
 }
 
-/// Log a last notification that still exceeds `limit`: its latest changes
-/// and untimestamped values alone do not fit, and are never split (#1008).
+/// The report's parts: the earlier `parts`, then `last` with the rest of the
+/// claim unless it carries nothing. A timestamped reference is finished by
+/// the last part that carries it, which carries its latest drained change.
+fn finish(
+    content: &ReportContent<'_>,
+    parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>,
+    last: COVNotificationMultipleRequest,
+    claim: TimedClaim,
+) -> Vec<Part> {
+    let mut parts: Vec<_> = parts
+        .into_iter()
+        .map(|(notification, claim)| Part {
+            notification,
+            claim,
+            finishes: HashSet::new(),
+        })
+        .collect();
+    if !last.list_of_cov_notifications.is_empty() {
+        let untimed = content
+            .retained
+            .iter()
+            .filter(|(sub, _)| !sub.timestamped)
+            .map(|(sub, _)| sub.key().clone());
+        parts.push(Part {
+            notification: last,
+            claim,
+            finishes: untimed.collect(),
+        });
+    }
+    let mut later = HashSet::new();
+    for part in parts.iter_mut().rev() {
+        for (key, _) in part.claim.last_changes() {
+            if later.insert(key.clone()) {
+                part.finishes.insert(key.clone());
+            }
+        }
+    }
+    parts
+}
+
+/// Log a last notification that still exceeds `limit`: its untimestamped
+/// values alone do not fit, and they are never split (#1008).
 fn warn_oversized(notification: &COVNotificationMultipleRequest, limit: usize) {
     if let Some(len) = encoded_len(notification).filter(|len| *len > limit) {
         warn!(
             octets = len,
             limit,
             "COV-multiple notification exceeds the subscriber's maximum APDU: its \
-             latest changes and untimestamped values alone do not fit"
+             untimestamped values alone do not fit"
         );
     }
 }

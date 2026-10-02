@@ -46,7 +46,7 @@ impl BACnetClient {
             c.delete_object(&mac, oid).await.map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Create an object on a remote device.
@@ -90,7 +90,7 @@ impl BACnetClient {
             })
             .collect();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -102,7 +102,7 @@ impl BACnetClient {
                 .create_object(&mac, specifier, init_vals)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
+            crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
 
@@ -136,7 +136,7 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send a ReinitializeDevice request.
@@ -164,7 +164,7 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -210,7 +210,7 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Deprecated compatibility helper for acknowledging an alarm.
@@ -257,7 +257,7 @@ impl BACnetClient {
             .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get event information from a remote device.
@@ -271,7 +271,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let last_oid = last_received_object_identifier.map(|o| o.to_rust());
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -283,7 +283,7 @@ impl BACnetClient {
                 .get_event_information(&mac, last_oid)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
+            crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
 
@@ -318,7 +318,7 @@ impl BACnetClient {
             count,
         )?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -336,7 +336,7 @@ impl BACnetClient {
                 )
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| crate::read_range::ack_to_dict(py, ack))
+            crate::py_async::attach(|py| crate::read_range::ack_to_dict(py, ack))
         })
     }
 }

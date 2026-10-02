@@ -12,6 +12,7 @@ mod cov_subscription;
 mod event_parameter;
 mod fault_parameter;
 mod landing_call_status;
+mod landing_door_status;
 mod object_identifier_invariant;
 mod recipient;
 mod schedule;

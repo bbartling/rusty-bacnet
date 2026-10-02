@@ -8,6 +8,7 @@ fn high_level_error_projection_remains_class_and_code_only() {
     let result = confirmed_response_result(TsmResponse::Error {
         class: ErrorClass::PROPERTY.to_raw() as u32,
         code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        first_failed_element_number: None,
     });
     assert!(matches!(
         result,

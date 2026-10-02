@@ -66,6 +66,9 @@ use bacnet_types::error::Error;
 // Protocol error from a remote device
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
+// AddListElement/RemoveListElement error with the failed element's position
+let e = Error::ChangeList { class: 5, code: 81, first_failed_element_number: 2 }; // SERVICES / LIST_ELEMENT_NOT_FOUND
+
 // Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
 // RoutedPathCapacityExceeded, UnsupportedTransport, Encoding, etc.
 ```
@@ -383,6 +386,13 @@ constructed, context and vendor values. It does not validate every application
 primitive or infer the remote property's datatype. Invalid requests leave the
 output buffer unchanged; both client methods reject before transaction admission
 or traffic. Inbound decoding and target property validation remain separate.
+
+`ChangeListError` is the error body both services answer with (Clause 21): the
+error class and code plus `first_failed_element_number`, the position from 1 of
+the request element that failed, or 0 when the request failed for another
+reason. `to_error_pdu` builds the Error PDU and `TryFrom<&ErrorPdu>` decodes and
+checks one. `ErrorPdu` keeps the whole body in `error_data`; a device that sends
+only a class and code still decodes, with no element number.
 
 
 ### Private Transfer
@@ -1510,6 +1520,22 @@ destination codec. A list the object holds framed with no element codec, such as
 Schedule's List_Of_Object_Property_References, returns
 `PROPERTY/WRITE_ACCESS_DENIED`.
 
+Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
+when their encodings are, so a destination that differs in one field is a
+different destination. AddListElement leaves an element that is already present
+as it is, including a repeat within the request; that is not a failure.
+RemoveListElement checks every element first and removes nothing if one is
+refused: an element that does not decode as the property's element, or whose
+datatype differs from the stored elements', returns
+`PROPERTY/INVALID_DATA_TYPE`, and one not in the list
+`SERVICES/LIST_ELEMENT_NOT_FOUND`. Both services always answer errors with a
+ChangeList-Error. A refusal of an element (decode, datatype, not found) names
+its position. When the object refuses the edited list as a whole for an
+element's datatype, encoding, range or space, the response names the first
+element the list would have gained, which is exact when one element is new.
+Refusals of the request or target (authorization, object, property, array
+index, list kind, write access) name element 0.
+
 ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
 single value, a whole array (Object_List, Priority_Array) or an indexed array
 element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,
@@ -2297,30 +2323,36 @@ re-subscription is stamped with the Device time of admission; this is a local
 convention, since no change has been observed yet. A renewal keeps changes not yet
 conveyed, including those of a notification that fails during the renewal.
 
-History that one notification cannot carry goes out in several (§13.1,
-§13.18.1.1). Each notification fits the smaller of the server's `max_apdu_length`
-and the max-APDU-length-accepted from the header of the subscriber's latest
-SubscribeCOVPropertyMultiple request (`subscribe_multiple` takes it as
-`subscriber_max_apdu`; `None`, unknown, keeps the value advertised before). The
-oldest history goes first, as many changes per notification as fit, and the last
-notification carries each reference's latest change, the untimestamped values and
-whatever newer history still fits. Each notification's header timestamp names the
-last change it carries. An unconfirmed report sends every part, each retired once
-transmitted. One such report goes out per context at a time: another fanout of the
-context meanwhile leaves its changes queued, and the report hands the context to
-one follow-up once done, so no newer change reaches the subscriber ahead of older
-parts. A send failure, an exhausted event budget, or communication being disabled
-before a part (Clause 16.1) stops the rest, which the `Max_Notification_Delay`
-backstop below retries once nothing blocks it. Clause 13.18 expects several
-unconfirmed notifications when the changes do not fit one; the confirmed service
-(Clause 13.17) says nothing about splitting, so splitting a confirmed report is
-local policy: it sends only its oldest part and returns the rest to the queue once
-it holds the context, the Ack's follow-up sends the next part, and a part that
-fails goes out again first after the hold-off. A history change that does not fit
-a notification even alone is dropped and counted, since every attempt to send it
-would fail. Latest changes are never split or dropped, so the last notification
-can still exceed the limit when the latest changes and untimestamped values alone
-do; that is logged as a warning (#1008 tracks splitting them too).
+Changes that one notification cannot carry go out in several (§13.1,
+§13.18.1.1), strictly in capture order (#1008). Each notification fits the smaller
+of the server's `max_apdu_length` and the max-APDU-length-accepted from the header
+of the subscriber's latest SubscribeCOVPropertyMultiple request
+(`subscribe_multiple` takes it as `subscriber_max_apdu`; `None`, unknown, keeps the
+value advertised before). The oldest changes go first, as many per notification as
+fit, with no exception for a reference's latest change, and the last notification
+carries the untimestamped values with the newest changes that still fit. So every
+change in one notification is older than every change in the next, and each
+notification's header timestamp names the last change it carries. A reference
+whose latest change went out in an earlier notification conveys no change in the
+last one; a sibling there that carries its coordinate times it as for any
+timestamped selector that conveys no change, described above. Its observation
+completes when the notification carrying its latest change is sent, for an
+unconfirmed context, or acknowledged, for a confirmed one. An unconfirmed report
+sends every part, each retired once transmitted. One such report goes out per
+context at a time: another fanout of the context meanwhile leaves its changes
+queued, and the report hands the context to one follow-up once done, so no newer
+change reaches the subscriber ahead of older parts. A send failure, an exhausted
+event budget, or communication being disabled before a part (Clause 16.1) stops
+the rest, which the `Max_Notification_Delay` backstop below retries once nothing
+blocks it. Clause 13.18 expects several unconfirmed notifications when the changes
+do not fit one; the confirmed service (Clause 13.17) says nothing about splitting,
+so splitting a confirmed report is local policy: it sends only its oldest part and
+returns the rest to the queue once it holds the context, the Ack's follow-up sends
+the next part, and a part that fails goes out again first after the hold-off. A
+change that does not fit a notification even alone, a reference's latest
+included, is dropped and counted, since every attempt to send it would fail. Only
+the untimestamped values, which always travel together in the last notification,
+can still exceed the limit; that is logged as a warning.
 
 As a local bound, one context's pending changes are limited to an estimate of what
 four notifications of that size can carry. Each change counts its encoding, one
@@ -2610,6 +2642,10 @@ let ack = client.read_range(&mac, oid, PropertyIdentifier::LOG_BUFFER, None, Som
 client.add_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, element_bytes).await?;
 client.remove_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, element_bytes).await?;
 ```
+
+A device that answers with a ChangeList-Error surfaces as
+`Error::ChangeList { class, code, first_failed_element_number }`; a device that
+sends only the class and code surfaces as `Error::Protocol`.
 
 ### Private Transfer
 
@@ -3126,6 +3162,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | Variant | Meaning |
 |---------|---------|
 | `Error::Protocol { class, code }` | Remote BACnet error response |
+| `Error::ChangeList { class, code, first_failed_element_number }` | AddListElement/RemoveListElement ChangeList-Error: the error and the failed element's position (0 when no element failed) |
 | `Error::Timeout(msg)` | APDU retry exhausted |
 | `Error::Reject { reason }` | Remote device rejected request |
 | `Error::Abort { reason }` | Remote device aborted request |

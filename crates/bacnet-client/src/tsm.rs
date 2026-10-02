@@ -64,6 +64,9 @@ pub enum TsmResponse {
         class: u32,
         /// Raw BACnetErrorCode enumeration value.
         code: u32,
+        /// First Failed Element Number when the PDU carried an AddListElement
+        /// or RemoveListElement ChangeList-Error; `None` for a plain error.
+        first_failed_element_number: Option<u32>,
     },
     /// Reject PDU.
     Reject {
@@ -80,6 +83,23 @@ pub enum TsmResponse {
         /// Destination network named by the network-layer rejection.
         dnet: u16,
     },
+}
+
+impl TsmResponse {
+    /// The completion an Error PDU produces. A ChangeList-Error keeps its
+    /// First Failed Element Number; any other service-specific body, such as
+    /// WritePropertyMultiple's first failed write attempt, is reduced to the
+    /// class and code.
+    pub(crate) fn from_error_pdu(pdu: &bacnet_encoding::apdu::ErrorPdu) -> Self {
+        Self::Error {
+            class: pdu.error_class.to_raw() as u32,
+            code: pdu.error_code.to_raw() as u32,
+            first_failed_element_number:
+                bacnet_services::list_manipulation::ChangeListError::try_from(pdu)
+                    .ok()
+                    .map(|error| error.first_failed_element_number),
+        }
+    }
 }
 
 /// Invoke ID allocator scoped to a single destination MAC.

@@ -161,9 +161,14 @@ fn dropped_claim_requeues_ahead_of_newer_changes_and_commit_retires() {
     let mut claim = TimedClaim::new(store.clone());
     let (incarnation, drained) = store.lock().drain(&k, 3);
     claim.add(k.clone(), incarnation, drained);
-    assert_eq!(claim.earlier().len(), 1);
-    assert_eq!(claim.latest(&k).map(|c| c.frame()), Some(frame(2)));
-    assert_eq!(claim.newest().map(|(_, f)| f), Some(frame(2)));
+    assert_eq!(claim.in_order().len(), 2);
+    assert_eq!(
+        claim
+            .last_changes()
+            .map(|(_, c)| c.frame())
+            .collect::<Vec<_>>(),
+        [frame(2)]
+    );
     store.lock().push(&k, 3, change(3, 4));
     drop(claim);
     assert_eq!(seconds(&store.lock().drain(&k, 3).1), [1, 2, 3]);

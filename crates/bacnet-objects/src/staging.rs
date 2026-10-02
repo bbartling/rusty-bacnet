@@ -378,7 +378,7 @@ impl BACnetObject for StagingObject {
                 ErrorCode::VALUE_NOT_INITIALIZED,
             )),
             PropertyIdentifier::PRESENT_STAGE => Ok(PropertyValue::Unsigned(self.present_stage)),
-            PropertyIdentifier::STAGES => read_encoded_array(
+            PropertyIdentifier::STAGES => common::read_array(
                 self.stages
                     .iter()
                     .map(|stage| {
@@ -393,7 +393,7 @@ impl BACnetObject for StagingObject {
                 let Some(names) = &self.stage_names else {
                     return Err(common::unknown_property_error());
                 };
-                read_encoded_array(
+                common::read_array(
                     names
                         .iter()
                         .cloned()
@@ -402,7 +402,7 @@ impl BACnetObject for StagingObject {
                     array_index,
                 )
             }
-            PropertyIdentifier::TARGET_REFERENCES => read_encoded_array(
+            PropertyIdentifier::TARGET_REFERENCES => common::read_array(
                 self.target_references
                     .iter()
                     .map(|reference| {
@@ -558,20 +558,6 @@ impl BACnetObject for StagingObject {
         }
         self.reliability = reliability;
         true
-    }
-}
-
-fn read_encoded_array(
-    values: Vec<PropertyValue>,
-    array_index: Option<u32>,
-) -> Result<PropertyValue, Error> {
-    match array_index {
-        None => Ok(PropertyValue::List(values)),
-        Some(0) => Ok(PropertyValue::Unsigned(values.len() as u64)),
-        Some(index) => values
-            .into_iter()
-            .nth((index - 1) as usize)
-            .ok_or_else(common::invalid_array_index_error),
     }
 }
 

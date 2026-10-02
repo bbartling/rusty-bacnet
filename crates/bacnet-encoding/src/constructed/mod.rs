@@ -39,6 +39,7 @@ pub mod cov_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
 pub mod landing_call_status;
+pub mod landing_door_status;
 pub mod object_property_reference;
 pub mod recipient;
 pub mod schedule;
@@ -64,6 +65,7 @@ pub use landing_call_status::{
     decode_landing_call_status, decode_landing_call_status_list, encode_landing_call_status,
     encode_landing_call_status_list,
 };
+pub use landing_door_status::{decode_landing_door_status, encode_landing_door_status};
 pub use object_property_reference::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,

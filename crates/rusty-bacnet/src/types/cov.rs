@@ -128,7 +128,7 @@ impl PyCovNotificationIterator {
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let rx = self.rx.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mut guard = rx.lock().await;
             loop {
                 match guard.recv().await {

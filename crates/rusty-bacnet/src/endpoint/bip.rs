@@ -326,21 +326,21 @@ impl PyBipEndpoint {
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
         let config = self.config.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             lifecycle
                 .start(false, |objects| config.prepare(objects))
                 .await
                 .map_err(lifecycle_error)?;
-            Ok(Python::attach(|py| py.None()))
+            crate::py_async::attach(|py| Ok(py.None()))
         })
     }
 
     /// Join earlier admitted startup and teardown; safe before start and twice.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             lifecycle.close().await.map_err(lifecycle_error)?;
-            Ok(Python::attach(|py| py.None()))
+            crate::py_async::attach(|py| Ok(py.None()))
         })
     }
 
@@ -351,7 +351,7 @@ impl PyBipEndpoint {
             let borrowed = slf.borrow();
             (borrowed.lifecycle.clone(), borrowed.config.clone())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             lifecycle
                 .start(true, |objects| config.prepare(objects))
                 .await
@@ -375,7 +375,7 @@ impl PyBipEndpoint {
     /// Clone the client role (fails with RuntimeError before start/after close).
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
                 let session = guard.as_ref().ok_or_else(|| {
@@ -396,7 +396,7 @@ impl PyBipEndpoint {
     /// Clone the server role (fails with RuntimeError before start/after close).
     fn server<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
                 let session = guard.as_ref().ok_or_else(|| {
@@ -418,7 +418,7 @@ impl PyBipEndpoint {
     /// Raises RuntimeError before startup publication and during/after teardown.
     fn local_address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let guard = inner.lock().await;
             guard
                 .as_ref()
@@ -435,7 +435,7 @@ impl PyBipEndpoint {
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
         let config = self.config.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let snapshot = {
                 let guard = inner.lock().await;
                 let session = guard
@@ -450,7 +450,7 @@ impl PyBipEndpoint {
                 (counters, leases, running, address)
             };
             // Lock released before touching Python.
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("is_running", snapshot.2)?;
                 dict.set_item("device_instance", config.identity.instance())?;
@@ -483,7 +483,7 @@ impl PyBipEndpoint {
             session.broadcast_i_am().await.map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Device instance from the single identity (no I/O).

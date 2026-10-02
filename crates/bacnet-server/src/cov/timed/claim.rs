@@ -1,9 +1,7 @@
 //! Claims on drained timestamped changes, and the one report an unconfirmed
-//! context sends at a time (#986).
+//! context sends at a time (#986, #1008).
 
 use std::sync::Arc;
-
-use bacnet_objects::clock::ClockFrame;
 
 use super::{CovSubscriptionKey, MultipleContextKey, TimedChange, TimedStore};
 use crate::cov::CovRevisits;
@@ -12,14 +10,14 @@ use crate::cov::CovRevisits;
 /// called once the notification is delivered, dropping the claim returns the
 /// changes to their references.
 ///
-/// A report's claim conveys each reference's last claimed change as its
-/// current state. A claim split off by [`TimedClaim::split_earliest`] carries
-/// history only, for a notification that goes out before the report's last.
+/// A claim is only a set of changes. How a notification conveys them, as
+/// history or as a reference's current state, is decided by the report that
+/// builds it; [`TimedClaim::split_oldest`] moves the oldest of them into a
+/// claim of their own, for a notification that goes out first (#986, #1008).
 #[derive(Debug)]
 pub(crate) struct TimedClaim {
     store: TimedStore,
     changes: Vec<(CovSubscriptionKey, u64, Vec<TimedChange>)>,
-    history_only: bool,
     /// Whether returning these changes applies the context bound.
     evict: bool,
 }
@@ -29,7 +27,6 @@ impl TimedClaim {
         Self {
             store,
             changes: Vec::new(),
-            history_only: false,
             evict: true,
         }
     }
@@ -62,30 +59,25 @@ impl TimedClaim {
         }
     }
 
-    /// Move the `count` oldest changes of [`Self::earlier`] (all of them, if
-    /// fewer) into a claim of their own, for a notification that goes out
-    /// before this one. Each
-    /// reference keeps its latest change here, so this claim still conveys
-    /// every reference's current state.
-    pub(crate) fn split_earliest(&mut self, count: usize) -> Self {
+    /// Move the `count` oldest claimed changes, across every reference and
+    /// latest changes included (all of them, if fewer), into a claim of their
+    /// own, for a notification that goes out before this one.
+    pub(crate) fn split_oldest(&mut self, count: usize) -> Self {
         let mut part = Self {
             store: self.store.clone(),
             changes: Vec::new(),
-            history_only: true,
             evict: self.evict,
         };
         let cut = {
-            let earlier = self.earlier();
-            let moved = count.min(earlier.len());
-            moved.checked_sub(1).map(|last| earlier[last].1.seq)
+            let all = self.in_order();
+            let moved = count.min(all.len());
+            moved.checked_sub(1).map(|last| all[last].1.seq)
         };
         let Some(cut) = cut else {
             return part;
         };
-        let kept = usize::from(!self.history_only);
         for (key, incarnation, changes) in &mut self.changes {
-            let movable = changes.len().saturating_sub(kept);
-            let moved = changes[..movable].partition_point(|change| change.seq <= cut);
+            let moved = changes.partition_point(|change| change.seq <= cut);
             if moved > 0 {
                 part.changes
                     .push((key.clone(), *incarnation, changes.drain(..moved).collect()));
@@ -95,30 +87,12 @@ impl TimedClaim {
         part
     }
 
-    /// The latest claimed change of a reference: its current conveyed state.
-    /// A history-only claim conveys none.
-    pub(crate) fn latest(&self, key: &CovSubscriptionKey) -> Option<&TimedChange> {
-        if self.history_only {
-            return None;
-        }
-        self.changes
-            .iter()
-            .find(|(k, _, _)| k == key)
-            .and_then(|(_, _, changes)| changes.last())
-    }
-
-    /// Claimed changes conveyed as history, in capture order: those before
-    /// each reference's latest one, or every change of a history-only claim.
-    /// Each goes out as distinct timestamped values.
-    pub(crate) fn earlier(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
-        let kept = usize::from(!self.history_only);
+    /// Every claimed change, in capture order.
+    pub(crate) fn in_order(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
         let mut all: Vec<_> = self
             .changes
             .iter()
-            .flat_map(|(key, _, changes)| {
-                let earlier = &changes[..changes.len().saturating_sub(kept)];
-                earlier.iter().map(move |change| (key, change))
-            })
+            .flat_map(|(key, _, changes)| changes.iter().map(move |change| (key, change)))
             .collect();
         all.sort_by_key(|(_, change)| change.seq);
         all
@@ -129,15 +103,6 @@ impl TimedClaim {
         self.changes
             .iter()
             .filter_map(|(key, _, changes)| Some((key, changes.last()?)))
-    }
-
-    /// Sequence and clock frame of the most recently captured claimed change.
-    pub(crate) fn newest(&self) -> Option<(u64, ClockFrame)> {
-        self.changes
-            .iter()
-            .filter_map(|(_, _, changes)| changes.last())
-            .max_by_key(|change| change.seq)
-            .map(|change| (change.seq, change.frame))
     }
 
     /// The notification carrying these changes was delivered: retire them.
