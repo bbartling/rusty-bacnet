@@ -412,6 +412,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.set_present_value_internal(value)
     }
 
+    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.wrapped.set_tracking_value_internal(value)
+    }
+
     fn set_controlled_variable_value_internal(
         &mut self,
         value: PropertyValue,

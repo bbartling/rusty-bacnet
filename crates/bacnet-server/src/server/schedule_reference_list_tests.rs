@@ -20,7 +20,7 @@
 use super::cov_wire_test_support::*;
 use super::schedule_reference_write_tests::{av2, bv2, present_values, slot, LIST};
 use super::schedule_write_tests::{
-    error_response, from_three, read, sch5, schedule, write_property, write_property_multiple,
+    from_three, read, sch5, schedule, write_property, write_property_multiple,
 };
 use super::*;
 use bacnet_encoding::constructed::encode_device_object_property_reference;

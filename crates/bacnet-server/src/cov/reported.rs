@@ -1,16 +1,31 @@
 //! Table 13-1 values an ordinary (SubscribeCOV) notification reports after
-//! Present_Value and Status_Flags, captured under the same object borrow.
+//! its leading value and Status_Flags, captured under the same object borrow.
 use super::CovSample;
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_objects::traits::BACnetObject;
+use bacnet_objects::traits::{BACnetObject, CovReportedProperty};
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
+
+/// The value a whole-object notification reports first, ahead of
+/// Status_Flags, which Active_COV_Subscriptions also names as the monitored
+/// property. Present_Value, a trigger filtered by the object's COV_Increment,
+/// for every type but Access Point: its Table 13-1 row starts with
+/// Access_Event, and footnote 1 has the subscription list name it, but only
+/// Access_Event_Time and Status_Flags changes send its notification.
+pub(crate) fn lead(object_type: ObjectType) -> CovReportedProperty {
+    if object_type == ObjectType::ACCESS_POINT {
+        CovReportedProperty::Value(PropertyIdentifier::ACCESS_EVENT)
+    } else {
+        CovReportedProperty::Trigger(PropertyIdentifier::PRESENT_VALUE)
+    }
+}
 
 /// The encoded extra values in report order, and the bounded samples of those
 /// whose changes trigger a notification. A declared property the object's
 /// Property_List lacks is left out; a listed one that fails to read fails the
-/// whole capture, as an unreadable Present_Value does.
+/// whole capture, as an unreadable leading value does.
 pub(crate) struct PreparedReported {
     pub values: Vec<BACnetPropertyValue>,
     pub triggers: Box<[CovSample]>,

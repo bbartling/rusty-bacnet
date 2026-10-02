@@ -45,7 +45,10 @@
 //! commit, and both objects offer it for property COV. While Out_Of_Service is
 //! TRUE a client may write Tracking_Value and Reliability instead (#1108); see
 //! `out_of_service.rs` for how the simulated values interact with the rest of
-//! the object.
+//! the object. Once a server holds the object, the application reaches
+//! Present_Value and Tracking_Value through `set_present_value_internal` and
+//! `set_tracking_value_internal` (#1123); `application.rs` records how that
+//! route meets latching, Silenced, the reset executor and Out_Of_Service.
 //!
 //! Accepted_Modes (Clauses 12.15.13 and 12.16.13) is the configured set of
 //! modes a network write of Mode may select. It starts as every standard
@@ -65,6 +68,7 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
+mod application;
 mod metadata;
 mod out_of_service;
 mod reset;
@@ -220,7 +224,8 @@ fn operation_outcome(
 ///
 /// Represents a single life-safety sensor or detector (e.g. smoke detector,
 /// pull station). Present_Value is an enumerated LifeSafetyState, set by the
-/// application via [`set_present_value`](Self::set_present_value).
+/// application via [`set_present_value`](Self::set_present_value), or through
+/// [`BACnetObject::set_present_value_internal`] once a server holds the point.
 pub struct LifeSafetyPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -512,6 +517,17 @@ impl BACnetObject for LifeSafetyPointObject {
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         self.simulation().set_reliability(reliability)
     }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.present_value = application::life_safety_state(&value)?;
+        Ok(())
+    }
+
+    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let state = application::life_safety_state(&value)?;
+        self.set_tracking_value(state);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +538,9 @@ impl BACnetObject for LifeSafetyPointObject {
 ///
 /// Aggregates one or more Life Safety Point objects into a zone.
 /// Present_Value is an enumerated LifeSafetyState, set by the application
-/// (typically the worst-case state among zone members).
+/// (typically the worst-case state among zone members) via
+/// [`set_present_value`](Self::set_present_value), or through
+/// [`BACnetObject::set_present_value_internal`] once a server holds the zone.
 pub struct LifeSafetyZoneObject {
     oid: ObjectIdentifier,
     name: String,
@@ -782,6 +800,17 @@ impl BACnetObject for LifeSafetyZoneObject {
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         self.simulation().set_reliability(reliability)
     }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.present_value = application::life_safety_state(&value)?;
+        Ok(())
+    }
+
+    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let state = application::life_safety_state(&value)?;
+        self.set_tracking_value(state);
+        Ok(())
+    }
 }
 
 // ===========================================================================
@@ -802,3 +831,6 @@ mod accepted_modes_tests;
 
 #[cfg(test)]
 mod out_of_service_tests;
+
+#[cfg(test)]
+mod application_tests;

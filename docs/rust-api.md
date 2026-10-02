@@ -1622,8 +1622,21 @@ framing, through the shared `bacnet-encoding` codecs.
   NO_SPACE_TO_WRITE_PROPERTY naming the first destination past the cap, which
   AddListElement reports as NO_SPACE_TO_ADD_LIST_ELEMENT at the request element
   that brought it. `add_destination` returns `Result` and refuses past the cap
-  too, and `recipient_list()` reads the list. The codec is not a Notification
-  Forwarder object, which is unsupported.
+  too, and `recipient_list()` reads the list. An address recipient's MAC is at
+  most `BACnetAddress::MAX_MAC_LEN` (18) octets, the B/IPv6 form (#1124):
+  `decode_destination` reads the recipient with `decode_configured_recipient`,
+  which refuses a longer one, so a write fails with PROPERTY /
+  INVALID_DATA_TYPE and `add_destination` refuses it with the same code. The
+  Audit_Notification_Recipient has the same bound, refused there with PROPERTY /
+  INVALID_DATA_ENCODING. The generic `decode_recipient` takes any length, as
+  COV subscription lists and audit records report addresses learned off the
+  network. Only the framed form in `PropertyValue::ApplicationData` is a
+  Recipient_List value; the flat `PropertyValue::List` layout from before #152
+  is refused (#1125). Routing holds every Notification Class, a custom object
+  included, to the same cap: a class serving a longer list gets
+  `RecipientLookupOutcome::RecipientListTooLong`, and the transition reaches
+  none of its destinations. The codec is not a Notification Forwarder object,
+  which is unsupported.
 - **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
   alternatives round-trip. An alternative the stack does not model is kept as
@@ -1705,13 +1718,16 @@ not disable the remaining supported AV/BV target Audit policy or add MSV target
 Audit reporting.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
-Analog/Binary/Multi-state Inputs, noncommandable Values and Loop (the control
-algorithm's output), then runs the existing event and COV path after releasing
-the database lock. The corresponding low-level
-`set_present_value_internal` hook bypasses those server notifications. Both deny
-updates while Out_Of_Service to preserve simulation ownership: this is local
-policy for Inputs and the object-clause rule for these Values and Loop, whose
-Present_Value peers may write only while Out_Of_Service is TRUE. Application NULL
+Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
+algorithm's output) and Life Safety Point and Zone, then runs the existing event
+and COV path after releasing the database lock. The corresponding low-level
+`set_present_value_internal` hook bypasses those server notifications. For the
+Inputs, Values and Loop both deny updates while Out_Of_Service to preserve
+simulation ownership: this is local policy for Inputs and the object-clause rule
+for these Values and Loop, whose Present_Value peers may write only while
+Out_Of_Service is TRUE. Peers never write a Life Safety Present_Value, so those
+objects take the update in either state (see
+[Life Safety execution and COV](#life-safety-execution-and-cov)). Application NULL
 is an invalid datatype, not a relinquishment. For network-equivalent writes use
 `write_local`; noncommandable writes remain available without resolved command
 identity. Commandable writes still require a valid source. These access modes are
@@ -1920,6 +1936,11 @@ on the Loop carries the value in its next report without being triggered by it.
 Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
 starting value.
 
+Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
+Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
+Shed_Duration, and a change of any of them sends one. Duty_Window, which the
+row also names, isn't served yet.
+
 The application also feeds an Averaging object its samples. The server doesn't
 read Object_Property_Reference: the application samples the referenced property,
 spacing its reads Window_Interval / Window_Samples seconds apart, and, in a
@@ -2048,6 +2069,17 @@ Reliability), or when Present_Stage changes.
 | `AccessRightsObject` | `::new(instance, name)` |
 | `AccessZoneObject` | `::new(instance, name)` |
 | `CredentialDataInputObject` | `::new(instance, name)` |
+
+Access Door, Access Point and Credential Data Input support COV (Table 13-1).
+A door's SubscribeCOV report carries Present_Value, Status_Flags and
+Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
+Present_Value, so its report starts with Access_Event, then Status_Flags,
+Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
+Status_Flags change sends one. A Credential Data Input report carries
+Update_Time, whose change sends one. These values are read-only over the
+network; set them before adding the object with
+`AccessDoorObject::set_door_alarm_state`, `AccessPointObject::set_access_event`
+and `CredentialDataInputObject::set_update_time`.
 
 #### Transportation (3)
 
@@ -3374,6 +3406,28 @@ application detects, is refused. A simulated value notifies through the same
 COV path as any write, and Present_Value, `Silenced` and `Operation_Expected`
 don't follow it; a reset executor sees the simulated `Tracking_Value` in its
 context.
+
+Once the server holds a Point or Zone, the application reaches its
+Present_Value with `BACnetServer::set_present_value_local` and its
+Tracking_Value with `BACnetServer::set_tracking_value_local` (#1123), which go
+through the `BACnetObject::set_present_value_internal` and
+`set_tracking_value_internal` hooks. Both take an Enumerated `LifeSafetyState`,
+standard or from 256 to 65535: another number fails with
+`PROPERTY / VALUE_OUT_OF_RANGE`, another datatype with
+`PROPERTY / INVALID_DATA_TYPE`, an unknown object with `OBJECT / UNKNOWN_OBJECT`
+and any other object type with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+Each sets only its own property: Silenced and Operation_Expected stay put, and
+the object never derives one value from the other, so latching Present_Value
+until reset is the application's rule (keep Present_Value on the alarm state,
+report the live state through Tracking_Value, and commit the post-reset
+Present_Value from the reset executor, whose context sees the values the route
+left). Present_Value isn't decoupled out of service, so it is taken in either
+state; an application Tracking_Value sent while `Out_Of_Service` is TRUE
+replaces the value set aside, as `set_tracking_value` does. Changes notify
+through the Life Safety COV path once the lock is released: Present_Value
+reaches SubscribeCOV and Present_Value property subscribers, Tracking_Value
+only its property subscribers. The built-in objects run no intrinsic
+reporting, so the post-write event pass raises nothing.
 
 `Accepted_Modes` lists the modes a WriteProperty or WritePropertyMultiple of
 `Mode` may select. It starts as every standard `LifeSafetyMode`, and

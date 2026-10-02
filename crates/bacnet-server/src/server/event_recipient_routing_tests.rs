@@ -14,7 +14,7 @@ use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::{EventStateChange, EventTransition};
-use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::notification_class::{NotificationClass, MAX_RECIPIENT_LIST_DESTINATIONS};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
@@ -182,6 +182,8 @@ pub(super) async fn distribute_from_database_with_bindings(
 enum TestRecipientList {
     Unavailable,
     Invalid,
+    /// This many local-broadcast destinations, process identifiers 1 up.
+    Broadcasts(u32),
 }
 
 struct TestNotificationClass {
@@ -220,6 +222,17 @@ impl BACnetObject for TestNotificationClass {
                     code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
                 }),
                 TestRecipientList::Invalid => Ok(PropertyValue::ApplicationData(vec![0x5E])),
+                TestRecipientList::Broadcasts(count) => {
+                    let destinations: Vec<_> = (1..=count)
+                        .map(|process_identifier| BACnetDestination {
+                            process_identifier,
+                            ..destination_for(address_recipient(0, &[]), false)
+                        })
+                        .collect();
+                    let mut list = BytesMut::new();
+                    bacnet_encoding::constructed::encode_destination_list(&mut list, &destinations);
+                    Ok(PropertyValue::ApplicationData(list.to_vec()))
+                }
             },
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -263,6 +276,12 @@ async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFram
                 TestRecipientList::Invalid,
             )))
             .unwrap(),
+        // Only a custom class can serve a list past the cap (#1124).
+        "list-past-the-cap" => db
+            .add(Box::new(TestNotificationClass::new(
+                TestRecipientList::Broadcasts(CAP + 1),
+            )))
+            .unwrap(),
         "empty-list" => db
             .add(Box::new(NotificationClass::new(0, "NC-0").unwrap()))
             .unwrap(),
@@ -284,6 +303,7 @@ async fn every_non_matched_lookup_outcome_emits_no_frame() {
         "missing-class",
         "list-unavailable",
         "list-invalid",
+        "list-past-the-cap",
         "empty-list",
         "no-eligible-destination",
     ] {
@@ -291,6 +311,23 @@ async fn every_non_matched_lookup_outcome_emits_no_frame() {
         assert!(broadcasts.is_empty(), "{case} must not widen to broadcast");
         assert!(unicasts.is_empty(), "{case} must not emit a unicast");
     }
+}
+
+/// The Recipient_List cap (#1098), which routing applies to every class.
+const CAP: u32 = MAX_RECIPIENT_LIST_DESTINATIONS as u32;
+
+#[tokio::test]
+async fn custom_class_at_the_cap_reaches_every_destination() {
+    // #1124: the routing bound is inclusive. A custom class serving exactly
+    // the cap is routed whole; one more destination and none is.
+    let mut db = clocked_test_database();
+    db.add(Box::new(TestNotificationClass::new(
+        TestRecipientList::Broadcasts(CAP),
+    )))
+    .unwrap();
+    let (broadcasts, unicasts) = distribute_from_database(db).await;
+    assert_eq!(broadcasts.len(), CAP as usize);
+    assert!(unicasts.is_empty());
 }
 
 #[tokio::test]

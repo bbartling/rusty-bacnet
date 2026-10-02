@@ -1,5 +1,5 @@
 use bacnet_objects::event::EventTransition;
-use bacnet_objects::notification_class::RecipientLookupOutcome;
+use bacnet_objects::notification_class::{RecipientLookupOutcome, MAX_RECIPIENT_LIST_DESTINATIONS};
 use bacnet_types::constructed::BACnetRecipient;
 use tracing::{debug, warn};
 
@@ -31,6 +31,18 @@ pub(super) fn matched_recipients_or_log(
                 notification_class,
                 ?transition,
                 "Recipient list invalid; delivery suppressed"
+            );
+            None
+        }
+        RecipientLookupOutcome::RecipientListTooLong => {
+            // Only a custom Notification Class can serve a list past the cap.
+            // The whole transition is refused rather than sent to part of the
+            // list (#1124).
+            warn!(
+                notification_class,
+                ?transition,
+                cap = MAX_RECIPIENT_LIST_DESTINATIONS,
+                "Recipient list longer than the cap; delivery suppressed"
             );
             None
         }

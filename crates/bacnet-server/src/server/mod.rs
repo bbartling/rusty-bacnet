@@ -712,6 +712,8 @@ mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;
 #[cfg(test)]
+mod life_safety_application_tests;
+#[cfg(test)]
 mod life_safety_cov_tests;
 #[cfg(test)]
 mod life_safety_operation_replay_tests;
@@ -737,6 +739,8 @@ mod schedule_write_tests;
 mod segmentation_tests;
 #[cfg(test)]
 mod staging_cov_tests;
+#[cfg(test)]
+mod table_13_1_cov_tests;
 #[cfg(test)]
 pub(crate) mod test_transport;
 #[cfg(test)]

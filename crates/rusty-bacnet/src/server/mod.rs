@@ -168,6 +168,7 @@ mod server_methods {
     mod cov_policy;
     mod dcc_outcomes;
     mod file_configuration;
+    mod life_safety_methods;
     mod lifecycle;
     mod loop_methods;
     mod network_port;

@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Life Safety runtime Present_Value and Tracking_Value (breaking API):** once
+  a server holds a Life Safety Point or Zone, the application can now change
+  its Present_Value and Tracking_Value (#1123). Before, only a reset commit
+  could, and `set_present_value_local` answered
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for these objects.
+  - Point and Zone implement `BACnetObject::set_present_value_internal`, so
+    `BACnetServer::set_present_value_local` (Python:
+    `BACnetServer.set_present_value_local`) takes them. The new
+    `BACnetObject::set_tracking_value_internal` hook (default:
+    OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED) backs the new
+    `BACnetServer::set_tracking_value_local` (Python:
+    `BACnetServer.set_tracking_value_local`). Custom wrappers that forward
+    every trait method need the new one.
+  - Both take an Enumerated BACnetLifeSafetyState, standard or from 256 to
+    65535, the range a reset commit already enforces. Another number fails
+    with VALUE_OUT_OF_RANGE and another datatype with INVALID_DATA_TYPE,
+    leaving the object as it was; an unknown object fails with UNKNOWN_OBJECT
+    and any other object type with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+  - Each sets only its own property. Silenced and Operation_Expected stay
+    put and the object never derives one value from the other, so latching
+    Present_Value until reset stays the application's rule (Clauses 12.15.4
+    and 12.16.4 leave it to the implementation); a reset executor's context
+    sees the values the route left.
+  - Present_Value has no out-of-service footnote, so it is taken whether or
+    not Out_Of_Service is TRUE. A Tracking_Value sent while it is TRUE
+    replaces the value set aside, as #1108 does for `set_tracking_value`, and
+    is served and notified on the return to service.
+  - Both go through the server's local write path: a Present_Value change
+    notifies SubscribeCOV and Present_Value property subscribers, a
+    Tracking_Value change only its property subscribers, and the post-write
+    event pass runs as for every other `set_present_value_local` caller
+    (the built-in objects run no intrinsic reporting, so it raises nothing).
+
 - **Schedule reference list through AddListElement and RemoveListElement, and
   references naming this device (wire):** the list services now edit a
   Schedule's List_Of_Object_Property_References, and a member whose Device
@@ -889,6 +922,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **COV reports for the rest of Table 13-1 (wire):** SubscribeCOV now covers
+  every object type the COV criteria table (Clause 13.1, Table 13-1) lists
+  that the stack builds, and each report carries the values that type's row
+  names after Present_Value and Status_Flags (#1061). A change of a value
+  marked as a trigger sends a report on its own; the others only ride along.
+  - Access Door reports now carry Door_Alarm_State, and its change triggers a
+    report. Before, neither happened.
+  - Access Point, Credential Data Input and Load Control took no SubscribeCOV
+    (OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED); now they do, and they take
+    SubscribeCOVProperty and SubscribeCOVPropertyMultiple too.
+  - An Access Point has no Present_Value, so its report starts with
+    Access_Event, then Status_Flags, Access_Event_Tag and Access_Event_Time.
+    Only an Access_Event_Time or Status_Flags change sends one. The Device's
+    Active_COV_Subscriptions already named Access_Event for these
+    subscriptions.
+  - A Credential Data Input report carries Update_Time, a trigger.
+  - A Load Control report carries Requested_Shed_Level, Start_Time and
+    Shed_Duration, each a trigger.
+  - Rows the objects don't serve yet are left out of the report: Access
+    Point's Access_Event_Credential and Access_Event_Authentication_Factor,
+    and Load Control's Duty_Window (#1092).
+  - New setters for values that have no network write route:
+    `AccessDoorObject::set_door_alarm_state`,
+    `AccessPointObject::set_access_event` and
+    `CredentialDataInputObject::set_update_time`. Like the other object
+    setters they reach the object only before the server holds it.
+  - `BACnetObject::cov_reported_properties` lists the new rows by default.
+    The Pulse Converter's Update_Time (#1092) was already reported; a pulse
+    that moves only Update_Time still sends nothing.
+
 - **Breaking Notification Class Recipient_List cap (wire and Rust API):** the
   list now holds at most 32 destinations (#1098). Before, it grew without a
   bound until the framed decoder's 10,000-item limit, past which a write
@@ -904,6 +967,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MAX_RECIPIENT_LIST_DESTINATIONS` names the cap,
   `NotificationClass::add_destination` returns `Result` and refuses past it,
   and the `recipient_list` field is private: read it with `recipient_list()`.
+
+- **Breaking Recipient_List bounds (wire and Rust API):** follow-ups to the
+  #1098 cap.
+  - A configured recipient's address MAC is at most 18 octets (#1124),
+    `BACnetAddress::MAX_MAC_LEN`. That is B/IPv6's form here, a 16-octet IPv6
+    address and a 2-octet port, and the longest any data link this stack
+    serves uses; the longest in the standard's network-layer address table is
+    7. Before, any length was taken, so one destination could make every
+    event transition re-encode and re-decode a list of any size; now a
+    destination is at most 47 octets and a full list at most 1,504. A
+    Recipient_List destination with a longer MAC doesn't decode: WriteProperty
+    and WritePropertyMultiple fail with PROPERTY / INVALID_DATA_TYPE, and
+    AddListElement with a ChangeList-Error naming the element. A write of
+    Audit_Notification_Recipient fails with PROPERTY / INVALID_DATA_ENCODING.
+    The stored value is unchanged. `NotificationClass::add_destination` and
+    `DeviceObject::provision_audit_recipient` refuse one with the same codes.
+    The new `decode_configured_recipient` applies the bound, and
+    `decode_destination` uses it; `decode_recipient` still takes any length,
+    since COV subscription lists and audit records report source addresses
+    learned off the network.
+  - Routing holds every Notification Class to the 32-destination cap, not
+    only the built-in object (#1124). A custom NOTIFICATION_CLASS object
+    serving a longer list gets nothing for the transition: none of its
+    destinations, never some of them. The server logs a warning naming the
+    class, and stops decoding at the first destination past the cap. Rust:
+    `RecipientLookupOutcome` gains `RecipientListTooLong`;
+    `get_notification_recipients_strict` returns `None` for it, and
+    `get_notification_recipients` and `filter_recipient_list` an empty list.
+    No counter covers event delivery, so none counts it.
+  - The flat Recipient_List form from before #152 is gone (#1125). A local
+    `write_property` or `write_local` of Recipient_List takes only the framed
+    BACnetLIST of BACnetDestination in `PropertyValue::ApplicationData`; a
+    `PropertyValue::List`, an empty one included, fails with PROPERTY /
+    INVALID_DATA_TYPE. Routing and `filter_recipient_list` treat a custom
+    class serving the flat form as an invalid list. Network writes were
+    always framed, and neither the Python bindings nor the CLI built the flat
+    form. To clear the list locally, write `PropertyValue::ApplicationData`
+    of no bytes (Python: `PropertyValue.application_data(b"")`).
 
 - **Breaking Rust API:** `ScHub::start`, and every other hub start method,
   now returns `Error::Transport` with the OS's `io::Error` when it can't bind
