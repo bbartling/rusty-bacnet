@@ -34,6 +34,26 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
     db
 }
 
+/// The class, code and First Failed Element Number an AddListElement or
+/// RemoveListElement refusal goes out with: zero unless the handler named an
+/// element of the request.
+fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
+    let (class, code, element) = match result {
+        Err(Error::Protocol { class, code }) => (class, code, 0),
+        Err(Error::ChangeList {
+            class,
+            code,
+            first_failed_element_number,
+        }) => (class, code, first_failed_element_number),
+        other => panic!("expected a protocol refusal, got {other:?}"),
+    };
+    (
+        ErrorClass::from_raw(class as u16),
+        ErrorCode::from_raw(code as u16),
+        element,
+    )
+}
+
 mod acknowledge_alarm;
 mod acknowledge_alarm_ee;
 mod alarm_summary_projection;
@@ -72,6 +92,8 @@ mod indexed_write_presence;
 mod life_safety_cov;
 mod life_safety_operation;
 mod life_safety_reset;
+mod list_element_edits;
+mod list_element_recipients;
 mod list_element_targets;
 mod multi_element_writes;
 mod passwords;

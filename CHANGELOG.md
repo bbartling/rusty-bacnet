@@ -341,6 +341,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking wire format and Rust API:** AddListElement and RemoveListElement
+  now answer every error with a ChangeList-Error, which carries the First
+  Failed Element Number, instead of a plain class and code (#1026). The number
+  is the position, counted from 1, of the request element that failed, or 0
+  when the request or its target was refused (authorization, unknown object or
+  property, array index, not a list, write access). A peer that only parses the
+  plain form no longer reads these errors. The client decodes the new form, which
+  it used to drop as undecodable, and returns the new
+  `Error::ChangeList { class, code, first_failed_element_number }`; a device
+  that still sends only a class and code returns `Error::Protocol` as before.
+  `TsmResponse::Error` gains `first_failed_element_number`, and
+  `bacnet_services::list_manipulation::ChangeListError` encodes and decodes the
+  body. In Python, `BacnetProtocolError` gains `first_failed_element_number`,
+  `None` for other errors.
+
+- **Breaking list service behaviour:** AddListElement and RemoveListElement now
+  compare whole elements and follow the add and remove rules of Clauses 15.1
+  and 15.2 (#1027). AddListElement leaves an element that is already present as
+  it is, a repeat within the request included, instead of appending a second
+  copy. RemoveListElement refuses the whole request with SERVICES /
+  LIST_ELEMENT_NOT_FOUND when any element is absent, instead of skipping it,
+  and with PROPERTY / INVALID_DATA_TYPE when an element's datatype differs from
+  the stored elements', and removes nothing in either case. This holds for
+  lists of values, Recipient_List destinations and Calendar Date_List entries.
+  An element the server cannot decode, or that the object refuses, is reported
+  with its position as above. Adding a fault that Escalator Fault_Signals
+  already holds now succeeds and changes nothing, where it was refused as out
+  of range.
+
 - **Breaking Calendar and Schedule wire format (and Rust API):** Calendar's
   Date_List now carries each BACnetCalendarEntry under its Clause 21 CHOICE
   tag: date `[0]`, date-range `[1]` (a frame around two application Dates) or

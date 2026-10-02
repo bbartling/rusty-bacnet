@@ -226,10 +226,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         invoke_id: err.invoke_id,
                         peer: &canonical_peer,
                         apdu: &coordinator_apdu,
-                        response: TsmResponse::Error {
-                            class: err.error_class.to_raw() as u32,
-                            code: err.error_code.to_raw() as u32,
-                        },
+                        response: TsmResponse::from_error_pdu(&err),
                         phase_gate: true,
                         owner: None,
                     },

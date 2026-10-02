@@ -220,9 +220,18 @@ fn date_list_write_property_multiple_takes_entries_and_keeps_the_prefix() {
 #[test]
 fn date_list_add_and_remove_list_element_match_entries_by_choice() {
     let (mut db, oid) = calendar_db(&typed()[..1]);
-    edit(&mut db, oid, &[RANGE, MONDAYS].concat(), false).unwrap();
+    // DATE is present already, so the list gains RANGE and MONDAYS only.
+    edit(&mut db, oid, &[RANGE, DATE, MONDAYS].concat(), false).unwrap();
     assert_eq!(read_wire(&db, oid), [DATE, RANGE, MONDAYS].concat());
     edit(&mut db, oid, &[MONDAYS, DATE].concat(), true).unwrap();
+    assert_eq!(read_wire(&db, oid), RANGE);
+    // A date range of one day matches no stored entry: the request fails at
+    // that element and RANGE stays (#1027).
+    let one_day = [0x1E, 0xA4, 126, 9, 14, 1, 0xA4, 126, 9, 14, 1, 0x1F];
+    assert_eq!(
+        list_refusal(edit(&mut db, oid, &[RANGE, &one_day[..]].concat(), true)),
+        (ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND, 2)
+    );
     assert_eq!(read_wire(&db, oid), RANGE);
     edit(&mut db, oid, RANGE, true).unwrap();
     assert!(read_wire(&db, oid).is_empty());
@@ -247,10 +256,10 @@ fn date_list_list_services_refuse_bad_entries_without_partial_commit() {
     ] {
         for (remove, good) in [(false, MONDAYS), (true, DATE)] {
             let elements = [good, bad].concat();
-            assert_property_error(
-                edit(&mut db, oid, &elements, remove),
-                ErrorCode::INVALID_DATA_TYPE,
-                &format!("{what} (remove: {remove})"),
+            assert_eq!(
+                list_refusal(edit(&mut db, oid, &elements, remove)),
+                (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, 2),
+                "{what} (remove: {remove})"
             );
             assert_eq!(read_wire(&db, oid), before, "{what} changed Date_List");
         }
@@ -262,16 +271,15 @@ fn date_list_add_list_element_past_the_cap_is_no_space_to_add() {
     let monday = typed()[2].clone();
     let (mut db, oid) = calendar_db(&vec![monday; 1024]);
     let before = read_wire(&db, oid);
-    match edit(&mut db, oid, DATE, false) {
-        Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-            assert_eq!(
-                code,
-                ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-            );
-        }
-        other => panic!("expected RESOURCES/NO_SPACE_TO_ADD_LIST_ELEMENT, got {other:?}"),
-    }
+    // MONDAYS is present, so DATE is the element that does not fit.
+    assert_eq!(
+        list_refusal(edit(&mut db, oid, &[MONDAYS, DATE].concat(), false)),
+        (
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
+            2
+        )
+    );
     assert_eq!(read_wire(&db, oid), before);
 }
 

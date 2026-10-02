@@ -98,6 +98,8 @@ mod bbmd_discovery;
 mod dcc;
 #[path = "server/error_cov.rs"]
 mod error_cov;
+#[path = "server/list_elements.rs"]
+mod list_elements;
 #[path = "server/local_write_cov.rs"]
 mod local_write_cov;
 #[path = "server/routing_alarm.rs"]

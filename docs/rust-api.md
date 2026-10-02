@@ -66,6 +66,9 @@ use bacnet_types::error::Error;
 // Protocol error from a remote device
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
+// AddListElement/RemoveListElement error with the failed element's position
+let e = Error::ChangeList { class: 5, code: 81, first_failed_element_number: 2 }; // SERVICES / LIST_ELEMENT_NOT_FOUND
+
 // Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
 // RoutedPathCapacityExceeded, UnsupportedTransport, Encoding, etc.
 ```
@@ -383,6 +386,13 @@ constructed, context and vendor values. It does not validate every application
 primitive or infer the remote property's datatype. Invalid requests leave the
 output buffer unchanged; both client methods reject before transaction admission
 or traffic. Inbound decoding and target property validation remain separate.
+
+`ChangeListError` is the error body both services answer with (Clause 21): the
+error class and code plus `first_failed_element_number`, the position from 1 of
+the request element that failed, or 0 when the request failed for another
+reason. `to_error_pdu` builds the Error PDU and `TryFrom<&ErrorPdu>` decodes and
+checks one. `ErrorPdu` keeps the whole body in `error_data`; a device that sends
+only a class and code still decodes, with no element number.
 
 
 ### Private Transfer
@@ -1510,6 +1520,22 @@ destination codec. A list the object holds framed with no element codec, such as
 Schedule's List_Of_Object_Property_References, returns
 `PROPERTY/WRITE_ACCESS_DENIED`.
 
+Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
+when their encodings are, so a destination that differs in one field is a
+different destination. AddListElement leaves an element that is already present
+as it is, including a repeat within the request; that is not a failure.
+RemoveListElement checks every element first and removes nothing if one is
+refused: an element that does not decode as the property's element, or whose
+datatype differs from the stored elements', returns
+`PROPERTY/INVALID_DATA_TYPE`, and one not in the list
+`SERVICES/LIST_ELEMENT_NOT_FOUND`. Both services always answer errors with a
+ChangeList-Error. A refusal of an element (decode, datatype, not found) names
+its position. When the object refuses the edited list as a whole for an
+element's datatype, encoding, range or space, the response names the first
+element the list would have gained, which is exact when one element is new.
+Refusals of the request or target (authorization, object, property, array
+index, list kind, write access) name element 0.
+
 Intrinsic reporting uses one proposal/commit contract. The
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
@@ -2598,6 +2624,10 @@ client.add_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, 
 client.remove_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, element_bytes).await?;
 ```
 
+A device that answers with a ChangeList-Error surfaces as
+`Error::ChangeList { class, code, first_failed_element_number }`; a device that
+sends only the class and code surfaces as `Error::Protocol`.
+
 ### Private Transfer
 
 No dedicated client methods: both forms share `PrivateTransferRequest`.
@@ -3113,6 +3143,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | Variant | Meaning |
 |---------|---------|
 | `Error::Protocol { class, code }` | Remote BACnet error response |
+| `Error::ChangeList { class, code, first_failed_element_number }` | AddListElement/RemoveListElement ChangeList-Error: the error and the failed element's position (0 when no element failed) |
 | `Error::Timeout(msg)` | APDU retry exhausted |
 | `Error::Reject { reason }` | Remote device rejected request |
 | `Error::Abort { reason }` | Remote device aborted request |

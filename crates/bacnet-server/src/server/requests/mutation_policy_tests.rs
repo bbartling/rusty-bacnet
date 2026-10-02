@@ -207,6 +207,23 @@ async fn mutation_policy_matrix_all_ten_decisions_and_post_issuance_reauthorizat
                         }
                     );
                     assert_eq!(snapshot(&server).await, after_first);
+                } else if service == ConfirmedServiceChoice::REMOVE_LIST_ELEMENT {
+                    // The element went with the first removal (#1027).
+                    let Apdu::Error(error) = apdu(reused) else {
+                        panic!("repeated removal must see current state")
+                    };
+                    let body =
+                        bacnet_services::list_manipulation::ChangeListError::try_from(&error)
+                            .unwrap();
+                    assert_eq!(
+                        (
+                            body.error_class,
+                            body.error_code,
+                            body.first_failed_element_number
+                        ),
+                        (ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND, 1)
+                    );
+                    assert_eq!(snapshot(&server).await, after_first);
                 } else {
                     assert!(
                         matches!(apdu(reused), Apdu::SimpleAck(_) | Apdu::ComplexAck(_)),

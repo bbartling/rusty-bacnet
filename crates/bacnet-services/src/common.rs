@@ -9,6 +9,7 @@ use bytes::{BufMut, BytesMut};
 /// Safety limit for decoded sequences to prevent unbounded allocations.
 pub const MAX_DECODED_ITEMS: usize = 10_000;
 
+pub(crate) mod error_type;
 mod property_value_decode;
 pub(crate) use property_value_decode::{
     PropertyValueDecodeError, PropertyValueDecodeFailure, PropertyValueDecodeStage,

@@ -403,8 +403,12 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
     assert!(record.invoke_id.is_some());
     if lists {
         let object = oid(ObjectType::MULTI_STATE_INPUT, 1);
+        // Add 2 and 3, remove them, then remove them again: the second removal
+        // finds 2 absent, fails with a ChangeList-Error naming element 1 and
+        // removes nothing, and the log records that failure (#1026, #1027).
+        let not_found = (ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND);
         for step in 0..3 {
-            if step == 0 {
+            let result = if step == 0 {
                 client
                     .add_list_element(
                         target.local_mac(),
@@ -414,7 +418,6 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                         vec![0x21, 2, 0x21, 3],
                     )
                     .await
-                    .unwrap();
             } else {
                 client
                     .remove_list_element(
@@ -425,7 +428,21 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                         vec![0x21, 2, 0x21, 3],
                     )
                     .await
-                    .unwrap();
+            };
+            if step == 2 {
+                match result {
+                    Err(bacnet_types::error::Error::ChangeList {
+                        class,
+                        code,
+                        first_failed_element_number: 1,
+                    }) => assert_eq!(
+                        (class, code),
+                        (not_found.0.to_raw() as u32, not_found.1.to_raw() as u32)
+                    ),
+                    other => panic!("expected a ChangeList-Error, got {other:?}"),
+                }
+            } else {
+                result.unwrap();
             }
             wait_for_records(&persistence, 3 + step).await;
             let snapshot = persistence.0.lock().unwrap().clone().unwrap();
@@ -453,7 +470,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                     vec![0x21, 1]
                 })
             );
-            assert_eq!(record.result, None);
+            assert_eq!(record.result, (step == 2).then_some(not_found));
             assert!(record.source_timestamp.is_none());
             assert!(record.target_timestamp.is_some());
             assert_eq!(
@@ -566,7 +583,7 @@ async fn audit_reporter_selected_writes_and_failures_reach_real_log_once_over_ud
 }
 
 #[tokio::test]
-async fn audit_reporter_list_add_remove_and_noop_reach_real_log_over_udp() {
+async fn audit_reporter_list_add_remove_and_absent_element_reach_real_log_over_udp() {
     exercise(false, false, true, false).await;
     exercise(true, false, true, false).await;
 }
