@@ -75,6 +75,11 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::EVENT_STATE,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
+            // The Table 12-30 required rows #1073 added.
+            P::DOOR_PULSE_TIME,
+            P::DOOR_EXTENDED_PULSE_TIME,
+            P::DOOR_OPEN_TOO_LONG_TIME,
+            P::CURRENT_COMMAND_PRIORITY,
         ],
         ObjectType::ACCESS_POINT => vec![
             P::OBJECT_IDENTIFIER,

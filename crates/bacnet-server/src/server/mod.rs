@@ -504,7 +504,8 @@ pub struct BACnetServer<T: TransportPort> {
     schedule_tick_task: Option<JoinHandle<()>>,
     /// One-second `Time_Delay` confirmation task for intrinsic reporting.
     intrinsic_reporting_task: Option<JoinHandle<()>>,
-    /// Monotonic Binary Lighting Output WARN_OFF/WARN_RELINQUISH task.
+    /// Monotonic object-operation task: Binary Lighting Output
+    /// WARN_OFF/WARN_RELINQUISH egress and Access Door pulse relock (#1073).
     binary_lighting_operation_task: Option<JoinHandle<()>>,
     /// Follow-up fanout after acknowledged confirmed COV reports (#896).
     cov_revisit_task: Option<JoinHandle<()>>,
@@ -648,6 +649,8 @@ mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
 
+#[cfg(test)]
+mod access_door_pulse_task_tests;
 #[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]

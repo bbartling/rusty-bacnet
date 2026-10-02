@@ -130,7 +130,7 @@ fn access_credential_create_and_read_defaults() {
     assert_eq!(
         cred.read_property(PropertyIdentifier::CREDENTIAL_STATUS, None)
             .unwrap(),
-        PropertyValue::Enumerated(BinaryPV::INACTIVE.to_raw())
+        PropertyValue::Enumerated(BinaryPV::ACTIVE.to_raw())
     );
 }
 
@@ -160,7 +160,7 @@ fn access_credential_read_assigned_access_rights() {
     assert_eq!(
         cred.read_property(PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS, None)
             .unwrap(),
-        PropertyValue::Unsigned(0)
+        PropertyValue::List(vec![])
     );
 }
 
@@ -520,10 +520,10 @@ fn credential_data_input_write_denied() {
 // ---------------------------------------------------------------------------
 
 /// Access Door: Relinquish_Default carries R in Table 12-30 typed as
-/// BACnetDoorValue (Clause 21: lock(0), unlock(1), pulse-unlock(2),
-/// extended-pulse-unlock(3)) and writability is permitted; the write is
-/// validated against that production and — with an all-NULL priority array —
-/// Present_Value immediately resolves to the written default.
+/// BACnetDoorValue and writability is permitted; Clause 12.26.11 narrows it
+/// to LOCK and UNLOCK, the write is validated against those two, and — with
+/// an all-NULL priority array — Present_Value immediately resolves to the
+/// written default.
 #[test]
 fn access_door_relinquish_default_write_recaptures_present_value() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
@@ -548,9 +548,8 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
         "with an empty priority array, PV must resolve to the written default"
     );
 
-    // Every named BACnetDoorValue is accepted, including
-    // extended-pulse-unlock (3) — matching the priority-slot PV arm.
-    for &(_, value) in DoorValue::ALL_NAMED {
+    // LOCK and UNLOCK are accepted; the two pulses are refused (#1073).
+    for value in [DoorValue::LOCK, DoorValue::UNLOCK] {
         let named = value.to_raw();
         door.write_property(
             PropertyIdentifier::RELINQUISH_DEFAULT,
@@ -572,10 +571,12 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
     }
     door.set_relinquish_default(DoorValue::UNLOCK).unwrap();
 
-    // 4 is out of the production; so are large values; so are wrong types.
-    // Each refuses PROPERTY / VALUE_OUT_OF_RANGE (or INVALID_DATA_TYPE) and
-    // the stored default is byte-identical afterward.
+    // The pulses and 4 are outside the two; so are large values; so are
+    // wrong types. Each refuses PROPERTY / VALUE_OUT_OF_RANGE (or
+    // INVALID_DATA_TYPE) and the stored default is byte-identical afterward.
     for (value, code) in [
+        (PropertyValue::Enumerated(2), ErrorCode::VALUE_OUT_OF_RANGE),
+        (PropertyValue::Enumerated(3), ErrorCode::VALUE_OUT_OF_RANGE),
         (PropertyValue::Enumerated(4), ErrorCode::VALUE_OUT_OF_RANGE),
         (
             PropertyValue::Enumerated(u32::MAX),
@@ -608,11 +609,13 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
 
     // The local setter shares the validation domain.
     assert!(door.set_relinquish_default(DoorValue::from_raw(4)).is_err());
-    door.set_relinquish_default(DoorValue::EXTENDED_PULSE_UNLOCK)
-        .unwrap();
+    assert!(door
+        .set_relinquish_default(DoorValue::EXTENDED_PULSE_UNLOCK)
+        .is_err());
+    door.set_relinquish_default(DoorValue::LOCK).unwrap();
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(3)
+        PropertyValue::Enumerated(0)
     );
 }

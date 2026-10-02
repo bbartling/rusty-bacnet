@@ -1,8 +1,9 @@
 //! Access Door's BACnetDoorValue properties and Access Credential's
 //! BACnetBinaryPV Credential_Status over WriteProperty and ReadProperty
-//! (#979): writes outside either closed set are refused with
-//! VALUE_OUT_OF_RANGE and change nothing, and the credential's
-//! Present_Value, which Table 12-40 doesn't define, is an unknown property.
+//! (#979, #1073): door writes outside the closed set are refused with
+//! VALUE_OUT_OF_RANGE and change nothing, Credential_Status is derived and
+//! refuses every write, and the credential's Present_Value, which Table
+//! 12-40 doesn't define, is an unknown property.
 
 use super::*;
 use bacnet_objects::access_control::{AccessCredentialObject, AccessDoorObject};
@@ -106,52 +107,44 @@ fn wp_access_door_present_value_holds_to_door_value() {
 }
 
 #[test]
-fn wp_access_door_relinquish_default_holds_to_door_value() {
+fn wp_access_door_relinquish_default_holds_to_lock_or_unlock() {
     let (mut db, oid) = db_with(Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()));
     let rd = PropertyIdentifier::RELINQUISH_DEFAULT;
-    write(&mut db, oid, rd, PropertyValue::Enumerated(3), None).unwrap();
-    assert_eq!(read_wire(&db, oid, rd).unwrap(), [0x91, 3]);
-    assert_property_error(
-        write(&mut db, oid, rd, PropertyValue::Enumerated(4), None),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_eq!(read_wire(&db, oid, rd).unwrap(), [0x91, 3]);
+    write(&mut db, oid, rd, PropertyValue::Enumerated(1), None).unwrap();
+    assert_eq!(read_wire(&db, oid, rd).unwrap(), [0x91, 1]);
+    // Clause 12.26.11 keeps the two pulses out of Relinquish_Default
+    // (#1073).
+    for raw in [2, 3, 4] {
+        assert_property_error(
+            write(&mut db, oid, rd, PropertyValue::Enumerated(raw), None),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+    assert_eq!(read_wire(&db, oid, rd).unwrap(), [0x91, 1]);
     assert_eq!(
         read_wire(&db, oid, PropertyIdentifier::PRESENT_VALUE).unwrap(),
-        [0x91, 3]
+        [0x91, 1]
     );
 }
 
 #[test]
-fn wp_access_credential_status_holds_to_binary_pv() {
+fn wp_access_credential_status_is_read_only() {
     let (mut db, oid) = db_with(Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()));
     let cs = PropertyIdentifier::CREDENTIAL_STATUS;
-    for value in [BinaryPV::ACTIVE, BinaryPV::INACTIVE, BinaryPV::ACTIVE] {
-        write(
-            &mut db,
-            oid,
-            cs,
-            PropertyValue::Enumerated(value.to_raw()),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            read_wire(&db, oid, cs).unwrap(),
-            [0x91, value.to_raw() as u8]
-        );
-    }
-    for raw in [2, 255, u32::MAX] {
+    // The status follows Reason_For_Disable (#1073): a new credential has
+    // no reason, so it reads ACTIVE, and no write reaches it.
+    for value in [
+        PropertyValue::Enumerated(BinaryPV::INACTIVE.to_raw()),
+        PropertyValue::Enumerated(BinaryPV::ACTIVE.to_raw()),
+        PropertyValue::Enumerated(2),
+        PropertyValue::Unsigned(0),
+    ] {
         assert_property_error(
-            write(&mut db, oid, cs, PropertyValue::Enumerated(raw), None),
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            write(&mut db, oid, cs, value, None),
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_eq!(read_wire(&db, oid, cs).unwrap(), [0x91, 1]);
     }
-    assert_property_error(
-        write(&mut db, oid, cs, PropertyValue::Unsigned(0), None),
-        ErrorCode::INVALID_DATA_TYPE,
-    );
-    assert_eq!(read_wire(&db, oid, cs).unwrap(), [0x91, 1]);
 }
 
 #[test]
@@ -167,6 +160,6 @@ fn rp_wp_access_credential_present_value_is_unknown() {
     }
     assert_eq!(
         read_wire(&db, oid, PropertyIdentifier::CREDENTIAL_STATUS).unwrap(),
-        [0x91, 0]
+        [0x91, 1]
     );
 }
