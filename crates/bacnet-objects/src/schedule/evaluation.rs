@@ -60,7 +60,7 @@ impl ScheduleObject {
         if !self.effective_period.contains(today) {
             return None;
         }
-        let mut exception: Option<(u8, &PropertyValue)> = None;
+        let mut exception: Option<(u64, &PropertyValue)> = None;
         for event in &self.exception_schedule {
             // Iterating in array order, a later event wins only with a
             // strictly better priority.

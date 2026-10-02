@@ -658,10 +658,10 @@ async fn in_flight_confirmed_per_peer_throttled() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Existing atomic multi-property capacity behavior remains intact
+// 7. Multi-property admission stops at the reference past the peer quota
 // ---------------------------------------------------------------------------
 #[tokio::test]
-async fn subscribe_cov_property_multiple_atomic_rejection() {
+async fn subscribe_cov_property_multiple_quota_names_the_overflowing_reference() {
     let db = create_database_with_ais(5);
     let policy = CovPolicy {
         max_subscriptions_per_peer: 3,
@@ -705,7 +705,8 @@ async fn subscribe_cov_property_multiple_atomic_rejection() {
         }
     }
 
-    // Now request 2 more properties in a batch (2 + 2 = 4 > max_subscriptions_per_peer = 3)
+    // Now request 2 more properties in a batch: the first takes the peer's
+    // third and last slot, and the second is past max_subscriptions_per_peer.
     let request = SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,
         issue_confirmed_notifications: false,
@@ -738,20 +739,36 @@ async fn subscribe_cov_property_multiple_atomic_rejection() {
 
     let mut table = server.cov_table.write().await;
     let db = server.db.read().await;
-    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &peer, &buf)
+    let refusal = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &peer, &buf)
         .unwrap_err();
 
-    match err {
-        Error::Protocol { class, code } => {
+    match refusal.error {
+        Error::Structured {
+            class,
+            code,
+            detail,
+        } => {
             assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
             assert_eq!(
                 code,
                 ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
             );
+            assert_eq!(
+                *detail,
+                bacnet_types::error::ErrorDetail::FirstFailedSubscription(
+                    bacnet_types::constructed::BACnetObjectPropertyReference::new(
+                        ai(3),
+                        PropertyIdentifier::STATUS_FLAGS.to_raw()
+                    )
+                )
+            );
         }
         other => panic!("expected RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT, got {other:?}"),
     }
 
-    // ATOMIC: Still exactly 2 subscriptions in the table (0 added from the failed batch)
-    assert_eq!(table.len(), 2);
+    // Present_Value, admitted before the quota ran out, stays (#1058, #1059).
+    assert_eq!(refusal.refused, Some(1));
+    assert_eq!(refusal.committed.len(), 1);
+    assert_eq!(table.len(), 3);
+    assert_eq!(table.counters().snapshot().subscriptions_rejected_quota, 1);
 }

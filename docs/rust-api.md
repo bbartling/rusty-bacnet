@@ -1701,7 +1701,10 @@ Present_Value peers may write only while Out_Of_Service is TRUE. Application NUL
 is an invalid datatype, not a relinquishment. For network-equivalent writes use
 `write_local`; noncommandable writes remain available without resolved command
 identity. Commandable writes still require a valid source. These access modes are
-Rust construction APIs; Python constructors retain their current defaults.
+Rust construction APIs; Python constructors retain their current defaults. A
+Loop's measured input has its own route,
+`BACnetServer::set_controlled_variable_value_local` (see
+[Building Control](#building-control-7)).
 
 #### Schedule & Notification (5)
 
@@ -1747,6 +1750,19 @@ writes. Reliability is CONFIGURATION_ERROR, with FAULT in Status_Flags, while
 the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
 are not all of one datatype (#1056); the Schedule still writes its references.
 Whether each referenced property accepts that datatype is not checked.
+
+While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
+primitive value, NULL included (INVALID_DATA_TYPE otherwise, and
+WRITE_ACCESS_DENIED in service), and the tick leaves it alone. Every accepted
+write goes on to the references at `Priority_For_Writing`, a NULL
+relinquishing, in the pass the committed write triggers. The public
+`BACnetObject::take_simulated_schedule_write()` hook hands that write to the
+pass once, before `tick_schedule`, and needs no clock, so a value written on
+the object directly goes out at the next tick. When Out_Of_Service returns to
+FALSE the evaluation runs at once and takes over. A special event's priority is
+a `u64` (`BACnetSpecialEvent::event_priority`): the shared codec decodes any
+Unsigned there, and the object refuses one outside 1 to 16 with
+VALUE_OUT_OF_RANGE, over the network and from `add_exception` alike (#1087).
 
 `CalendarObject` evaluates Present_Value from the bound Device clock's local
 date on every read (#1029): TRUE when any Date_List entry matches, FALSE
@@ -1834,6 +1850,30 @@ delay capability and preserving exactly-one source-role ownership. See
 | `ProgramObject` | `::new(instance, name)` |
 | `AveragingObject` | `::new(instance, name)` |
 | `StagingObject` | `::new(instance, name, StagingConfig { ... })` |
+
+The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
+Update_Interval and Action (DIRECT or REVERSE) take network writes.
+Controlled_Variable_Units, the three gain units rows and Priority_For_Writing
+are read-only over the network; set them before adding the Loop with
+`set_controlled_variable_units`, `set_proportional_constant_units`,
+`set_integral_constant_units`, `set_derivative_constant_units` and
+`set_priority_for_writing`. The object stores the loop's configuration and
+output for the application's algorithm: it neither computes Present_Value nor
+writes it to the Manipulated_Variable_Reference target.
+
+While the application runs the algorithm, it also feeds Controlled_Variable_Value,
+the measurement the algorithm compares with Setpoint. The server doesn't follow
+Controlled_Variable_Reference. In a running server the application calls
+`BACnetServer::set_controlled_variable_value_local(&loop_id, PropertyValue::Real(v))`
+alongside `set_present_value_local` for the output. The property stays
+read-only over the network. The call takes a finite REAL and refuses any other
+object with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Unlike Present_Value, it is
+accepted while Out_Of_Service is TRUE, because Out_Of_Service decouples only the
+output and Reliability. The change goes through the server's COV path: a
+SubscribeCOVProperty on Controlled_Variable_Value is notified, while a SubscribeCOV
+on the Loop carries the value in its next report without being triggered by it.
+Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
+starting value.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
@@ -2243,7 +2283,18 @@ source decoding does, before purging or modifying subscriptions. Invalid routed
 input is never reinterpreted as a direct peer.
 
 `subscribe_multiple` takes an explicit `&SubscriberEndpoint` route after the context
-argument and validates it against the recipient and proposals.
+argument and validates it against the recipient and proposals. It admits the
+proposals in request order, checking the recipient's quota and the table's
+capacity one proposal at a time; a renewal or a repeat of an earlier proposal
+takes no slot. The first proposal that does not fit fails the call with a
+`MultipleRefusal` that carries the RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT
+error, its position and the snapshots kept for the proposals before it, which
+renewed the context as an accepted request would (#1058, #1059). When that is
+the first proposal, or the request fails as a whole (identity or route
+mismatch, generation exhaustion), `refused` is `Some(0)` or `None` and nothing
+changes. The SubscribeCOVPropertyMultiple handler sends the kept references'
+initial notifications along with the error that names the refused one
+(Clause 13.16.2).
 `CovSubscription::endpoint()` on subscription data (also available through accepted
 snapshots) reports its captured delivery route.
 

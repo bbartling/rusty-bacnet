@@ -97,7 +97,7 @@ fn life_safety_single_property_cov_uses_explicit_capability_and_error_taxonomy()
 }
 
 #[test]
-fn life_safety_multiple_property_cov_rejection_is_atomic() {
+fn life_safety_multiple_property_cov_rejection_keeps_the_earlier_reference() {
     let db = life_safety_db();
     for (oid, property, code) in [
         (
@@ -145,7 +145,7 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
             }],
         };
 
-        let error = handle_subscribe_cov_property_multiple_request_endpoint(
+        let refusal = handle_subscribe_cov_property_multiple_request_endpoint(
             &mut table,
             &db,
             &[1, 2, 3],
@@ -154,11 +154,12 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
             request,
         )
         .unwrap_err();
+        let error = &refusal.error;
 
         // The error names the second reference, the one refused (#1047).
         assert!(
             matches!(
-                &error,
+                error,
                 Error::Structured { class, code: actual_code, detail }
                     if *class == ErrorClass::PROPERTY.to_raw() as u32
                         && *actual_code == code.to_raw() as u32
@@ -168,7 +169,15 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
             ),
             "{error:?}"
         );
-        assert!(table.is_empty());
+        // The first reference, processed before the refusal, stays (#1058).
+        assert_eq!(refusal.refused, Some(1));
+        assert_eq!(refusal.committed.len(), 1);
+        assert_eq!(table.len(), 1);
+        assert!(table.is_current(&refusal.committed[0]));
+        assert_eq!(
+            refusal.committed[0].monitored_property,
+            Some(PropertyIdentifier::SILENCED)
+        );
     }
 }
 

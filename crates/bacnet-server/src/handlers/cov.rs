@@ -1,4 +1,5 @@
 use super::*;
+use crate::cov::MultipleRefusal;
 
 fn cov_property_error(code: ErrorCode) -> Error {
     Error::Protocol {
@@ -237,7 +238,9 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 /// Handle a SubscribeCOVPropertyMultiple request.
 ///
 /// Creates individual COV subscriptions for each property in each object
-/// referenced by the request.
+/// referenced by the request, in request order. A failed reference ends the
+/// request with an error naming it; the references before it stay subscribed
+/// (Clause 13.16.2).
 pub fn handle_subscribe_cov_property_multiple(
     table: &mut CovSubscriptionTable,
     db: &ObjectDatabase,
@@ -246,6 +249,7 @@ pub fn handle_subscribe_cov_property_multiple(
 ) -> Result<(), Error> {
     handle_subscribe_cov_property_multiple_with_initial(table, db, source_mac, service_data)
         .map(|_| ())
+        .map_err(|refusal| refusal.error)
 }
 
 pub(crate) fn handle_subscribe_cov_property_multiple_with_initial(
@@ -253,7 +257,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial(
     db: &ObjectDatabase,
     source_mac: &[u8],
     service_data: &[u8],
-) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
     handle_subscribe_cov_property_multiple_with_initial_endpoint(
         table,
         db,
@@ -269,7 +273,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
-) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
     use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 
     let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
@@ -285,6 +289,14 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
 
 /// `subscriber_max_apdu` is the max-APDU-length-accepted of the request's
 /// header, when the caller has it; the context's notifications fit it.
+///
+/// A failure before any COV reference is processed (inconsistent or out of
+/// range timing, timestamps without a clock) keeps nothing and carries the
+/// bare class and code. Otherwise the references are processed in request
+/// order until one fails, whether its object, its property or the
+/// subscription caps refuse it (#1059): the error names that reference, and
+/// the [`MultipleRefusal`] carries the references kept before it, which are
+/// owed their initial notifications like an accepted request's (#1058).
 pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     table: &mut CovSubscriptionTable,
     db: &ObjectDatabase,
@@ -292,7 +304,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     source_network: Option<&NpduAddress>,
     subscriber_max_apdu: Option<u16>,
     request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
-) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
     let confirmed = request.issue_confirmed_notifications;
     let route = SubscriberEndpoint::new(source_mac, source_network);
     let context = MultipleContextKey {
@@ -306,7 +318,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         _ => {
             return Err(Error::Reject {
                 reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
-            });
+            }
+            .into());
         }
     };
 
@@ -343,7 +356,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         return Err(Error::Protocol {
             class: ErrorClass::SERVICES.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
-        });
+        }
+        .into());
     }
 
     let lifetime = request.lifetime.expect("validated COV-multiple lifetime");
@@ -357,50 +371,60 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         return Err(Error::Protocol {
             class: ErrorClass::SERVICES.to_raw() as u32,
             code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
-        });
+        }
+        .into());
     }
     let expires_at = Instant::now() + Duration::from_secs(u64::from(lifetime));
     let subscriber_mac = MacAddr::from_slice(source_mac);
+    // The references that pass validation, in request order, up to the first
+    // that fails; `names` holds each one's object and property reference.
     let mut subscriptions = Vec::new();
+    let mut names = Vec::new();
+    let mut failure = None;
 
-    for spec in &request.list_of_cov_subscription_specifications {
+    'specs: for spec in &request.list_of_cov_subscription_specifications {
         let monitored = spec.monitored_object_identifier;
-        // A refusal of the object is a refusal of its first COV reference,
-        // the first one that could not be processed.
-        let refuse_object = |class: ErrorClass, code: ErrorCode| {
-            let error = Error::Protocol {
-                class: class.to_raw() as u32,
-                code: code.to_raw() as u32,
-            };
-            match spec.list_of_cov_references.first() {
-                Some(first) => subscription_error(error, monitored, &first.monitored_property),
-                None => error,
+        let object = match db.get(&monitored) {
+            Some(object) if object.supports_cov() => object,
+            found => {
+                let code = match found {
+                    None => ErrorCode::UNKNOWN_OBJECT,
+                    Some(_) => ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                };
+                let error = Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: code.to_raw() as u32,
+                };
+                // A refusal of the object is a refusal of its first COV
+                // reference, the first one that could not be processed.
+                failure = Some(match spec.list_of_cov_references.first() {
+                    Some(first) => subscription_error(error, monitored, &first.monitored_property),
+                    None => error,
+                });
+                break;
             }
         };
-        let object = db
-            .get(&monitored)
-            .ok_or_else(|| refuse_object(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
-
-        if !object.supports_cov() {
-            return Err(refuse_object(
-                ErrorClass::OBJECT,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            ));
-        }
 
         for cov_ref in &spec.list_of_cov_references {
             let property_identifier = cov_ref.monitored_property.property_identifier;
             let property_array_index = cov_ref.monitored_property.property_array_index;
 
-            validate_cov_property(object, property_identifier, property_array_index).map_err(
-                |error| subscription_error(error, monitored, &cov_ref.monitored_property),
-            )?;
+            if let Err(error) =
+                validate_cov_property(object, property_identifier, property_array_index)
+            {
+                failure = Some(subscription_error(
+                    error,
+                    monitored,
+                    &cov_ref.monitored_property,
+                ));
+                break 'specs;
+            }
 
-            let subscription = CovSubscription {
+            subscriptions.push(CovSubscription {
                 subscriber_mac: subscriber_mac.clone(),
                 subscriber_network: source_network.cloned(),
                 subscriber_process_identifier: request.subscriber_process_identifier,
-                monitored_object_identifier: spec.monitored_object_identifier,
+                monitored_object_identifier: monitored,
                 issue_confirmed_notifications: confirmed,
                 expires_at: Some(expires_at),
                 last_notified_observation: None,
@@ -409,21 +433,54 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
                 cov_increment: cov_ref.cov_increment,
                 notification_kind: CovNotificationKind::Multiple,
                 timestamped: cov_ref.timestamped,
-            };
-            subscriptions.push(subscription);
+            });
+            names.push((monitored, &cov_ref.monitored_property));
         }
     }
 
-    let accepted = table.subscribe_multiple(
+    // A failed first reference leaves nothing processed, so nothing changes;
+    // not even an existing context's lifetime is renewed.
+    let validated = subscriptions.len();
+    if validated == 0 {
+        if let Some(error) = failure {
+            return Err(MultipleRefusal {
+                error,
+                refused: Some(0),
+                committed: Vec::new(),
+            });
+        }
+    }
+    let (accepted, refusal) = match table.subscribe_multiple(
         &context,
         &route,
         expires_at,
         max_notification_delay,
         subscriber_max_apdu,
         subscriptions,
-    )?;
+    ) {
+        Ok(accepted) => (accepted, failure.map(|error| (validated, error))),
+        // A subscription cap stopped admission before the validated
+        // references ran out.
+        Err(MultipleRefusal {
+            error,
+            refused: Some(position),
+            committed,
+        }) => {
+            let (monitored, reference) = names[position];
+            let error = subscription_error(error, monitored, reference);
+            (committed, Some((position, error)))
+        }
+        Err(whole) => return Err(whole),
+    };
     if let Some(frame) = admission_clock {
         table.initial_timed_capture(&accepted, frame).run(db);
     }
-    Ok(accepted)
+    match refusal {
+        None => Ok(accepted),
+        Some((position, error)) => Err(MultipleRefusal {
+            error,
+            refused: Some(position),
+            committed: accepted,
+        }),
+    }
 }

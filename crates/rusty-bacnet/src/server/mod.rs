@@ -161,9 +161,11 @@ impl BACnetServer {
 }
 
 mod server_methods {
+    mod cov_counters;
     mod dcc_outcomes;
     mod file_configuration;
     mod lifecycle;
+    mod loop_methods;
     mod network_port;
     mod registration;
     mod request_admission;

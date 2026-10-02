@@ -329,7 +329,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The default reproduces the standard's classification (see
     /// `array_property_default`): identifier-stable arrays are admitted
     /// without consulting the object type, the identifiers whose datatype
-    /// changes with the object type (ALARM_VALUES / FAULT_VALUES,
+    /// changes with the object type (ACTION, ALARM_VALUES / FAULT_VALUES,
     /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE) classify by
     /// `object_identifier().object_type()`, and everything else — scalars and
     /// BACnetLIST properties — rejects the index. Object implementations with
@@ -589,6 +589,17 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         _time: Time,
         _calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
     ) -> Option<ScheduleWrite> {
+        None
+    }
+
+    /// Take the write that a Present_Value written while Out_Of_Service was
+    /// TRUE owes the references (Clause 12.24.14), once per written value.
+    ///
+    /// A schedule pass collects it before calling
+    /// [`tick_schedule`](Self::tick_schedule), so the written value reaches
+    /// the targets ahead of any calculated one; it needs no clock. Only
+    /// meaningful for Schedule objects; default returns `None`.
+    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
         None
     }
 
@@ -866,6 +877,22 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The default fails closed so commandable and other object families do not
     /// acquire privileged `Present_Value` write authority through this hook.
     fn set_present_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply the Controlled_Variable_Value measured by the local application.
+    ///
+    /// Only the built-in Loop opts in. Its control algorithm runs in the
+    /// application, which feeds the measured value here while it does so; the
+    /// property stays read-only over the network. The default fails closed
+    /// with the same error as [`set_present_value_internal`](Self::set_present_value_internal).
+    fn set_controlled_variable_value_internal(
+        &mut self,
+        _value: PropertyValue,
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

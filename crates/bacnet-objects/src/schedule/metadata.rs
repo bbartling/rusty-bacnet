@@ -18,7 +18,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::SCHEDULE_DEFAULT, RequiredRead, None, Always),
     PropertyMetadata::new(P::WEEKLY_SCHEDULE, Optional, None, Always),
     PropertyMetadata::new(P::EXCEPTION_SCHEDULE, Optional, None, Always),
@@ -174,7 +174,7 @@ mod tests {
                     | P::EFFECTIVE_PERIOD
                     | P::OUT_OF_SERVICE
                     | P::DESCRIPTION => Always,
-                    P::RELIABILITY => WhenOutOfService,
+                    P::PRESENT_VALUE | P::RELIABILITY => WhenOutOfService,
                     _ => ReadOnly,
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");

@@ -183,7 +183,7 @@ async fn changed_value_uses(wire: &Wire, route: &Peer, object: ObjectIdentifier,
 async fn multiple_route_rejected_wire_renewals_preserve_live_context() {
     let mut wire = Wire::start(ServerConfig {
         cov_policy: CovPolicy {
-            max_subscriptions_per_peer: 2,
+            max_subscriptions_per_peer: 1,
             ..Default::default()
         },
         ..Default::default()
@@ -210,6 +210,8 @@ async fn multiple_route_rejected_wire_renewals_preserve_live_context() {
         .subscriptions_for(&av(1))
         .remove(0)
         .clone();
+    // Each refuses the whole request or its first reference, which leaves
+    // nothing processed and the route where it was (#1058).
     let rejected = [
         (
             subscribe_cov_property_multiple(
@@ -217,8 +219,8 @@ async fn multiple_route_rejected_wire_renewals_preserve_live_context() {
                 false,
                 Some((900, 99)),
                 vec![
-                    (av(1), vec![plain(PropertyIdentifier::STATUS_FLAGS)]),
                     (av(99), vec![plain(PV)]),
+                    (av(1), vec![plain(PropertyIdentifier::STATUS_FLAGS)]),
                 ],
             ),
             ErrorClass::OBJECT,
