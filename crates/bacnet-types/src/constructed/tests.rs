@@ -301,7 +301,7 @@ fn special_event_inline_calendar_entry() {
                 second: 0,
                 hundredths: 0,
             },
-            value: vec![0x10, 0x00], // raw-tagged Null
+            value: PropertyValue::Null,
         }],
         event_priority: 16, // lowest priority
     };

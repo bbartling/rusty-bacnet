@@ -19,22 +19,23 @@ use bacnet_objects::event_enrollment::{
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::schedule::ScheduleWrite;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
     BACnetObject, CovReportedProperty, LifeSafetyOperationOutcome, MonotonicClock,
     ReliabilityEvaluation,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
+use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectPropertyReference,
-    BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
     Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 
 struct SourceReporter {
     owner: Weak<AuditOwnership>,
@@ -296,11 +297,15 @@ impl BACnetObject for SourceReporter {
 
     fn tick_schedule(
         &mut self,
-        day_of_week: u8,
-        hour: u8,
-        minute: u8,
-    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
-        self.wrapped.tick_schedule(day_of_week, hour, minute)
+        today: SpecificDate,
+        time: Time,
+        calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+    ) -> Option<ScheduleWrite> {
+        self.wrapped.tick_schedule(today, time, calendar_active)
+    }
+
+    fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
+        self.wrapped.calendar_state_internal(day)
     }
 
     fn acknowledge_alarm(&mut self, transition_bit: EventTransitionBits) -> Result<(), Error> {

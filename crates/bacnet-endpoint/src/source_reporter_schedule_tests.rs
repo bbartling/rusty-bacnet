@@ -1,6 +1,8 @@
 use super::*;
-use bacnet_objects::schedule::ScheduleObject;
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_objects::schedule::{CalendarObject, ScheduleObject, ScheduleWrite};
+use bacnet_types::calendar::SpecificDate;
+use bacnet_types::constructed::{BACnetCalendarEntry, BACnetObjectPropertyReference};
+use bacnet_types::primitives::Time;
 
 #[test]
 fn source_reporter_forwards_complete_schedule_targets() {
@@ -27,9 +29,42 @@ fn source_reporter_forwards_complete_schedule_targets() {
         selected(),
     );
     source_reporter::install(&mut object, &owner).unwrap();
+    // Monday 14 September 2026, noon.
+    let today = SpecificDate::new(2026, 9, 14).unwrap();
+    let noon = Time {
+        hour: 12,
+        minute: 0,
+        second: 0,
+        hundredths: 0,
+    };
+    let no_calendars = |_: ObjectIdentifier| false;
     assert_eq!(
-        object.tick_schedule(0, 12, 0),
-        Some((PropertyValue::Unsigned(2), refs))
+        object.tick_schedule(today, noon, &no_calendars),
+        Some(ScheduleWrite {
+            value: PropertyValue::Unsigned(2),
+            priority: 16,
+            references: refs,
+        })
     );
-    assert!(object.tick_schedule(0, 12, 0).is_none());
+    assert!(object.tick_schedule(today, noon, &no_calendars).is_none());
+}
+
+#[test]
+fn source_reporter_forwards_calendar_state() {
+    let mut calendar = CalendarObject::new(4, "wrapped calendar").unwrap();
+    calendar
+        .add_date_entry(BACnetCalendarEntry::Date(
+            SpecificDate::new(2026, 12, 25).unwrap().to_date(),
+        ))
+        .unwrap();
+    let mut object: Box<dyn BACnetObject> = Box::new(calendar);
+    let owner = bacnet_objects::database::AuditOwnership::for_source(
+        oid(ObjectType::DEVICE, 123),
+        selected(),
+    );
+    source_reporter::install(&mut object, &owner).unwrap();
+    for (day, expected) in [(25, true), (24, false)] {
+        let day = SpecificDate::new(2026, 12, day).unwrap();
+        assert_eq!(object.calendar_state_internal(day), Some(expected));
+    }
 }

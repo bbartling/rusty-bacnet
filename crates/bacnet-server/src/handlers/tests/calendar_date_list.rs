@@ -54,7 +54,7 @@ fn typed() -> [BACnetCalendarEntry; 3] {
 fn calendar_db(entries: &[BACnetCalendarEntry]) -> (ObjectDatabase, ObjectIdentifier) {
     let mut calendar = CalendarObject::new(1, "CAL-1").unwrap();
     for entry in entries {
-        calendar.add_date_entry(entry.clone());
+        calendar.add_date_entry(entry.clone()).unwrap();
     }
     let oid = calendar.object_identifier();
     let mut db = ObjectDatabase::new();
@@ -304,4 +304,69 @@ fn date_list_read_range_addresses_entries_by_position() {
     assert_eq!(ack.item_count, 2);
     assert_eq!(ack.item_data, [RANGE, MONDAYS].concat());
     assert_eq!(ack.result_flags, (false, true, false));
+}
+
+#[test]
+fn date_list_refuses_out_of_range_entries_over_every_write_service() {
+    // #1029: these entries decoded and were stored as written. Each is well
+    // formed but holds an octet outside its Clause 21 range.
+    let (mut db, oid) = calendar_db(&typed()[..2]);
+    let before = read_wire(&db, oid);
+    for (what, bad) in [
+        ("date month 15", &[0x0C, 126, 15, 14, 0xFF][..]),
+        ("date weekday 8", &[0x0C, 0xFF, 0xFF, 0xFF, 8]),
+        (
+            "date-range start without a year",
+            &[0x1E, 0xA4, 0xFF, 1, 1, 4, 0xA4, 126, 12, 31, 4, 0x1F],
+        ),
+        (
+            "date-range end on 30 February",
+            &[0x1E, 0xA4, 126, 1, 1, 4, 0xA4, 126, 2, 30, 1, 0x1F],
+        ),
+        ("weekNDay week-of-month 10", &[0x2B, 0xFF, 10, 0xFF]),
+        ("weekNDay month 0", &[0x2B, 0, 0xFF, 1]),
+    ] {
+        // A good entry ahead of the bad one does not save the request.
+        let elements = [MONDAYS, bad].concat();
+        assert_property_error(
+            write(&mut db, oid, &elements),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            &format!("WriteProperty: {what}"),
+        );
+        let mut request = BytesMut::new();
+        WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: oid,
+                list_of_properties: vec![BACnetPropertyValue {
+                    property_identifier: DATE_LIST,
+                    property_array_index: None,
+                    value: elements.clone(),
+                    priority: None,
+                }],
+            }],
+        }
+        .encode(&mut request)
+        .unwrap();
+        assert_property_error(
+            handle_write_property_multiple(&mut db, &request).map(|_| ()),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            &format!("WritePropertyMultiple: {what}"),
+        );
+        // AddListElement names the offending entry, the second, though the
+        // first is the one the list would gain first.
+        assert_eq!(
+            list_refusal(edit(&mut db, oid, &elements, false)),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2),
+            "AddListElement: {what}"
+        );
+        // RemoveListElement has no VALUE_OUT_OF_RANGE (Clause 15.2.1.3.1).
+        // No stored entry is ever out of range, so the entry is not found and
+        // DATE ahead of it stays.
+        assert_eq!(
+            list_refusal(edit(&mut db, oid, &[DATE, bad].concat(), true)),
+            (ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND, 2),
+            "RemoveListElement: {what}"
+        );
+        assert_eq!(read_wire(&db, oid), before, "{what} changed Date_List");
+    }
 }
