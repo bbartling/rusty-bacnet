@@ -464,7 +464,7 @@ fn relationship_values_match_clause_21() {
         ],
     );
     // The forward/reverse pairing is structural in the production.
-    for pair in Relationship::ALL_NAMED[2..].chunks_exact(2) {
+    for pair in Relationship::ALL_NAMED[2..].as_chunks::<2>().0 {
         let (fwd_name, fwd) = pair[0];
         let (rev_name, rev) = pair[1];
         assert_eq!(fwd.to_raw() ^ 1, rev.to_raw(), "{fwd_name} / {rev_name}");

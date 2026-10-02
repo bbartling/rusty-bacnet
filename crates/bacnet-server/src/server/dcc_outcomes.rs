@@ -83,6 +83,7 @@ impl DccOutcomes {
             DccOutcome::DeprecatedDenied => 3,
             DccOutcome::Malformed => 4,
         };
+        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
         let _ = self.0[index].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             Some(n.saturating_add(1))
         });

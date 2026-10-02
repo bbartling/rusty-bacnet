@@ -4,10 +4,10 @@
 # a comment, produces a new tag; release.yml uses the same tag. Never re-push an
 # existing tag.
 #
-# Bumping a pin: the Rust toolchain also lives in rust-toolchain.toml and
-# .github/workflows/release.yml; the MSRV in Cargo.toml's rust-version,
-# ci.yml's RUSTUP_TOOLCHAIN and scripts/ci/check-msrv.sh. The "CI image" job
-# fails if rust-toolchain.toml, Cargo.toml or ci.yml disagree with the ARGs.
+# Bumping a pin: the Rust toolchain also lives in rust-toolchain.toml; the MSRV
+# in Cargo.toml's rust-version, ci.yml's RUSTUP_TOOLCHAIN and
+# scripts/ci/check-msrv.sh. The "CI image" job fails if rust-toolchain.toml,
+# Cargo.toml or ci.yml disagree with the ARGs.
 # Tool pins sit next to their download, each with the asset's SHA-256.
 
 # The runner's default image, pinned so the tag covers the base as well.
@@ -35,9 +35,9 @@ RUN printf '%s\n' '#!/bin/bash' 'set -euo pipefail' \
  && chmod +x /usr/local/bin/fetch
 
 # The CI toolchain with the components the jobs use, and the MSRV toolchain.
-ARG RUSTUP_VERSION=1.29.0
-ARG RUSTUP_SHA256=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
-ARG RUST_TOOLCHAIN=1.97.1
+ARG RUSTUP_VERSION=1.29.1
+ARG RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+ARG RUST_TOOLCHAIN=1.99.0
 ARG RUST_MSRV=1.93
 RUN fetch "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init" \
       "$RUSTUP_SHA256" /tmp/rustup-init \

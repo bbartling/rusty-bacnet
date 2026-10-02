@@ -99,7 +99,7 @@ fn hex<const N: usize>(text: &str, flag: &str) -> Result<[u8; N], String> {
         ));
     }
     let mut bytes = [0; N];
-    for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+    for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
         let digit = |b: u8| {
             if b.is_ascii_digit() {
                 b - b'0'

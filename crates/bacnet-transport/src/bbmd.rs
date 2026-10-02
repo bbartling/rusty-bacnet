@@ -205,7 +205,7 @@ pub fn decode_fdt(data: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
         return Err(Error::decoding(0, msg));
     }
     let mut entries = Vec::with_capacity(count);
-    for chunk in data.chunks_exact(FDT_ENTRY_SIZE) {
+    for chunk in data.as_chunks::<FDT_ENTRY_SIZE>().0 {
         entries.push(FdtEntryWire {
             ip: [chunk[0], chunk[1], chunk[2], chunk[3]],
             port: u16::from_be_bytes([chunk[4], chunk[5]]),
@@ -386,7 +386,7 @@ impl BbmdState {
             ));
         }
         let mut entries = Vec::with_capacity(count);
-        for chunk in data.chunks_exact(BDT_ENTRY_SIZE) {
+        for chunk in data.as_chunks::<BDT_ENTRY_SIZE>().0 {
             entries.push(BdtEntry {
                 ip: [chunk[0], chunk[1], chunk[2], chunk[3]],
                 port: u16::from_be_bytes([chunk[4], chunk[5]]),
