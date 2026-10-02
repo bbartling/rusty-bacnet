@@ -1654,6 +1654,16 @@ framing, through the shared `bacnet-encoding` codecs.
   `AccessResult` values, by member position, and a member without one reads
   PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
   index from 1 one element.
+- **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
+  and 12.10) are arrays too, with the same per-index reads, as is
+  `Subordinate_Annotations`. A Subordinate_List element is a
+  BACnetDeviceObjectReference; `add_subordinate` takes one, or an
+  `ObjectIdentifier` for an object in this device. An Action element is a
+  BACnetActionList, the BACnetActionCommand writes that Present_Value N
+  selects, framed in `[0]`. `CommandObject::set_action` takes
+  `BACnetActionList` values and refuses a command whose priority is outside 1
+  to 16 or whose value can't be encoded. All three arrays are read-only on the
+  network, and the Command stores Present_Value without running the actions.
 
 ### ObjectDatabase
 
