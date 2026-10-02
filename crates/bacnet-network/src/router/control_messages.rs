@@ -695,7 +695,7 @@ pub(super) async fn handle_network_message(
         let mut tbl = table.lock().await;
         tbl.record_disconnect_removal_ignored();
     } else if msg_type == NetworkMessageType::WHAT_IS_NETWORK_NUMBER.to_raw() {
-        // Clause 6.4.14: never routed (enforced by dispatch); ignore when
+        // Clause 6.4.19: never routed (enforced by dispatch); ignore when
         // SNET/SADR or DNET/DADR is present. X'12 defines no data octets, so
         // a non-empty payload is malformed. A link unicast or broadcast
         // What-Is may both be answered.
@@ -729,7 +729,7 @@ pub(super) async fn handle_network_message(
             warn!(%e, "Router dropped Network-Number-Is: output channel full");
         }
     } else if msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw() {
-        // Clause 6.4.15: never routed (enforced by dispatch); ignore messages
+        // Clause 6.4.20: never routed (enforced by dispatch); ignore messages
         // that carry SNET/SADR or DNET/DADR, that arrive via link unicast, or
         // whose payload is not exactly network(2) + flag(1).
         if npdu.source.is_some() || npdu.destination.is_some() {
@@ -738,7 +738,7 @@ pub(super) async fn handle_network_message(
         if !ctx.link_layer_group {
             return;
         }
-        // Spec 6.6.3.12: process Network-Number-Is for conflict detection.
+        // Clause 6.4.20 recommends reporting a conflict with a configured number.
         if npdu.payload.len() != 3 {
             return;
         }

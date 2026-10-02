@@ -139,7 +139,7 @@ async fn real_tls(server: bool) {
     peer.send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 0]).await;
     peer.send(BROADCAST_VMAC, &[1, 0x80, 0x12]).await;
     peer.number(77).await;
-    // Clause6.4.14 explicitly permits local unicast What-Is-Network-Number.
+    // Clause 6.4.19 explicitly permits local unicast What-Is-Network-Number.
     peer.send(NODE, &[1, 0x80, 0x12]).await;
     peer.number(77).await;
     // Learned values update until configured evidence takes precedence.

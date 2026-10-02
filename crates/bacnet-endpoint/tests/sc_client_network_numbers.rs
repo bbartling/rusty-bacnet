@@ -21,7 +21,7 @@ async fn sc_client_number_hub_direct_wire_and_confirmed_progress() {
         .await;
     f.peer.send(BROADCAST_VMAC, &[1, 0x80, 0x12]).await;
     f.peer.number(77).await;
-    // Clause6.4.14 explicitly permits local unicast What-Is-Network-Number.
+    // Clause 6.4.19 explicitly permits local unicast What-Is-Network-Number.
     f.peer.send(NODE, &[1, 0x80, 0x12]).await;
     f.peer.number(77).await;
     // Learned values update until configured evidence takes precedence.
