@@ -370,3 +370,52 @@ async fn an_explicit_untimestamped_selector_is_never_repeated_or_timestamped() {
     );
     h.server.stop().await.unwrap();
 }
+
+/// Status_Flags times of a single-object notification.
+fn flag_times(
+    report: &bacnet_services::cov_multiple::COVNotificationMultipleRequest,
+) -> Vec<Option<bacnet_types::primitives::Time>> {
+    rows(report)
+        .into_iter()
+        .filter(|(property, _, _)| *property == SF)
+        .map(|(_, _, time_of_change)| time_of_change)
+        .collect()
+}
+
+#[tokio::test]
+async fn an_explicit_timestamped_selector_that_did_not_change_keeps_its_last_change_time() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    h.set_clock(1);
+    h.subscribe_specs(false, vec![(av1(), vec![(PV, false), (SF, true)])])
+        .await;
+    let initial = h.notification().await;
+    assert_eq!(flag_times(&initial), vec![Some(time(1))], "admission time");
+    // Status_Flags changes at 3: its own selector captures that.
+    h.set_clock(3);
+    h.server
+        .write_local(
+            &av1(),
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    assert_eq!(flag_times(&h.notification().await), vec![Some(time(3))]);
+    // Only PV changes at 5. The untimestamped PV reference carries Status_Flags
+    // along, and the field still reports the time its own timestamped selector
+    // last saw it change (§13.17.3.1.2.4; #987).
+    h.set_clock(5);
+    h.write_local(10.0).await;
+    let report = h.notification().await;
+    assert_eq!(pv_rows(&report), vec![(real(10.0), None)]);
+    assert_eq!(flag_times(&report), vec![Some(time(3))]);
+    assert_eq!(
+        envelope(&report),
+        Some((at(3).local_date, time(3))),
+        "the last change conveyed"
+    );
+    h.server.stop().await.unwrap();
+}
