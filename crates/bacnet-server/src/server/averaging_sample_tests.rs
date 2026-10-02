@@ -15,6 +15,9 @@ use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::enums::ObjectType;
 use std::collections::BTreeMap;
 
+#[path = "averaging_window_tests.rs"]
+mod window_tests;
+
 const MIN: PropertyIdentifier = PropertyIdentifier::MINIMUM_VALUE;
 const MAX: PropertyIdentifier = PropertyIdentifier::MAXIMUM_VALUE;
 const AVG: PropertyIdentifier = PropertyIdentifier::AVERAGE_VALUE;
@@ -116,7 +119,7 @@ async fn notifications(
 
 async fn sample(h: &Harness, value: f32) {
     h.server
-        .add_averaging_sample_local(&avg1(), PropertyValue::Real(value))
+        .add_averaging_sample_local(&avg1(), Some(PropertyValue::Real(value)))
         .await
         .unwrap();
 }
@@ -143,11 +146,19 @@ fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
 #[tokio::test(start_paused = true)]
 async fn averaging_sample_local_updates_statistics_and_notifies_property_subscriptions() {
     let mut h = start().await;
-    for (process, property) in [(1, MIN), (2, MAX), (3, AVG)] {
+    // Before the first sample the statistics hold their empty-window values.
+    for (process, property, empty) in [
+        (1, MIN, f32::INFINITY),
+        (2, MAX, f32::NEG_INFINITY),
+        (3, AVG, f32::NAN),
+    ] {
         subscribe_property(&mut h, process, property, None).await;
         assert_eq!(response(&h).await, Ok(()), "{property:?} admitted");
         // The initial report has the property alone: no Status_Flags.
-        assert_eq!(values(&h.cov_notification().await), [(property, real(0.0))]);
+        assert_eq!(
+            values(&h.cov_notification().await),
+            [(property, real(empty))]
+        );
     }
 
     // The first sample moves all three statistics.
@@ -184,7 +195,7 @@ async fn averaging_property_subscription_reports_by_its_cov_increment() {
     let mut h = start().await;
     subscribe_property(&mut h, 7, AVG, Some(5.0)).await;
     assert_eq!(response(&h).await, Ok(()));
-    assert_eq!(values(&h.cov_notification().await), [(AVG, real(0.0))]);
+    assert_eq!(values(&h.cov_notification().await), [(AVG, real(f32::NAN))]);
 
     sample(&h, 10.0).await; // average 10: moved 10 since the last report
     assert_eq!(values(&h.cov_notification().await), [(AVG, real(10.0))]);
@@ -238,7 +249,7 @@ async fn averaging_refuses_subscribe_cov_but_admits_property_multiple() {
     assert_eq!(
         rows(h.notification().await),
         [
-            (AVG, real(0.0)),
+            (AVG, real(f32::NAN)),
             (VALID, encoded(PropertyValue::Unsigned(0)))
         ]
     );
@@ -273,7 +284,7 @@ async fn averaging_sample_local_refuses_bad_values_and_targets() {
     ] {
         let error = h
             .server
-            .add_averaging_sample_local(&avg1(), value)
+            .add_averaging_sample_local(&avg1(), Some(value))
             .await
             .unwrap_err();
         assert_error(error, ErrorClass::PROPERTY, code);
@@ -288,13 +299,13 @@ async fn averaging_sample_local_refuses_bad_values_and_targets() {
     let unknown = ObjectIdentifier::new(ObjectType::AVERAGING, 9).unwrap();
     let error = h
         .server
-        .add_averaging_sample_local(&unknown, PropertyValue::Real(1.0))
+        .add_averaging_sample_local(&unknown, Some(PropertyValue::Real(1.0)))
         .await
         .unwrap_err();
     assert_error(error, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
     let error = h
         .server
-        .add_averaging_sample_local(&av1(), PropertyValue::Real(1.0))
+        .add_averaging_sample_local(&av1(), Some(PropertyValue::Real(1.0)))
         .await
         .unwrap_err();
     assert_error(

@@ -419,8 +419,11 @@ impl BACnetObject for SourceReporter {
         self.wrapped.set_controlled_variable_value_internal(value)
     }
 
-    fn add_averaging_sample_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.wrapped.add_averaging_sample_internal(value)
+    fn add_averaging_sample_internal(
+        &mut self,
+        sample: Option<PropertyValue>,
+    ) -> Result<(), Error> {
+        self.wrapped.add_averaging_sample_internal(sample)
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

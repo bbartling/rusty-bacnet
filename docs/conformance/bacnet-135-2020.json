@@ -1694,6 +1694,48 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL, from the #1092 tracking list the #1064 property-set sweep produced. Breaking pre-1.0 wire changes: new rows in Property_List, RPM ALL and REQUIRED, and the PICS, and a Pulse Converter whose Present_Value and Adjust_Value now behave as Clause 12.23 describes. Each row was checked against the 135-2020 table images before it was added. Units: the commandable value macro takes an optional units entry, so only the three numeric types carry the field, with a `units` getter and a `set_units` setter that refuses values above 65535 (the Lift Car_Load_Units precedent); the analog objects likewise keep Units read-only. Pulse Converter: before, Present_Value was a stored REAL that only an out-of-service write changed and Adjust_Value was stored without effect. Now Count is the state: `add_pulses` accumulates input and stamps Update_Time, and Present_Value is computed from Count and Scale_Factor on each read while in service (the clause leaves the timing to the implementation). Going out of service freezes Present_Value and decouples it, as item (a) of 12.23.10 requires; Count keeps accumulating, and returning to service makes Present_Value follow Count again. Every change to Count or Scale_Factor is refused with VALUE_OUT_OF_RANGE if the scaled value would not fit a finite REAL, and an Adjust_Value with a zero Scale_Factor is refused because the quotient is undefined. Timestamps come from the database's Device clock through `clock::stamp_datetime`, shared with the File object's Modification_Date, and are all-unspecified with no clock or before the first change. COV_Period is required by footnote 2 since the object supports COV; it is a constant 0, which Clause 13.1 defines as no periodic notifications, because the server sends none. Table 13-1 reports Update_Time with the Pulse Converter's Present_Value and Status_Flags, so `cov_reported_properties_default` now lists it (reported, not a trigger). Lighting: Default_Ramp_Rate starts at 100.0 and Default_Step_Increment at 1.0, both inside the 0.1 to 100.0 range Clauses 12.54.17 and 12.54.18 set; they are writable, with matching setters. Current_Command_Priority reuses `common::current_command_priority`, which the analog, binary and multi-state outputs and values already share; on Binary Lighting Output it stays at the commanding slot through a WARN_RELINQUISH egress, since the slot holds until the egress ends. Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference."
   },
   {
+   "id": "BACNET-12-AVERAGING-WINDOW",
+   "standard_anchor": "Clause 12.5 and Table 12-5 with its footnote 1 (Averaging), including 12.5.4, 12.5.6, 12.5.8, 12.5.11, 12.5.12, 12.5.13, 12.5.14 and 12.5.15; Clause 13.1 and Table 13-1a (property COV criteria for a REAL); Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "The Averaging object serves Window_Interval (Unsigned seconds, 900 by default) and Window_Samples (Unsigned, 15 by default), both required and writable, and computes Minimum_Value, Maximum_Value and Average_Value over the valid samples among the most recent Window_Samples attempts. Attempted_Samples counts the attempts in the window and stops at Window_Samples; Valid_Samples counts the valid ones, so their difference is the number of missed samples. With no valid sample in the window, which includes a new object, the three statistics read positive infinity, NaN and negative infinity respectively for minimum, average and maximum, and both counts read zero. A WriteProperty or WritePropertyMultiple of Window_Interval, Window_Samples or Object_Property_Reference, or of zero to Attempted_Samples, empties the window even when the value doesn't change. A zero Window_Interval, a Window_Samples of zero or above 1440 (the buffer bound) and a nonzero Attempted_Samples fail with PROPERTY / VALUE_OUT_OF_RANGE, another datatype with PROPERTY / INVALID_DATA_TYPE, and the object is unchanged. The three rows are in Property_List, RPM ALL and REQUIRED, and writable in the property metadata and the PICS. A property COV subscription on a statistic is notified when the window empties or fills again, whatever its increment, because a non-finite REAL is compared by its bits.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/averaging.rs::AveragingObject",
+    "crates/bacnet-objects/src/averaging/window.rs",
+    "crates/bacnet-objects/src/averaging/metadata.rs",
+    "crates/bacnet-server/src/server/local_writes.rs",
+    "crates/bacnet-server/src/cov/sample.rs",
+    "crates/rusty-bacnet/src/server/server_methods/averaging_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/averaging/window_tests.rs::{averaging_statistics_start_at_infinity_nan_and_negative_infinity,averaging_window_keeps_only_the_most_recent_samples,averaging_window_average_has_no_drift_over_many_samples,averaging_each_reset_route_discards_the_samples,averaging_description_write_keeps_the_samples}",
+    "crates/bacnet-objects/src/averaging/sample_tests.rs::{averaging_missed_samples_count_as_attempted_but_not_valid,averaging_window_setters_validate_and_reset_like_writes}",
+    "crates/bacnet-objects/src/averaging/metadata.rs::tests::{property_metadata_averaging_exact_sets_readable_rows_and_indexed_list,property_metadata_averaging_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/averaging_window_writes.rs::{read_property_serves_the_window_rows_and_empty_window_statistics,write_property_window_rows_reset_the_statistics,write_property_multiple_resets_and_keeps_the_prefix_on_a_refusal}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/averaging.rs::rpm_averaging_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/averaging.rs::rpm_averaging_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/averaging.rs::pics_averaging_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/truth_source_tests.rs::is_writable_property_matches_write_property_on_pulse_converter_and_averaging",
+    "crates/bacnet-server/src/server/averaging_window_tests.rs::{averaging_window_write_reports_nan_and_infinities_to_property_subscribers,averaging_missed_sample_local_counts_an_attempt_and_not_a_value}",
+    "crates/bacnet-server/src/server/averaging_sample_tests.rs::averaging_sample_local_updates_statistics_and_notifies_property_subscriptions",
+    "crates/bacnet-endpoint/src/source_reporter_averaging_tests.rs::averaging_sample_route_and_property_cov_admission_survive_wrapping",
+    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingWindowTests::test_live_server_window_slides_and_resets",
+    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingWindowTests::test_runtime_and_stub_expose_the_window_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/averaging/window_tests.rs::averaging_window_writes_refuse_bad_values_and_keep_the_samples",
+    "crates/bacnet-server/src/handlers/tests/averaging_window_writes.rs::write_property_window_rows_refuse_bad_values_unchanged",
+    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingWindowTests::test_out_of_range_windows_are_refused_at_registration"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1092 (Averaging sample window)",
+    "docs/rust-api.md#building-control-7 Averaging window",
+    "docs/python-api.md#building-control Averaging window"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL, from the #1092 tracking list. Breaking pre-1.0 wire change: two new rows, Attempted_Samples now writable, statistics that cover a window instead of every sample since creation, and empty-window values of +INF, NaN and -INF where 0.0 used to be read. Table 12-5 and the clause were read as page images. The window keeps one slot per attempt, oldest first, with a marker for an attempt that produced no value; the statistics are recomputed over the whole window in f64 on every change, so samples leaving the window cause no drift, and the empty-window NaN is always the canonical f32::NAN so COV sees two empty windows as equal. Window_Samples is capped at 1440 (one sample a minute for a day, eight bytes a slot); the clause sets a floor of 15 and no ceiling. A zero Window_Interval is refused because the clause leaves the minimum to the implementation and a window of no length has no sample spacing. The application feeds samples (#1083) and can now report a miss with None; the object has no clock and treats each call as the next sample, so Window_Interval is advisory: it tells the application how often to sample. Not covered: Clause 12.5 has the device itself take a sample every Window_Interval / Window_Samples seconds by reading Object_Property_Reference, and the server still doesn't sample on its own; the optional Variance_Value, Minimum_Value_Timestamp and Maximum_Value_Timestamp rows; references to properties in other devices."
+  },
+  {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
    "standard_anchor": "Clause 12.11, Table 12-13",
    "priority": "P1",
@@ -2178,8 +2220,8 @@
     "crates/bacnet-objects/src/reference/tests.rs::empty_setpoint_frame_clears_only_on_the_setpoint_arm",
     "crates/bacnet-objects/src/reference/tests.rs::legacy_list_accepts_unsigned_or_enumerated_property_member",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_empty_setpoint_frame_clears_reference",
-    "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_accepts_exact_shapes_and_both_member_typings",
-    "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_accepts_the_framed_local_form",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_exact_shapes_and_both_member_typings",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_the_framed_local_form",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::setpoint_reference_empty_frame_and_null_both_clear_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::averaging_object_property_reference_over_the_wire",
     "crates/bacnet-server/src/pics/truth_source_tests.rs::is_writable_property_matches_write_property_on_pulse_converter_and_averaging",
@@ -2200,7 +2242,7 @@
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_device_qualified_reference_rejected_and_preserves",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
-    "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -3877,7 +3919,7 @@
    "id": "BACNET-13-COV-OBJECT-CRITERIA",
    "standard_anchor": "Clause 13.1 and Table 13-1 (Loop and Staging rows; no Averaging row) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15; Clause 12.5 and Table 12-5 (Averaging samples and the datatypes they may have)",
    "priority": "P1",
-   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment. An Averaging object, which Table 13-1 doesn't list, refuses SubscribeCOV with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and admits SubscribeCOVProperty and SubscribeCOVPropertyMultiple; a numeric property is reported when it moves by the subscription's COV increment, or on any change without one, with no Status_Flags. A running server's application feeds it samples with BACnetServer::add_averaging_sample_local (Python: add_averaging_sample_local): a BOOLEAN (0 or 1), Signed, Unsigned, Enumerated or finite REAL converted to REAL, other datatypes refused with PROPERTY / INVALID_DATA_TYPE, non-finite REALs with PROPERTY / VALUE_OUT_OF_RANGE and other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and Valid_Samples change together, and a property subscription on one of them is notified.",
+   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment. An Averaging object, which Table 13-1 doesn't list, refuses SubscribeCOV with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and admits SubscribeCOVProperty and SubscribeCOVPropertyMultiple; a numeric property is reported when it moves by the subscription's COV increment, or on any change without one, with no Status_Flags. A running server's application feeds it samples with BACnetServer::add_averaging_sample_local (Python: add_averaging_sample_local): a BOOLEAN (0 or 1), Signed, Unsigned, Enumerated or finite REAL converted to REAL, other datatypes refused with PROPERTY / INVALID_DATA_TYPE, non-finite REALs with PROPERTY / VALUE_OUT_OF_RANGE and other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and Valid_Samples change together, and a property subscription on one of them is notified. None in place of a value records a missed attempt (Attempted_Samples moves, Valid_Samples doesn't), refused on the same targets. The positive infinity, negative infinity and NaN an empty sample window reads are compared by their bits, so a move to or from one is always reported, whatever the subscription's increment, and staying at one never is.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/traits.rs",
@@ -3912,7 +3954,10 @@
     "crates/bacnet-server/src/server/averaging_sample_tests.rs::averaging_refuses_subscribe_cov_but_admits_property_multiple",
     "crates/bacnet-endpoint/src/source_reporter_averaging_tests.rs::averaging_sample_route_and_property_cov_admission_survive_wrapping",
     "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingLiveServerTests::test_live_server_takes_samples_and_reports_them",
-    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingStubContractTests::test_runtime_and_stub_expose_the_sample_route"
+    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingStubContractTests::test_runtime_and_stub_expose_the_sample_route",
+    "crates/bacnet-server/src/server/averaging_window_tests.rs::averaging_window_write_reports_nan_and_infinities_to_property_subscribers",
+    "crates/bacnet-server/src/server/averaging_window_tests.rs::averaging_missed_sample_local_counts_an_attempt_and_not_a_value",
+    "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_missed_samples_count_as_attempted_but_not_valid"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_cov_increment_is_writable_validated_and_drives_cov",

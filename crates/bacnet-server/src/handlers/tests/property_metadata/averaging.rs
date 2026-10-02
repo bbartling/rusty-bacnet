@@ -14,9 +14,8 @@ fn averaging_object(configured: bool) -> AveragingObject {
                 None,
             )
             .unwrap();
-        object.add_sample(10.0).unwrap();
-        object.add_sample(20.0).unwrap();
-        object.add_sample(30.0).unwrap();
+        // The reference and window writes reset the window, so they come
+        // before the samples.
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         object
             .write_property(
@@ -29,6 +28,20 @@ fn averaging_object(configured: bool) -> AveragingObject {
                 None,
             )
             .unwrap();
+        object
+            .write_property(P::WINDOW_SAMPLES, None, PropertyValue::Unsigned(60), None)
+            .unwrap();
+        object
+            .write_property(
+                P::WINDOW_INTERVAL,
+                None,
+                PropertyValue::Unsigned(3600),
+                None,
+            )
+            .unwrap();
+        object.add_sample(10.0).unwrap();
+        object.add_sample(20.0).unwrap();
+        object.add_sample(30.0).unwrap();
     }
     object
 }
@@ -46,6 +59,8 @@ fn rpm_averaging_metadata_selectors_preserve_bytes_and_budgets() {
         P::ATTEMPTED_SAMPLES,
         P::VALID_SAMPLES,
         P::OBJECT_PROPERTY_REFERENCE,
+        P::WINDOW_INTERVAL,
+        P::WINDOW_SAMPLES,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -57,6 +72,8 @@ fn rpm_averaging_metadata_selectors_preserve_bytes_and_budgets() {
         P::ATTEMPTED_SAMPLES,
         P::VALID_SAMPLES,
         P::OBJECT_PROPERTY_REFERENCE,
+        P::WINDOW_INTERVAL,
+        P::WINDOW_SAMPLES,
     ];
     // Table 12-5 has no Present_Value, Status_Flags, Out_Of_Service,
     // Reliability or Event_State (#1064), so Description is the only optional

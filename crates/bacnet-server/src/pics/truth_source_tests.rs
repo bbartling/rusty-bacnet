@@ -520,6 +520,19 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyIdentifier::DESCRIPTION,
                 PropertyValue::CharacterString("d".into()),
             ),
+            // The window rows and the Attempted_Samples reset (#1092).
+            (
+                PropertyIdentifier::WINDOW_INTERVAL,
+                PropertyValue::Unsigned(60),
+            ),
+            (
+                PropertyIdentifier::WINDOW_SAMPLES,
+                PropertyValue::Unsigned(30),
+            ),
+            (
+                PropertyIdentifier::ATTEMPTED_SAMPLES,
+                PropertyValue::Unsigned(0),
+            ),
         ],
         &[
             (
@@ -534,8 +547,8 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
             (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(1.0)),
             (PropertyIdentifier::MINIMUM_VALUE, PropertyValue::Real(1.0)),
             (
-                PropertyIdentifier::WINDOW_INTERVAL,
-                PropertyValue::Unsigned(60),
+                PropertyIdentifier::VALID_SAMPLES,
+                PropertyValue::Unsigned(0),
             ),
             (
                 PropertyIdentifier::RELIABILITY,

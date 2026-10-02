@@ -29,6 +29,9 @@ enum LocalWrite {
     ApplicationControlledVariableValue,
     /// The application supplying one sample to an Averaging object.
     ApplicationAveragingSample,
+    /// The application reporting an Averaging sample attempt that produced no
+    /// value.
+    ApplicationAveragingMiss,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -175,34 +178,53 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// by the application.
     ///
     /// The server doesn't read `Object_Property_Reference` itself, so the
-    /// application samples that property and passes each value here. The
-    /// value may be a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed,
-    /// Unsigned, Enumerated or finite REAL; the object keeps its statistics in
-    /// REAL (Clause 12.5). Another datatype, Double included, fails with
-    /// PROPERTY / INVALID_DATA_TYPE and NaN or an infinity with PROPERTY /
+    /// application samples that property, spacing its reads Window_Interval /
+    /// Window_Samples seconds apart, and passes each result here. A value may be
+    /// a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned,
+    /// Enumerated or finite REAL; the object keeps its statistics in REAL
+    /// (Clause 12.5). `None` records an attempt that produced no value, such
+    /// as a failed read: it counts toward Attempted_Samples but not
+    /// Valid_Samples. Another datatype, Double included, fails with PROPERTY /
+    /// INVALID_DATA_TYPE and NaN or an infinity with PROPERTY /
     /// VALUE_OUT_OF_RANGE, and a refused sample counts as neither attempted
     /// nor valid. An unknown object fails with OBJECT / UNKNOWN_OBJECT and any
     /// object other than an Averaging object with OBJECT /
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as with
     /// [`BACnetServer::set_present_value_local`].
     ///
-    /// Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and
-    /// Valid_Samples change together under the database lock, and the
-    /// server's COV processing runs once the lock is released. Averaging has
-    /// no Table 13-1 row, so SubscribeCOV on it is refused, but
-    /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple are admitted: a
-    /// numeric property is reported when it moves by the subscription's
-    /// COV increment, or on any change when the subscription gives none
-    /// (Table 13-1a), and the report has no Status_Flags because the object
-    /// has none. The Python binding exposes this as
+    /// Each call fills the next slot of the object's window, dropping the
+    /// oldest once Window_Samples are held, and Minimum_Value, Maximum_Value,
+    /// Average_Value, Attempted_Samples and Valid_Samples change together
+    /// under the database lock; the server's COV processing runs once the
+    /// lock is released. Averaging has no Table 13-1 row, so SubscribeCOV on
+    /// it is refused, but SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple are admitted: a numeric property is
+    /// reported when it moves by the subscription's COV increment, or on any
+    /// change when the subscription gives none (Table 13-1a). A move to or
+    /// from the NaN or infinite value of an empty window is always reported,
+    /// and staying at it never is. The report has no Status_Flags because the
+    /// object has none. The Python binding exposes this as
     /// `BACnetServer.add_averaging_sample_local`.
     pub async fn add_averaging_sample_local(
         &self,
         oid: &ObjectIdentifier,
-        value: PropertyValue,
+        sample: Option<PropertyValue>,
     ) -> Result<(), Error> {
-        self.write_local_as(oid, LocalWrite::ApplicationAveragingSample, value, None)
-            .await
+        match sample {
+            Some(value) => {
+                self.write_local_as(oid, LocalWrite::ApplicationAveragingSample, value, None)
+                    .await
+            }
+            None => {
+                self.write_local_as(
+                    oid,
+                    LocalWrite::ApplicationAveragingMiss,
+                    PropertyValue::Null,
+                    None,
+                )
+                .await
+            }
+        }
     }
 
     async fn write_local_as(
@@ -277,7 +299,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 LocalWrite::ApplicationPresentValue
                 | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample => None,
+                | LocalWrite::ApplicationAveragingSample
+                | LocalWrite::ApplicationAveragingMiss => None,
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
@@ -308,7 +331,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 LocalWrite::ApplicationPresentValue
                 | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample => None,
+                | LocalWrite::ApplicationAveragingSample
+                | LocalWrite::ApplicationAveragingMiss => None,
             };
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
@@ -335,7 +359,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         object.set_controlled_variable_value_internal(value)
                     }
                     LocalWrite::ApplicationAveragingSample => {
-                        object.add_averaging_sample_internal(value)
+                        object.add_averaging_sample_internal(Some(value))
+                    }
+                    LocalWrite::ApplicationAveragingMiss => {
+                        object.add_averaging_sample_internal(None)
                     }
                 }
             });
