@@ -3,10 +3,11 @@
 //! [`AnyTransport`] wraps all supported BACnet transport types, enabling
 //! a single router to manage heterogeneous ports (e.g., BIP + MS/TP).
 
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use tokio::sync::mpsc;
 
-use crate::bip::BipTransport;
+use crate::bip::{AsBip, BipTransport};
 #[cfg(feature = "ipv6")]
 use crate::bip6::Bip6Transport;
 use crate::loopback::LoopbackTransport;
@@ -281,6 +282,41 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
     }
 }
 
+impl<S: SerialPort + 'static> AnyTransport<S> {
+    /// The data link this variant carries, for errors.
+    fn data_link(&self) -> DataLink {
+        match self {
+            Self::Bip(_) => DataLink::Bip,
+            Self::Mstp(_) => DataLink::Mstp,
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(_) => DataLink::Bip6,
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(_) => DataLink::Ethernet,
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(_) => DataLink::Sc,
+            Self::Loopback(_) => DataLink::Loopback,
+        }
+    }
+}
+
+impl<S: SerialPort + 'static> AsBip for AnyTransport<S> {
+    /// The [`Bip`](Self::Bip) variant's transport.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedTransport`] naming the variant's data link for
+    /// every other variant.
+    fn as_bip(&self) -> Result<&BipTransport, Error> {
+        match self {
+            Self::Bip(transport) => Ok(transport),
+            other => Err(Error::UnsupportedTransport {
+                required: DataLink::Bip,
+                actual: other.data_link(),
+            }),
+        }
+    }
+}
+
 impl<S: SerialPort> From<BipTransport> for AnyTransport<S> {
     fn from(t: BipTransport) -> Self {
         Self::Bip(Box::new(t))
@@ -373,6 +409,44 @@ mod tests {
         let any: AnyTransport<LoopbackSerial> = bip.into();
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
+    }
+
+    /// `as_bip` refuses `any`, naming `link` as the data link it carries.
+    fn assert_refused(any: &AnyTransport<LoopbackSerial>, link: DataLink) {
+        assert_eq!(any.data_link(), link);
+        assert!(matches!(
+            any.as_bip(),
+            Err(Error::UnsupportedTransport { required: DataLink::Bip, actual }) if actual == link
+        ));
+    }
+
+    #[test]
+    fn as_bip_lends_the_bip_variant_and_names_every_other_data_link() {
+        let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
+        let any: AnyTransport<LoopbackSerial> = bip.into();
+        assert_eq!(any.data_link(), DataLink::Bip);
+        let lent = any.as_bip().expect("the Bip variant lends its transport");
+        assert_eq!(lent.local_mac(), any.local_mac());
+
+        let (serial, _) = LoopbackSerial::pair();
+        let mstp = MstpTransport::new(serial, MstpConfig::default());
+        assert_refused(&mstp.into(), DataLink::Mstp);
+        let (loopback, _) = LoopbackTransport::pair(vec![1], vec![2]);
+        assert_refused(&loopback.into(), DataLink::Loopback);
+        #[cfg(feature = "ipv6")]
+        {
+            let bip6 = Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
+            assert_refused(&bip6.into(), DataLink::Bip6);
+        }
+        #[cfg(all(feature = "ethernet", target_os = "linux"))]
+        assert_refused(&EthernetTransport::new("lo").into(), DataLink::Ethernet);
+    }
+
+    #[cfg(feature = "sc-tls")]
+    #[tokio::test]
+    async fn as_bip_names_the_sc_data_link() {
+        let (_hub_end, ws) = crate::sc_hub::ws_limits_test_support::initiating_pair().await;
+        assert_refused(&ScTransport::new(ws, [0x02; 6]).into(), DataLink::Sc);
     }
 
     #[test]

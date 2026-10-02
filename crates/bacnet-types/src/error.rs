@@ -9,6 +9,7 @@ use alloc::{format, string::String};
 #[cfg(feature = "std")]
 use std::time::Duration;
 
+use crate::data_link::DataLink;
 use crate::enums::{ErrorClass, ErrorCode};
 
 fn format_protocol_error(class: u32, code: u32) -> String {
@@ -67,6 +68,17 @@ pub enum Error {
     RoutedPathCapacityExceeded {
         /// Maximum number of immediate-router/DNET path entries retained.
         capacity: usize,
+    },
+
+    /// The endpoint's transport cannot carry the requested operation, such as
+    /// a BBMD management request through a data link other than BACnet/IP.
+    /// Nothing was sent.
+    #[error("operation requires {required}; this transport is {actual}")]
+    UnsupportedTransport {
+        /// Data link the operation needs.
+        required: DataLink,
+        /// Data link the endpoint's transport carries.
+        actual: DataLink,
     },
 
     /// Error encoding a PDU.
@@ -182,5 +194,17 @@ mod tests {
     fn routed_path_capacity_display_preserves_bound() {
         let err = Error::RoutedPathCapacityExceeded { capacity: 256 };
         assert!(err.to_string().contains("256"));
+    }
+
+    #[test]
+    fn unsupported_transport_display_names_both_data_links() {
+        let err = Error::UnsupportedTransport {
+            required: DataLink::Bip,
+            actual: DataLink::Mstp,
+        };
+        assert_eq!(
+            err.to_string(),
+            "operation requires BACnet/IP; this transport is MS/TP"
+        );
     }
 }

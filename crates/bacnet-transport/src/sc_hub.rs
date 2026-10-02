@@ -561,7 +561,7 @@ mod ws_limits_tests;
 #[cfg(test)]
 mod ws_capacity_tests;
 #[cfg(test)]
-mod ws_limits_test_support;
+pub(crate) mod ws_limits_test_support;
 
 #[cfg(test)]
 mod shutdown_tests;

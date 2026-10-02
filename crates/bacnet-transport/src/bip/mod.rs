@@ -22,6 +22,7 @@ use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 
+mod access;
 mod bbmd_start;
 mod bvlc_response;
 mod fanout;
@@ -38,6 +39,7 @@ use socket::BipSocket;
 mod io;
 mod own_broadcast;
 mod rate_limit;
+pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 use io::{
     handle_bvll_message, original_destination_matches, send_register_foreign_device, Delivery,

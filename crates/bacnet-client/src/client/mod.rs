@@ -488,56 +488,6 @@ impl BACnetClient<BipTransport> {
             options: ClientOptions::default(),
         }
     }
-
-    /// Read the Broadcast Distribution Table from a BBMD.
-    pub async fn read_bdt(
-        &self,
-        target: &[u8],
-    ) -> Result<Vec<bacnet_transport::bbmd::BdtEntry>, Error> {
-        self.network.transport().read_bdt(target).await
-    }
-
-    /// Write the Broadcast Distribution Table to a BBMD.
-    pub async fn write_bdt(
-        &self,
-        target: &[u8],
-        entries: &[bacnet_transport::bbmd::BdtEntry],
-    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
-        self.network.transport().write_bdt(target, entries).await
-    }
-
-    /// Read the Foreign Device Table from a BBMD.
-    pub async fn read_fdt(
-        &self,
-        target: &[u8],
-    ) -> Result<Vec<bacnet_transport::bbmd::FdtEntryWire>, Error> {
-        self.network.transport().read_fdt(target).await
-    }
-
-    /// Delete a Foreign Device Table entry on a BBMD.
-    pub async fn delete_fdt_entry(
-        &self,
-        target: &[u8],
-        ip: [u8; 4],
-        port: u16,
-    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
-        self.network
-            .transport()
-            .delete_fdt_entry(target, ip, port)
-            .await
-    }
-
-    /// Register as a foreign device with a BBMD and return the result code.
-    pub async fn register_foreign_device_bvlc(
-        &self,
-        target: &[u8],
-        ttl: u16,
-    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
-        self.network
-            .transport()
-            .register_foreign_device_bvlc(target, ttl)
-            .await
-    }
 }
 
 #[cfg(feature = "ipv6")]
@@ -760,6 +710,35 @@ impl ScClientBuilder {
     /// Reconnect configuration is validated before TLS lookup or dialing, and
     /// again when the transport starts. An error still consumes this builder
     /// and drops its inputs; this does not promise generic endpoint rollback.
+    ///
+    /// The client's [`transport()`](BACnetClient::transport) lends the hub
+    /// connection-state watch and the NPDU drop counts:
+    ///
+    /// ```no_run
+    /// use bacnet_client::client::BACnetClient;
+    /// use bacnet_transport::sc::ScConnectionState;
+    /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    ///
+    /// async fn watch_hub(tls: ScNodeTlsConfig) -> Result<(), bacnet_types::error::Error> {
+    ///     let client = BACnetClient::sc_builder()
+    ///         .hub_url("wss://hub.example.com/bacnet")
+    ///         .tls_config(tls)
+    ///         .vmac([0x02, 0, 0, 0, 0, 0x01])
+    ///         .device_uuid([0x42; 16])
+    ///         .build()
+    ///         .await?;
+    ///     // An owned receiver: it can live in its own task.
+    ///     let mut state = client.transport().connection_state_changes();
+    ///     tokio::spawn(async move {
+    ///         while state.changed().await.is_ok() {
+    ///             let _connected = *state.borrow_and_update() == ScConnectionState::Connected;
+    ///         }
+    ///     });
+    ///     // A snapshot: poll it as often as needed.
+    ///     let _full_queue_drops = client.transport().npdu_drop_counts().full_drops;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn build(
         self,
     ) -> Result<
@@ -862,6 +841,7 @@ mod segmentation_context;
 mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
+mod transport_access;
 use routed_path_limits::{routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits};
 use transaction_peer::response_transaction_peer;
 
@@ -940,6 +920,8 @@ mod segmented_response_capacity_tests;
 mod segmented_timeout_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transport_access_tests;
 #[cfg(test)]
 mod wpm_validation_tests;
 #[cfg(test)]

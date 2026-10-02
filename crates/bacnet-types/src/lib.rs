@@ -18,6 +18,7 @@ extern crate alloc;
 
 pub mod bitstring;
 pub mod constructed;
+pub mod data_link;
 pub mod enums;
 pub mod error;
 pub mod network_number;
