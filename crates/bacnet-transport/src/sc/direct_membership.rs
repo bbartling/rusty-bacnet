@@ -148,7 +148,7 @@ impl DirectMembership {
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sc-tls"))]
     pub(crate) fn counts(&self) -> (usize, usize) {
         let state = self.state.lock().unwrap();
         (
