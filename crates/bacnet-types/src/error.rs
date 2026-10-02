@@ -9,6 +9,7 @@ use alloc::{format, string::String};
 #[cfg(feature = "std")]
 use std::time::Duration;
 
+use crate::data_link::DataLink;
 use crate::enums::{ErrorClass, ErrorCode};
 
 fn format_protocol_error(class: u32, code: u32) -> String {
@@ -71,12 +72,13 @@ pub enum Error {
 
     /// The endpoint's transport cannot carry the requested operation, such as
     /// a BBMD management request through a data link other than BACnet/IP.
-    #[error("operation needs a {required} transport, but this one is {actual}")]
+    /// Nothing was sent.
+    #[error("operation requires {required}; this transport is {actual}")]
     UnsupportedTransport {
-        /// Data link the operation needs, such as `"BACnet/IP"`.
-        required: &'static str,
-        /// Data link the endpoint uses, such as `"MS/TP"`.
-        actual: &'static str,
+        /// Data link the operation needs.
+        required: DataLink,
+        /// Data link the endpoint's transport carries.
+        actual: DataLink,
     },
 
     /// Error encoding a PDU.
@@ -197,12 +199,12 @@ mod tests {
     #[test]
     fn unsupported_transport_display_names_both_data_links() {
         let err = Error::UnsupportedTransport {
-            required: "BACnet/IP",
-            actual: "MS/TP",
+            required: DataLink::Bip,
+            actual: DataLink::Mstp,
         };
         assert_eq!(
             err.to_string(),
-            "operation needs a BACnet/IP transport, but this one is MS/TP"
+            "operation requires BACnet/IP; this transport is MS/TP"
         );
     }
 }

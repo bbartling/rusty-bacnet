@@ -9,21 +9,49 @@ use super::*;
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// The transport this client was built with.
     ///
-    /// Use it for transport state and diagnostics after `build()`: the
-    /// BACnet/SC connection-state watch and NPDU drop counts, the B/IP
-    /// management, FDT and fanout counters and BBMD state, or an MS/TP
-    /// [`diagnostics()`](bacnet_transport::mstp::MstpTransport::diagnostics)
-    /// handle.
-    ///
     /// The client keeps its transport inside the network layer that its
-    /// dispatch task shares, so it lends a borrow and never gives the
-    /// transport up. What you take from the borrow can outlive it. The SC
-    /// watch receiver, an MS/TP diagnostics handle and the BBMD state `Arc`
-    /// are owned, so a long-lived UI takes them once and moves them into its
-    /// own tasks, as MS/TP callers already do before handing the transport
-    /// over. Counters are cheap snapshots: poll them through this borrow as
-    /// often as the UI redraws. The borrow is shared, so the transport's
-    /// `start` and `stop` stay with the client.
+    /// dispatch task shares, and lends it out only as a shared borrow.
+    /// Methods that take `&mut self`, such as `start`, `stop` and the
+    /// configuration setters, stay out of reach; [`stop`](Self::stop) stops
+    /// the transport in place.
+    ///
+    /// # Supported through this borrow
+    ///
+    /// Reading transport state and diagnostics while the client runs:
+    ///
+    /// - BACnet/SC: the `connection_state_changes()` watch and
+    ///   `npdu_drop_counts()`.
+    /// - B/IP: `management_counters()`, `fdt_counters()`,
+    ///   `fanout_counters()`, and `bbmd_state()` for a brief read of the BBMD
+    ///   tables.
+    /// - MS/TP: the
+    ///   [`diagnostics()`](bacnet_transport::mstp::MstpTransport::diagnostics)
+    ///   handle.
+    /// - Any transport: `local_mac()` and the APDU size limits.
+    ///
+    /// The watch receiver, the diagnostics handle and the BBMD state `Arc` are
+    /// owned and outlive the borrow, so a long-lived UI takes them once and
+    /// moves them into its own tasks, as MS/TP callers already do with
+    /// `diagnostics()` before handing a transport over. The counters are cheap
+    /// snapshots: poll them through the borrow as often as the UI redraws.
+    ///
+    /// # Not supported while the client runs
+    ///
+    /// These go around the client, which does not guard against them:
+    ///
+    /// - Sending through the transport (`send_unicast`, `send_broadcast` and
+    ///   their variants). The client's transaction state machine never sees
+    ///   the frame, so a hand-built confirmed request can reuse an invoke ID
+    ///   that is already in flight. Send through the client's request methods,
+    ///   and use its BBMD helpers for BBMD management.
+    /// - Holding the `bbmd_state()` lock across an await or a client call. A
+    ///   broadcast from the client takes the same lock, so the two deadlock.
+    ///   Lock, copy what you need and release.
+    ///
+    /// The live MS/TP master node and the BACnet/SC connection, whose locks
+    /// the token loop and the hub link take, are not public at all.
+    ///
+    /// # Why a borrow
     ///
     /// This is one accessor for every transport, rather than a bundle of
     /// handles returned by each builder. Each transport already offers its
@@ -75,6 +103,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 /// use bacnet_transport::any::AnyTransport;
 /// use bacnet_transport::loopback::LoopbackTransport;
 /// use bacnet_transport::mstp::NoSerial;
+/// use bacnet_types::data_link::DataLink;
 /// use bacnet_types::error::Error;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +117,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 ///     let bbmd = [127, 0, 0, 1, 0xBA, 0xC0];
 ///     assert!(matches!(
 ///         client.read_bdt(&bbmd).await,
-///         Err(Error::UnsupportedTransport { required: "BACnet/IP", actual: "loopback" })
+///         Err(Error::UnsupportedTransport {
+///             required: DataLink::Bip,
+///             actual: DataLink::Loopback,
+///         })
 ///     ));
 ///     client.stop().await?;
 ///     Ok::<_, Error>(())

@@ -69,10 +69,10 @@ async fn sc_mtls_connection_succeeds() {
     let _rx = transport.start().await.unwrap();
 
     // Verify connected state.
-    let conn = transport.connection().unwrap();
-    let c = conn.lock().await;
-    assert_eq!(c.state, ScConnectionState::Connected);
-    drop(c);
+    assert_eq!(
+        *transport.connection_state_changes().borrow(),
+        ScConnectionState::Connected
+    );
 
     transport.stop().await.unwrap();
     hub.stop().await;
@@ -108,10 +108,10 @@ async fn sc_mtls_helpers_roundtrip() {
         .with_device_uuid([1; 16]);
     let _rx = transport.start().await.unwrap();
 
-    let conn = transport.connection().unwrap();
-    let c = conn.lock().await;
-    assert_eq!(c.state, ScConnectionState::Connected);
-    drop(c);
+    assert_eq!(
+        *transport.connection_state_changes().borrow(),
+        ScConnectionState::Connected
+    );
 
     transport.stop().await.unwrap();
     hub.stop().await;

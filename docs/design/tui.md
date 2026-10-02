@@ -404,13 +404,14 @@ The TUI uses only public `bacnet-client` and `bacnet-transport` APIs.
   `subscribe_cov`, `manage_cov_subscription` and `cov_notifications()`; the BBMD
   helpers on any `BACnetClient` whose transport is `AsBip` (`BipTransport`, or
   `AnyTransport` with a `Bip` variant); `ScConnectError` and
-  `ScWebSocketErrorKind`; the MS/TP `node_state()` and `diagnostics()` handles
-  and `decode_frame_stream`.
+  `ScWebSocketErrorKind`; the MS/TP `diagnostics()` handle and
+  `decode_frame_stream`.
 - **Transport handles.** `client.transport()` (#956) borrows the transport of
   any built client. Workers take the owned handles once (the SC
   `connection_state_changes()` watch, the MS/TP `diagnostics()` handle, the
   BBMD state `Arc`) and poll the counter snapshots (SC `npdu_drop_counts()`,
-  B/IP management, FDT and fanout counters) through the borrow.
+  B/IP management, FDT and fanout counters) through the borrow. They never
+  send through the transport or hold the BBMD state lock across an await.
 - **Monitor and capture.** The MS/TP passive monitor has no client: a worker
   owns the serial port (#958). Live capture of our own traffic needs a
   link-level tap (#957).

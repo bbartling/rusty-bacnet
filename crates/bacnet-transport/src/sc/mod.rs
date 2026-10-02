@@ -172,8 +172,9 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// start retried on the same owned WebSocket. This cannot undo caller-owned
     /// WebSocket creation or external dials (including work creating closures),
     /// and is not generic endpoint rollback or a promise that every field has a
-    /// repair setter. It is startup enforcement, not lifetime immutability:
-    /// application mutation through [`Self::connection`] remains possible.
+    /// repair setter. The transport gives applications no mutable access to
+    /// the live connection afterwards; they read its state through
+    /// [`connection_state_changes`](Self::connection_state_changes).
     pub fn with_device_uuid(mut self, uuid: [u8; 16]) -> Self {
         self.device_uuid = uuid;
         self

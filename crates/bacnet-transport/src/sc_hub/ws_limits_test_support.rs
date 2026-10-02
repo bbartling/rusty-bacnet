@@ -76,7 +76,8 @@ pub(super) async fn heartbeat(ws: &mut ClientWs, id: u16) {
     );
 }
 
-pub(super) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_tls::TlsWebSocket) {
+/// A TLS WebSocket the hub side accepted, and the node end as a [`TlsWebSocket`](crate::sc_tls::TlsWebSocket).
+pub(crate) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_tls::TlsWebSocket) {
     let tls = TestTls::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

@@ -8,6 +8,7 @@ use bacnet_transport::bip::{AsBip, ManagementCounters};
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::mstp::NoSerial;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::enums::BvlcResultCode;
 
 /// A remote BBMD row the in-process BBMD starts with.
@@ -75,7 +76,8 @@ async fn bip_client_transport_counters_change_after_a_read_bdt_exchange() {
 
     client.stop().await.unwrap();
     bbmd.stop().await.unwrap();
-    // Holding the state Arc did not keep stop from taking the transport back.
+    // The owned handle still reads the last tables after the client has
+    // stopped its transport, as an MS/TP diagnostics handle does.
     assert_eq!(state.lock().await.bdt(), bdt.as_slice());
 }
 
@@ -145,8 +147,8 @@ async fn bbmd_helpers_on_a_non_bip_any_transport_fail_typed_before_sending() {
         matches!(
             result,
             Err(Error::UnsupportedTransport {
-                required: "BACnet/IP",
-                actual: "loopback",
+                required: DataLink::Bip,
+                actual: DataLink::Loopback,
             })
         )
     }

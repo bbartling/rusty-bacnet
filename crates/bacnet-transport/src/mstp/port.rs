@@ -154,16 +154,17 @@ impl<S: SerialPort> MstpTransport<S> {
         self
     }
 
-    /// Get the master node state (for testing/inspection).
-    pub fn node_state(&self) -> Option<&Arc<Mutex<MasterNode>>> {
+    /// The live master node. Test-only: its lock is the one the token loop
+    /// takes, so holding it across an await stalls token passing.
+    #[cfg(test)]
+    pub(crate) fn node_state(&self) -> Option<&Arc<Mutex<MasterNode>>> {
         self.node.as_ref()
     }
 
     /// Obtain a cloneable, counts-only handle before transferring transport ownership.
     /// Cloning retains no serial or runtime ownership; snapshots remain readable
     /// after stop/drop. See [`MstpDiagnostics`] for lifecycle and coherence limits.
-    /// Direct manipulations through [`Self::node_state`] are outside the transport
-    /// admission/delivery counters; use the normal transport API during measurement.
+    /// The counters see only traffic that goes through the transport API.
     ///
     /// ```
     /// use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};

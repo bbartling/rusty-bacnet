@@ -72,8 +72,10 @@ let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, Error
 
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
-`AnyTransport` that is not B/IP. Both fields are short data-link names such as
-`"BACnet/IP"` and `"MS/TP"`, and nothing was sent.
+`AnyTransport` that is not B/IP. Both fields are a
+`bacnet_types::data_link::DataLink` (`Bip`, `Bip6`, `Mstp`, `Sc`, `Ethernet`,
+`Loopback`), whose `Display` is the short name, so the message reads
+"operation requires BACnet/IP; this transport is MS/TP". Nothing was sent.
 
 `Error::RoutedPathTooLong { dnet }` identifies the destination network from a
 matching network-layer rejection; it does not claim an exact supported length.
@@ -633,10 +635,11 @@ generic endpoint rollback or repairability of every configuration field.
 
 The caller owns predeployment UUID generation and durable same-byte lifetime
 reuse. Internal reconnect/failover/primary restore preserve the UUID, including
-when a duplicate-VMAC NAK legitimately reselects the VMAC. This is **startup
-enforcement, not lifetime immutability**: `connection()` still exposes mutable
-`ScConnection` identity fields to applications. Pure `ScConnection` codec/manual
-WebSocket use and later handshake validation are outside this guard.
+when a duplicate-VMAC NAK legitimately reselects the VMAC. The checks run at
+startup, and `ScTransport` exposes no mutable access to its `ScConnection`
+afterwards: applications read the link state through
+`connection_state_changes()` (#956). Pure `ScConnection` codec/manual WebSocket
+use and later handshake validation are outside this guard.
 
 `with_advertised_uris` configures known direct-connection URIs; it does not enable
 accepting connections. Address-Resolution requests receive an ACK (with a
@@ -1867,9 +1870,10 @@ Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
 
 `client.transport()` borrows the transport a built client owns, whichever
 builder made it. The transport lives in the client's network layer for the
-client's whole life, so this is a shared borrow: the transport's `start` and
-`stop` stay with the client. What you take from it can outlive the borrow,
-which suits a long-lived UI:
+client's whole life, so this is a shared borrow: `&mut self` methods such as
+`start`, `stop` and the setters stay out of reach, and `client.stop()` stops
+the transport in place. What you take from it can outlive the borrow, which
+suits a long-lived UI:
 
 ```rust
 // BACnet/SC (sc_builder): an owned watch receiver, and a drop-count snapshot.
@@ -1892,6 +1896,14 @@ let bbmd = bip_client.transport().bbmd_state().cloned(); // Option<Arc<Mutex<Bbm
 let diagnostics = mstp_client.transport().diagnostics();
 ```
 
+Reading state and diagnostics is what the borrow supports. Two things go around
+the client and are not supported while it runs: sending through the transport
+(`send_unicast`, `send_broadcast`), which the client's transaction state
+machine never sees, so a hand-built confirmed request can reuse an in-flight
+invoke ID; and holding the `bbmd_state()` lock across an await, which deadlocks
+against the client's next broadcast. The live MS/TP master node and SC
+connection are not public.
+
 The management, FDT and fanout counters count what this transport does as a
 BBMD (ACKs sent, registrations admitted, broadcasts forwarded). A client from
 `bip_builder()` is never a BBMD, so its counters stay at zero; a client built
@@ -1904,6 +1916,8 @@ is `Bip`. On any other variant they return `Error::UnsupportedTransport`
 before sending anything:
 
 ```rust
+use bacnet_transport::bip::AsBip;
+
 let client = BACnetClient::generic_builder()
     .transport(AnyTransport::<NoSerial>::from(BipTransport::new(ip, 0, broadcast)))
     .build()
