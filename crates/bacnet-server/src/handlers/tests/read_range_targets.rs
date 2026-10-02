@@ -1,0 +1,508 @@
+//! ReadRange serves only a BACnetLIST (#1025; Clause 15.8). The decision
+//! follows the property's datatype, as for the list services (#999), not the
+//! shape of the value read: a whole array and a BACnetDateTime both read as
+//! lists, and a list held framed reads as one block of bytes, which ReadRange
+//! splits into its elements.
+
+use super::*;
+use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::elevator::ElevatorGroupObject;
+use bacnet_objects::multistate::MultiStateValueObject;
+use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::schedule::ScheduleObject;
+use bacnet_objects::value_types::DateTimeValueObject;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
+use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
+
+const POSITION: Option<RangeSpec> = Some(RangeSpec::ByPosition {
+    reference_index: 1,
+    count: 2,
+});
+const SEQUENCE: Option<RangeSpec> = Some(RangeSpec::BySequenceNumber {
+    reference_seq: 1,
+    count: 2,
+});
+
+fn by_time() -> Option<RangeSpec> {
+    Some(RangeSpec::ByTime {
+        reference_time: (DATE, time(0)),
+        count: 2,
+    })
+}
+
+fn add(db: &mut ObjectDatabase, object: impl BACnetObject + 'static) -> ObjectIdentifier {
+    let oid = object.object_identifier();
+    db.add(Box::new(object)).unwrap();
+    oid
+}
+
+fn assert_refused(
+    result: Result<ReadRangeAck, Error>,
+    class: ErrorClass,
+    code: ErrorCode,
+    context: &str,
+) {
+    match result {
+        Err(Error::Protocol {
+            class: got_class,
+            code: got_code,
+        }) => assert_eq!(
+            (got_class, got_code),
+            (class.to_raw() as u32, code.to_raw() as u32),
+            "{context}: expected {class:?}/{code:?}"
+        ),
+        other => panic!("{context}: expected {class:?}/{code:?}, got {other:?}"),
+    }
+}
+
+/// Every case must refuse with SERVICES / PROPERTY_IS_NOT_A_LIST, whatever
+/// the range form.
+fn assert_not_a_list(
+    db: &ObjectDatabase,
+    cases: &[(ObjectIdentifier, PropertyIdentifier, Option<u32>)],
+) {
+    for &(oid, property, index) in cases {
+        for range in [None, POSITION, SEQUENCE, by_time()] {
+            let result = call_with_index(db, oid, property, index, range.clone());
+            if !matches!(&result, Err(Error::Protocol { class, code })
+                if *class == ErrorClass::SERVICES.to_raw() as u32
+                    && *code == ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32)
+            {
+                panic!("{oid:?} {property:?} index {index:?} {range:?}: {result:?}");
+            }
+        }
+    }
+}
+
+fn msv_db() -> (ObjectDatabase, ObjectIdentifier) {
+    let mut db = ObjectDatabase::new();
+    let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
+    msv.set_alarm_values(vec![1, 2, 3]);
+    let oid = add(&mut db, msv);
+    (db, oid)
+}
+
+fn destination(process_identifier: u32) -> BACnetDestination {
+    BACnetDestination {
+        valid_days: DaysOfWeek::all(),
+        from_time: Time {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            hundredths: 0,
+        },
+        to_time: Time {
+            hour: 23,
+            minute: 59,
+            second: 0,
+            hundredths: 0,
+        },
+        recipient: BACnetRecipient::Device(
+            ObjectIdentifier::new(ObjectType::DEVICE, process_identifier).unwrap(),
+        ),
+        process_identifier,
+        issue_confirmed_notifications: process_identifier.is_multiple_of(2),
+        transitions: EventTransitionBits::all(),
+    }
+}
+
+fn encoded_destination(process_identifier: u32) -> PropertyValue {
+    let mut encoded = BytesMut::new();
+    bacnet_encoding::constructed::encode_destination(
+        &mut encoded,
+        &destination(process_identifier),
+    );
+    PropertyValue::ApplicationData(encoded.to_vec())
+}
+
+/// An object that reads one property as a fixed value and calls it a list.
+struct FixedList {
+    oid: ObjectIdentifier,
+    name: &'static str,
+    property: PropertyIdentifier,
+    value: PropertyValue,
+}
+
+impl BACnetObject for FixedList {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+
+    fn object_name(&self) -> &str {
+        self.name
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        if property == self.property {
+            Ok(self.value.clone())
+        } else {
+            Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            })
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        Cow::Owned(vec![self.property])
+    }
+
+    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
+        property == self.property
+    }
+}
+
+#[test]
+fn read_range_refuses_whole_arrays_and_array_elements_as_not_a_list() {
+    let (mut db, msv) = msv_db();
+    let device = add(
+        &mut db,
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "DEV-1".into(),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let schedule = add(
+        &mut db,
+        ScheduleObject::new(1, "SCH-1", PropertyValue::Real(0.0)).unwrap(),
+    );
+    assert_not_a_list(
+        &db,
+        &[
+            // Whole arrays read as lists but are not BACnetLISTs.
+            (msv, PropertyIdentifier::STATE_TEXT, None),
+            (msv, PropertyIdentifier::PROPERTY_LIST, None),
+            (msv, PropertyIdentifier::PRIORITY_ARRAY, None),
+            (device, PropertyIdentifier::OBJECT_LIST, None),
+            (schedule, PropertyIdentifier::WEEKLY_SCHEDULE, None),
+            // Neither is an element, even one that reads as several values.
+            (msv, PropertyIdentifier::STATE_TEXT, Some(1)),
+            (msv, PropertyIdentifier::PRIORITY_ARRAY, Some(16)),
+            (schedule, PropertyIdentifier::WEEKLY_SCHEDULE, Some(1)),
+        ],
+    );
+}
+
+#[test]
+fn read_range_refuses_scalars_and_constructed_values_as_not_a_list() {
+    let (mut db, msv) = msv_db();
+    let ai = add(&mut db, AnalogInputObject::new(1, "AI-1", 62).unwrap());
+    let dtv = add(&mut db, DateTimeValueObject::new(1, "DTV-1").unwrap());
+    let group = add(&mut db, ElevatorGroupObject::new(1, "EG-1").unwrap());
+    let schedule = add(
+        &mut db,
+        ScheduleObject::new(1, "SCH-1", PropertyValue::Real(0.0)).unwrap(),
+    );
+    assert_not_a_list(
+        &db,
+        &[
+            (ai, PropertyIdentifier::PRESENT_VALUE, None),
+            (msv, PropertyIdentifier::PRESENT_VALUE, None),
+            (msv, PropertyIdentifier::OUT_OF_SERVICE, None),
+            (msv, PropertyIdentifier::OBJECT_NAME, None),
+            // A BACnetDateTime reads as its two members.
+            (dtv, PropertyIdentifier::PRESENT_VALUE, None),
+            // Single constructed values held framed.
+            (group, PropertyIdentifier::LANDING_CALL_CONTROL, None),
+            (schedule, PropertyIdentifier::EFFECTIVE_PERIOD, None),
+        ],
+    );
+}
+
+#[test]
+fn read_range_target_errors_follow_clause_order() {
+    let (db, msv) = msv_db();
+    let missing = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, 99).unwrap();
+    let vendor = PropertyIdentifier::from_raw(9999);
+    // Object, then property, then the array index, then the list kind, and
+    // only then whether the items support the range form.
+    let ladder = [
+        (
+            missing,
+            PropertyIdentifier::ALARM_VALUES,
+            None,
+            None,
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ),
+        (
+            msv,
+            vendor,
+            None,
+            None,
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ),
+        (
+            msv,
+            vendor,
+            Some(1),
+            None,
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ),
+        (
+            msv,
+            PropertyIdentifier::PRESENT_VALUE,
+            Some(1),
+            None,
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ),
+        (
+            msv,
+            PropertyIdentifier::ALARM_VALUES,
+            Some(1),
+            None,
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ),
+        (
+            msv,
+            PropertyIdentifier::STATE_TEXT,
+            Some(99),
+            None,
+            ErrorClass::PROPERTY,
+            ErrorCode::INVALID_ARRAY_INDEX,
+        ),
+        (
+            msv,
+            PropertyIdentifier::STATE_TEXT,
+            None,
+            SEQUENCE,
+            ErrorClass::SERVICES,
+            ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        ),
+        (
+            msv,
+            PropertyIdentifier::STATE_TEXT,
+            None,
+            by_time(),
+            ErrorClass::SERVICES,
+            ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        ),
+        (
+            msv,
+            PropertyIdentifier::ALARM_VALUES,
+            None,
+            SEQUENCE,
+            ErrorClass::PROPERTY,
+            ErrorCode::LIST_ITEM_NOT_NUMBERED,
+        ),
+        (
+            msv,
+            PropertyIdentifier::ALARM_VALUES,
+            None,
+            by_time(),
+            ErrorClass::PROPERTY,
+            ErrorCode::LIST_ITEM_NOT_TIMESTAMPED,
+        ),
+    ];
+    for (oid, property, index, range, class, code) in ladder {
+        let context = format!("{oid:?} {property:?} index {index:?} {range:?}");
+        assert_refused(
+            call_with_index(&db, oid, property, index, range),
+            class,
+            code,
+            &context,
+        );
+    }
+}
+
+#[test]
+fn read_range_pages_plain_lists_by_position() {
+    let (db, msv) = msv_db();
+    let all = call(&db, msv, PropertyIdentifier::ALARM_VALUES, None).unwrap();
+    assert_ack(&all, &unsigned_items(&[1, 2, 3]), (true, true, false), None);
+    let back = call(
+        &db,
+        msv,
+        PropertyIdentifier::ALARM_VALUES,
+        Some(RangeSpec::ByPosition {
+            reference_index: 2,
+            count: -2,
+        }),
+    )
+    .unwrap();
+    assert_ack(&back, &unsigned_items(&[1, 2]), (true, false, false), None);
+}
+
+#[test]
+fn read_range_splits_framed_recipient_list_into_destinations() {
+    let mut db = ObjectDatabase::new();
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    for process_identifier in 1..=3 {
+        nc.add_destination(destination(process_identifier));
+    }
+    let nc = add(&mut db, nc);
+    let property = PropertyIdentifier::RECIPIENT_LIST;
+    let items: Vec<_> = (1..=3).map(encoded_destination).collect();
+
+    // The items are the frame ReadProperty returns, cut at each destination.
+    let all = call(&db, nc, property, None).unwrap();
+    assert_ack(&all, &items, (true, true, false), None);
+    let mut framed = BytesMut::new();
+    let destinations: Vec<_> = (1..=3).map(destination).collect();
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &destinations);
+    assert_eq!(all.item_data, framed.to_vec());
+
+    let second = call(
+        &db,
+        nc,
+        property,
+        Some(RangeSpec::ByPosition {
+            reference_index: 2,
+            count: 1,
+        }),
+    )
+    .unwrap();
+    assert_ack(&second, &items[1..2], (false, false, false), None);
+    let last_two = call(
+        &db,
+        nc,
+        property,
+        Some(RangeSpec::ByPosition {
+            reference_index: 3,
+            count: -2,
+        }),
+    )
+    .unwrap();
+    assert_ack(&last_two, &items[1..], (false, true, false), None);
+    assert_refused(
+        call(&db, nc, property, SEQUENCE),
+        ErrorClass::PROPERTY,
+        ErrorCode::LIST_ITEM_NOT_NUMBERED,
+        "Recipient_List by sequence",
+    );
+}
+
+#[test]
+fn read_range_splits_framed_schedule_references() {
+    let mut db = ObjectDatabase::new();
+    let mut schedule = ScheduleObject::new(1, "SCH-1", PropertyValue::Real(0.0)).unwrap();
+    let av = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
+    // The first carries the optional array index, so each element's length
+    // differs and only the reference codec finds the boundary.
+    schedule.add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
+        av,
+        PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+        8,
+    ));
+    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
+        av,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    ));
+    let schedule = add(&mut db, schedule);
+    let ack = call(
+        &db,
+        schedule,
+        PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+        Some(RangeSpec::ByPosition {
+            reference_index: 2,
+            count: 1,
+        }),
+    )
+    .unwrap();
+    let mut second = BytesMut::new();
+    bacnet_encoding::constructed::encode_object_property_reference(
+        &mut second,
+        &BACnetObjectPropertyReference::new(av, PropertyIdentifier::PRESENT_VALUE.to_raw()),
+    );
+    assert_ack(
+        &ack,
+        &[PropertyValue::ApplicationData(second.to_vec())],
+        (false, true, false),
+        None,
+    );
+}
+
+#[test]
+fn read_range_refuses_lists_it_cannot_split() {
+    let mut db = ObjectDatabase::new();
+    // The standalone Device holds no COV subscriptions; only a running
+    // server's ReadProperty sees the live list, which has no element codec.
+    let device = add(
+        &mut db,
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "DEV-1".into(),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let mut truncated = encoded_destination(1);
+    if let PropertyValue::ApplicationData(bytes) = &mut truncated {
+        bytes.pop();
+    }
+    let cases = [
+        (device, PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS),
+        // A vendor list held framed, and a framed Recipient_List whose stored
+        // frame does not decode.
+        (
+            add(
+                &mut db,
+                FixedList {
+                    oid: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
+                    name: "vendor-framed",
+                    property: PropertyIdentifier::from_raw(600),
+                    value: encoded_destination(1),
+                },
+            ),
+            PropertyIdentifier::from_raw(600),
+        ),
+        (
+            add(
+                &mut db,
+                FixedList {
+                    oid: ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 1).unwrap(),
+                    name: "truncated-recipients",
+                    property: PropertyIdentifier::RECIPIENT_LIST,
+                    value: truncated,
+                },
+            ),
+            PropertyIdentifier::RECIPIENT_LIST,
+        ),
+        // A list property whose value has another shape.
+        (
+            add(
+                &mut db,
+                FixedList {
+                    oid: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap(),
+                    name: "vendor-scalar",
+                    property: PropertyIdentifier::from_raw(601),
+                    value: PropertyValue::Unsigned(1),
+                },
+            ),
+            PropertyIdentifier::from_raw(601),
+        ),
+    ];
+    for (oid, property) in cases {
+        for range in [None, POSITION] {
+            assert_refused(
+                call(&db, oid, property, range.clone()),
+                ErrorClass::SERVICES,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                &format!("{oid:?} {property:?} {range:?}"),
+            );
+        }
+    }
+}

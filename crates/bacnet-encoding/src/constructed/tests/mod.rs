@@ -304,6 +304,26 @@ fn dopr_body_round_trip_local_and_full() {
 }
 
 #[test]
+fn device_object_property_references_decode_one_list_element_at_a_time() {
+    let mut indexed = dopr_ai(5, 85);
+    indexed.property_array_index = Some(2);
+    let full = BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 8).unwrap()),
+        ..dopr_ai(7, 111)
+    };
+    let mut list = BytesMut::new();
+    for reference in [&indexed, &full] {
+        encode_dopr_body(&mut list, reference);
+    }
+    let (first, next) = decode_device_object_property_reference(&list, 0).unwrap();
+    assert_eq!(first, indexed);
+    let (second, end) = decode_device_object_property_reference(&list, next).unwrap();
+    assert_eq!(second, full);
+    assert_eq!(end, list.len());
+    assert!(decode_device_object_property_reference(&list[..next - 1], 0).is_err());
+}
+
+#[test]
 fn event_parameter_opaque_primitive_form_decodes() {
     // none [20] NULL — primitive context tag, zero contents (extended tag).
     let data = [0xF8, 20];

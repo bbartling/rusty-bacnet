@@ -1536,6 +1536,19 @@ element the list would have gained, which is exact when one element is new.
 Refusals of the request or target (authorization, object, property, array
 index, list kind, write access) name element 0.
 
+ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
+single value, a whole array (Object_List, Priority_Array) or an indexed array
+element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,
+unknown property and array-index errors and before any By Sequence Number or By
+Time error. A list the object holds framed in one `PropertyValue::ApplicationData`
+is split into its elements first, so By Position counts destinations in
+Recipient_List and references in Schedule's List_Of_Object_Property_References.
+A list it cannot split (a framed list with no element codec, such as a vendor
+list or the standalone Device's COV subscription lists, or a value of another
+shape) returns `SERVICES/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`; ReadProperty
+still reads it whole. Custom objects that hold a vendor list should return
+`PropertyValue::List`, one value per item.
+
 Intrinsic reporting uses one proposal/commit contract. The
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,

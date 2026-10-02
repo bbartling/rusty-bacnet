@@ -585,6 +585,17 @@ pub(crate) fn decode_dopr_body(
     ))
 }
 
+/// Decode one bare `BACnetDeviceObjectPropertyReference` at `offset`; returns
+/// it and the offset past its last member. A BACnetLIST of these references
+/// concatenates its elements with no frame, so walking the list calls this at
+/// each element's start.
+pub fn decode_device_object_property_reference(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetDeviceObjectPropertyReference, usize), Error> {
+    decode_dopr_body(data, offset, "BACnetDeviceObjectPropertyReference")
+}
+
 /// Validate a BACnet TLV sequence without normalizing its encoded values.
 ///
 /// This checks matching context tags, the context nesting limit, and

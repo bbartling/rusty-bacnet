@@ -224,8 +224,9 @@ fn by_time_rejects_invalid_absent_or_misaligned_timestamp_identities() {
     for (property, identities) in [
         (PropertyIdentifier::LOG_BUFFER, None),
         (PropertyIdentifier::LOG_BUFFER, Some(vec![identity(1, 1)])),
+        // A BACnetLIST other than LOG_BUFFER carries no timestamps.
         (
-            PropertyIdentifier::PROPERTY_LIST,
+            PropertyIdentifier::DATE_LIST,
             Some(vec![identity(1, 1), identity(2, 2)]),
         ),
     ] {
