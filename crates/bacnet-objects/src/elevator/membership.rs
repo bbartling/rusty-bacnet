@@ -19,7 +19,7 @@ use crate::common;
 /// The group placement of one lift or escalator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct GroupMembership {
-    /// The Elevator Group object whose Group_Members lists this object.
+    /// The Elevator Group that counts this object among its Group_Members.
     pub(super) elevator_group: ObjectIdentifier,
     /// The identification number of the group (Unsigned8).
     pub(super) group_id: u8,
@@ -80,8 +80,8 @@ macro_rules! group_membership_accessors {
             self.membership.elevator_group
         }
 
-        /// Set the Elevator Group object whose Group_Members lists this
-        #[doc = concat!($object, ".")]
+        /// Set which Elevator Group counts this
+        #[doc = concat!($object, " among its Group_Members.")]
         ///
         /// Elevator_Group is read-only over the network, so this is the only
         /// way to change it. A reference to any other object type is refused
