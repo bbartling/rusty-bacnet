@@ -1,7 +1,7 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
 use super::cov_clock::cov_multiple_datetime;
-use super::multiple_items::{build_items, Coordinate, LastChange};
+use super::multiple_items::{build_items, Coordinate, FieldStamp};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{TimedChange, TimedClaim};
@@ -107,28 +107,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut claim: Option<TimedClaim> = None;
         let (notification, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
-            // identity, the clock sample for any current-state fallback and
-            // every value. A producer snapshot carries its own captured
-            // changes, so that path takes no fallback clock.
-            let (device_oid, clock_frame, db) = if snapshot.is_none() {
-                let db = db.read().await;
-                let clock_frame = subscriptions
-                    .iter()
-                    .any(|sub| sub.timestamped)
-                    .then(|| db.clock_frame())
-                    .flatten()
+            // identity, the preparation clock sample and every value. The
+            // sample times the current-state fallback and a field that changed
+            // without its timestamped reference capturing it (#987). A producer
+            // snapshot carries its own captured changes, so that path adopts no
+            // fallback change; it still samples the clock for such a field.
+            let (device_oid, clock_frame, db) = {
+                let guard = db.read().await;
+                let device = crate::local_device::selected_device(&guard);
+                let clock_frame = guard
+                    .clock_frame()
                     .filter(|frame| frame.is_valid_actual_datetime());
-                (
-                    crate::local_device::selected_device(&db),
-                    clock_frame,
-                    Some(db),
-                )
-            } else {
-                (
-                    crate::local_device::selected_device(&*db.read().await),
-                    None,
-                    None,
-                )
+                (device, clock_frame, snapshot.is_none().then_some(guard))
             };
             let device_oid =
                 device_oid.unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
@@ -182,7 +172,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
-            let (retained, untimed, stamped) = {
+            let (retained, untimed, owners, store) = {
                 let table = cov_table.read().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
@@ -310,31 +300,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     claim.add(other.key().clone(), incarnation, changes);
                     retained.push((other.clone(), Vec::new(), last, completion, remaining));
                 }
-                // Live timestamped references that convey no change now keep
-                // stamping their field with their newest change (#987).
-                let mut stamped: HashMap<Coordinate, LastChange> = HashMap::new();
-                for other in table.multiple_context_references(&context) {
-                    if !other.timestamped
-                        || retained.iter().any(|(kept, ..)| kept.key() == other.key())
-                        || table
-                            .remaining_lifetime(other, now)
-                            .and_then(crate::cov::CovTimeRemaining::wire_seconds)
-                            .is_none()
-                    {
-                        continue;
-                    }
-                    if let Some(last) = store.lock().last_change(other.key(), other.generation()) {
-                        stamped.insert(
+                // Live timestamped references that convey no change now still
+                // time their field when a sibling carries it (#987).
+                let conveying: HashSet<_> = retained.iter().map(|(sub, ..)| sub.key()).collect();
+                let owners: HashMap<Coordinate, (crate::cov::CovSubscriptionKey, u64)> = table
+                    .multiple_context_references(&context)
+                    .filter(|other| {
+                        other.timestamped
+                            && !conveying.contains(other.key())
+                            && table
+                                .remaining_lifetime(other, now)
+                                .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                                .is_some()
+                    })
+                    .map(|other| {
+                        (
                             (
                                 other.monitored_object_identifier,
                                 other.monitored_property,
                                 other.monitored_property_array_index,
                             ),
-                            last,
-                        );
-                    }
-                }
-                (retained, untimed, stamped)
+                            (other.key().clone(), other.generation()),
+                        )
+                    })
+                    .collect();
+                (retained, untimed, owners, store)
             };
             let claim = claim.as_mut().expect("claim created under the table guard");
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
@@ -350,7 +340,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // the larger form) by discarding the oldest queued history; the
             // latest change of every reference is always kept.
             let notification = loop {
-                let (items, stamp) = build_items(claim, &parts, &reads, &untimed, &stamped);
+                let mut stamp = |coordinate: &Coordinate, value: &[u8]| {
+                    let Some((key, generation)) = owners.get(coordinate) else {
+                        return FieldStamp::Unowned;
+                    };
+                    store
+                        .lock()
+                        .field_time(key, *generation, value, clock_frame)
+                        .map_or(FieldStamp::Withhold, FieldStamp::At)
+                };
+                let (items, stamp) = build_items(claim, &parts, &reads, &untimed, &mut stamp);
                 // The header names the newest change whose time is conveyed,
                 // claimed now or stamped from an earlier one.
                 let timestamp = claim

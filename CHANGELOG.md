@@ -271,13 +271,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- In a timestamped COV-multiple report, a field subscribed with timestamps now
-  always carries a Time_Of_Change (#987). Before, when its own selector had not
-  changed in that round and an untimestamped sibling reference carried the field,
-  for example Status_Flags travelling with an untimestamped Present_Value, it went
-  out with no time. It now carries the time of the selector's newest change, which
-  the server keeps after delivery, and the header timestamp counts that change. A
-  field that a timestamped companion already times keeps that time.
+- In a timestamped COV-multiple report, a field subscribed with timestamps no
+  longer goes out without a Time_Of_Change (#987). Before, when its own selector
+  had not changed in that round and an untimestamped sibling reference carried
+  the field, for example Status_Flags travelling with an untimestamped
+  Present_Value, it had no time. When the carried value is the one the selector
+  last captured, it now carries that change's time; an admission or renewal
+  capture counts as one. A value the selector did not capture, because it moved
+  less than the selector's COV increment or no producer captured it, carries the
+  preparation time instead, kept for that value; without a valid Device clock it
+  is left out of the notification. The header timestamp counts these times, so
+  across notifications to a context on several objects it can move back. A field
+  that a timestamped companion already times keeps that time.
 
 - On Windows, a B/IP transport bound to `0.0.0.0` now lists the host's IPv4
   addresses with `GetAdaptersAddresses`, as Linux and macOS do with

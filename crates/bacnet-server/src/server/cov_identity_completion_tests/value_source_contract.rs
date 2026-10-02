@@ -359,17 +359,18 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
             v.property_identifier
         );
     }
-    let pv_time = values
-        .iter()
-        .find(|v| v.property_identifier == PropertyIdentifier::PRESENT_VALUE)
-        .unwrap()
-        .time_of_change;
     let pv_before = baseline(&f, &pv).await;
     state
         .lock()
         .unwrap()
         .overrides
         .insert(PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(12.0));
+    // A known preparation time, distinct from the system clock of the first
+    // report.
+    let prepared = crate::server::cov_wire_test_support::at(42);
+    f.db.write().await.set_clock_reader(Some(Arc::new(
+        crate::server::cov_wire_test_support::SharedClock(Arc::new(StdMutex::new(prepared))),
+    )));
     f.fire(false, &[]).await;
     let frame = f.sent.lock().unwrap().pop().unwrap();
     let Apdu::UnconfirmedRequest(request) =
@@ -378,16 +379,20 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
         panic!()
     };
     let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
-    // The unqualified timestamped PV selector adds no companion timestamps,
-    // but its own field, carried by the Value_Source report, keeps the time
-    // of the selector's last change (#987).
+    // The unqualified timestamped PV selector adds no companion timestamps.
+    // Its own field, carried by the Value_Source report, still needs a time.
+    // PV moved less than the selector's increment, so the selector captured
+    // no change: 12.0 takes the preparation time, never the time of the value
+    // the selector last captured (#987).
     for v in &report.list_of_cov_notifications[0].list_of_values {
         let expected = (v.property_identifier == PropertyIdentifier::PRESENT_VALUE)
-            .then_some(pv_time)
-            .flatten();
+            .then_some(prepared.local_time);
         assert_eq!(v.time_of_change, expected, "{:?}", v.property_identifier);
     }
-    assert_eq!(report.timestamp.map(|(_, time)| Some(time)), Some(pv_time));
+    assert_eq!(
+        report.timestamp,
+        Some((prepared.local_date, prepared.local_time))
+    );
     assert_eq!(baseline(&f, &pv).await, pv_before);
     assert!(baseline(&f, &source).await.unwrap().command().is_some());
     f.finish(false).await;

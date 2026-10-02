@@ -2155,38 +2155,44 @@ replay guarantee.
 Timestamped SubscribeCOVPropertyMultiple references (§13.16.3.1.2.3) record each
 qualifying change together with the Device clock frame of its commit. The capture
 runs under the database write guard of network WriteProperty and
-WritePropertyMultiple, `write_local`, Staging target writes and source
-completion, Binary Lighting terminal transitions, committed intrinsic transitions
-(both write-triggered and those confirmed by the periodic Time_Delay task),
+WritePropertyMultiple, `write_local`, Staging target writes and source completion,
+Binary Lighting terminal transitions, committed intrinsic transitions (both
+write-triggered and those confirmed by the periodic Time_Delay task),
 fault-detection reliability changes and schedule writes. WritePropertyMultiple
 captures each successful attempt as it commits, so a request that writes a value
 out and back, or fails after a committed prefix, conveys every change it made.
-Life Safety objects capture exactly the properties each mutation changed, with
-the same selection as their exact fanout; LifeSafetyOperation changes, on any
-object, do the same. The admission check and the initial capture share one clock
-sample. Changes queue
-per reference until a notification carrying them is delivered: sent, for an
-unconfirmed context, or acknowledged, for a confirmed one (#896). Any notification
-to a context also carries the pending changes of that context's other references
-(§§13.17.1.1, 13.18.1.1), and each value carries its own `Time_Of_Change`. A
-confirmed context sends nothing while its report is outstanding, so the next
-notification carries everything held meanwhile (#896).
+Life Safety objects capture exactly the properties each mutation changed, with the
+same selection as their exact fanout; LifeSafetyOperation changes, on any object,
+do the same. The admission check and the initial capture share one clock sample.
+Changes queue per reference until a notification carrying them is delivered: sent,
+for an unconfirmed context, or acknowledged, for a confirmed one (#896). Any
+notification to a context also carries the pending changes of that context's other
+references (§§13.17.1.1, 13.18.1.1), and each value carries its own
+`Time_Of_Change`. A confirmed context sends nothing while its report is
+outstanding, so the next notification carries everything held meanwhile (#896).
 Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
 without timestamps is never repeated as history, and its current row carries no
-time even when that selector did not qualify. Conversely, when a sibling reference
-carries a coordinate explicitly subscribed with timestamps in a round where that
-selector conveys no change, the row is timed with the selector's newest change,
-which the store keeps after delivery; a companion that already carries a time keeps
-it. A history row is dropped only when
-the next row for its coordinate repeats it exactly (overlapping selectors of one
-change, or an unchanged companion); a value that returns after a different one
-within the same clock tick stays. The header timestamp names
-the latest timestamped change conveyed, a selector's kept newest change included. The initial report after admission or
-re-subscription is stamped with the Device time of admission; this is a local
-convention, since no change has been observed yet. A renewal keeps changes not yet
-conveyed, including those of a notification that fails during the renewal.
+time even when that selector did not qualify: it governs its coordinate outright.
+An explicit timestamped selector that conveys no change in a round only fills in a
+missing time when a sibling carries its coordinate. When the carried value is the
+one the selector last captured (an admission or renewal capture counts), the row
+takes that change's time. A value the selector did not capture, because it moved
+less than its COV increment or no producer captured it, takes the preparation
+time, which is kept for that value; the selector's increment baseline is
+untouched. Without a valid Device clock such a value is left out of the
+notification, as a timestamped change without a clock is. A companion that already
+carries a time keeps it. A history row is dropped only when the next row for its
+coordinate repeats it exactly (overlapping selectors of one change, or an
+unchanged companion); a value that returns after a different one within the same
+clock tick stays. The header timestamp names the newest change whose time the
+notification carries, captured now or kept. It describes one notification, so
+across notifications to a context on several objects it can move back. The initial
+report after admission or re-subscription is stamped with the Device time of
+admission; this is a local convention, since no change has been observed yet. A
+renewal keeps changes not yet conveyed, including those of a notification that
+fails during the renewal.
 
 Local bounds deviate from the Standard's expectation of additional notifications
 rather than loss (§13.1, §13.18.1.1). One context's pending changes are limited to

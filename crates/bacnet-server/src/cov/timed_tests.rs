@@ -237,6 +237,68 @@ fn renewal_keeps_pending_changes_and_recaptures_its_baseline() {
     assert_eq!(seconds(&h.drain(&k, 2).1), [1]);
 }
 
+/// A change whose PV value encodes as four `byte` octets.
+fn valued(second: u8, byte: u8) -> TimedChange {
+    let mut change = change(second, 4);
+    change.values[0].value = vec![byte; 4];
+    change
+}
+
+#[test]
+fn a_field_keeps_its_captured_time_and_remembers_one_for_an_uncaptured_value() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    assert_eq!(h.field_time(&k, 1, &[1; 4], None), None, "nothing to give");
+    h.push(&k, 1, valued(3, 1));
+    let captured = h.field_time(&k, 1, &[1; 4], Some(frame(9))).unwrap();
+    assert_eq!(captured.1, frame(3), "the captured value keeps its time");
+    // A value the reference did not capture (it moved less than the
+    // increment, or no producer captured it) takes the preparation time.
+    assert_eq!(
+        h.field_time(&k, 1, &[2; 4], None),
+        None,
+        "no clock: left out"
+    );
+    let moved = h.field_time(&k, 1, &[2; 4], Some(frame(9))).unwrap();
+    assert_eq!(moved.1, frame(9));
+    assert!(moved.0 > captured.0, "newer than the captured change");
+    assert_eq!(
+        h.field_time(&k, 1, &[2; 4], Some(frame(12))),
+        Some(moved),
+        "remembered for that value"
+    );
+    assert_eq!(
+        h.baseline(&k, 1),
+        Some(valued(3, 1).observation()),
+        "the increment baseline is untouched"
+    );
+    assert_eq!(h.field_time(&k, 2, &[2; 4], Some(frame(12))), None, "stale");
+}
+
+#[test]
+fn a_field_time_follows_renewal_captures_and_a_recreated_reference_starts_fresh() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    h.push(&k, 1, valued(3, 1));
+    h.reset(&k, 2, 0); // a renewal
+    let at = |h: &mut TimedHistories, generation| {
+        h.field_time(&k, generation, &[1; 4], None)
+            .map(|(_, frame)| frame)
+    };
+    assert_eq!(at(&mut h, 2), Some(frame(3)), "until the renewal's capture");
+    h.push(&k, 2, valued(5, 1)); // its initial report, the same value
+    assert_eq!(
+        at(&mut h, 2),
+        Some(frame(5)),
+        "a renewal capture is a change"
+    );
+    h.remove(&k); // cancelled, then subscribed again
+    h.reset(&k, 3, 0);
+    assert_eq!(at(&mut h, 3), None, "a recreated reference starts fresh");
+}
+
 #[test]
 fn failed_older_notification_cannot_requeue_behind_a_transmitted_newer_one() {
     let (store, counters) = store(8, 4);

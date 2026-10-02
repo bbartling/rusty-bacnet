@@ -114,6 +114,15 @@ impl TimedChange {
     }
 }
 
+/// Encoded value of a reference's own coordinate, with the sequence and clock
+/// frame of the change that set it.
+#[derive(Debug, Clone)]
+struct FieldTime {
+    value: Vec<u8>,
+    seq: u64,
+    frame: ClockFrame,
+}
+
 #[derive(Debug)]
 struct TimedHistory {
     /// Identity of this history across renewals. A cancelled and recreated
@@ -123,11 +132,10 @@ struct TimedHistory {
     /// Latest observation already captured or conveyed; the next change
     /// qualifies against it rather than the last completed delivery.
     baseline: Option<CovObservation>,
-    /// Sequence and clock frame of the newest change captured or conveyed,
-    /// kept once it is delivered and across renewals: the time an explicit
-    /// timestamped selector still reports for its field in a round it did
-    /// not change in (#987).
-    last_change: Option<(u64, ClockFrame)>,
+    /// The newest known value of the reference's own coordinate and when it
+    /// changed, kept once delivered: what an explicit timestamped selector
+    /// reports for its field in a round it conveys no change in (#987).
+    field: Option<FieldTime>,
     /// Sequence of the newest captured or conveyed change.
     latest: u64,
     /// Sequence of the newest delivered change. An older change returned by
@@ -136,6 +144,23 @@ struct TimedHistory {
     /// The context's Max_Notification_Delay, as last admitted.
     delay: Duration,
     entries: VecDeque<TimedChange>,
+}
+
+/// The encoded value a change carries for its reference's own coordinate.
+fn own_value(key: &CovSubscriptionKey, change: &TimedChange) -> Option<Vec<u8>> {
+    let CovSubscriptionKey::Multiple {
+        property, index, ..
+    } = key
+    else {
+        return None;
+    };
+    change
+        .values
+        .iter()
+        .find(|value| {
+            value.property_identifier == *property && value.property_array_index == *index
+        })
+        .map(|value| value.value.clone())
 }
 
 /// Pending timestamped changes of every live timestamped Multiple reference.
@@ -282,7 +307,7 @@ impl TimedHistories {
                 incarnation,
                 generation,
                 baseline: None,
-                last_change: None,
+                field: None,
                 latest: 0,
                 committed: 0,
                 delay,
@@ -333,14 +358,39 @@ impl TimedHistories {
         self.history(key, generation)?.baseline.as_ref()
     }
 
-    /// Sequence and clock frame of the newest change a live generation's
-    /// reference captured or conveyed, delivered or not.
-    pub(crate) fn last_change(
-        &self,
+    /// Sequence and clock frame to report for the own field of a live
+    /// timestamped reference that conveys no change now, carried by a sibling
+    /// with the encoded `value` (#987).
+    ///
+    /// The value the reference last captured, an admission or renewal capture
+    /// included, keeps that change's time. Any other value changed without a
+    /// capture of this reference: it moved less than the reference's
+    /// increment, or no producer captured it. It takes `now`, the preparation
+    /// time, which is remembered for that value so a later notification
+    /// carrying it reports the same time; the reference's baseline, and so its
+    /// increment, is untouched. Without a valid clock there is no time to give
+    /// such a value, and `None` asks the caller to leave the field out, as a
+    /// timestamped change without a clock is left out.
+    pub(crate) fn field_time(
+        &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
+        value: &[u8],
+        now: Option<ClockFrame>,
     ) -> Option<(u64, ClockFrame)> {
-        self.history(key, generation)?.last_change
+        let seq = self.next_seq;
+        let history = self.history_mut(key, generation)?;
+        if let Some(field) = history.field.as_ref().filter(|field| field.value == value) {
+            return Some((field.seq, field.frame));
+        }
+        let frame = now?;
+        history.field = Some(FieldTime {
+            value: value.to_vec(),
+            seq,
+            frame,
+        });
+        self.next_seq += 1;
+        Some((seq, frame))
     }
 
     /// Queue a captured change and make it the reference's baseline, evicting
@@ -372,7 +422,11 @@ impl TimedHistories {
         self.next_seq += 1;
         if let Some(history) = self.history_mut(key, generation) {
             history.baseline = Some(change.observation.clone());
-            history.last_change = Some((change.seq, change.frame));
+            history.field = own_value(key, &change).map(|value| FieldTime {
+                value,
+                seq: change.seq,
+                frame: change.frame,
+            });
             history.latest = change.seq;
         }
         change
