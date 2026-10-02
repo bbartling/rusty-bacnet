@@ -34,8 +34,15 @@ fn elevator_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
         escalator
             .write_property(P::ENERGY_METER, None, PropertyValue::Real(18.75), None)
             .unwrap();
-        lift.write_property(P::TRACKING_VALUE, None, PropertyValue::Unsigned(2), None)
+        lift.write_property(P::CAR_POSITION, None, PropertyValue::Unsigned(2), None)
             .unwrap();
+        for object in [&mut escalator as &mut dyn BACnetObject, &mut lift] {
+            object
+                .write_property(P::PASSENGER_ALARM, None, PropertyValue::Boolean(true), None)
+                .unwrap();
+        }
+        escalator.set_group_id(47);
+        lift.set_installation_id(2);
     }
     let mut objects: [Box<dyn BACnetObject>; 3] =
         [Box::new(group), Box::new(escalator), Box::new(lift)];
@@ -81,36 +88,43 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         ObjectType::ESCALATOR => vec![
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::ESCALATOR_MODE,
-            P::FAULT_SIGNALS,
-            P::ENERGY_METER,
-            P::ENERGY_METER_REF,
+            P::DESCRIPTION,
+            P::STATUS_FLAGS,
+            P::ELEVATOR_GROUP,
+            P::GROUP_ID,
+            P::INSTALLATION_ID,
             P::POWER_MODE,
             P::OPERATION_DIRECTION,
-            P::PASSENGER_ALARM,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
+            P::ESCALATOR_MODE,
+            P::ENERGY_METER,
+            P::ENERGY_METER_REF,
             P::RELIABILITY,
+            P::OUT_OF_SERVICE,
+            P::FAULT_SIGNALS,
+            P::PASSENGER_ALARM,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::TRACKING_VALUE,
+            P::DESCRIPTION,
+            P::STATUS_FLAGS,
+            P::ELEVATOR_GROUP,
+            P::GROUP_ID,
+            P::INSTALLATION_ID,
+            P::FLOOR_TEXT,
             P::CAR_POSITION,
             P::CAR_MOVING_DIRECTION,
             P::CAR_DOOR_STATUS,
             P::CAR_LOAD,
-            P::LANDING_DOOR_STATUS,
-            P::FLOOR_TEXT,
+            P::CAR_LOAD_UNITS,
+            P::PASSENGER_ALARM,
             P::ENERGY_METER,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
             P::RELIABILITY,
-            P::FLOOR_NUMBER,
+            P::OUT_OF_SERVICE,
+            P::FAULT_SIGNALS,
+            P::LANDING_DOOR_STATUS,
         ],
     };
     let optional = match kind {
@@ -122,22 +136,21 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         ],
         ObjectType::ESCALATOR => vec![
             P::DESCRIPTION,
+            P::POWER_MODE,
             P::ESCALATOR_MODE,
-            P::FAULT_SIGNALS,
             P::ENERGY_METER,
             P::ENERGY_METER_REF,
-            P::POWER_MODE,
             P::RELIABILITY,
+            P::FAULT_SIGNALS,
         ],
         _ => vec![
             P::DESCRIPTION,
-            P::TRACKING_VALUE,
-            P::CAR_LOAD,
-            P::LANDING_DOOR_STATUS,
             P::FLOOR_TEXT,
+            P::CAR_LOAD,
+            P::CAR_LOAD_UNITS,
             P::ENERGY_METER,
             P::RELIABILITY,
-            P::FLOOR_NUMBER,
+            P::LANDING_DOOR_STATUS,
         ],
     };
     let required: Vec<_> = all

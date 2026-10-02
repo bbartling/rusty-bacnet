@@ -20,7 +20,7 @@ pub use audit::{
     BACnetObjectSelector,
 };
 mod lift;
-pub use lift::{BACnetLandingCallStatus, LandingCallCommand};
+pub use lift::{BACnetLandingCallStatus, BACnetLandingDoorStatus, LandingCallCommand, LandingDoor};
 mod staging;
 pub use staging::BACnetStageLimitValue;
 
