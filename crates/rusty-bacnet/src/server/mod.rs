@@ -124,6 +124,7 @@ pub struct BACnetServer {
     atomic_write_file_budget: server::AtomicWriteFileBudget,
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
+    cov_policy: server::CovPolicy,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,
@@ -163,6 +164,7 @@ impl BACnetServer {
 mod server_methods {
     mod averaging_methods;
     mod cov_counters;
+    mod cov_policy;
     mod dcc_outcomes;
     mod file_configuration;
     mod lifecycle;

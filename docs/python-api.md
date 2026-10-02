@@ -1437,6 +1437,7 @@ server = BACnetServer(
     dcc_source_restriction=None, # optional list[(network_or_None, bytes)]; [] denies all; requires require_password
     dcc_disable_rate_limit=None, # optional (capacity, refill_interval_ms); (3, 20000) enables default rate
     reinit_password=None,        # password for ReinitializeDevice
+    cov_policy=None,             # keyword-only dict of COV limits; see COV policy below
 )
 ```
 
@@ -2228,6 +2229,51 @@ counters["timed_changes_dropped"]         # timestamped COV-multiple changes los
 
 The binding builds the dict from an exhaustive pattern over the Rust struct, so
 a counter added in Rust must be added here before the bindings compile.
+
+#### COV policy
+
+The keyword-only `cov_policy` constructor argument sets the limits behind those
+counters. It takes a dict, typed as the `CovPolicy` TypedDict in the stub, whose
+keys are the fields of the Rust `CovPolicy` under the same names. A key left
+out keeps its default, and `None` or `{}` gives the defaults. The policy is
+copied at construction and applies to every later `start()`.
+
+```python
+server = BACnetServer(
+    1234,
+    cov_policy={
+        "max_subscriptions_per_peer": 8,
+        "allow_indefinite_subscriptions": False,
+        "reserved_peers": [bytes([192, 168, 1, 20, 0xBA, 0xC0])],  # B/IP: IP then port
+    },
+)
+```
+
+| Key | Default | Unit | Limits | Counter it moves |
+|---|---|---|---|---|
+| `max_subscriptions_global` | 1024 | subscriptions | Positive. Subscriptions held across all peers | `subscriptions_rejected_capacity` |
+| `max_subscriptions_per_peer` | 64 | subscriptions | Positive. Subscriptions one peer may hold | `subscriptions_rejected_quota` |
+| `reserved_capacity` | 64 | subscriptions | Slots of the global cap kept for reserved peers, clamped to it. Has no effect while both reserved lists are empty; 0 keeps none | `subscriptions_rejected_capacity` |
+| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 255 octets | |
+| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534) and MAC (1 to 255 octets) | |
+| `allow_indefinite_subscriptions` | `True` | `bool` | Whether a subscription without a lifetime is admitted | `subscriptions_rejected_indefinite` |
+| `max_indefinite_per_peer` | 16 | subscriptions | Indefinite subscriptions one peer may hold, clamped to its per-peer cap; 0 admits none | `subscriptions_rejected_indefinite` |
+| `max_notifications_per_event` | 64 | notifications | Positive. Notifications one change of a monitored object may send | `notifications_throttled_fanout` |
+| `max_notification_bytes_per_event` | 65536 | APDU bytes | Positive. Bytes those notifications may total | `notifications_throttled_fanout` |
+| `max_confirmed_in_flight_per_peer` | 16 | notifications | Positive. Confirmed notifications awaiting one peer's acknowledgment | `notifications_throttled_peer` |
+
+The quotas count a directly attached peer by its MAC, and a peer behind a router
+by its routed source network and MAC, so only `reserved_recipients` can reserve
+slots for the latter. A request is checked against its peer's quota before the
+global cap.
+
+The constructor checks the dict before any I/O, with the exception types the
+other keywords use: an unknown or non-`str` key, or a value of the wrong type,
+raises `TypeError`, a negative or oversized integer `OverflowError`, and a value
+the Rust `CovPolicy::validate` refuses `ValueError`. The Rust server runs the
+same check before it starts a transport. The conversion names every field of
+the Rust struct without `..`, so a field added in Rust must get a key here
+before the bindings compile.
 
 #### `local_address() -> str`
 
