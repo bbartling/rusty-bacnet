@@ -46,6 +46,7 @@ pub mod landing_door_status;
 pub mod lift_car_call_list;
 mod members;
 pub mod object_property_reference;
+mod property_access_result;
 pub mod recipient;
 pub mod schedule;
 pub mod staging;
@@ -82,6 +83,7 @@ pub use object_property_reference::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,
 };
+pub use property_access_result::{decode_property_access_result, encode_property_access_result};
 pub use recipient::{
     decode_destination, decode_destination_list, decode_recipient, encode_destination,
     encode_destination_list, encode_recipient,
@@ -595,6 +597,16 @@ pub(crate) fn decode_dopr_body(
         },
         offset,
     ))
+}
+
+/// Encode one bare `BACnetDeviceObjectPropertyReference`, the members
+/// [`decode_device_object_property_reference`] reads back. An array or list
+/// of these references concatenates its elements with no frame.
+pub fn encode_device_object_property_reference(
+    buf: &mut BytesMut,
+    r: &BACnetDeviceObjectPropertyReference,
+) {
+    encode_dopr_body(buf, r);
 }
 
 /// Decode one bare `BACnetDeviceObjectPropertyReference` at `offset`; returns

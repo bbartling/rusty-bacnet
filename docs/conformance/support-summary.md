@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 89 |
+| Priority | P1 | 90 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 61 |
+| Status | supported-with-clause-evidence | 62 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -74,6 +74,7 @@
 | `BACNET-12-UNDEFINED-PROPERTY-ROWS` | Clause 12 property tables: Tables 12-5 (Averaging), 12-12 (Command), 12-14 (Event Enrollment), 12-16 (File), 12-17 (Group), 12-24 (Notification Class), 12-31 (Event Log), 12-32 (Load Control), 12-34 (Structured View), 12-36 (Access Point), 12-37 (Access Zone), 12-38 (Access User), 12-39 (Access Rights) and 12-40 (Access Credential); the Status_Flags descriptions of Clauses 12.10, 12.12, 12.21, 12.27, 12.28, 12.33, 12.34 and 12.35; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-LIFE-SAFETY-GLOBAL-GROUP-REQUIRED-ROWS` | Clause 12.15, Table 12-18 (Life Safety Point) and Clauses 12.15.12 (Mode) and 12.15.13 (Accepted_Modes); Clause 12.16, Table 12-19 (Life Safety Zone) and Clauses 12.16.5 (Tracking_Value), 12.16.12 and 12.16.13; Clause 12.50, Table 12-57 (Global Group) and Clauses 12.50.9 (Event_State) and 12.50.10 (Member_Status_Flags); Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION` | Clause 12.15, Table 12-18 footnote 1 and Clauses 12.15.4, 12.15.5, 12.15.10 and 12.15.11 (Life Safety Point); Clause 12.16, Table 12-19 footnote 1 and Clauses 12.16.4, 12.16.5, 12.16.10 and 12.16.11 (Life Safety Zone); Clause 13.3.8 CHANGE_OF_LIFE_SAFETY; Clause 15.9.1.3 WriteProperty errors; Clause 21 BACnetLifeSafetyState and BACnetReliability | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-12-GLOBAL-GROUP-ARRAY-ENCODINGS` | Clause 12.50, Table 12-57 (Global Group) and Clauses 12.50.5 (Group_Members), 12.50.7 (Present_Value), 12.50.7.1 and 12.50.10 (Member_Status_Flags); Clause 21 BACnetDeviceObjectPropertyReference and BACnetPropertyAccessResult; Clause 12.1.5.1 array properties; Clause 15.5 ReadProperty and Clause 15.7 ReadPropertyMultiple | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-LOOP-PROPERTY-SET` | Clause 12.17 and Table 12-20 (Controlled_Variable_Units, Action, Priority_For_Writing; footnotes 1 to 3 for the gain-constant units rows); Clause 21 BACnetAction and BACnetEngineeringUnits; Clause 12.1.5.1; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-REQUIRED-ROWS-UNITS-PULSE-LIGHTING` | Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51 (Units); Clause 12.23 and Table 12-27, including 12.23.5 Present_Value, 12.23.13 Adjust_Value and 12.23.14-12.23.17; Clause 13.1 and Table 13-1 (Pulse Converter row, COV_Period); Clauses 12.54 and 12.55 with Tables 12-64 and 12-69, including 12.54.17, 12.54.18, 12.54.39 and 12.55.32; Clause 21 BACnetEngineeringUnits, BACnetDateTime and BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
