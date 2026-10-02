@@ -1497,6 +1497,19 @@ Audit record; present read-only arrays and unindexed absence retain their existi
 Audit handling. The outer WP authorization check and direct object writes are
 unchanged.
 
+AddListElement and RemoveListElement edit only properties that
+`BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
+Clause 12 datatypes, including identifiers whose type depends on the object type
+(Alarm_Values, Present_Value, Member_Of, List_Of_Object_Property_References);
+custom objects with vendor lists override it. Every other target, whether a scalar,
+a constructed single value, a whole array or an indexed array element, returns
+`SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
+unknown property and array-index errors come first, and element datatype errors
+after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
+destination codec. A list the object holds framed with no element codec, such as
+Schedule's List_Of_Object_Property_References, returns
+`PROPERTY/WRITE_ACCESS_DENIED`.
+
 Intrinsic reporting uses one proposal/commit contract. The
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
@@ -2579,8 +2592,10 @@ let ack = client.read_range(&mac, oid, PropertyIdentifier::LOG_BUFFER, None, Som
 ### List Manipulation
 
 ```rust
-client.add_list_element(&mac, oid, PropertyIdentifier::OBJECT_LIST, None, element_bytes).await?;
-client.remove_list_element(&mac, oid, PropertyIdentifier::OBJECT_LIST, None, element_bytes).await?;
+// A BACnetLIST, here a Notification Class Recipient_List; arrays such as
+// Object_List are refused with SERVICES/PROPERTY_IS_NOT_A_LIST.
+client.add_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, element_bytes).await?;
+client.remove_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, element_bytes).await?;
 ```
 
 ### Private Transfer

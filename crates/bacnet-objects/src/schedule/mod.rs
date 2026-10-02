@@ -1,6 +1,9 @@
 //! Schedule (type 17) and Calendar (type 6) objects per ASHRAE 135-2020.
 
-use bacnet_encoding::constructed::encode_object_property_reference;
+use bacnet_encoding::constructed::{
+    encode_daily_schedule, encode_date_range, encode_object_property_reference,
+    encode_special_event,
+};
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
     BACnetTimeValue,
@@ -9,7 +12,7 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 use std::borrow::Cow;
 
@@ -17,6 +20,7 @@ use crate::common::{self, read_property_list_property};
 use crate::traits::BACnetObject;
 
 mod calendar_metadata;
+mod date_list;
 mod metadata;
 
 // ---------------------------------------------------------------------------
@@ -28,6 +32,11 @@ mod metadata;
 /// Present_Value is Boolean — true when today matches one of the date_list
 /// entries. The application is responsible for evaluating the date_list and
 /// calling `set_present_value()`.
+///
+/// Date_List is a BACnetLIST of `BACnetCalendarEntry`, each entry under its
+/// Clause 21 CHOICE tag on the wire. It is network-writable (WriteProperty,
+/// AddListElement and RemoveListElement), so an application that evaluates
+/// Present_Value reads the current entries back with `date_list()`.
 ///
 /// The object serves only properties its table (Clause 12.9, Table 12-11)
 /// defines. That table has no Status_Flags, Event_State, Out_Of_Service or
@@ -72,6 +81,11 @@ impl CalendarObject {
     pub fn clear_date_list(&mut self) {
         self.date_list.clear();
     }
+
+    /// The current date_list entries, as configured or last written.
+    pub fn date_list(&self) -> &[BACnetCalendarEntry] {
+        &self.date_list
+    }
 }
 
 impl BACnetObject for CalendarObject {
@@ -104,20 +118,7 @@ impl BACnetObject for CalendarObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Boolean(self.present_value))
             }
-            p if p == PropertyIdentifier::DATE_LIST => Ok(PropertyValue::List(
-                self.date_list
-                    .iter()
-                    .map(|entry| match entry {
-                        BACnetCalendarEntry::Date(d) => PropertyValue::Date(*d),
-                        BACnetCalendarEntry::DateRange(dr) => {
-                            PropertyValue::OctetString(dr.encode().to_vec())
-                        }
-                        BACnetCalendarEntry::WeekNDay(wnd) => {
-                            PropertyValue::OctetString(wnd.encode().to_vec())
-                        }
-                    })
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::DATE_LIST => Ok(date_list::read(&self.date_list)),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -131,12 +132,20 @@ impl BACnetObject for CalendarObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
+        }
+        if property == PropertyIdentifier::DATE_LIST {
+            // A BACnetLIST takes no index; the services gate this first.
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            self.date_list = date_list::decode_write(value)?;
+            return Ok(());
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
             return Err(Error::Protocol {
@@ -147,7 +156,7 @@ impl BACnetObject for CalendarObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 
@@ -184,7 +193,7 @@ pub struct ScheduleObject {
     /// 7-day weekly schedule: index 0 = Monday, index 6 = Sunday.
     weekly_schedule: [Vec<BACnetTimeValue>; 7],
     exception_schedule: Vec<BACnetSpecialEvent>,
-    effective_period: Option<BACnetDateRange>,
+    effective_period: BACnetDateRange,
     list_of_object_property_references: Vec<BACnetObjectPropertyReference>,
     /// Priority for writing to referenced objects (1-16).
     priority_for_writing: u8,
@@ -192,7 +201,8 @@ pub struct ScheduleObject {
 
 impl ScheduleObject {
     /// Create a new Schedule object; `schedule_default` is both Schedule_Default and the initial
-    /// Present_Value.
+    /// Present_Value. Effective_Period starts with both dates unspecified, a range that covers
+    /// every date.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
@@ -211,7 +221,10 @@ impl ScheduleObject {
             status_flags: StatusFlags::empty(),
             weekly_schedule: [vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
             exception_schedule: Vec::new(),
-            effective_period: None,
+            effective_period: BACnetDateRange {
+                start_date: unspecified_date(),
+                end_date: unspecified_date(),
+            },
             list_of_object_property_references: Vec::new(),
             priority_for_writing: 16, // default: lowest priority
         })
@@ -241,7 +254,7 @@ impl ScheduleObject {
 
     /// Set the effective period for this schedule.
     pub fn set_effective_period(&mut self, period: BACnetDateRange) {
-        self.effective_period = Some(period);
+        self.effective_period = period;
     }
 
     /// Append a local target reference, retaining its optional array index.
@@ -292,6 +305,30 @@ impl ScheduleObject {
         // 3. Fall back to schedule_default
         self.schedule_default.clone()
     }
+}
+
+/// A Date with every octet unspecified.
+fn unspecified_date() -> Date {
+    Date {
+        year: Date::UNSPECIFIED,
+        month: Date::UNSPECIFIED,
+        day: Date::UNSPECIFIED,
+        day_of_week: Date::UNSPECIFIED,
+    }
+}
+
+/// One Weekly_Schedule element: a BACnetDailySchedule.
+fn daily_schedule(time_values: &[BACnetTimeValue]) -> PropertyValue {
+    let mut encoded = BytesMut::new();
+    encode_daily_schedule(&mut encoded, time_values);
+    PropertyValue::ApplicationData(encoded.to_vec())
+}
+
+/// One Exception_Schedule element: a BACnetSpecialEvent.
+fn special_event(event: &BACnetSpecialEvent) -> PropertyValue {
+    let mut encoded = BytesMut::new();
+    encode_special_event(&mut encoded, event);
+    PropertyValue::ApplicationData(encoded.to_vec())
 }
 
 /// Find the last time-value entry whose time is at or before (hour, minute).
@@ -355,99 +392,37 @@ impl BACnetObject for ScheduleObject {
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
+            // Clause 21 wire forms, one list element per array element so
+            // the services concatenate them for a whole-array read.
             p if p == PropertyIdentifier::WEEKLY_SCHEDULE => match array_index {
-                None => {
-                    let days: Vec<PropertyValue> = self
-                        .weekly_schedule
+                None => Ok(PropertyValue::List(
+                    self.weekly_schedule
                         .iter()
-                        .map(|day| {
-                            PropertyValue::List(
-                                day.iter()
-                                    .map(|tv| {
-                                        PropertyValue::List(vec![
-                                            PropertyValue::Time(tv.time),
-                                            PropertyValue::OctetString(tv.value.clone()),
-                                        ])
-                                    })
-                                    .collect(),
-                            )
-                        })
-                        .collect();
-                    Ok(PropertyValue::List(days))
-                }
+                        .map(|day| daily_schedule(day))
+                        .collect(),
+                )),
                 Some(0) => Ok(PropertyValue::Unsigned(7)),
                 Some(idx) if (1..=7).contains(&idx) => {
-                    let day = &self.weekly_schedule[(idx - 1) as usize];
-                    Ok(PropertyValue::List(
-                        day.iter()
-                            .map(|tv| {
-                                PropertyValue::List(vec![
-                                    PropertyValue::Time(tv.time),
-                                    PropertyValue::OctetString(tv.value.clone()),
-                                ])
-                            })
-                            .collect(),
-                    ))
+                    Ok(daily_schedule(&self.weekly_schedule[(idx - 1) as usize]))
                 }
-                _ => Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
-                }),
+                _ => Err(common::invalid_array_index_error()),
             },
             p if p == PropertyIdentifier::EXCEPTION_SCHEDULE => match array_index {
-                None => {
-                    let events: Vec<PropertyValue> = self
-                        .exception_schedule
-                        .iter()
-                        .map(|ev| {
-                            let tvs: Vec<PropertyValue> = ev
-                                .list_of_time_values
-                                .iter()
-                                .map(|tv| {
-                                    PropertyValue::List(vec![
-                                        PropertyValue::Time(tv.time),
-                                        PropertyValue::OctetString(tv.value.clone()),
-                                    ])
-                                })
-                                .collect();
-                            PropertyValue::List(vec![
-                                PropertyValue::Unsigned(ev.event_priority as u64),
-                                PropertyValue::List(tvs),
-                            ])
-                        })
-                        .collect();
-                    Ok(PropertyValue::List(events))
-                }
+                None => Ok(PropertyValue::List(
+                    self.exception_schedule.iter().map(special_event).collect(),
+                )),
                 Some(0) => Ok(PropertyValue::Unsigned(self.exception_schedule.len() as u64)),
-                Some(i) => {
-                    let idx = (i as usize).checked_sub(1).ok_or(Error::Protocol {
-                        class: ErrorClass::PROPERTY.to_raw() as u32,
-                        code: ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
-                    })?;
-                    let ev = self.exception_schedule.get(idx).ok_or(Error::Protocol {
-                        class: ErrorClass::PROPERTY.to_raw() as u32,
-                        code: ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
-                    })?;
-                    let tvs: Vec<PropertyValue> = ev
-                        .list_of_time_values
-                        .iter()
-                        .map(|tv| {
-                            PropertyValue::List(vec![
-                                PropertyValue::Time(tv.time),
-                                PropertyValue::OctetString(tv.value.clone()),
-                            ])
-                        })
-                        .collect();
-                    Ok(PropertyValue::List(vec![
-                        PropertyValue::Unsigned(ev.event_priority as u64),
-                        PropertyValue::List(tvs),
-                    ]))
-                }
+                Some(i) => (i as usize)
+                    .checked_sub(1)
+                    .and_then(|idx| self.exception_schedule.get(idx))
+                    .map(special_event)
+                    .ok_or_else(common::invalid_array_index_error),
             },
-            p if p == PropertyIdentifier::EFFECTIVE_PERIOD => match &self.effective_period {
-                Some(dr) => Ok(PropertyValue::OctetString(dr.encode().to_vec())),
-                None => Ok(PropertyValue::Null),
-            },
+            p if p == PropertyIdentifier::EFFECTIVE_PERIOD => {
+                let mut encoded = BytesMut::new();
+                encode_date_range(&mut encoded, &self.effective_period);
+                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+            }
             p if p == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
                 let mut encoded = BytesMut::new();
                 for reference in &self.list_of_object_property_references {
@@ -572,3 +547,6 @@ impl BACnetObject for ScheduleObject {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod calendar_tests;

@@ -48,28 +48,41 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Pin reference members as context-tagged local DOPR bodies.
+        // Pin reference members as context-tagged local DOPR bodies, and the
+        // Clause 21 schedule forms (#996): each BACnetDailySchedule is a [0]
+        // frame (0x0E ... 0x0F) around its time-values, an application Time
+        // (0xB4) then the raw value; a special event is its period (here the
+        // calendar-entry [0] frame around date [0], 0x0C), the [2] time-value
+        // frame and event-priority [3] (0x39).
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
+        let empty_day: &[u8] = &[0x0e, 0x0f];
         let day: &[u8] = if configured {
-            &[0xb4, 8, 30, 0, 0, 0x62, 0x21, 42]
+            &[0x0e, 0xb4, 8, 30, 0, 0, 0x21, 42, 0x0f]
         } else {
-            &[]
+            empty_day
         };
+        let event: &[u8] = &[
+            0x0e, 0x0c, 126, 9, 14, 1, 0x0f, 0x2e, 0xb4, 8, 30, 0, 0, 0x21, 42, 0x2f, 0x39, 3,
+        ];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (
                 P::WEEKLY_SCHEDULE,
                 None,
                 Ok(if configured {
                     &[
-                        0xb4, 8, 30, 0, 0, 0x62, 0x21, 42, 0xb4, 8, 30, 0, 0, 0x62, 0x21, 42,
+                        0x0e, 0xb4, 8, 30, 0, 0, 0x21, 42, 0x0f, 0x0e, 0x0f, 0x0e, 0x0f, 0x0e,
+                        0x0f, 0x0e, 0x0f, 0x0e, 0x0f, 0x0e, 0xb4, 8, 30, 0, 0, 0x21, 42, 0x0f,
                     ]
                 } else {
-                    &[]
+                    &[
+                        0x0e, 0x0f, 0x0e, 0x0f, 0x0e, 0x0f, 0x0e, 0x0f, 0x0e, 0x0f, 0x0e, 0x0f,
+                        0x0e, 0x0f,
+                    ]
                 }),
             ),
             (P::WEEKLY_SCHEDULE, Some(0), Ok(&[0x21, 7])),
             (P::WEEKLY_SCHEDULE, Some(1), Ok(day)),
-            (P::WEEKLY_SCHEDULE, Some(2), Ok(&[])),
+            (P::WEEKLY_SCHEDULE, Some(2), Ok(empty_day)),
             (P::WEEKLY_SCHEDULE, Some(7), Ok(day)),
             (
                 P::WEEKLY_SCHEDULE,
@@ -84,11 +97,7 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
             (
                 P::EXCEPTION_SCHEDULE,
                 None,
-                Ok(if configured {
-                    &[0x21, 3, 0xb4, 8, 30, 0, 0, 0x62, 0x21, 42]
-                } else {
-                    &[]
-                }),
+                Ok(if configured { event } else { &[] }),
             ),
             (
                 P::EXCEPTION_SCHEDULE,
@@ -99,7 +108,7 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
                 P::EXCEPTION_SCHEDULE,
                 Some(1),
                 if configured {
-                    Ok(&[0x21, 3, 0xb4, 8, 30, 0, 0, 0x62, 0x21, 42])
+                    Ok(event)
                 } else {
                     Err(ErrorCode::INVALID_ARRAY_INDEX)
                 },
@@ -132,7 +141,12 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
             ),
             (P::PRESENT_VALUE, None, Ok(&[0x21, 42])),
             (P::SCHEDULE_DEFAULT, None, Ok(&[0x21, 42])),
-            (P::EFFECTIVE_PERIOD, None, Ok(&[0])),
+            // Both dates unspecified: the range covering every date.
+            (
+                P::EFFECTIVE_PERIOD,
+                None,
+                Ok(&[0xa4, 0xff, 0xff, 0xff, 0xff, 0xa4, 0xff, 0xff, 0xff, 0xff]),
+            ),
             (P::PRIORITY_FOR_WRITING, None, Ok(&[0x21, 16])),
             (
                 P::PRIORITY_FOR_WRITING,

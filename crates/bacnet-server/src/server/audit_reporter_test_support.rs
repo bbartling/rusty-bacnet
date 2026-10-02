@@ -136,14 +136,16 @@ pub(super) fn reporter() -> AuditReporterObject {
     reporter
 }
 
-struct CountingValue {
-    value: BinaryValueObject,
+/// Counts write attempts and commits on the wrapped object, and fails the next
+/// write with a scripted error when one is set.
+struct CountingValue<O = BinaryValueObject> {
+    value: O,
     writes: Arc<AtomicUsize>,
     attempts: Arc<AtomicUsize>,
     execution_error: Arc<StdMutex<Option<Error>>>,
 }
 
-impl BACnetObject for CountingValue {
+impl<O: BACnetObject> BACnetObject for CountingValue<O> {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.value.object_identifier()
     }
@@ -201,6 +203,19 @@ pub(super) struct Fixture {
     pub(super) writes: Arc<AtomicUsize>,
     pub(super) attempts: Arc<AtomicUsize>,
     pub(super) execution_error: Arc<StdMutex<Option<Error>>>,
+}
+
+impl Fixture {
+    /// Wrap `object` so its writes share this fixture's attempt and commit
+    /// counters and its scripted execution error.
+    pub(super) fn counting(&self, object: impl BACnetObject + 'static) -> Box<dyn BACnetObject> {
+        Box::new(CountingValue {
+            value: object,
+            writes: Arc::clone(&self.writes),
+            attempts: Arc::clone(&self.attempts),
+            execution_error: Arc::clone(&self.execution_error),
+        })
+    }
 }
 
 pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {

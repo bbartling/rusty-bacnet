@@ -157,7 +157,7 @@ mod pics {
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
             (P::PRESENT_VALUE, false, false),
-            (P::DATE_LIST, false, false),
+            (P::DATE_LIST, false, true),
             (P::PROPERTY_LIST, false, false),
         ];
         for configured in [false, true] {

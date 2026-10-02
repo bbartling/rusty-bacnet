@@ -30,34 +30,15 @@ pub use staging::BACnetStageLimitValue;
 
 /// BACnet date range: a SEQUENCE of start and end Date values.
 ///
-/// Encoded as 8 bytes: 4 bytes for start_date followed by 4 bytes for end_date.
+/// On the wire each Date is application-tagged; the codec is
+/// `bacnet_encoding::constructed::{encode_date_range, decode_date_range}`.
+/// An unspecified start or end date leaves that side of the range open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetDateRange {
     /// The start of the date range (inclusive).
     pub start_date: Date,
     /// The end of the date range (inclusive).
     pub end_date: Date,
-}
-
-impl BACnetDateRange {
-    /// Encode to 8 bytes (start_date || end_date).
-    pub fn encode(&self) -> [u8; 8] {
-        let mut out = [0u8; 8];
-        out[..4].copy_from_slice(&self.start_date.encode());
-        out[4..].copy_from_slice(&self.end_date.encode());
-        out
-    }
-
-    /// Decode from at least 8 bytes.
-    pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.len() < 8 {
-            return Err(Error::buffer_too_short(8, data.len()));
-        }
-        Ok(Self {
-            start_date: Date::decode(&data[0..4])?,
-            end_date: Date::decode(&data[4..8])?,
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -69,15 +50,16 @@ impl BACnetDateRange {
 ///
 /// Each field may be `0xFF` to mean "any" (wildcard).
 ///
-/// - `month`: 1-12, 13=odd, 14=even, 0xFF=any
-/// - `week_of_month`: 1=first, 2=second, ..., 5=last, 6=any-in-first,
-///   0xFF=any
+/// - `month`: 1-12, 13=odd months, 14=even months, 0xFF=any
+/// - `week_of_month`: 1-5 = the days numbered 1-7, 8-14, 15-21, 22-28 and
+///   29-31; 6 = the last 7 days of the month; 7, 8 and 9 = the 7 days before
+///   the last 7, 14 and 21 days; 0xFF=any
 /// - `day_of_week`: 1=Monday..7=Sunday, 0xFF=any
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetWeekNDay {
     /// Month (1-14, or 0xFF for any).
     pub month: u8,
-    /// Week of month (1-6, or 0xFF for any).
+    /// Week of month (1-9, or 0xFF for any).
     pub week_of_month: u8,
     /// Day of week (1-7, or 0xFF for any).
     pub day_of_week: u8,
@@ -116,6 +98,9 @@ impl BACnetWeekNDay {
 /// - `[0]` Date
 /// - `[1]` DateRange
 /// - `[2]` WeekNDay
+///
+/// The wire codec is `bacnet_encoding::constructed::{encode_calendar_entry,
+/// decode_calendar_entry}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BACnetCalendarEntry {
     /// A single specific date (context tag 0).
