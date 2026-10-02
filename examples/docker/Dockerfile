@@ -4,7 +4,7 @@
 # Runtime stage copies them into a minimal Alpine image.
 
 # ── Builder ──────────────────────────────────────────────────────────────────
-FROM rust:1.97.1-alpine AS builder
+FROM rust:1.99.0-alpine AS builder
 
 RUN apk add --no-cache musl-dev cmake make perl gcc g++
 

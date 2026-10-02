@@ -39,6 +39,7 @@ impl CovSubscriptionSnapshot {
     /// Call synchronously after complete capture/qualification, before any later await.
     /// For shared ordinary capture, prepare each applicable reference under that view.
     pub(crate) fn prepare_completion(&self) -> Option<PreparedCovCompletion> {
+        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
         let ticket = self
             .owner
             .issued

@@ -291,6 +291,7 @@ impl MutationDecisions {
             _ => return,
         };
         let increment = |column: usize| {
+            #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
             let _ = self.0[index][column].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_add(1))
             });

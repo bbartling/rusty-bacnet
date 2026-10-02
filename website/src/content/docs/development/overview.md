@@ -29,7 +29,7 @@ git rev-parse HEAD
 cargo build --locked
 ```
 
-The checked-in development toolchain is Rust 1.97.1; the declared minimum is 1.93. `cargo build` uses workspace default members, so select the CLI or Python binding explicitly when needed. Native prerequisites depend on the selected features and platform.
+The checked-in development toolchain is Rust 1.99.0; the declared minimum is 1.93. `cargo build` uses workspace default members, so select the CLI or Python binding explicitly when needed. Native prerequisites depend on the selected features and platform.
 
 For the CLI, from this checkout:
 
