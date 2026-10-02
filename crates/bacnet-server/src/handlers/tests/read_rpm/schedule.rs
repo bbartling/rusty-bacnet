@@ -21,20 +21,22 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
                     second: 0,
                     hundredths: 0,
                 },
-                value: vec![0x21, 42],
+                value: PropertyValue::Unsigned(42),
             };
-            object.set_weekly_schedule(0, vec![tv.clone()]);
-            object.set_weekly_schedule(6, vec![tv.clone()]);
-            object.add_exception(BACnetSpecialEvent {
-                period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::Date(Date {
-                    year: 126,
-                    month: 9,
-                    day: 14,
-                    day_of_week: 1,
-                })),
-                list_of_time_values: vec![tv],
-                event_priority: 3,
-            });
+            object.set_weekly_schedule(0, vec![tv.clone()]).unwrap();
+            object.set_weekly_schedule(6, vec![tv.clone()]).unwrap();
+            object
+                .add_exception(BACnetSpecialEvent {
+                    period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::Date(Date {
+                        year: 126,
+                        month: 9,
+                        day: 14,
+                        day_of_week: 1,
+                    })),
+                    list_of_time_values: vec![tv],
+                    event_priority: 3,
+                })
+                .unwrap();
             object.add_object_property_reference(BACnetObjectPropertyReference::new(
                 ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
                 P::PRESENT_VALUE.to_raw(),
@@ -51,7 +53,8 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
         // Pin reference members as context-tagged local DOPR bodies, and the
         // Clause 21 schedule forms (#996): each BACnetDailySchedule is a [0]
         // frame (0x0E ... 0x0F) around its time-values, an application Time
-        // (0xB4) then the raw value; a special event is its period (here the
+        // (0xB4) then the value under its own tag (Unsigned 42 is 0x21 0x2A);
+        // a special event is its period (here the
         // calendar-entry [0] frame around date [0], 0x0C), the [2] time-value
         // frame and event-priority [3] (0x39).
         type ExpectedRead = Result<&'static [u8], ErrorCode>;

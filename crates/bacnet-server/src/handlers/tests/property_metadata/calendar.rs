@@ -8,7 +8,6 @@ fn calendar_object(configured: bool) -> CalendarObject {
     let mut object = CalendarObject::new(7, "CAL-7").unwrap();
     if configured {
         object.set_description("long calendar label".repeat(100));
-        object.set_present_value(true);
         let date = Date {
             year: 126,
             month: 9,
@@ -16,16 +15,20 @@ fn calendar_object(configured: bool) -> CalendarObject {
             day_of_week: 1,
         };
         for _ in 0..32 {
-            object.add_date_entry(BACnetCalendarEntry::Date(date));
-            object.add_date_entry(BACnetCalendarEntry::DateRange(BACnetDateRange {
-                start_date: date,
-                end_date: date,
-            }));
-            object.add_date_entry(BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
-                month: 255,
-                week_of_month: 255,
-                day_of_week: 1,
-            }));
+            for entry in [
+                BACnetCalendarEntry::Date(date),
+                BACnetCalendarEntry::DateRange(BACnetDateRange {
+                    start_date: date,
+                    end_date: date,
+                }),
+                BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
+                    month: 255,
+                    week_of_month: 255,
+                    day_of_week: 1,
+                }),
+            ] {
+                object.add_date_entry(entry).unwrap();
+            }
         }
     }
     object

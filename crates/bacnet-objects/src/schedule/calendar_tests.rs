@@ -1,7 +1,11 @@
-//! Calendar object tests: Present_Value and the Date_List wire form (#996).
+//! Calendar object tests: the Date_List wire form (#996), its value checks
+//! and Present_Value evaluated from the clock's local date (#1029).
 
 use super::*;
-use bacnet_types::constructed::{BACnetDateRange, BACnetWeekNDay};
+use crate::clock::{ClockFrame, ClockReader};
+use bacnet_types::calendar::SpecificDate;
+use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay};
+use std::sync::{Arc, Mutex};
 
 const DATE_LIST: PropertyIdentifier = PropertyIdentifier::DATE_LIST;
 
@@ -52,9 +56,48 @@ fn wire_list() -> PropertyValue {
 fn configured() -> CalendarObject {
     let mut cal = CalendarObject::new(1, "CAL-1").unwrap();
     for (entry, _) in entries_and_wire() {
-        cal.add_date_entry(entry);
+        cal.add_date_entry(entry).unwrap();
     }
     cal
+}
+
+/// A clock whose local date a test sets; `None` is a clock with no time.
+struct DateClock(Mutex<Option<Date>>);
+
+impl DateClock {
+    fn new(date: Option<Date>) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(date)))
+    }
+
+    fn set(&self, date: Option<Date>) {
+        *self.0.lock().unwrap() = date;
+    }
+}
+
+impl ClockReader for DateClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        let local_date = (*self.0.lock().unwrap())?;
+        Some(ClockFrame {
+            local_date,
+            local_time: Time {
+                hour: 12,
+                minute: 0,
+                second: 0,
+                hundredths: 0,
+            },
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
+
+fn ymd(year: u16, month: u8, day: u8) -> Date {
+    SpecificDate::new(year, month, day).unwrap().to_date()
+}
+
+fn present_value(cal: &CalendarObject) -> PropertyValue {
+    cal.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        .unwrap()
 }
 
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
@@ -77,13 +120,93 @@ fn calendar_read_present_value_default() {
 }
 
 #[test]
-fn calendar_set_present_value() {
+fn calendar_present_value_follows_the_clock_date() {
+    // #1029: Present_Value used to stay whatever the application last set.
     let mut cal = CalendarObject::new(1, "CAL-1").unwrap();
-    cal.set_present_value(true);
-    let val = cal
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+    cal.add_date_entry(BACnetCalendarEntry::Date(ymd(2026, 12, 25)))
         .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(true));
+    // No clock: no local date, so no entry can match.
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
+    let clock = DateClock::new(Some(ymd(2026, 12, 24)));
+    cal.bind_clock_internal(Some(clock.clone()));
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
+    // The date changes: the next read sees it, with no tick in between.
+    clock.set(Some(ymd(2026, 12, 25)));
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(true));
+    clock.set(Some(ymd(2026, 12, 26)));
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
+    // A clock without a time, or with a date that names no day, is FALSE.
+    for date in [
+        None,
+        Some(Date {
+            year: Date::UNSPECIFIED,
+            ..ymd(2026, 12, 25)
+        }),
+        Some(Date {
+            day: 32,
+            ..ymd(2026, 12, 25)
+        }),
+    ] {
+        clock.set(date);
+        assert_eq!(
+            present_value(&cal),
+            PropertyValue::Boolean(false),
+            "{date:?}"
+        );
+    }
+    // Unbinding the clock leaves the calendar without a date.
+    clock.set(Some(ymd(2026, 12, 25)));
+    cal.bind_clock_internal(None);
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
+}
+
+#[test]
+fn calendar_present_value_follows_date_list_writes() {
+    let clock = DateClock::new(Some(ymd(2026, 9, 14)));
+    let mut cal = CalendarObject::new(1, "CAL-1").unwrap();
+    cal.bind_clock_internal(Some(clock));
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
+    // Each choice in turn makes Monday 14 September 2026 a calendar day.
+    for (entry, wire) in entries_and_wire() {
+        cal.write_property(DATE_LIST, None, app(wire), None)
+            .unwrap();
+        assert_eq!(
+            present_value(&cal),
+            PropertyValue::Boolean(true),
+            "{entry:?}"
+        );
+        cal.write_property(DATE_LIST, None, PropertyValue::List(vec![]), None)
+            .unwrap();
+        assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
+    }
+    // Any matching entry is enough: a non-matching one beside it changes
+    // nothing.
+    cal.write_property(
+        DATE_LIST,
+        None,
+        PropertyValue::List(vec![
+            app(&[0x2B, 0xFF, 0xFF, 2]),
+            app(&[0x2B, 0xFF, 0xFF, 1]),
+        ]),
+        None,
+    )
+    .unwrap();
+    assert_eq!(present_value(&cal), PropertyValue::Boolean(true));
+}
+
+#[test]
+fn calendar_state_hook_answers_for_any_day() {
+    let cal = configured();
+    // The configured entries: 14 September 2026, the same day as a range,
+    // and every Monday.
+    for (day, expected) in [
+        (SpecificDate::new(2026, 9, 14).unwrap(), true),
+        (SpecificDate::new(2026, 9, 21).unwrap(), true),
+        (SpecificDate::new(2026, 9, 15).unwrap(), false),
+    ] {
+        assert_eq!(cal.is_active_on(day), expected, "{day:?}");
+        assert_eq!(cal.calendar_state_internal(day), Some(expected), "{day:?}");
+    }
 }
 
 #[test]
@@ -125,12 +248,6 @@ fn calendar_date_list_reads_each_entry_under_its_choice_tag() {
     }
     let entries: Vec<_> = entries_and_wire().into_iter().map(|(e, _)| e).collect();
     assert_eq!(cal.date_list(), entries.as_slice());
-    // Present_Value stays application-managed whatever Date_List holds.
-    assert_eq!(
-        cal.read_property(PropertyIdentifier::PRESENT_VALUE, None)
-            .unwrap(),
-        PropertyValue::Boolean(false)
-    );
     cal.clear_date_list();
     assert_eq!(
         cal.read_property(DATE_LIST, None).unwrap(),
@@ -275,4 +392,114 @@ fn calendar_date_list_write_refuses_an_array_index() {
         );
     }
     assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());
+}
+
+/// Entries whose encoding is well formed but whose octets are outside their
+/// Clause 21 ranges, each with what it breaks.
+fn out_of_range_entries() -> Vec<(&'static str, Vec<u8>)> {
+    let range =
+        |start: [u8; 4], end: [u8; 4]| [&[0x1E, 0xA4][..], &start, &[0xA4], &end, &[0x1F]].concat();
+    let good = [126, 7, 1, 3];
+    let open = [0xFF; 4];
+    vec![
+        ("date month 0", vec![0x0C, 126, 0, 1, 0xFF]),
+        ("date month 15", vec![0x0C, 126, 15, 1, 0xFF]),
+        ("date day 0", vec![0x0C, 126, 7, 0, 0xFF]),
+        ("date day 35", vec![0x0C, 126, 7, 35, 0xFF]),
+        ("date weekday 0", vec![0x0C, 0xFF, 0xFF, 0xFF, 0]),
+        ("date weekday 8", vec![0x0C, 0xFF, 0xFF, 0xFF, 8]),
+        (
+            "range start with year unspecified",
+            range([0xFF, 7, 1, 3], good),
+        ),
+        (
+            "range end with day unspecified",
+            range(good, [126, 8, 0xFF, 1]),
+        ),
+        (
+            "range end on the last-day value",
+            range(good, [126, 8, 32, 1]),
+        ),
+        ("range start in odd months", range([126, 13, 1, 3], open)),
+        ("range end on 30 February", range(open, [126, 2, 30, 1])),
+        ("range start weekday 9", range([126, 7, 1, 9], good)),
+        ("weekNDay month 0", vec![0x2B, 0, 0xFF, 0xFF]),
+        ("weekNDay month 15", vec![0x2B, 15, 0xFF, 0xFF]),
+        ("weekNDay week 0", vec![0x2B, 0xFF, 0, 0xFF]),
+        ("weekNDay week 10", vec![0x2B, 0xFF, 10, 0xFF]),
+        ("weekNDay weekday 0", vec![0x2B, 0xFF, 0xFF, 0]),
+        ("weekNDay weekday 8", vec![0x2B, 0xFF, 0xFF, 8]),
+    ]
+}
+
+#[test]
+fn calendar_date_list_write_refuses_out_of_range_entries() {
+    // #1029: these decoded and were stored as written.
+    for (what, bytes) in out_of_range_entries() {
+        for (shape, value) in [
+            ("alone", app(&bytes)),
+            // A good entry first does not save the list.
+            (
+                "after a good entry",
+                PropertyValue::List(vec![app(&[0x2B, 0xFF, 0xFF, 1]), app(&bytes)]),
+            ),
+        ] {
+            let mut cal = configured();
+            assert_error(
+                cal.write_property(DATE_LIST, None, value, None),
+                ErrorClass::PROPERTY,
+                ErrorCode::VALUE_OUT_OF_RANGE,
+                &format!("{what}, {shape}"),
+            );
+            assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());
+        }
+    }
+    // The boundary values themselves are accepted.
+    let mut cal = configured();
+    cal.write_property(
+        DATE_LIST,
+        None,
+        PropertyValue::List(vec![
+            app(&[0x0C, 0, 14, 34, 7]),
+            app(&[0x0C, 254, 1, 1, 1]),
+            app(&[0x2B, 14, 9, 7]),
+            app(&[0x2B, 1, 1, 1]),
+            app(&[
+                0x1E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xA4, 126, 2, 28, 0xFF, 0x1F,
+            ]),
+        ]),
+        None,
+    )
+    .unwrap();
+    assert_eq!(cal.date_list().len(), 5);
+}
+
+#[test]
+fn calendar_add_date_entry_checks_values_and_the_cap() {
+    let mut cal = CalendarObject::new(1, "CAL-1").unwrap();
+    for (what, bytes) in out_of_range_entries() {
+        let (entry, _) = bacnet_encoding::constructed::decode_calendar_entry(&bytes, 0).unwrap();
+        assert_error(
+            cal.add_date_entry(entry),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            what,
+        );
+    }
+    assert!(cal.date_list().is_empty());
+    let monday = BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
+        month: BACnetWeekNDay::ANY,
+        week_of_month: BACnetWeekNDay::ANY,
+        day_of_week: 1,
+    });
+    for _ in 0..date_list::MAX_DATE_LIST_ENTRIES {
+        cal.add_date_entry(monday.clone()).unwrap();
+    }
+    assert_error(
+        cal.add_date_entry(monday),
+        ErrorClass::RESOURCES,
+        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        "one entry over the cap",
+    );
+    assert_eq!(cal.date_list().len(), date_list::MAX_DATE_LIST_ENTRIES);
 }

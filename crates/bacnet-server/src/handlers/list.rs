@@ -213,6 +213,19 @@ impl Elements {
                 })
             }
             (Self::CalendarEntries(stored), Self::CalendarEntries(edits)) => {
+                // The Calendar refuses an entry out of its Clause 21 range
+                // only for the edited list as a whole; checking here names
+                // the entry (#1029). A removal has no range error (Clause
+                // 15.2.1.3.1): no such entry is ever stored, so it is not
+                // found.
+                let out_of_range = edits.iter().position(|entry| !entry.is_valid());
+                if let (false, Some(index)) = (remove, out_of_range) {
+                    return Err(element_error(
+                        ErrorClass::PROPERTY,
+                        ErrorCode::VALUE_OUT_OF_RANGE,
+                        position(index),
+                    ));
+                }
                 let (list, first_new) = edit(
                     stored,
                     edits,

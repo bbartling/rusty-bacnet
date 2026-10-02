@@ -398,12 +398,34 @@ pub enum PropertyValue {
     /// `bacnet_encoding::primitives::encode_property_value` and are produced
     /// by `decode_application_value` when it encounters a context-tagged
     /// element; they always span exactly one complete tagged element,
-    /// including its context tag header(s). The same convention as
-    /// [`crate::constructed::BACnetTimeValue::value`]'s raw bytes. Objects
-    /// that serve structured properties decode these with the matching
-    /// framed codec in `bacnet-encoding`; a property writer that is not
-    /// expecting this variant should reject it as `INVALID_DATA_TYPE`.
+    /// including its context tag header(s). Objects that serve structured
+    /// properties decode these with the matching framed codec in
+    /// `bacnet-encoding`; a property writer that is not expecting this variant
+    /// should reject it as `INVALID_DATA_TYPE`.
     ApplicationData(Vec<u8>),
+}
+
+impl PropertyValue {
+    /// Whether this is a value of a primitive datatype, one application tag
+    /// on the wire: every variant except `List` and `ApplicationData`.
+    pub fn is_primitive(&self) -> bool {
+        match self {
+            Self::Null
+            | Self::Boolean(_)
+            | Self::Unsigned(_)
+            | Self::Signed(_)
+            | Self::Real(_)
+            | Self::Double(_)
+            | Self::OctetString(_)
+            | Self::CharacterString(_)
+            | Self::BitString { .. }
+            | Self::Enumerated(_)
+            | Self::Date(_)
+            | Self::Time(_)
+            | Self::ObjectIdentifier(_) => true,
+            Self::List(_) | Self::ApplicationData(_) => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

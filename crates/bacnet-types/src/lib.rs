@@ -17,6 +17,7 @@
 extern crate alloc;
 
 pub mod bitstring;
+pub mod calendar;
 pub mod constructed;
 pub mod data_link;
 pub mod enums;
