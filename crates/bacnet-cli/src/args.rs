@@ -98,6 +98,20 @@ pub(crate) enum Command {
     /// Launch interactive shell.
     Shell,
 
+    /// Open the full-screen terminal UI (read-only).
+    ///
+    /// Uses the transport chosen by the global flags (BACnet/IP by default,
+    /// --ipv6 or --sc). Needs an interactive terminal: stdin and stdout must be
+    /// a TTY and TERM must not be "dumb".
+    Tui {
+        /// Frames per second for redraws (1-60).
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=60))]
+        fps: u16,
+        /// Also write log lines to this file (the in-app log pane is `L`).
+        #[arg(long, value_name = "FILE")]
+        log_file: Option<PathBuf>,
+    },
+
     /// Discover BACnet devices (WhoIs).
     #[command(alias = "whois")]
     Discover {
@@ -378,6 +392,36 @@ mod tests {
     // so parse where `main` does: on a thread with a larger stack (#953).
     fn parse<const N: usize>(args: [&'static str; N]) -> Result<Cli, clap::Error> {
         crate::parse_on_large_stack(move || Cli::try_parse_from(args))
+    }
+
+    #[test]
+    fn tui_takes_fps_and_log_file_and_global_flags() {
+        let cli = parse([
+            "bacnet",
+            "tui",
+            "--fps",
+            "5",
+            "--log-file",
+            "tui.log",
+            "-i",
+            "10.0.0.5",
+        ])
+        .unwrap();
+        assert_eq!(cli.interface, Some(Ipv4Addr::new(10, 0, 0, 5)));
+        let Some(Command::Tui { fps, log_file }) = cli.command else {
+            panic!("expected Tui");
+        };
+        assert_eq!(fps, 5);
+        assert_eq!(log_file, Some(PathBuf::from("tui.log")));
+
+        let Some(Command::Tui { fps, log_file }) = parse(["bacnet", "tui"]).unwrap().command else {
+            panic!("expected Tui");
+        };
+        assert_eq!((fps, log_file), (20, None));
+        for bad in ["0", "61"] {
+            let error = parse(["bacnet", "tui", "--fps", bad]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        }
     }
 
     #[test]
