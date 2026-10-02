@@ -1,6 +1,6 @@
 # BACnet CLI Reference
 
-The `bacnet` command-line tool provides interactive and scripted access to BACnet networks for device discovery, property reading/writing, diagnostics, and packet analysis.
+The `bacnet` command-line tool provides interactive and scripted access to BACnet networks for device discovery, property reading/writing, diagnostics, and packet analysis. `bacnet tui` opens a full-screen terminal UI; see [Terminal UI](#terminal-ui).
 
 ## Installation
 
@@ -55,7 +55,7 @@ and its headers (`libpcap-dev` on Debian and Ubuntu).
 
 Output auto-detects: tables in TTY, JSON when piped.
 
-**Interface selection:** When launching the interactive shell without `--interface` on BACnet/IP, the CLI lists available network interfaces and prompts you to select one. For one-shot commands without `--interface`, it defaults to `0.0.0.0`.
+**Interface selection:** When launching the interactive shell without `--interface` on BACnet/IP, the CLI lists available network interfaces and prompts you to select one; `bacnet tui` shows the same list as a dialog. For one-shot commands without `--interface`, it defaults to `0.0.0.0`.
 
 ## Target Resolution
 
@@ -106,6 +106,83 @@ exit                        # exit the shell (also: quit, Ctrl-D)
 ```
 
 **Command aliases in shell:** `whois`=discover, `whohas`=find, `rp`=read, `rpm`=readm, `rr`=read-range, `wp`=write, `wpm`=writem, `cov`=subscribe, `dcc`=control, `ack`=ack-alarm, `ts`=time-sync
+
+### Terminal UI
+
+```bash
+bacnet tui                               # full-screen UI on BACnet/IP
+bacnet tui -i 10.0.1.5                   # bind this interface, skip the picker
+bacnet --ipv6 tui                        # BACnet/IPv6
+bacnet --sc --sc-url wss://hub:443 --sc-ca ca.pem --sc-cert me.pem \
+  --sc-key me.key --sc-vmac 02:00:00:00:00:09 \
+  --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff tui   # BACnet/SC
+bacnet tui --fps 5 --log-file tui.log    # lower redraw rate, keep a log file
+```
+
+`bacnet tui` opens a full-screen terminal UI on the transport chosen by the
+global flags. This first version has one screen, **Devices**: a live table of
+the devices that answer Who-Is, built from the client's I-Am notifications. It
+is **read-only**: it sends discovery requests and nothing that changes a remote
+device, and the status bar says `READ-ONLY`. The design and the planned screens
+(browse, watch, BBMD, SC, MS/TP, capture) are in
+[docs/design/tui.md](design/tui.md).
+
+**Tui flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--fps <N>` | `20` | Redraws per second, 1 to 60. Idle screens are not redrawn |
+| `--log-file <FILE>` | | Append log lines to this file as well as the in-app log pane |
+
+`-v` and `-vv` raise the log level from info to debug and trace.
+
+**Requirements.** stdin and stdout must be a terminal and `TERM` must not be
+`dumb`; otherwise `bacnet tui` exits 1 with a hint on stderr and writes nothing
+to stdout. Use the one-shot commands (`bacnet discover --json`) in scripts and
+pipes. 80x24 is the smallest supported terminal and 120x40 shows the full
+table; below 80x24 the TUI shows a notice until the window is resized. Colour
+follows `NO_COLOR`. On Windows use Windows Terminal or conhost; mintty and Git
+Bash are not supported.
+
+**Interface selection.** On BACnet/IP without `-i`, a dialog lists the IPv4
+interfaces (one interface is used without asking, as in the shell).
+
+**Devices screen.** Press `d` for the Who-Is form:
+
+| Field | Values |
+|---|---|
+| Scope | Local broadcast, global broadcast, directed (one address), or remote network |
+| Target | For directed: `IP`, `IP:port`, `[IPv6]:port`, or an SC VMAC as 12 hex digits. For remote network: the network number |
+| Range | Blank for every instance, `N`, or `LOW-HIGH` (0 to 4194303) |
+| Listen | Seconds to show the request as running while replies arrive (1 to 60, default 3) |
+
+A global or unbounded Who-Is can draw a reply from every device on a site, so
+the first Enter shows a one-line warning with the number of devices already
+known, and a second Enter sends it. The table shows instance, address (for a
+routed device, its remote MAC and the router), network, vendor, max APDU,
+segmentation and time since the last I-Am. When two addresses answer for the
+same instance, a `DUPLICATE` banner names both. If the UI falls behind a burst
+of I-Am traffic, events are dropped rather than queued without limit; the
+status bar's `drop` counter shows how many, and the table is refreshed from the
+client's discovery table afterwards.
+
+**Keys:**
+
+| Key | Action |
+|---|---|
+| `d` | Who-Is form |
+| `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
+| `s` / `S` | Next sort column / reverse the order |
+| arrows, `j`/`k`, `PgUp`/`PgDn`, `Home`/`End` | Move |
+| `L` | Show or hide the log pane |
+| `?` | Help |
+| `Ctrl-C` | Close the open dialog or cancel the running Who-Is; press again within 2 s to quit |
+| `q` | Quit |
+
+The `tui` cargo feature is on by default. A build with
+`--no-default-features` leaves out ratatui and crossterm, and `bacnet tui` then
+prints rebuild advice. The one-shot commands and their JSON output are the
+same with or without the feature.
 
 ### Device Discovery
 
