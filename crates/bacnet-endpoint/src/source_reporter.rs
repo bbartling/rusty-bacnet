@@ -400,6 +400,13 @@ impl BACnetObject for SourceReporter {
         self.wrapped.set_present_value_internal(value)
     }
 
+    fn set_controlled_variable_value_internal(
+        &mut self,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        self.wrapped.set_controlled_variable_value_internal(value)
+    }
+
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         self.wrapped.audit_log_storage_internal()
     }

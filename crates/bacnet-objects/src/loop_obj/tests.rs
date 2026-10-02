@@ -595,6 +595,56 @@ fn loop_controlled_variable_value_is_application_fed_and_read_only() {
     }
 }
 
+// --- #1063: the application route a running server uses ---
+
+#[test]
+fn loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service() {
+    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    for (out_of_service, measured) in [(false, 20.5), (true, 19.0), (false, -4.25)] {
+        set_out_of_service(&mut lo, out_of_service);
+        lo.set_controlled_variable_value_internal(PropertyValue::Real(measured))
+            .unwrap();
+        assert_eq!(
+            read(&lo, PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
+            PropertyValue::Real(measured)
+        );
+    }
+    for (value, code) in [
+        (PropertyValue::Double(1.0), ErrorCode::INVALID_DATA_TYPE),
+        (PropertyValue::Null, ErrorCode::INVALID_DATA_TYPE),
+        (PropertyValue::Real(f32::NAN), ErrorCode::VALUE_OUT_OF_RANGE),
+        (
+            PropertyValue::Real(f32::INFINITY),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+    ] {
+        assert_property_error(
+            lo.set_controlled_variable_value_internal(value)
+                .unwrap_err(),
+            code,
+        );
+    }
+    assert_eq!(
+        read(&lo, PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
+        PropertyValue::Real(-4.25),
+        "a refused value keeps the measurement"
+    );
+}
+
+#[test]
+fn controlled_variable_value_hook_is_refused_by_other_objects() {
+    let mut av = crate::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let error = av
+        .set_controlled_variable_value_internal(PropertyValue::Real(1.0))
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Protocol { class, code }
+            if class == ErrorClass::OBJECT.to_raw() as u32
+                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn loop_cov_reports_setpoint_and_controlled_variable_value() {
     use crate::traits::CovReportedProperty::Value;

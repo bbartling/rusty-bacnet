@@ -7,37 +7,47 @@ fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
     use bacnet_types::primitives::PropertyValue;
     use PropertyIdentifier as P;
 
-    // Independent legacy-order fixtures: classification must not be inferred
-    // from the metadata being exercised. Property_List is read explicitly.
+    // Independent fixtures (Loop in Table 12-20 order, Program in its legacy
+    // order): classification must not be inferred from the metadata being
+    // exercised. Property_List is read explicitly.
     let loop_all = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
-        P::DESCRIPTION,
         P::OBJECT_TYPE,
         P::PRESENT_VALUE,
-        P::SETPOINT,
-        P::PROPORTIONAL_CONSTANT,
-        P::INTEGRAL_CONSTANT,
-        P::DERIVATIVE_CONSTANT,
-        P::OUTPUT_UNITS,
-        P::UPDATE_INTERVAL,
+        P::DESCRIPTION,
         P::STATUS_FLAGS,
         P::EVENT_STATE,
         P::RELIABILITY,
         P::OUT_OF_SERVICE,
+        P::UPDATE_INTERVAL,
+        P::OUTPUT_UNITS,
+        P::MANIPULATED_VARIABLE_REFERENCE,
         P::CONTROLLED_VARIABLE_REFERENCE,
         P::CONTROLLED_VARIABLE_VALUE,
-        P::MANIPULATED_VARIABLE_REFERENCE,
+        P::CONTROLLED_VARIABLE_UNITS,
         P::SETPOINT_REFERENCE,
+        P::SETPOINT,
+        P::ACTION,
+        P::PROPORTIONAL_CONSTANT,
+        P::PROPORTIONAL_CONSTANT_UNITS,
+        P::INTEGRAL_CONSTANT,
+        P::INTEGRAL_CONSTANT_UNITS,
+        P::DERIVATIVE_CONSTANT,
+        P::DERIVATIVE_CONSTANT_UNITS,
+        P::PRIORITY_FOR_WRITING,
         P::COV_INCREMENT,
     ];
     let loop_optional = [
         P::DESCRIPTION,
-        P::PROPORTIONAL_CONSTANT,
-        P::INTEGRAL_CONSTANT,
-        P::DERIVATIVE_CONSTANT,
-        P::UPDATE_INTERVAL,
         P::RELIABILITY,
+        P::UPDATE_INTERVAL,
+        P::PROPORTIONAL_CONSTANT,
+        P::PROPORTIONAL_CONSTANT_UNITS,
+        P::INTEGRAL_CONSTANT,
+        P::INTEGRAL_CONSTANT_UNITS,
+        P::DERIVATIVE_CONSTANT,
+        P::DERIVATIVE_CONSTANT_UNITS,
         P::COV_INCREMENT,
     ];
     let program_all = [
