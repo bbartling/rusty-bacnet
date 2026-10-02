@@ -138,11 +138,18 @@ device, and the status bar says `READ-ONLY`. The design and the planned screens
 
 **Requirements.** stdin and stdout must be a terminal and `TERM` must not be
 `dumb`; otherwise `bacnet tui` exits 1 with a hint on stderr and writes nothing
-to stdout. Use the one-shot commands (`bacnet discover --json`) in scripts and
-pipes. 80x24 is the smallest supported terminal and 120x40 shows the full
-table; below 80x24 the TUI shows a notice until the window is resized. Colour
-follows `NO_COLOR`. On Windows use Windows Terminal or conhost; mintty and Git
-Bash are not supported.
+to stdout. The same hint appears, with exit status 1, when the terminal refuses
+raw mode (as MSYS and mintty terminals on Windows do). Use the one-shot
+commands (`bacnet discover --json`) in scripts and pipes. 80x24 is the smallest
+supported terminal and 120x40 shows the full table; below 80x24 the TUI shows a
+notice until the window is resized. Colour follows `NO_COLOR`. On Windows use
+Windows Terminal or conhost; mintty and Git Bash are not supported.
+
+**Exit status.** 0 after `q` or a second Ctrl-C. 1 for an error, such as a
+failed connection or an internal error, with the reason on stderr. When a
+signal ends it, the terminal is restored first; on Unix the status then follows
+the shell convention of 128 plus the signal number (130 for SIGINT, 129 for
+SIGHUP, 143 for SIGTERM), and on Windows a console close or Ctrl-Break exits 1.
 
 **Interface selection.** On BACnet/IP without `-i`, a dialog lists the IPv4
 interfaces (one interface is used without asking, as in the shell).

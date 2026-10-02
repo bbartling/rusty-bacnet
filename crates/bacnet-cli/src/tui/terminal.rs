@@ -36,6 +36,15 @@ pub(crate) fn unusable_terminal(
     }
 }
 
+/// The stderr message when the TUI cannot use this terminal.
+pub(crate) fn unusable_hint(reason: &str) -> String {
+    format!(
+        "Error: bacnet tui needs an interactive terminal ({reason}).\n\
+         hint: for scripts and pipes use the one-shot commands, such as \
+         `bacnet discover --json`."
+    )
+}
+
 /// Check the real process streams; the error is the hint for stderr.
 pub(crate) fn check_terminal() -> Result<(), String> {
     let term = std::env::var_os("TERM");
@@ -44,11 +53,7 @@ pub(crate) fn check_terminal() -> Result<(), String> {
         io::stdout().is_terminal(),
         term.as_deref(),
     ) {
-        Some(reason) => Err(format!(
-            "Error: bacnet tui needs an interactive terminal ({reason}).\n\
-             hint: for scripts and pipes use the one-shot commands, such as \
-             `bacnet discover --json`."
-        )),
+        Some(reason) => Err(unusable_hint(reason)),
         None => Ok(()),
     }
 }
@@ -81,6 +86,16 @@ pub(crate) fn enter() -> io::Result<DefaultTerminal> {
     terminal
 }
 
+/// True between a successful [`enter`] and the first [`restore`].
+///
+/// The panic hook is process-wide: a panic in the worker or in any client or
+/// transport task restores the terminal, and tokio then catches the panic.
+/// The UI loop checks this before every draw so it never paints over a
+/// restored terminal.
+pub(crate) fn is_active() -> bool {
+    ACTIVE.load(Ordering::SeqCst)
+}
+
 /// Leave raw mode and the alternate screen and show the cursor. Does nothing
 /// unless [`enter`] succeeded, so normal exit, a signal and the panic hook can
 /// all call it.
@@ -92,13 +107,24 @@ pub(crate) fn restore() {
     }
 }
 
+/// A signal that ended the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SignalExit {
+    /// Its name, for the stderr message.
+    pub(crate) name: &'static str,
+    /// The process exit status: 128 plus the signal number on Unix, as shells
+    /// report it (130 for SIGINT, 129 for SIGHUP, 143 for SIGTERM); 1 on
+    /// Windows.
+    pub(crate) code: i32,
+}
+
 /// Signals that end the TUI. The loop restores the terminal before exiting.
 ///
 /// In raw mode Ctrl-C arrives as a key, not SIGINT, so these come from
 /// outside: `kill`, a closed SSH session, a closed console window.
 pub(crate) struct Signals {
     #[cfg(unix)]
-    unix: Option<[(tokio::signal::unix::Signal, &'static str); 3]>,
+    unix: Option<[(tokio::signal::unix::Signal, SignalExit); 3]>,
     #[cfg(windows)]
     windows: Option<(
         tokio::signal::windows::CtrlClose,
@@ -113,11 +139,15 @@ impl Signals {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
+            let exit = |name, number: i32| SignalExit {
+                name,
+                code: 128 + number,
+            };
             Ok(Self {
                 unix: Some([
-                    (signal(SignalKind::terminate())?, "SIGTERM"),
-                    (signal(SignalKind::hangup())?, "SIGHUP"),
-                    (signal(SignalKind::interrupt())?, "SIGINT"),
+                    (signal(SignalKind::terminate())?, exit("SIGTERM", 15)),
+                    (signal(SignalKind::hangup())?, exit("SIGHUP", 1)),
+                    (signal(SignalKind::interrupt())?, exit("SIGINT", 2)),
                 ]),
             })
         }
@@ -145,22 +175,23 @@ impl Signals {
         }
     }
 
-    /// The name of the next signal.
-    pub(crate) async fn recv(&mut self) -> &'static str {
+    /// The next signal.
+    pub(crate) async fn recv(&mut self) -> SignalExit {
         #[cfg(unix)]
-        if let Some([(a, a_name), (b, b_name), (c, c_name)]) = &mut self.unix {
+        if let Some([(a, a_exit), (b, b_exit), (c, c_exit)]) = &mut self.unix {
             tokio::select! {
-                Some(()) = a.recv() => return *a_name,
-                Some(()) = b.recv() => return *b_name,
-                Some(()) = c.recv() => return *c_name,
+                Some(()) = a.recv() => return *a_exit,
+                Some(()) = b.recv() => return *b_exit,
+                Some(()) = c.recv() => return *c_exit,
                 else => {}
             }
         }
         #[cfg(windows)]
         if let Some((close, brk)) = &mut self.windows {
+            let exit = |name| SignalExit { name, code: 1 };
             tokio::select! {
-                Some(()) = close.recv() => return "console close",
-                Some(()) = brk.recv() => return "Ctrl-Break",
+                Some(()) = close.recv() => return exit("console close"),
+                Some(()) = brk.recv() => return exit("Ctrl-Break"),
                 else => {}
             }
         }

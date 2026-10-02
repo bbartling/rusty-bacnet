@@ -327,7 +327,10 @@ signals ------------------+      if dirty: terminal.draw(view)
   status bar shows the total. After any loss the worker resynchronises the table
   from the client's own discovery table, at most once a second. Duplicate-
   instance notices are rare and important, so they wait for room instead of
-  being dropped. Later streams (COV, events, frames) get the same treatment.
+  being dropped; the record behind the banner keeps at most four addresses per
+  instance and counts the rest, and its text is rebuilt only when it changes.
+  Lost devices leave the table with a line in the log pane. Later streams
+  (COV, events, frames) get the same treatment.
 - **Latest-value state** (SC link state, MS/TP statistics, FD countdown) will
   use `watch` channels.
 - **MS/TP** will run with `MstpExecutionMode::DedicatedThread`, so terminal
@@ -348,10 +351,22 @@ signals ------------------+      if dirty: terminal.draw(view)
   `ratatui::try_restore`. The panic hook is our own so that it shares one
   idempotent restore with normal exit and signal exit and so that its order is
   testable: it restores the terminal first, then runs the previous hook, which
-  prints the panic on a usable screen. SIGTERM, SIGHUP and an external SIGINT
-  (Unix), and console close and Ctrl-Break (Windows), end the loop and restore
-  the terminal; the TUI then exits 1 with the reason on stderr. Windows ends a
-  process soon after console close, so that restore is best effort.
+  prints the panic on a usable screen.
+- **Panics off the UI thread.** The hook is process-wide, so a panic in the
+  worker or in any client or transport task also restores the terminal, and
+  tokio then catches it. The loop checks `terminal::is_active()` before every
+  pass and every draw, so it never paints over the restored screen; it quits
+  with an internal error and exit status 1. The worker's channel closing while
+  the UI still runs is treated the same way.
+- **Signals and exit status.** SIGTERM, SIGHUP and an external SIGINT (Unix),
+  and console close and Ctrl-Break (Windows), end the loop and restore the
+  terminal. On Unix the TUI then exits with 128 plus the signal number, as
+  shells report it (143, 129, 130); on Windows it exits 1. The handlers stay
+  installed while the worker shuts down, so a Ctrl-C during that wait (SIGINT
+  again, now that the terminal is cooked) exits at once instead of being
+  swallowed. Windows ends a process soon after console close, so that restore
+  is best effort. A terminal that passes the TTY check but refuses raw mode
+  (MSYS and mintty) gets the same hint as the TTY check and exit status 1.
 
 ### 6.4 State model
 

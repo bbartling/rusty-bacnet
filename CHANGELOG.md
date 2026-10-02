@@ -20,10 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-app log pane (`L`) and optionally `--log-file`, never to the terminal
   while it is in raw mode; `--fps` sets the redraw rate, and an idle screen is
   not redrawn. Ctrl-C cancels the running Who-Is and a second press quits. The
-  terminal is restored on panic, on SIGTERM, SIGHUP and SIGINT, and on Windows
-  console close. Without a terminal on stdin and stdout, or with `TERM=dumb`,
-  it exits 1 with a hint on stderr and an empty stdout. Below 80x24 it shows a
-  notice instead of a broken layout. The UI loop runs in the CLI's boxed
+  terminal is restored on panic (including a panic in a background task, after
+  which the TUI stops drawing and exits 1), on SIGTERM, SIGHUP and SIGINT, and
+  on Windows console close; a signal exit uses the shell's 128-plus-signal
+  status on Unix. Without a terminal on stdin and stdout, with `TERM=dumb`, or
+  when the terminal refuses raw mode, it exits 1 with a hint on stderr and an
+  empty stdout. Below 80x24 it shows a notice instead of a broken layout.
+  The UI loop runs in the CLI's boxed
   `block_on` future; a worker generic over the transport owns the client and
   reaches the UI over bounded channels, dropping and counting events (shown as
   `drop N`) instead of queueing without limit. The new default-on `tui` cargo

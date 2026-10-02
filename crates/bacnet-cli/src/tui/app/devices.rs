@@ -309,43 +309,175 @@ pub(crate) fn age_label(now: Instant, then: Instant) -> String {
     }
 }
 
+/// Addresses kept per duplicated instance; more are counted, not stored.
+const MAX_ADDRESSES: usize = 4;
+/// Extra addresses counted per instance before the count stops growing.
+const MAX_EXTRA: usize = 64;
+/// Duplicated instances tracked. The client's discovery table holds at most
+/// 4,096 devices, and every collision names a row in it.
+const MAX_INSTANCES: usize = 4_096;
+/// Banner lines before the rest are summarised.
+pub(crate) const MAX_BANNER_LINES: usize = 3;
+
+/// The addresses claiming one instance.
+#[derive(Default)]
+struct Claims {
+    addresses: BTreeSet<String>,
+    /// Hashes of the addresses past [`MAX_ADDRESSES`], so each is counted once.
+    extra: BTreeSet<u64>,
+}
+
+impl Claims {
+    /// Add an address; true if it was new.
+    fn add(&mut self, address: &str) -> bool {
+        if self.addresses.contains(address) {
+            return false;
+        }
+        if self.addresses.len() < MAX_ADDRESSES {
+            return self.addresses.insert(address.to_string());
+        }
+        if self.extra.len() >= MAX_EXTRA {
+            return false;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(address, &mut hasher);
+        self.extra.insert(std::hash::Hasher::finish(&hasher))
+    }
+
+    fn line(&self, instance: u32) -> String {
+        let list: Vec<&str> = self.addresses.iter().map(String::as_str).collect();
+        let mut joined = match list.as_slice() {
+            [one] => (*one).to_string(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+            [] => String::new(),
+        };
+        match self.extra.len() {
+            0 => {}
+            MAX_EXTRA => joined.push_str(&format!(" (+{MAX_EXTRA} or more)")),
+            n => joined.push_str(&format!(" (+{n} more)")),
+        }
+        format!("instance {instance} claimed by {joined}")
+    }
+}
+
 /// Instances that more than one address claims, from the client's collision
-/// notices.
+/// notices. Bounded, and the banner text is rebuilt only when it changes.
 #[derive(Default)]
 pub(crate) struct Duplicates {
-    by_instance: BTreeMap<u32, BTreeSet<String>>,
+    by_instance: BTreeMap<u32, Claims>,
+    banner: Vec<String>,
 }
 
 impl Duplicates {
     /// Record that `retained` and `incoming` claim the same instance.
     /// Returns true if this added an address.
     pub(crate) fn record(&mut self, retained: &DeviceRow, incoming: &DeviceRow) -> bool {
-        let entry = self.by_instance.entry(retained.instance).or_default();
-        let before = entry.len();
-        entry.insert(retained.address.clone());
-        entry.insert(incoming.address.clone());
-        entry.len() != before
+        let instance = retained.instance;
+        if !self.by_instance.contains_key(&instance) && self.by_instance.len() >= MAX_INSTANCES {
+            return false;
+        }
+        let claims = self.by_instance.entry(instance).or_default();
+        let added = claims.add(&retained.address) | claims.add(&incoming.address);
+        if added {
+            self.rebuild_banner();
+        }
+        added
     }
 
     /// True when no duplicate has been seen.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.by_instance.is_empty()
     }
 
     /// One line per duplicated instance, such as
     /// `instance 200 claimed by 10.0.0.1:47808 and 10.0.0.2:47808`.
+    #[cfg(test)]
     pub(crate) fn lines(&self) -> Vec<String> {
         self.by_instance
             .iter()
-            .map(|(instance, addresses)| {
-                let list: Vec<&str> = addresses.iter().map(String::as_str).collect();
-                let joined = match list.as_slice() {
-                    [one] => (*one).to_string(),
-                    [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-                    [] => String::new(),
-                };
-                format!("instance {instance} claimed by {joined}")
-            })
+            .map(|(instance, claims)| claims.line(*instance))
             .collect()
+    }
+
+    /// The banner: at most [`MAX_BANNER_LINES`] lines, the last summarising
+    /// any instances that don't fit.
+    pub(crate) fn banner(&self) -> &[String] {
+        &self.banner
+    }
+
+    fn rebuild_banner(&mut self) {
+        let total = self.by_instance.len();
+        let shown = if total > MAX_BANNER_LINES {
+            MAX_BANNER_LINES - 1
+        } else {
+            total
+        };
+        self.banner = self
+            .by_instance
+            .iter()
+            .take(shown)
+            .map(|(instance, claims)| format!(" DUPLICATE {}", claims.line(*instance)))
+            .collect();
+        if total > shown {
+            self.banner.push(format!(
+                " DUPLICATE and {} more duplicated instances",
+                total - shown
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claim(instance: u32, address: &str) -> DeviceRow {
+        DeviceRow {
+            instance,
+            address: address.into(),
+            network: None,
+            vendor_id: 1,
+            max_apdu: 1476,
+            segmentation: Segmentation::NONE,
+            last_seen: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn duplicates_keep_four_addresses_and_count_the_rest_once() {
+        let mut duplicates = Duplicates::default();
+        let retained = claim(7, "10.0.0.1:47808");
+        for i in 2..=9 {
+            duplicates.record(&retained, &claim(7, &format!("10.0.0.{i}:47808")));
+        }
+        // A repeat of an extra address is not counted twice.
+        assert!(!duplicates.record(&retained, &claim(7, "10.0.0.9:47808")));
+        assert_eq!(
+            duplicates.lines(),
+            [
+                "instance 7 claimed by 10.0.0.1:47808, 10.0.0.2:47808, 10.0.0.3:47808 \
+              and 10.0.0.4:47808 (+5 more)"
+            ]
+        );
+        for i in 0..200 {
+            duplicates.record(&retained, &claim(7, &format!("10.0.1.{i}:47808")));
+        }
+        assert!(duplicates.lines()[0].ends_with("(+64 or more)"));
+    }
+
+    #[test]
+    fn the_banner_is_capped_and_summarises_the_rest() {
+        let mut duplicates = Duplicates::default();
+        for instance in 1..=5 {
+            duplicates.record(
+                &claim(instance, "10.0.0.1:47808"),
+                &claim(instance, "10.0.0.2:47808"),
+            );
+        }
+        let banner = duplicates.banner();
+        assert_eq!(banner.len(), MAX_BANNER_LINES);
+        assert_eq!(banner[2], " DUPLICATE and 3 more duplicated instances");
+        assert!(banner[0].starts_with(" DUPLICATE instance 1 claimed by"));
     }
 }

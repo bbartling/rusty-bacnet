@@ -5,35 +5,19 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
-use super::{Theme, FULL_WIDTH, MAX_BANNER_LINES};
+use super::{Theme, FULL_WIDTH};
 use crate::tui::app::devices::{age_label, segmentation_label, SortKey};
 use crate::tui::app::{App, Link, OpState};
 use crate::tui::message::DeviceRow;
 
-/// Banner text, one line per duplicated instance, capped.
-pub(super) fn banner_lines(app: &App) -> Vec<String> {
-    if app.duplicates.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = app.duplicates.lines();
-    if lines.len() > MAX_BANNER_LINES {
-        let more = lines.len() - (MAX_BANNER_LINES - 1);
-        lines.truncate(MAX_BANNER_LINES - 1);
-        lines.push(format!("and {more} more duplicated instances"));
-    }
-    lines
-        .into_iter()
-        .map(|line| format!(" DUPLICATE {line}"))
-        .collect()
-}
-
-pub(super) fn banner(frame: &mut Frame, area: Rect, lines: Vec<String>, theme: &Theme) {
+/// The duplicate-instance banner; the model keeps its text up to date.
+pub(super) fn banner(frame: &mut Frame, area: Rect, lines: &[String], theme: &Theme) {
     if lines.is_empty() {
         return;
     }
     let text: Vec<Line> = lines
-        .into_iter()
-        .map(|l| Line::styled(l, theme.danger()))
+        .iter()
+        .map(|l| Line::styled(l.as_str(), theme.danger()))
         .collect();
     frame.render_widget(
         Paragraph::new(text)

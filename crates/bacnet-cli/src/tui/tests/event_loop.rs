@@ -2,7 +2,7 @@
 //! time: quitting, Ctrl-C, release events, and redrawing only when dirty.
 
 use std::io;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,8 +11,8 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModif
 use tokio::sync::mpsc;
 
 use super::*;
-use crate::tui::event_loop::{run, LoopIo, LoopStats};
-use crate::tui::terminal::Signals;
+use crate::tui::event_loop::{run, LoopIo, LoopStats, INTERNAL_ERROR, WORKER_STOPPED};
+use crate::tui::terminal::{chain_panic_hook, PanicHook, Signals};
 
 type Input = std::pin::Pin<Box<dyn Stream<Item = io::Result<Event>>>>;
 
@@ -41,6 +41,7 @@ fn harness() -> Harness {
             dropped: Arc::new(AtomicU64::new(0)),
             fps: 20,
             signals: Signals::none(),
+            alive: || true,
         },
     }
 }
@@ -156,11 +157,8 @@ async fn commands_from_keys_reach_the_worker() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_loop_ends_when_input_ends_and_survives_a_stopped_worker() {
+async fn the_loop_ends_when_input_ends() {
     let mut h = harness();
-    // A worker that has already gone: the loop keeps running.
-    let (_, closed) = mpsc::channel(1);
-    h.io.events = closed;
     let keys = h.keys;
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -170,4 +168,63 @@ async fn the_loop_ends_when_input_ends_and_survives_a_stopped_worker() {
     run_app(&mut app, &mut h.io).await;
     assert!(app.quit, "end of input quits");
     assert_eq!(app.exit_error, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_worker_that_stops_early_ends_the_loop_with_an_error() {
+    let mut h = harness();
+    let (worker_tx, worker_rx) = mpsc::channel(1);
+    h.io.events = worker_rx;
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        drop(worker_tx);
+    });
+    let mut app = connected_app();
+    run_app(&mut app, &mut h.io).await;
+    assert!(app.quit);
+    assert_eq!(app.exit_error.as_deref(), Some(WORKER_STOPPED));
+    assert_eq!(app.exit_code, Some(1));
+}
+
+/// Liveness for the panic test: a stand-in for the real terminal state, which
+/// the test's panic hook clears as the real hook's restore does.
+static TEST_TERMINAL_ACTIVE: AtomicBool = AtomicBool::new(true);
+
+fn test_terminal_active() -> bool {
+    TEST_TERMINAL_ACTIVE.load(Ordering::SeqCst)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_panic_in_another_task_stops_drawing_and_ends_the_loop() {
+    let mut h = harness();
+    h.io.alive = test_terminal_active;
+    // The production hook's shape: restore first, then the previous hook
+    // (silent here so the test log stays readable).
+    let original = std::panic::take_hook();
+    let silent: PanicHook = Box::new(|_: &std::panic::PanicHookInfo<'_>| {});
+    std::panic::set_hook(chain_panic_hook(silent, || {
+        TEST_TERMINAL_ACTIVE.store(false, Ordering::SeqCst)
+    }));
+    let panicked = tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        panic!("a bug in a client task");
+    });
+    // Worker events after the panic make the state dirty; none may be drawn.
+    let events = h.events.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let _ = events
+            .send(WorkerEvent::Discovered(row(9, "10.0.0.9:47808", 1, 0)))
+            .await;
+    });
+    let mut app = connected_app();
+    let stats = run_app(&mut app, &mut h.io).await;
+    std::panic::set_hook(original);
+    assert!(panicked.await.unwrap_err().is_panic());
+    assert!(app.quit);
+    assert_eq!(app.exit_error.as_deref(), Some(INTERNAL_ERROR));
+    assert_eq!(
+        stats.frames, 1,
+        "nothing drawn after the terminal was restored"
+    );
 }

@@ -45,10 +45,11 @@ owo-colors = "4.3.0"
 if-addrs = "0.15"
 
 # Terminal UI (`bacnet tui`). ratatui without its calendar widget (which pulls
-# in the `time` crate) or macros. crossterm is the version ratatui re-exports;
-# it is named here only to turn on `event-stream`, and the code imports it as
-# `ratatui::crossterm`.
-ratatui = { version = "0.30.2", optional = true, default-features = false, features = ["crossterm", "layout-cache", "underline-color"] }
+# in the `time` crate), macros, or `underline-color`, whose weak references to
+# the other backends would lock about 60 crates that are never built.
+# crossterm is the version ratatui re-exports; it is named here only to turn
+# on `event-stream`, and the code imports it as `ratatui::crossterm`.
+ratatui = { version = "0.30.2", optional = true, default-features = false, features = ["crossterm", "layout-cache"] }
 crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures-util = { workspace = true, optional = true }
 

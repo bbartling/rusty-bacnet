@@ -29,6 +29,12 @@ use super::view;
 /// Worker events applied per wake-up before yielding to input and frames.
 const DRAIN_BUDGET: usize = 256;
 
+/// Exit message when a panic elsewhere has already restored the terminal.
+pub(crate) const INTERNAL_ERROR: &str = "internal error (see the panic message above)";
+
+/// Exit message when the worker task ends while the UI is still running.
+pub(crate) const WORKER_STOPPED: &str = "internal error: the network worker stopped unexpectedly";
+
 /// Channels and settings the loop runs with.
 pub(crate) struct LoopIo<I> {
     /// Terminal events.
@@ -43,6 +49,10 @@ pub(crate) struct LoopIo<I> {
     pub(crate) fps: u16,
     /// Signals that end the loop.
     pub(crate) signals: Signals,
+    /// False once the terminal has been restored behind the loop's back (by
+    /// the panic hook). [`terminal::is_active`](super::terminal::is_active)
+    /// in production.
+    pub(crate) alive: fn() -> bool,
 }
 
 /// Counters for tests.
@@ -68,8 +78,13 @@ where
     let mut frames = tokio::time::interval(period);
     frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut worker_open = true;
-    draw(terminal, app, &mut stats)?;
+    let alive = io.alive;
+    draw(terminal, app, &mut stats, alive)?;
     while !app.quit {
+        if !alive() {
+            app.fail(INTERNAL_ERROR, 1);
+            break;
+        }
         tokio::select! {
             input = io.input.next() => match input {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
@@ -77,12 +92,12 @@ where
                         apply(app, action, &io.commands);
                     }
                     if app.dirty && !app.quit {
-                        draw(terminal, app, &mut stats)?;
+                        draw(terminal, app, &mut stats, alive)?;
                     }
                 }
                 Some(Ok(Event::Resize(..))) => {
                     apply(app, Action::Resize, &io.commands);
-                    draw(terminal, app, &mut stats)?;
+                    draw(terminal, app, &mut stats, alive)?;
                 }
                 Some(Ok(_)) => {}
                 Some(Err(error)) => return Err(error.into()),
@@ -96,7 +111,7 @@ where
                 };
                 apply(app, tick, &io.commands);
                 if app.dirty {
-                    draw(terminal, app, &mut stats)?;
+                    draw(terminal, app, &mut stats, alive)?;
                 }
             }
             event = io.events.recv(), if worker_open => match event {
@@ -110,15 +125,16 @@ where
                     }
                 }
                 None => {
+                    // The worker owns the client; without it the screen
+                    // would only go stale. It ends early only on a bug.
                     worker_open = false;
-                    if app.exit_error.is_none() && !app.quit {
-                        tracing::warn!("the network worker stopped");
+                    if !app.quit {
+                        app.fail(WORKER_STOPPED, 1);
                     }
                 }
             },
             signal = io.signals.recv() => {
-                app.exit_error = Some(format!("terminated by {signal}"));
-                app.quit = true;
+                app.fail(format!("terminated by {}", signal.name), signal.code);
             }
         }
     }
@@ -137,11 +153,18 @@ fn draw<B>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     stats: &mut LoopStats,
+    alive: fn() -> bool,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     B: Backend,
     B::Error: Send + Sync + 'static,
 {
+    if !alive() {
+        // A panic elsewhere restored the terminal: drawing now would paint
+        // the alternate screen's frame over the shell in cooked mode.
+        app.fail(INTERNAL_ERROR, 1);
+        return Ok(());
+    }
     app.settle();
     terminal.draw(|frame| view::draw(frame, app))?;
     app.dirty = false;

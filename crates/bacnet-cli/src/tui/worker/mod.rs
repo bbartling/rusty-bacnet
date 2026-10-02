@@ -134,7 +134,11 @@ impl DeviceFeed {
                 let event = match event.kind {
                     DeviceEventKind::Discovered => WorkerEvent::Discovered(row),
                     DeviceEventKind::Updated => WorkerEvent::Updated(row),
-                    DeviceEventKind::Lost => WorkerEvent::Lost(row),
+                    DeviceEventKind::Lost => {
+                        // The row leaves the table, so say so in the log pane.
+                        tracing::info!("device {} lost ({})", row.instance, row.address);
+                        WorkerEvent::Lost(row)
+                    }
                 };
                 if sink.offer(event) == Offer::Dropped {
                     self.needs_resync = true;

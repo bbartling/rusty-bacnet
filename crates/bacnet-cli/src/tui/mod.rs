@@ -105,13 +105,23 @@ pub(crate) async fn run(cli: Cli) -> crate::CliResult {
         log,
     ));
 
+    let signals = Signals::install()?;
+    // Before any network traffic: a terminal that passes the TTY check can
+    // still refuse raw mode (mintty and MSYS ptys on Windows).
+    let mut terminal = match terminal::enter() {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            eprintln!(
+                "{}",
+                terminal::unusable_hint(&format!("raw mode failed: {error}"))
+            );
+            std::process::exit(1);
+        }
+    };
     let (sink, events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
     let dropped = sink.dropped_counter();
     let (commands, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
-    let signals = Signals::install()?;
     let worker = session::spawn(plan, sink, command_rx);
-
-    let mut terminal = terminal::enter()?;
     let mut io = LoopIo {
         input: EventStream::new(),
         events,
@@ -119,25 +129,45 @@ pub(crate) async fn run(cli: Cli) -> crate::CliResult {
         dropped,
         fps,
         signals,
+        alive: terminal::is_active,
     };
     let result = Box::pin(event_loop::run(&mut terminal, &mut app, &mut io)).await;
     // Leave raw mode first: `Terminal`'s drop can report a cursor error on stderr.
     terminal::restore();
     drop(terminal);
 
-    // Closing the command channel tells the worker to stop the client.
-    drop(io);
-    if tokio::time::timeout(STOP_TIMEOUT, worker).await.is_err() {
-        tracing::warn!("the network worker did not stop in time");
+    // Closing the command channel tells the worker to stop the client. The
+    // signal handlers stay installed for the life of the process, so keep
+    // listening while waiting: otherwise Ctrl-C, now SIGINT again, would be
+    // swallowed until the timeout.
+    let LoopIo {
+        input,
+        events,
+        commands,
+        mut signals,
+        ..
+    } = io;
+    drop((input, events, commands));
+    let mut signal = None;
+    tokio::select! {
+        joined = tokio::time::timeout(STOP_TIMEOUT, worker) => {
+            if joined.is_err() {
+                tracing::warn!("the network worker did not stop in time");
+            }
+        }
+        received = signals.recv() => signal = Some(received),
     }
-    let error = match result {
-        Ok(_) => app.exit_error.take(),
-        Err(error) => Some(error.to_string()),
+    let (error, code) = match (result, signal) {
+        (Err(error), _) => (Some(error.to_string()), 1),
+        (Ok(_), Some(signal)) if app.exit_error.is_none() => {
+            (Some(format!("terminated by {}", signal.name)), signal.code)
+        }
+        (Ok(_), _) => (app.exit_error.take(), app.exit_code.unwrap_or(1)),
     };
     if let Some(error) = error {
         // stderr may be gone (SIGHUP), so a failed write is not a panic.
         let _ = writeln!(std::io::stderr(), "Error: {error}");
-        std::process::exit(1);
+        std::process::exit(code);
     }
     Ok(())
 }

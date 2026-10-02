@@ -306,8 +306,12 @@ fn parse_listen(text: &str) -> Result<Duration, String> {
     }
 }
 
-/// The one-line warning for a global or unbounded Who-Is, or `None`.
+/// The one-line warning for a global or unbounded Who-Is, or `None`. A
+/// directed Who-Is goes to one address, so it never warns.
 pub(crate) fn warning_for(spec: &WhoIsSpec, known: usize) -> Option<String> {
+    if matches!(spec.scope, WhoIsScope::Directed { .. }) {
+        return None;
+    }
     let volume = match known {
         0 => String::new(),
         1 => " (1 device known)".to_string(),
@@ -381,6 +385,20 @@ mod tests {
         // An edit withdraws the pending confirmation.
         global.key(FormKey::Backspace, AddressStyle::Bip, 0);
         assert_eq!(global.warning, None);
+    }
+
+    #[test]
+    fn a_directed_who_is_without_a_range_sends_on_the_first_enter() {
+        let mut form = WhoIsForm {
+            scope: ScopeChoice::Directed,
+            target: "10.0.0.7:47809".into(),
+            ..WhoIsForm::default()
+        };
+        let FormOutcome::Send(spec) = form.key(FormKey::Submit, AddressStyle::Bip, 9) else {
+            panic!("a directed Who-Is reaches one address and must not warn");
+        };
+        assert_eq!(spec.range, None);
+        assert_eq!(warning_for(&spec, 9), None);
     }
 
     #[test]

@@ -4,6 +4,11 @@
 //!
 //! The hub gives every port a 6-byte MAC shaped like a BACnet/IP address, so
 //! frames read like a real site and stay the same on every run.
+//!
+//! The tests run on paused tokio time. Everything here is in memory and on
+//! the test's runtime, so the clock only moves when every task is idle: the
+//! listen window cannot end while a reply is still being processed, however
+//! slow the machine. Reply counts are therefore exact rather than timing-bound.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -203,8 +208,8 @@ impl Site {
         self.pump_until(|app| app.op.as_ref().is_some_and(|op| !op.running()))
             .await;
         assert_eq!(self.app.op.as_ref().unwrap().state, OpState::Done);
-        // Replies are in memory and arrive within the window; this only keeps
-        // a very slow runner from failing on a reply still in flight.
+        // With paused time every reply is in before the window ends; this is
+        // a second guard that costs nothing when it already holds.
         self.pump_until(|app| app.devices.len() >= rows).await;
     }
 
@@ -220,7 +225,7 @@ impl Site {
 
 const LAB: [(u8, u32); 5] = [(100, 100), (101, 101), (102, 102), (103, 103), (104, 104)];
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn range_who_is_lists_exactly_the_three_devices_in_range() {
     let mut site = Site::start(&LAB).await;
     site.who_is("101-103", 3).await;
@@ -230,7 +235,7 @@ async fn range_who_is_lists_exactly_the_three_devices_in_range() {
     site.stop().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn unbounded_who_is_lists_all_five_devices() {
     let mut site = Site::start(&LAB).await;
     site.who_is("", 5).await;
@@ -241,7 +246,7 @@ async fn unbounded_who_is_lists_all_five_devices() {
     site.stop().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn two_servers_with_one_instance_raise_a_banner_naming_both() {
     let mut site = Site::start(&[(20, 200), (21, 200), (30, 300)]).await;
     site.who_is("", 2).await;

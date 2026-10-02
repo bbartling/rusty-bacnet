@@ -25,9 +25,6 @@ pub(crate) const FULL_WIDTH: u16 = 120;
 /// Height from which the log pane gets more room.
 pub(crate) const FULL_HEIGHT: u16 = 40;
 
-/// Most duplicate-instance lines shown before summarising the rest.
-const MAX_BANNER_LINES: usize = 3;
-
 /// Draw one frame.
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -36,7 +33,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         too_small(frame, area, &theme);
         return;
     }
-    let banner = devices::banner_lines(app);
+    let banner = app.duplicates.banner();
     // Long addresses wrap rather than vanish off the edge.
     let banner_height: usize = banner
         .iter()
@@ -85,7 +82,8 @@ fn too_small(frame: &mut Frame, area: Rect, theme: &Theme) {
             "bacnet tui needs at least {MIN_WIDTH}x{MIN_HEIGHT} \
              ({FULL_WIDTH}x{FULL_HEIGHT} for the full layout)."
         )),
-        Line::raw("Resize the window, or press q to quit."),
+        // Not "q": it types into an open form or filter.
+        Line::raw("Resize the window, or press Ctrl-C twice to quit."),
     ];
     frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), area);
 }

@@ -4,7 +4,7 @@ expression: "screen(&mut app, w, h)"
 ---
 "Terminal too small: 80x23.                                                      "
 "bacnet tui needs at least 80x24 (120x40 for the full layout).                   "
-"Resize the window, or press q to quit.                                          "
+"Resize the window, or press Ctrl-C twice to quit.                               "
 "                                                                                "
 "                                                                                "
 "                                                                                "

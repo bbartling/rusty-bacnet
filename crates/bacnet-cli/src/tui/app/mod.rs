@@ -209,6 +209,8 @@ pub(crate) struct App {
     pub(crate) quit: bool,
     /// Why the TUI ended, if it was an error.
     pub(crate) exit_error: Option<String>,
+    /// Exit status to use with `exit_error`; `None` means 1.
+    pub(crate) exit_code: Option<i32>,
     /// The screen needs a redraw.
     pub(crate) dirty: bool,
 }
@@ -243,6 +245,7 @@ impl App {
             log_generation,
             quit: false,
             exit_error: None,
+            exit_code: None,
             dirty: true,
         }
     }
@@ -250,6 +253,15 @@ impl App {
     /// Rebuild derived state (the visible table order) before drawing.
     pub(crate) fn settle(&mut self) {
         self.devices.settle();
+    }
+
+    /// End the TUI with an error, keeping the first reason if there are two.
+    pub(crate) fn fail(&mut self, error: impl Into<String>, code: i32) {
+        if self.exit_error.is_none() {
+            self.exit_error = Some(error.into());
+            self.exit_code = Some(code);
+        }
+        self.quit = true;
     }
 
     /// True while a Who-Is is sending or listening.
@@ -425,8 +437,7 @@ impl App {
             WorkerEvent::Connected { local } => self.link = Link::Up { local },
             WorkerEvent::ConnectFailed { error } => {
                 self.link = Link::Failed(error.clone());
-                self.exit_error = Some(error);
-                self.quit = true;
+                self.fail(error, 1);
             }
             WorkerEvent::Discovered(row) | WorkerEvent::Updated(row) => {
                 if let Some(op) = self.op.as_mut().filter(|op| op.running()) {
