@@ -6,7 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
-    PropertyWriteCapability::{Always, ReadOnly},
+    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Canonical effective rows for Life Safety Point (type 21, Clause 12.15
@@ -18,11 +18,10 @@ use crate::property_metadata::{
 // intrinsic-reporting/event rows, Reliability_Evaluation_Inhibit,
 // Value_Source/audit/tags/profile rows) stay absent until dispatch exists.
 // Mode carries the table W code; Accepted_Modes (R) follows it, read-only, and
-// bounds what a Mode write may select (#1092). Tracking_Value, served by
-// both objects, and Reliability carry the table R1 OOS-writable footnote, but
-// dispatch currently has no write arm for either property, so both rows
-// mirror dispatch as ReadOnly rather than advertising a route write_property
-// rejects.
+// bounds what a Mode write may select (#1092). Tracking_Value and Reliability
+// carry footnote 1 of both tables, writability while Out_Of_Service is TRUE,
+// and dispatch takes their writes only then (#1108), so both rows are
+// WhenOutOfService.
 const POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -33,14 +32,14 @@ const POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::ACCEPTED_MODES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SILENCED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OPERATION_EXPECTED, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::MEMBER_OF, Optional, None, ReadOnly),
     PropertyMetadata::new(P::DIRECT_READING, Optional, None, Always),
     PropertyMetadata::new(P::MAINTENANCE_REQUIRED, Optional, None, Always),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -54,12 +53,12 @@ const ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::ACCEPTED_MODES, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SILENCED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OPERATION_EXPECTED, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::ZONE_MEMBERS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -87,6 +86,50 @@ mod tests {
                     && code == expected.to_raw() as u32),
             "expected {expected:?}, got {error:?}"
         );
+    }
+
+    /// Each row's capability against dispatch, in service and out of service:
+    /// the `always` rows take a same-value write in both, Tracking_Value and
+    /// Reliability only out of service (#1108), and the rest in neither.
+    fn assert_rows_match_dispatch(object: &mut dyn BACnetObject, always: &[P]) {
+        let metadata = object.property_metadata().into_owned();
+        for out_of_service in [false, true] {
+            object
+                .write_property(
+                    P::OUT_OF_SERVICE,
+                    None,
+                    PropertyValue::Boolean(out_of_service),
+                    None,
+                )
+                .unwrap();
+            for row in &metadata {
+                let p = row.property_identifier;
+                let capability = if always.contains(&p) {
+                    Always
+                } else if matches!(p, P::TRACKING_VALUE | P::RELIABILITY) {
+                    WhenOutOfService
+                } else {
+                    ReadOnly
+                };
+                assert_eq!(row.write_capability, capability, "{p:?}");
+                assert_eq!(
+                    object.is_writable_property(p),
+                    capability.is_writable(),
+                    "{p:?}"
+                );
+                let before = object.read_property(p, None).unwrap();
+                let result = object.write_property(p, None, before.clone(), None);
+                if capability == Always || (capability == WhenOutOfService && out_of_service) {
+                    result.unwrap();
+                } else {
+                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+                }
+                assert_eq!(object.read_property(p, None).unwrap(), before, "{p:?}");
+            }
+        }
+        object
+            .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(false), None)
+            .unwrap();
     }
 
     fn assert_conformance(metadata: &[PropertyMetadata], required: &[P]) {
@@ -271,31 +314,16 @@ mod tests {
         let mut object = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
         object.set_description("original");
         let metadata = object.property_metadata().into_owned();
-        for row in &metadata {
-            let p = row.property_identifier;
-            let writable = matches!(
-                p,
-                P::MODE
-                    | P::DIRECT_READING
-                    | P::MAINTENANCE_REQUIRED
-                    | P::DESCRIPTION
-                    | P::OUT_OF_SERVICE
-            );
-            assert_eq!(
-                row.write_capability,
-                if writable { Always } else { ReadOnly },
-                "{p:?}"
-            );
-            assert_eq!(object.is_writable_property(p), writable, "{p:?}");
-            let before = object.read_property(p, None).unwrap();
-            let result = object.write_property(p, None, before.clone(), None);
-            if writable {
-                result.unwrap();
-            } else {
-                assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
-            }
-            assert_eq!(object.read_property(p, None).unwrap(), before);
-        }
+        assert_rows_match_dispatch(
+            &mut object,
+            &[
+                P::MODE,
+                P::DIRECT_READING,
+                P::MAINTENANCE_REQUIRED,
+                P::DESCRIPTION,
+                P::OUT_OF_SERVICE,
+            ],
+        );
         for (property, value, error) in [
             (
                 P::MODE,
@@ -362,24 +390,7 @@ mod tests {
         let mut object = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
         object.set_description("original");
         let metadata = object.property_metadata().into_owned();
-        for row in &metadata {
-            let p = row.property_identifier;
-            let writable = matches!(p, P::MODE | P::DESCRIPTION | P::OUT_OF_SERVICE);
-            assert_eq!(
-                row.write_capability,
-                if writable { Always } else { ReadOnly },
-                "{p:?}"
-            );
-            assert_eq!(object.is_writable_property(p), writable, "{p:?}");
-            let before = object.read_property(p, None).unwrap();
-            let result = object.write_property(p, None, before.clone(), None);
-            if writable {
-                result.unwrap();
-            } else {
-                assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
-            }
-            assert_eq!(object.read_property(p, None).unwrap(), before);
-        }
+        assert_rows_match_dispatch(&mut object, &[P::MODE, P::DESCRIPTION, P::OUT_OF_SERVICE]);
         for (property, value, error) in [
             (
                 P::MODE,

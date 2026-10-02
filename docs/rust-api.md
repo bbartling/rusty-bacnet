@@ -3286,6 +3286,19 @@ the typed enums: `set_present_value` and `set_tracking_value` a
 `SilencedState` and `set_operation_expected` a `LifeSafetyOperation`. Each stores
 the value as given, so a proprietary value reads back unchanged.
 
+While `Out_Of_Service` is TRUE, WriteProperty, WritePropertyMultiple and
+`write_local` take `Tracking_Value` (a standard `LifeSafetyState` or one from
+256 to 65535) and `Reliability` (a named value or one from 64 to 65535); in
+service both are `PROPERTY / WRITE_ACCESS_DENIED` (#1108). Entering out of
+service sets the object's own `Tracking_Value` and `Reliability` aside and the
+return to service restores them. Meanwhile `set_tracking_value` and a reset
+commit's `tracking_value` replace the value set aside, not the simulated one,
+and `set_reliability_internal`, the in-service route for a fault the
+application detects, is refused. A simulated value notifies through the same
+COV path as any write, and Present_Value, `Silenced` and `Operation_Expected`
+don't follow it; a reset executor sees the simulated `Tracking_Value` in its
+context.
+
 `Accepted_Modes` lists the modes a WriteProperty or WritePropertyMultiple of
 `Mode` may select. It starts as every standard `LifeSafetyMode`, and
 `set_accepted_modes` replaces it (each mode kept once, in the order given). A
@@ -3297,9 +3310,8 @@ This is a bounded operational-state slice with pinned partial metadata (Point
 `POINT_BASE` 18 rows, Zone `ZONE_BASE` 16 rows; exact PICS projection tests) and
 network read-only `Silenced`/`Operation_Expected`/`Accepted_Modes`; not complete
 Life Safety Point/Zone tables, formal PICS/BIBB/profile/device-advertisement,
-out-of-service tracking/`Reliability` writability, or intrinsic
-`CHANGE_OF_LIFE_SAFETY` event-algorithm conformance (`Event_State`
-intrinsic-only, `IN_ALARM` latent with no setter).
+or intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance
+(`Event_State` intrinsic-only, `IN_ALARM` latent with no setter).
 
 ### Handled Services
 

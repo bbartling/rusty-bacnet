@@ -131,8 +131,10 @@ fn write_property_multiple_stops_at_the_unlisted_mode_after_committing_the_prefi
     }
 }
 
+/// The Zone is in service here; out of service its Tracking_Value takes
+/// writes (`life_safety_oos_writes.rs`, #1108).
 #[test]
-fn accepted_modes_and_the_zone_tracking_value_refuse_writes() {
+fn accepted_modes_and_the_in_service_zone_tracking_value_refuse_writes() {
     let (mut db, [point, zone]) = life_safety_db();
     for oid in [point, zone] {
         let mut list = BytesMut::new();

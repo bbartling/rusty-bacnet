@@ -1,5 +1,6 @@
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::schedule::ScheduleObject;
@@ -359,6 +360,16 @@ reliability_gate_test!(
 reliability_gate_test!(
     schedule_reliability_requires_out_of_service,
     ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap()
+);
+// Clauses 12.15 and 12.16: footnote 1 of Tables 12-18 and 12-19 makes
+// Reliability writable while Out_Of_Service is TRUE (#1108).
+reliability_gate_test!(
+    life_safety_point_reliability_requires_out_of_service,
+    LifeSafetyPointObject::new(1, "LSP-1").unwrap()
+);
+reliability_gate_test!(
+    life_safety_zone_reliability_requires_out_of_service,
+    LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()
 );
 
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {

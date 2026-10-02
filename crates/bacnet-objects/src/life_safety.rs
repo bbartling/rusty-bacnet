@@ -42,7 +42,10 @@
 //!
 //! Point and Zone both serve Tracking_Value (Clauses 12.15.5 and 12.16.5): the
 //! application keeps it current through `set_tracking_value` or a reset
-//! commit, and both objects offer it for property COV.
+//! commit, and both objects offer it for property COV. While Out_Of_Service is
+//! TRUE a client may write Tracking_Value and Reliability instead (#1108); see
+//! `out_of_service.rs` for how the simulated values interact with the rest of
+//! the object.
 //!
 //! Accepted_Modes (Clauses 12.15.13 and 12.16.13) is the configured set of
 //! modes a network write of Mode may select. It starts as every standard
@@ -63,13 +66,25 @@ use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
 mod metadata;
+mod out_of_service;
 mod reset;
+
+use out_of_service::{DeviceValues, Simulation};
 
 pub use reset::{
     LifeSafetyPointResetCommit, LifeSafetyPointResetContext, LifeSafetyPointResetExecutor,
     LifeSafetyResetError, LifeSafetyZoneResetCommit, LifeSafetyZoneResetContext,
     LifeSafetyZoneResetExecutor,
 };
+
+/// Whether a state is one BACnetLifeSafetyState defines or one from the
+/// proprietary range 256..=65535 (Clause 21).
+fn valid_life_safety_state(state: LifeSafetyState) -> bool {
+    LifeSafetyState::ALL_NAMED
+        .iter()
+        .any(|&(_, named)| named == state)
+        || (256..=65_535).contains(&state.to_raw())
+}
 
 fn life_safety_error(code: ErrorCode) -> Error {
     Error::Protocol {
@@ -234,6 +249,9 @@ pub struct LifeSafetyPointObject {
     out_of_service: bool,
     /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
+    /// The application's Tracking_Value and Reliability while a client
+    /// simulates them.
+    device_values: DeviceValues,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyPointResetExecutor>,
 }
@@ -263,6 +281,7 @@ impl LifeSafetyPointObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
+            device_values: DeviceValues::default(),
             reset_executor: None,
         })
     }
@@ -286,9 +305,21 @@ impl LifeSafetyPointObject {
         self.accepted_modes = distinct_modes(modes);
     }
 
-    /// Set the tracking value.
+    /// Set the tracking value the device reports.
+    ///
+    /// While Out_Of_Service is TRUE a client's simulated value keeps being
+    /// served, and this one takes over on the return to service.
     pub fn set_tracking_value(&mut self, state: LifeSafetyState) {
-        self.tracking_value = state;
+        self.simulation().track(state);
+    }
+
+    fn simulation(&mut self) -> Simulation<'_> {
+        Simulation {
+            out_of_service: &mut self.out_of_service,
+            reliability: &mut self.reliability,
+            tracking_value: &mut self.tracking_value,
+            device_values: &mut self.device_values,
+        }
     }
 
     /// Set the locally determined silenced state.
@@ -421,9 +452,7 @@ impl BACnetObject for LifeSafetyPointObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = self.simulation().write(property, &value) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -479,6 +508,10 @@ impl BACnetObject for LifeSafetyPointObject {
         self.set_operation_expected(operation);
         Ok(())
     }
+
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -514,6 +547,9 @@ pub struct LifeSafetyZoneObject {
     out_of_service: bool,
     /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
+    /// The application's Tracking_Value and Reliability while a client
+    /// simulates them.
+    device_values: DeviceValues,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyZoneResetExecutor>,
 }
@@ -541,6 +577,7 @@ impl LifeSafetyZoneObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
+            device_values: DeviceValues::default(),
             reset_executor: None,
         })
     }
@@ -564,9 +601,21 @@ impl LifeSafetyZoneObject {
         self.accepted_modes = distinct_modes(modes);
     }
 
-    /// Set the tracking value.
+    /// Set the tracking value the device reports.
+    ///
+    /// While Out_Of_Service is TRUE a client's simulated value keeps being
+    /// served, and this one takes over on the return to service.
     pub fn set_tracking_value(&mut self, state: LifeSafetyState) {
-        self.tracking_value = state;
+        self.simulation().track(state);
+    }
+
+    fn simulation(&mut self) -> Simulation<'_> {
+        Simulation {
+            out_of_service: &mut self.out_of_service,
+            reliability: &mut self.reliability,
+            tracking_value: &mut self.tracking_value,
+            device_values: &mut self.device_values,
+        }
     }
 
     /// Set the locally determined silenced state.
@@ -673,9 +722,7 @@ impl BACnetObject for LifeSafetyZoneObject {
         {
             return Err(common::write_access_denied_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = self.simulation().write(property, &value) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -731,6 +778,10 @@ impl BACnetObject for LifeSafetyZoneObject {
         self.set_operation_expected(operation);
         Ok(())
     }
+
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
+    }
 }
 
 // ===========================================================================
@@ -748,3 +799,6 @@ mod event_state_tests;
 
 #[cfg(test)]
 mod accepted_modes_tests;
+
+#[cfg(test)]
+mod out_of_service_tests;

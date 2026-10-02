@@ -96,6 +96,7 @@ mod get_event_information_projection;
 mod indexed_write_presence;
 mod life_safety_cov;
 mod life_safety_mode_writes;
+mod life_safety_oos_writes;
 mod life_safety_operation;
 mod life_safety_reset;
 mod list_element_edits;

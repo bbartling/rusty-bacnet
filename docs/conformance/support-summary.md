@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 85 |
+| Priority | P1 | 86 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 57 |
+| Status | supported-with-clause-evidence | 58 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -71,6 +71,7 @@
 | `BACNET-12-ACCESS-CREDENTIAL-PROPERTY-SET` | Clause 12.35 and Table 12-40 (Credential_Status); Clause 21 BACnetBinaryPV; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-UNDEFINED-PROPERTY-ROWS` | Clause 12 property tables: Tables 12-5 (Averaging), 12-12 (Command), 12-14 (Event Enrollment), 12-16 (File), 12-17 (Group), 12-24 (Notification Class), 12-31 (Event Log), 12-32 (Load Control), 12-34 (Structured View), 12-36 (Access Point), 12-37 (Access Zone), 12-38 (Access User), 12-39 (Access Rights) and 12-40 (Access Credential); the Status_Flags descriptions of Clauses 12.10, 12.12, 12.21, 12.27, 12.28, 12.33, 12.34 and 12.35; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-LIFE-SAFETY-GLOBAL-GROUP-REQUIRED-ROWS` | Clause 12.15, Table 12-18 (Life Safety Point) and Clauses 12.15.12 (Mode) and 12.15.13 (Accepted_Modes); Clause 12.16, Table 12-19 (Life Safety Zone) and Clauses 12.16.5 (Tracking_Value), 12.16.12 and 12.16.13; Clause 12.50, Table 12-57 (Global Group) and Clauses 12.50.9 (Event_State) and 12.50.10 (Member_Status_Flags); Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION` | Clause 12.15, Table 12-18 footnote 1 and Clauses 12.15.4, 12.15.5, 12.15.10 and 12.15.11 (Life Safety Point); Clause 12.16, Table 12-19 footnote 1 and Clauses 12.16.4, 12.16.5, 12.16.10 and 12.16.11 (Life Safety Zone); Clause 13.3.8 CHANGE_OF_LIFE_SAFETY; Clause 15.9.1.3 WriteProperty errors; Clause 21 BACnetLifeSafetyState and BACnetReliability | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-LOOP-PROPERTY-SET` | Clause 12.17 and Table 12-20 (Controlled_Variable_Units, Action, Priority_For_Writing; footnotes 1 to 3 for the gain-constant units rows); Clause 21 BACnetAction and BACnetEngineeringUnits; Clause 12.1.5.1; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-12-DEVICE-ACTIVE-COV-SUBSCRIPTIONS` | Clause 12.11, Table 12-13 and 12.11.31; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetObjectPropertyReference, ReadProperty-ACK, and ReadAccessResult productions | P1 | in-progress | 1 |
@@ -80,7 +81,7 @@
 | `BACNET-15-WRITEGROUP-SERVER-WITHDRAWAL` | Clause 15.11 (pp. 757-758); Clause 19.2.1.6 (p. 809) | P1 | unsupported-by-design | 0 |
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
-| `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 and 12.17.9 Out_Of_Service (Loop Present_Value and Reliability); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 and 12.17.9 Out_Of_Service (Loop Present_Value and Reliability); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clauses 12.15 and 12.16, Tables 12-18 and 12-19 footnote 1 (Life Safety Point and Zone); Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-BINARY-LIGHTING-OPERATIONS` | Clause 12.55 and Table 12-70, including 12.55.4.1 and 12.55.10.1; Clause 19.2 command prioritization; Clause 21 BACnetBinaryLightingPV | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
