@@ -529,6 +529,7 @@ impl Request<'_> {
                     &db,
                     self.source_mac,
                     self.source_network,
+                    Some(self.req.max_apdu_length),
                     request,
                 ) {
                     Ok(subscriptions) => {

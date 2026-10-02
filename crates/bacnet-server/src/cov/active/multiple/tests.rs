@@ -97,7 +97,14 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
         CovNotificationKind::Multiple,
     );
     table
-        .subscribe_multiple(&unconfirmed, &direct(), first, 5, vec![present, status])
+        .subscribe_multiple(
+            &unconfirmed,
+            &direct(),
+            first,
+            5,
+            None,
+            vec![present, status],
+        )
         .unwrap();
     let later = now + Duration::from_secs(60);
     let other_form = reference(
@@ -108,7 +115,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
         CovNotificationKind::Multiple,
     );
     table
-        .subscribe_multiple(&confirmed, &direct(), later, 7, vec![other_form])
+        .subscribe_multiple(&confirmed, &direct(), later, 7, None, vec![other_form])
         .unwrap();
 
     let rows = |table: &CovSubscriptionTable, at| {
@@ -143,6 +150,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
             &direct(),
             now + Duration::from_secs(10),
             9,
+            None,
             vec![],
         )
         .unwrap();

@@ -20,15 +20,17 @@ impl CovSubscriptionTable {
             existing.as_deref(),
         )?;
         let generation = self.reserve_generations(1)?;
-        Ok(self.publish(key, sub, generation, None, None))
+        Ok(self.publish(key, sub, generation, None, None, None))
     }
 
     /// Atomically accept final unique Multiple references and refresh their exact context.
     /// All identities/options are validated before quota/generation reservation or refresh.
-    /// The request's expiry and maximum notification delay become the whole
+    /// The request's expiry, maximum notification delay and the maximum APDU
+    /// its subscriber advertised (`None` when unknown) become the whole
     /// context's (last write wins). The delay bounds how long the context's
     /// timestamped changes may stay queued after a notification failed or was
-    /// held back.
+    /// held back; notifications fit the smaller of the subscriber's maximum
+    /// APDU and the local one.
     /// The admitted route also replaces the route of every retained reference,
     /// including empty renewals. A changed route fences old snapshots while
     /// preserving unreplaced observations; same-route refresh retains authority,
@@ -43,6 +45,7 @@ impl CovSubscriptionTable {
         route: &SubscriberEndpoint,
         expires_at: Instant,
         max_notification_delay: u32,
+        subscriber_max_apdu: Option<u16>,
         mut subscriptions: Vec<CovSubscription>,
     ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
         context.recipient.validate()?;
@@ -84,6 +87,7 @@ impl CovSubscriptionTable {
                 previously_indefinite += usize::from(entry.expires_at.is_none());
                 entry.subscription.expires_at = Some(expires_at);
                 entry.max_notification_delay = Some(max_notification_delay);
+                entry.subscriber_max_apdu = subscriber_max_apdu;
                 entry.subscription.subscriber_mac = route.mac.clone();
                 entry.subscription.subscriber_network = route.network.clone();
                 entry.flight = flight.clone();
@@ -104,11 +108,16 @@ impl CovSubscriptionTable {
                     sub,
                     first_generation + offset as u64,
                     Some(max_notification_delay),
+                    subscriber_max_apdu,
                     Some(flight.clone()),
                 )
             })
             .collect();
-        self.timed.lock().set_delay(context, max_notification_delay);
+        {
+            let mut timed = self.timed.lock();
+            timed.set_delay(context, max_notification_delay);
+            timed.set_apdu(context, subscriber_max_apdu);
+        }
         if let Some(replaced) = replaced {
             self.fence_context_flight(context, &replaced, &keys);
         }
@@ -136,6 +145,7 @@ impl CovSubscriptionTable {
             &sub.endpoint(),
             expires_at,
             max_notification_delay,
+            None,
             vec![sub],
         )?;
         Ok(accepted.remove(0))
@@ -168,6 +178,7 @@ impl CovSubscriptionTable {
         sub: CovSubscription,
         generation: u64,
         max_notification_delay: Option<u32>,
+        subscriber_max_apdu: Option<u16>,
         context_flight: Option<super::confirmed::FlightMarker>,
     ) -> CovSubscriptionSnapshot {
         let snapshot = CovSubscriptionSnapshot {
@@ -178,6 +189,7 @@ impl CovSubscriptionTable {
             flight: context_flight.unwrap_or_default(),
             subscription: sub.clone(),
             max_notification_delay,
+            subscriber_max_apdu,
         };
         {
             let mut timed = self.timed.lock();

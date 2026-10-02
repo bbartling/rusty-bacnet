@@ -29,14 +29,21 @@
 //! Delays and waits live only with timestamped histories, so a context
 //! without one costs nothing here.
 //!
+//! History that one notification cannot carry goes out in several (§13.1,
+//! §13.18.1.1): [`TimedClaim::split_earliest`] moves the oldest history into
+//! earlier notifications, and each reference's latest change stays with the
+//! last one.
+//!
 //! Local bound policy: the pending changes of one COV-multiple context are
-//! limited to an estimate of what one notification APDU of the local maximum
-//! length can carry. The Standard expects additional notifications rather than
-//! loss (§13.1, §13.18.1.1); until notifications are split, this bounds memory
-//! by dropping instead, a documented deviation. On overflow the oldest change
-//! of the same reference is evicted first, then the oldest change in the
-//! context. A reference's newest change is never evicted, so every reference's
-//! current state is always conveyed. Each discarded change is counted in
+//! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
+//! carry, each of the smaller of the local maximum APDU and the subscriber's.
+//! The estimate counts each change's values, item framing as if every change
+//! started its own item, and a reserve for the context's untimestamped values,
+//! which travel with the last notification. Peers therefore cannot grow this
+//! state without limit. Only on overflow, the last resort, is a change dropped:
+//! the oldest of the same reference first, then the oldest in the context. A
+//! reference's newest change is never evicted, so every reference's current
+//! state is always conveyed. Each discarded change is counted in
 //! [`AtomicCovCounters::timed_changes_dropped`].
 
 use std::collections::{HashMap, VecDeque};
@@ -52,12 +59,16 @@ use tracing::warn;
 
 use super::{AtomicCovCounters, CovObservation, CovSubscriptionKey, MultipleContextKey};
 
-/// Octets reserved for the notification envelope and item framing when
-/// deriving the per-context pending bound from the local maximum APDU.
-const ENVELOPE_RESERVE: usize = 64;
-/// Estimated framing per value: property identifier, optional index, value
-/// open/close tags and the context-tagged Time_Of_Change.
-const VALUE_FRAMING: usize = 16;
+/// Notifications' worth of pending history one context may hold.
+pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
+/// Most octets a COV-multiple notification spends outside its items: the
+/// unsegmented confirmed request header (4), process identifier (5), device
+/// identifier (5), time remaining (5), the date and time envelope (12) and the
+/// list's opening and closing tags (2).
+const ENVELOPE_RESERVE: usize = 33;
+/// Octets of one item's framing: its context-tagged object identifier (5) and
+/// the opening and closing tags of its value list (2).
+pub(crate) const ITEM_FRAMING: usize = 7;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
 const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
@@ -75,6 +86,27 @@ pub(crate) struct TimedChange {
     encoded_len: usize,
 }
 
+/// Octets of a context-tagged unsigned value: its tag and the minimal
+/// big-endian content, one octet at least.
+fn unsigned_len(value: u64) -> usize {
+    1 + (1..8)
+        .find(|octets| value >> (8 * octets) == 0)
+        .unwrap_or(8)
+}
+
+/// Encoded octets of one entry of a COV-multiple value list: its property
+/// identifier, optional array index, the value between its opening and closing
+/// tags, and its Time_Of_Change when present.
+pub(crate) fn value_len(value: &COVNotificationValue) -> usize {
+    unsigned_len(u64::from(value.property_identifier.to_raw()))
+        + value
+            .property_array_index
+            .map_or(0, |index| unsigned_len(u64::from(index)))
+        + 2
+        + value.value.len()
+        + if value.time_of_change.is_some() { 5 } else { 0 }
+}
+
 impl TimedChange {
     /// Pair prepared values with the Device clock frame of the change. Every
     /// value carries the frame's local time as its Time_Of_Change.
@@ -83,10 +115,10 @@ impl TimedChange {
         mut values: Vec<COVNotificationValue>,
         observation: CovObservation,
     ) -> Self {
-        let mut encoded_len = 0;
+        let mut encoded_len = ITEM_FRAMING;
         for value in &mut values {
             value.time_of_change = Some(frame.local_time);
-            encoded_len += value.value.len() + VALUE_FRAMING;
+            encoded_len += value_len(value);
         }
         Self {
             seq: 0,
@@ -130,7 +162,21 @@ struct TimedHistory {
     committed: u64,
     /// The context's Max_Notification_Delay, as last admitted.
     delay: Duration,
+    /// Octets one notification to the context may take: the smaller of the
+    /// local maximum APDU and the subscriber's, as last admitted.
+    apdu: usize,
+    /// Most octets the context's untimestamped values have taken in one of
+    /// its reports since this history began.
+    reserve: usize,
     entries: VecDeque<TimedChange>,
+}
+
+impl TimedHistory {
+    /// Octets of pending changes the history's context may hold.
+    fn capacity(&self) -> usize {
+        (HISTORY_NOTIFICATIONS * self.apdu.saturating_sub(ENVELOPE_RESERVE))
+            .saturating_sub(self.reserve)
+    }
 }
 
 /// Pending timestamped changes of every live timestamped Multiple reference.
@@ -145,12 +191,13 @@ pub(crate) struct TimedHistories {
     wake: Arc<Notify>,
     next_seq: u64,
     next_incarnation: u64,
-    capacity: usize,
+    /// Local maximum APDU length.
+    local_apdu: usize,
     counters: Arc<AtomicCovCounters>,
 }
 
 impl TimedHistories {
-    fn new(capacity: usize, counters: Arc<AtomicCovCounters>) -> Self {
+    fn new(local_apdu: usize, counters: Arc<AtomicCovCounters>) -> Self {
         Self {
             histories: HashMap::new(),
             context_bytes: HashMap::new(),
@@ -158,7 +205,7 @@ impl TimedHistories {
             wake: Arc::default(),
             next_seq: 1,
             next_incarnation: 1,
-            capacity,
+            local_apdu,
             counters,
         }
     }
@@ -177,6 +224,31 @@ impl TimedHistories {
         }
         if shorter {
             self.rearm_context(context);
+        }
+    }
+
+    /// Apply the maximum APDU the context's subscriber last advertised, if
+    /// known, to its timestamped histories: notifications and the history
+    /// bound use the smaller of it and the local maximum.
+    pub(super) fn set_apdu(&mut self, context: &MultipleContextKey, subscriber: Option<u16>) {
+        let apdu = subscriber.map_or(self.local_apdu, |subscriber| {
+            self.local_apdu.min(usize::from(subscriber))
+        });
+        for (key, history) in &mut self.histories {
+            if key.multiple_context() == Some(context) {
+                history.apdu = apdu;
+            }
+        }
+    }
+
+    /// Note the octets the context's untimestamped values took in a report.
+    /// The history bound keeps room for the most they have taken, since they
+    /// travel with the last notification of the next report too.
+    pub(crate) fn note_reserve(&mut self, context: &MultipleContextKey, octets: usize) {
+        for (key, history) in &mut self.histories {
+            if key.multiple_context() == Some(context) {
+                history.reserve = history.reserve.max(octets);
+            }
         }
     }
 
@@ -270,6 +342,7 @@ impl TimedHistories {
     pub(super) fn reset(&mut self, key: &CovSubscriptionKey, generation: u64, delay: u32) {
         let delay = Duration::from_secs(u64::from(delay));
         let incarnation = self.next_incarnation;
+        let apdu = self.local_apdu;
         let history = self
             .histories
             .entry(key.clone())
@@ -280,6 +353,8 @@ impl TimedHistories {
                 latest: 0,
                 committed: 0,
                 delay,
+                apdu,
+                reserve: 0,
                 entries: VecDeque::new(),
             });
         if history.incarnation == incarnation {
@@ -454,10 +529,13 @@ impl TimedHistories {
     }
 
     fn enforce_bound(&mut self, key: &CovSubscriptionKey) {
-        let Some(context) = key.multiple_context().cloned() else {
+        let (Some(context), Some(capacity)) = (
+            key.multiple_context().cloned(),
+            self.histories.get(key).map(TimedHistory::capacity),
+        ) else {
             return;
         };
-        while self.context_bytes.get(&context).copied().unwrap_or(0) > self.capacity {
+        while self.context_bytes.get(&context).copied().unwrap_or(0) > capacity {
             // Only a change followed by a newer one of the same reference is
             // evictable: prefer this reference, then the oldest in the context.
             let evictable = |h: &TimedHistory| h.entries.len() > 1;
@@ -544,9 +622,8 @@ pub(crate) struct TimedStore {
 
 impl TimedStore {
     pub(super) fn new(max_apdu_length: usize, counters: Arc<AtomicCovCounters>) -> Self {
-        let capacity = max_apdu_length.saturating_sub(ENVELOPE_RESERVE);
         Self {
-            histories: Arc::new(Mutex::new(TimedHistories::new(capacity, counters))),
+            histories: Arc::new(Mutex::new(TimedHistories::new(max_apdu_length, counters))),
         }
     }
 
@@ -597,10 +674,15 @@ impl TimedStore {
 /// Changes drained into one notification. Unless [`TimedClaim::commit`] is
 /// called once the notification is delivered, dropping the claim returns the
 /// changes to their references.
+///
+/// A report's claim conveys each reference's last claimed change as its
+/// current state. A claim split off by [`TimedClaim::split_earliest`] carries
+/// history only, for a notification that goes out before the report's last.
 #[derive(Debug)]
 pub(crate) struct TimedClaim {
     store: TimedStore,
     changes: Vec<(CovSubscriptionKey, u64, Vec<TimedChange>)>,
+    history_only: bool,
 }
 
 impl TimedClaim {
@@ -608,7 +690,13 @@ impl TimedClaim {
         Self {
             store,
             changes: Vec::new(),
+            history_only: false,
         }
+    }
+
+    /// The store these changes return to.
+    pub(crate) fn store(&self) -> &TimedStore {
+        &self.store
     }
 
     pub(crate) fn add(
@@ -622,50 +710,72 @@ impl TimedClaim {
         }
     }
 
-    /// Discard the oldest claimed change that a newer claimed change of its
-    /// reference supersedes, so a notification fits its APDU. `false` when
-    /// only each reference's latest change remains.
-    pub(crate) fn drop_oldest_earlier(&mut self) -> bool {
-        let Some(at) = self
-            .changes
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, _, changes))| changes.len() > 1)
-            .min_by_key(|(_, (_, _, changes))| changes[0].seq)
-            .map(|(at, _)| at)
-        else {
-            return false;
+    /// Move the `count` oldest changes of [`Self::earlier`] (all of them, if
+    /// fewer) into a claim of their own, for a notification that goes out
+    /// before this one. Each
+    /// reference keeps its latest change here, so this claim still conveys
+    /// every reference's current state.
+    pub(crate) fn split_earliest(&mut self, count: usize) -> Self {
+        let mut part = Self {
+            store: self.store.clone(),
+            changes: Vec::new(),
+            history_only: true,
         };
-        self.changes[at].2.remove(0);
-        self.store.lock().dropped(
-            &self.changes[at].0,
-            1,
-            "notification exceeds the maximum APDU",
-        );
-        true
+        let cut = {
+            let earlier = self.earlier();
+            let moved = count.min(earlier.len());
+            moved.checked_sub(1).map(|last| earlier[last].1.seq)
+        };
+        let Some(cut) = cut else {
+            return part;
+        };
+        let kept = usize::from(!self.history_only);
+        for (key, incarnation, changes) in &mut self.changes {
+            let movable = changes.len().saturating_sub(kept);
+            let moved = changes[..movable].partition_point(|change| change.seq <= cut);
+            if moved > 0 {
+                part.changes
+                    .push((key.clone(), *incarnation, changes.drain(..moved).collect()));
+            }
+        }
+        self.changes.retain(|(_, _, changes)| !changes.is_empty());
+        part
     }
 
     /// The latest claimed change of a reference: its current conveyed state.
+    /// A history-only claim conveys none.
     pub(crate) fn latest(&self, key: &CovSubscriptionKey) -> Option<&TimedChange> {
+        if self.history_only {
+            return None;
+        }
         self.changes
             .iter()
             .find(|(k, _, _)| k == key)
             .and_then(|(_, _, changes)| changes.last())
     }
 
-    /// Claimed changes that precede each reference's latest one, in capture
-    /// order: queued history conveyed as distinct timestamped values.
+    /// Claimed changes conveyed as history, in capture order: those before
+    /// each reference's latest one, or every change of a history-only claim.
+    /// Each goes out as distinct timestamped values.
     pub(crate) fn earlier(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
+        let kept = usize::from(!self.history_only);
         let mut all: Vec<_> = self
             .changes
             .iter()
             .flat_map(|(key, _, changes)| {
-                let earlier = &changes[..changes.len().saturating_sub(1)];
+                let earlier = &changes[..changes.len().saturating_sub(kept)];
                 earlier.iter().map(move |change| (key, change))
             })
             .collect();
         all.sort_by_key(|(_, change)| change.seq);
         all
+    }
+
+    /// Each claimed reference with its last claimed change.
+    pub(crate) fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
+        self.changes
+            .iter()
+            .filter_map(|(key, _, changes)| Some((key, changes.last()?)))
     }
 
     /// Clock frame of the most recently captured claimed change.

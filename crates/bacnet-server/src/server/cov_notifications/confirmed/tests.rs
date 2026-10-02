@@ -121,6 +121,7 @@ impl Fixture {
                 completion: sub.prepare_completion().unwrap(),
                 observations: vec![(sub.clone(), observation)],
                 claim: None,
+                deferred: Vec::new(),
             },
             |_| Ok(BytesMut::from(&[0u8; 8][..])),
         )
@@ -304,6 +305,7 @@ async fn a_fence_follow_up_that_beats_the_initial_report_carries_it() {
             &a.endpoint(),
             a.expires_at.unwrap(),
             0,
+            None,
             vec![(*a).clone()],
         )
         .unwrap();

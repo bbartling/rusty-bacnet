@@ -147,6 +147,7 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
             &db,
             &[1, 2, 3],
             None,
+            None,
             request,
         )
         .unwrap_err();

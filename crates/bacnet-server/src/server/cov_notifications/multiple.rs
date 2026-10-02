@@ -1,13 +1,9 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
-use super::cov_clock::cov_multiple_datetime;
-use super::multiple_items::build_items;
+use super::multiple_chunks::{request_limit, split, untimed_octets, Envelope, ReportContent};
 use super::*;
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{TimedChange, TimedClaim};
-
-/// Octets of an unsegmented confirmed-request APDU header.
-const CONFIRMED_REQUEST_HEADER: usize = 4;
 use std::collections::HashSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -105,7 +101,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
         let mut claim: Option<TimedClaim> = None;
-        let (notification, last_notified, representative) = {
+        let (chunks, notification, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the Device
             // identity, the clock sample for any current-state fallback and
             // every value. A producer snapshot carries its own captured
@@ -182,7 +178,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
-            let (retained, untimed) = {
+            let (retained, untimed, subscriber_max_apdu) = {
                 let table = cov_table.read().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
@@ -310,41 +306,48 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     claim.add(other.key().clone(), incarnation, changes);
                     retained.push((other.clone(), Vec::new(), last, completion, remaining));
                 }
-                (retained, untimed)
+                let subscriber_max_apdu = table
+                    .multiple_context_references(&context)
+                    .find_map(|sub| sub.subscriber_max_apdu());
+                (retained, untimed, subscriber_max_apdu)
             };
             let claim = claim.as_mut().expect("claim created under the table guard");
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
                 return;
             };
             let representative = representative.clone();
-            let time_remaining = *time_remaining;
+            let envelope = Envelope {
+                subscriber_process_identifier: representative.subscriber_process_identifier,
+                initiating_device_identifier: device_oid,
+                time_remaining: *time_remaining,
+            };
             let parts: Vec<_> = retained
                 .iter()
                 .map(|(sub, values, _, _, _)| (sub, values.as_slice()))
                 .collect();
-            // Fit the encoded request into one local APDU (confirmed header is
-            // the larger form) by discarding the oldest queued history; the
-            // latest change of every reference is always kept.
-            let notification = loop {
-                let notification = COVNotificationMultipleRequest {
-                    subscriber_process_identifier: representative.subscriber_process_identifier,
-                    initiating_device_identifier: device_oid,
-                    time_remaining,
-                    timestamp: claim.last_frame().map(cov_multiple_datetime),
-                    list_of_cov_notifications: build_items(claim, &parts, &reads, &untimed),
-                };
-                let mut encoded = BytesMut::new();
-                let fits = notification.encode(&mut encoded).is_err()
-                    || encoded.len() + CONFIRMED_REQUEST_HEADER <= config.max_apdu_length as usize;
-                if fits || !claim.drop_oldest_earlier() {
-                    break notification;
-                }
+            // The untimestamped values travel with the last notification, so
+            // the history bound keeps room for them (#986).
+            claim
+                .store()
+                .lock()
+                .note_reserve(&context, untimed_octets(&parts));
+            let limit = request_limit(
+                config.max_apdu_length,
+                subscriber_max_apdu,
+                representative.issue_confirmed_notifications,
+            );
+            let content = ReportContent {
+                envelope: &envelope,
+                retained: &parts,
+                reads: &reads,
+                untimed: &untimed,
             };
+            let (chunks, notification) = split(&content, claim, limit);
             let last_notified: Vec<_> = retained
                 .into_iter()
                 .map(|(sub, _, baseline, completion, _)| (sub, baseline, completion))
                 .collect();
-            (notification, last_notified, representative)
+            (chunks, notification, last_notified, representative)
         };
 
         // From the final live decision through fresh admission there is no await.
@@ -358,6 +361,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if representative.issue_confirmed_notifications {
             let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
                 .expect("validated local APDU capacity");
+            let mut chunks = chunks.into_iter();
+            let (notification, observations, claim, deferred): (_, Vec<_>, _, Vec<_>) =
+                match chunks.next() {
+                    // Everything fits one notification.
+                    None => (notification, last_notified, claim.take(), Vec::new()),
+                    // Only the oldest history goes now. The rest returns to its
+                    // queue, uncounted, once this report holds the context, and
+                    // the Ack's follow-up sends the next part (#986).
+                    Some(first) => {
+                        let carried = first
+                            .claim
+                            .last_changes()
+                            .filter_map(|(key, change)| {
+                                let (sub, _, completion) =
+                                    last_notified.iter().find(|(sub, _, _)| sub.key() == key)?;
+                                Some((sub.clone(), change.observation().clone(), *completion))
+                            })
+                            .collect();
+                        let deferred = chunks.map(|chunk| chunk.claim).chain(claim.take());
+                        (
+                            first.notification,
+                            carried,
+                            Some(first.claim),
+                            deferred.collect(),
+                        )
+                    }
+                };
             Self::send_confirmed_cov(
                 handles,
                 budget,
@@ -366,16 +396,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     route: representative,
                     // The newest prepared ticket postdates every carried
                     // reference's baseline, so it completes them all.
-                    completion: last_notified
+                    completion: observations
                         .iter()
                         .map(|(_, _, completion)| *completion)
                         .max_by_key(|completion| completion.ticket())
-                        .expect("a retained reference"),
-                    observations: last_notified
+                        .expect("a carried reference"),
+                    observations: observations
                         .into_iter()
                         .map(|(sub, observation, _)| (sub, observation))
                         .collect(),
                     claim,
+                    deferred,
                 },
                 |invoke_id| {
                     Self::encode_confirmed_cov_multiple_apdu(
@@ -387,39 +418,49 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
             .await;
         } else {
-            let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
-                Ok(buf) => buf,
-                Err(e) => {
-                    warn!(error = %e, "Failed to encode unconfirmed COVNotificationMultiple");
+            // Every part goes out now, oldest history first, each retired as
+            // it is sent. A failure or an exhausted budget stops the rest,
+            // which returns to its queue for a later notification (#986).
+            let parts = chunks
+                .into_iter()
+                .map(|chunk| (chunk.notification, Some(chunk.claim)))
+                .chain(std::iter::once((notification, claim.take())));
+            for (notification, claim) in parts {
+                let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
+                    Ok(buf) => buf,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to encode unconfirmed COVNotificationMultiple");
+                        return;
+                    }
+                };
+
+                if !budget.try_consume(buf.len()) {
+                    counters
+                        .notifications_throttled_fanout
+                        .fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-            };
 
-            if !budget.try_consume(buf.len()) {
+                counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
                 counters
-                    .notifications_throttled_fanout
+                    .notifications_unconfirmed
                     .fetch_add(1, Ordering::Relaxed);
-                return;
-            }
+                counters
+                    .notification_bytes_sent
+                    .fetch_add(buf.len() as u64, Ordering::Relaxed);
 
-            counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
-            counters
-                .notifications_unconfirmed
-                .fetch_add(1, Ordering::Relaxed);
-            counters
-                .notification_bytes_sent
-                .fetch_add(buf.len() as u64, Ordering::Relaxed);
-
-            if let Err(e) = Self::send_cov_apdu(network, &buf, &representative, false).await {
-                warn!(error = %e, "Failed to send COVNotificationMultiple");
-            } else {
-                if let Some(claim) = claim.take() {
+                if let Err(e) = Self::send_cov_apdu(network, &buf, &representative, false).await {
+                    warn!(error = %e, "Failed to send COVNotificationMultiple");
+                    return;
+                }
+                if let Some(claim) = claim {
                     claim.commit();
                 }
-                let mut table = cov_table.write().await;
-                for (snapshot, pv, completion) in &last_notified {
-                    table.complete_observation(snapshot, *completion, pv.clone());
-                }
+            }
+            // The last part carried every reference's current state.
+            let mut table = cov_table.write().await;
+            for (snapshot, pv, completion) in &last_notified {
+                table.complete_observation(snapshot, *completion, pv.clone());
             }
         }
     }

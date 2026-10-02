@@ -302,6 +302,7 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
             &SubscriberEndpoint::new(&[1, 2, 3], None),
             refreshed_expiry,
             9,
+            None,
             vec![],
         )
         .unwrap();
@@ -328,6 +329,7 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
             &SubscriberEndpoint::new(&[1, 2, 3], None),
             Instant::now() - Duration::from_secs(1),
             9,
+            None,
             vec![],
         )
         .unwrap();

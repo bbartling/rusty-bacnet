@@ -24,6 +24,7 @@ async fn migrate(fixture: &Fixture, old: &CovSubscriptionSnapshot) -> CovSubscri
             &route,
             Instant::now() + Duration::from_secs(600),
             1,
+            None,
             vec![],
         )
         .unwrap();

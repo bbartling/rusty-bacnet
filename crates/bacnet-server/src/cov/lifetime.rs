@@ -127,6 +127,7 @@ mod tests {
                 &snapshot.endpoint(),
                 now + Duration::from_secs(10),
                 0,
+                None,
                 vec![],
             )
             .unwrap();

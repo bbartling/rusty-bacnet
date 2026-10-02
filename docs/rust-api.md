@@ -2169,19 +2169,34 @@ re-subscription is stamped with the Device time of admission; this is a local
 convention, since no change has been observed yet. A renewal keeps changes not yet
 conveyed, including those of a notification that fails during the renewal.
 
-Local bounds deviate from the Standard's expectation of additional notifications
-rather than loss (§13.1, §13.18.1.1). One context's pending changes are limited to
-an estimate of what one notification of the server's `max_apdu_length` can carry;
-on overflow the oldest change of the same reference is dropped first, then the
-oldest in the context. Before sending, queued history is trimmed, oldest first, to
-fit the encoded request into the local maximum APDU. A reference's latest change is
-never dropped, so latest changes plus untimestamped values can still exceed it.
+History that one notification cannot carry goes out in several (§13.1,
+§13.18.1.1). Each notification fits the smaller of the server's `max_apdu_length`
+and the max-APDU-length-accepted from the header of the subscriber's latest
+SubscribeCOVPropertyMultiple request (`subscribe_multiple` takes it as
+`subscriber_max_apdu`; `None` when unknown). The oldest history goes first, as many
+changes per notification as fit, and the last notification carries each
+reference's latest change, the untimestamped values and whatever newer history
+still fits. Each notification's header timestamp names the last change it carries.
+An unconfirmed report sends every part, each retired once transmitted; a send
+failure or an exhausted event budget stops the rest, which the
+`Max_Notification_Delay` backstop below retries. A confirmed report sends only its
+oldest part and returns the rest to the queue once it holds the context; the Ack's
+follow-up sends the next part, and a part that fails goes out again first after
+the hold-off. A part always carries at least one change and latest changes are
+never split, so the last notification can still exceed the limit when the latest
+changes and untimestamped values alone do.
+
+As a local bound, one context's pending changes are limited to an estimate of what
+four notifications of that size can carry, counting each change's item framing and
+keeping room for the most the context's untimestamped values have taken in one
+report. Only on overflow, the last resort, is a change dropped: the oldest of the
+same reference first, then the oldest in the context, never a reference's latest.
 Changes returned by a failed notification wait while a newer change of the same
 reference is in flight; once a newer change is delivered, older ones are dropped
 rather than delivered as stale state. These drops increment
-`CovCounters::timed_changes_dropped` and log a warning. The subscriber's own
-maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
-the bound (the full server uses its configured capacity).
+`CovCounters::timed_changes_dropped` and log a warning; splitting is not counted.
+`CovSubscriptionTable::with_max_apdu_length` sets the local maximum (the full
+server uses its configured capacity).
 
 Changes are reported as soon as they happen. When their notification fails or is
 held back (a failed send, a confirmed report that went unacknowledged,

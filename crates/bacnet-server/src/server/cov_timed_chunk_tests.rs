@@ -133,6 +133,30 @@ async fn notifications_fit_the_maximum_apdu_the_subscriber_advertised() {
     h.server.stop().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn history_beyond_the_bound_drops_the_oldest_changes_and_counts_them() {
+    let mut h = Harness::start(ServerConfig {
+        max_apdu_length: u32::from(SMALL_APDU),
+        ..ServerConfig::default()
+    })
+    .await;
+    h.subscribe(false).await;
+    h.notification().await;
+    let all = hold_then_release(&h, 1, 40).await;
+    let dropped = h.server.cov_counters().timed_changes_dropped;
+    assert!(dropped > 0, "41 changes exceed the bound");
+    // The newest changes survive, several notifications' worth.
+    let kept = &all[usize::try_from(dropped).unwrap()..];
+    let taken = take_unconfirmed(&h, kept, SMALL_APDU).await;
+    assert!(taken.len() >= 3, "{} notifications", taken.len());
+    assert_eq!(
+        h.server.cov_counters().timed_changes_dropped,
+        dropped,
+        "sending drops nothing more"
+    );
+    h.server.stop().await.unwrap();
+}
+
 fn av2() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap()
 }
@@ -179,7 +203,10 @@ async fn untimestamped_values_and_latest_changes_go_in_the_last_notification() {
             .any(|item| item.monitored_object_identifier == av2())
     };
     let (last, earlier) = taken.split_last().unwrap();
-    assert!(earlier.iter().all(|n| !carries_av2(n)), "history goes first");
+    assert!(
+        earlier.iter().all(|n| !carries_av2(n)),
+        "history goes first"
+    );
     let av2_pv: Vec<_> = last
         .list_of_cov_notifications
         .iter()

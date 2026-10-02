@@ -1,0 +1,246 @@
+//! Splitting one COV-multiple report into notifications that each fit the
+//! subscriber's maximum APDU (135-2020 §13.1, §13.18.1.1; #986).
+//!
+//! The report's last notification carries each timestamped reference's latest
+//! change and the untimestamped values, with as much of the newest queued
+//! history as still fits. The rest of the history goes out first, oldest
+//! first, in as few notifications as fit. A notification always carries at
+//! least one change, and latest changes are never split, so the last
+//! notification may still exceed the limit, as an unsplit one would.
+use std::collections::HashSet;
+
+use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationMultipleRequest};
+use bacnet_types::primitives::ObjectIdentifier;
+use bytes::BytesMut;
+
+use super::cov_clock::cov_multiple_datetime;
+use super::multiple_items::{build_items, Coordinate, History, Retained};
+use crate::cov::multiple_reads::MultipleReads;
+use crate::cov::timed::{value_len, TimedClaim, ITEM_FRAMING};
+
+/// Octets of an unsegmented confirmed request header: type and flags, maximum
+/// segments and APDU, invoke ID and service choice.
+const CONFIRMED_HEADER: usize = 4;
+/// Octets of an unconfirmed request header: type and service choice.
+const UNCONFIRMED_HEADER: usize = 2;
+
+/// Envelope fields every notification of one report shares.
+pub(super) struct Envelope {
+    pub(super) subscriber_process_identifier: u32,
+    pub(super) initiating_device_identifier: ObjectIdentifier,
+    pub(super) time_remaining: u32,
+}
+
+impl Envelope {
+    fn notification(
+        &self,
+        timestamp: Option<bacnet_objects::clock::ClockFrame>,
+        items: Vec<COVNotificationItem>,
+    ) -> COVNotificationMultipleRequest {
+        COVNotificationMultipleRequest {
+            subscriber_process_identifier: self.subscriber_process_identifier,
+            initiating_device_identifier: self.initiating_device_identifier,
+            time_remaining: self.time_remaining,
+            timestamp: timestamp.map(cov_multiple_datetime),
+            list_of_cov_notifications: items,
+        }
+    }
+}
+
+/// A notification that goes out before the report's last one, with the
+/// history it retires once delivered.
+pub(super) struct Chunk {
+    pub(super) notification: COVNotificationMultipleRequest,
+    pub(super) claim: TimedClaim,
+}
+
+/// Service-request octets one notification may take: the smaller of the local
+/// maximum APDU and the subscriber's, less the request header.
+pub(super) fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> usize {
+    let local = usize::try_from(local).unwrap_or(usize::MAX);
+    let apdu = subscriber.map_or(local, |subscriber| local.min(usize::from(subscriber)));
+    let header = if confirmed {
+        CONFIRMED_HEADER
+    } else {
+        UNCONFIRMED_HEADER
+    };
+    apdu.saturating_sub(header)
+}
+
+/// Octets the untimestamped values among `retained` take, with one item's
+/// framing per object.
+pub(super) fn untimed_octets(retained: &Retained<'_>) -> usize {
+    let mut objects = HashSet::new();
+    retained
+        .iter()
+        .filter(|(sub, _)| !sub.timestamped)
+        .map(|(sub, values)| {
+            let framing = if objects.insert(sub.monitored_object_identifier) {
+                ITEM_FRAMING
+            } else {
+                0
+            };
+            framing + values.iter().map(value_len).sum::<usize>()
+        })
+        .sum()
+}
+
+/// What one report's notifications carry besides the claimed history.
+pub(super) struct ReportContent<'a> {
+    pub(super) envelope: &'a Envelope,
+    pub(super) retained: &'a Retained<'a>,
+    pub(super) reads: &'a MultipleReads,
+    pub(super) untimed: &'a HashSet<Coordinate>,
+}
+
+impl ReportContent<'_> {
+    /// History-only notification of `history`, named after its last change.
+    fn history(&self, claim: &TimedClaim, history: &History<'_>) -> COVNotificationMultipleRequest {
+        let timestamp = history.last().map(|(_, change)| change.frame());
+        let items = build_items(claim, history, None, self.reads, self.untimed);
+        self.envelope.notification(timestamp, items)
+    }
+
+    /// The report's last notification: `history`, then every reference's
+    /// current state, named after the latest change claimed.
+    fn last(&self, claim: &TimedClaim, history: &History<'_>) -> COVNotificationMultipleRequest {
+        let items = build_items(
+            claim,
+            history,
+            Some(self.retained),
+            self.reads,
+            self.untimed,
+        );
+        self.envelope.notification(claim.last_frame(), items)
+    }
+}
+
+/// Encoded length of a notification's service request; `None` if it does not
+/// encode.
+fn encoded_len(notification: &COVNotificationMultipleRequest) -> Option<usize> {
+    let mut encoded = BytesMut::new();
+    notification.encode(&mut encoded).ok()?;
+    Some(encoded.len())
+}
+
+fn fits(notification: &COVNotificationMultipleRequest, limit: usize) -> bool {
+    encoded_len(notification).is_some_and(|len| len <= limit)
+}
+
+/// Split the report `claim` conveys into notifications of at most `limit`
+/// service-request octets. Returns the notifications that go first, oldest
+/// history first, each with the claim it retires, and the last notification,
+/// whose changes stay in `claim`.
+pub(super) fn split(
+    content: &ReportContent<'_>,
+    claim: &mut TimedClaim,
+    limit: usize,
+) -> (Vec<Chunk>, COVNotificationMultipleRequest) {
+    let sizes = {
+        let history = claim.earlier();
+        let whole = content.last(claim, &history);
+        // A notification that does not encode is reported by its send.
+        if history.is_empty() || encoded_len(&whole).is_none_or(|len| len <= limit) {
+            return (Vec::new(), whole);
+        }
+        // Moving more of the oldest history out never grows the rest, so the
+        // fewest changes to move out can be found by bisection.
+        let moved = smallest(history.len(), |count| {
+            fits(&content.last(claim, &history[count..]), limit)
+        });
+        let mut sizes = Vec::new();
+        let mut start = 0;
+        while start < moved {
+            let end = largest(start + 1, moved, |end| {
+                fits(&content.history(claim, &history[start..end]), limit)
+            });
+            sizes.push(end - start);
+            start = end;
+        }
+        sizes
+    };
+    let chunks: Vec<Chunk> = sizes
+        .into_iter()
+        .map(|count| {
+            let part = claim.split_earliest(count);
+            let notification = content.history(&part, &part.earlier());
+            Chunk {
+                notification,
+                claim: part,
+            }
+        })
+        .collect();
+    let last = content.last(claim, &claim.earlier());
+    (chunks, last)
+}
+
+/// Smallest `count` in `1..=max` for which `fits` holds, knowing it fails at
+/// zero and only flips once; `max` when it never holds.
+fn smallest(max: usize, fits: impl Fn(usize) -> bool) -> usize {
+    let (mut failing, mut fitting) = (0, max);
+    if !fits(max) {
+        return max;
+    }
+    while fitting - failing > 1 {
+        let mid = failing + (fitting - failing) / 2;
+        if fits(mid) {
+            fitting = mid;
+        } else {
+            failing = mid;
+        }
+    }
+    fitting
+}
+
+/// Largest `end` in `first..=max` for which `fits` holds, knowing it only
+/// flips once; `first` when even that fails, so every chunk carries at least
+/// one change. Gallops from `first` so the cost follows the chunk's size.
+fn largest(first: usize, max: usize, fits: impl Fn(usize) -> bool) -> usize {
+    if !fits(first) {
+        return first;
+    }
+    let (mut fitting, mut step) = (first, 1);
+    let mut failing = loop {
+        let next = fitting + step;
+        if next > max {
+            break max + 1;
+        }
+        if !fits(next) {
+            break next;
+        }
+        fitting = next;
+        step *= 2;
+    };
+    while failing - fitting > 1 {
+        let mid = fitting + (failing - fitting) / 2;
+        if fits(mid) {
+            fitting = mid;
+        } else {
+            failing = mid;
+        }
+    }
+    fitting
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bisection_finds_the_flip_point() {
+        for flip in 1..=9 {
+            assert_eq!(smallest(9, |count| count >= flip), flip);
+            assert_eq!(largest(1, 9, |end| end <= flip), flip);
+        }
+        assert_eq!(smallest(9, |_| false), 9, "never fits: move everything");
+        assert_eq!(largest(3, 9, |_| false), 3, "at least one change");
+        assert_eq!(largest(3, 9, |_| true), 9);
+    }
+
+    #[test]
+    fn the_limit_is_the_smaller_maximum_less_the_header() {
+        assert_eq!(request_limit(1476, None, false), 1474);
+        assert_eq!(request_limit(1476, Some(206), false), 204);
+        assert_eq!(request_limit(480, Some(1476), true), 476);
+    }
+}

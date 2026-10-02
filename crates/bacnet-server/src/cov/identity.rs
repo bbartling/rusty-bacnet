@@ -164,6 +164,9 @@ pub struct CovSubscriptionSnapshot {
     /// for ordinary and Single entries. The timed store keeps the context's
     /// current value for its deadline backstop.
     pub(super) max_notification_delay: Option<u32>,
+    /// Max-APDU-length-accepted the subscriber of a Multiple reference last
+    /// advertised in a SubscribeCOVPropertyMultiple request header, if known.
+    pub(super) subscriber_max_apdu: Option<u16>,
 }
 
 impl CovSubscriptionSnapshot {
@@ -182,6 +185,13 @@ impl CovSubscriptionSnapshot {
     /// refresh of its context; a captured snapshot keeps its acceptance value.
     pub fn max_notification_delay(&self) -> Option<u32> {
         self.max_notification_delay
+    }
+
+    /// Maximum APDU the subscriber of a Multiple reference advertised, when
+    /// known; its notifications fit the smaller of it and the local maximum.
+    /// A table-held entry follows every refresh of its context.
+    pub fn subscriber_max_apdu(&self) -> Option<u16> {
+        self.subscriber_max_apdu
     }
 }
 

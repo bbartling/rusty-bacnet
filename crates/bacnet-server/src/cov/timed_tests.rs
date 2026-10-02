@@ -62,20 +62,34 @@ fn seconds(changes: &[TimedChange]) -> Vec<u8> {
         .collect()
 }
 
+/// Octets one change of `payload` octets counts against its context's bound.
+fn change_len(payload: usize) -> usize {
+    change(0, payload).encoded_len
+}
+
+/// A maximum APDU whose context bound holds exactly `n` changes of `payload`
+/// octets, with no reserve.
+fn apdu_for(n: usize, payload: usize) -> usize {
+    let octets = n * change_len(payload);
+    assert_eq!(octets % HISTORY_NOTIFICATIONS, 0, "an exact bound");
+    ENVELOPE_RESERVE + octets / HISTORY_NOTIFICATIONS
+}
+
 /// Capacity for exactly `n` changes of `payload` octets in one context.
 fn histories(n: usize, payload: usize) -> (TimedHistories, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
-    let capacity = n * (payload + VALUE_FRAMING);
     (
-        TimedHistories::new(capacity, Arc::clone(&counters)),
+        TimedHistories::new(apdu_for(n, payload), Arc::clone(&counters)),
         counters,
     )
 }
 
 fn store(n: usize, payload: usize) -> (TimedStore, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
-    let apdu = ENVELOPE_RESERVE + n * (payload + VALUE_FRAMING);
-    (TimedStore::new(apdu, Arc::clone(&counters)), counters)
+    (
+        TimedStore::new(apdu_for(n, payload), Arc::clone(&counters)),
+        counters,
+    )
 }
 
 fn dropped(counters: &AtomicCovCounters) -> u64 {
@@ -258,40 +272,134 @@ fn failed_older_notification_cannot_requeue_behind_a_transmitted_newer_one() {
     assert_eq!(dropped(&counters), 1);
 }
 
-#[test]
-fn trimming_a_claim_discards_oldest_superseded_history_but_keeps_latest_changes() {
-    let (store, counters) = store(8, 4);
+/// A claim of `a`'s changes at seconds 1, 2, 3 and `b`'s at 9 and 10, each
+/// sequenced by its second.
+fn two_reference_claim(store: &TimedStore) -> (TimedClaim, CovSubscriptionKey, CovSubscriptionKey) {
     let (a, b) = (key(1, 1), key(1, 2));
-    let mut claim = TimedClaim::new(store.clone());
-    let mut changes_a: Vec<_> = (1..=3).map(|s| change(s, 4)).collect();
-    for (seq, c) in changes_a.iter_mut().enumerate() {
-        c.seq = seq as u64 + 1;
-    }
-    let mut changes_b: Vec<_> = [9, 10].into_iter().map(|s| change(s, 4)).collect();
-    changes_b[0].seq = 9;
-    changes_b[1].seq = 10;
-    claim.add(a.clone(), 1, changes_a);
-    claim.add(b.clone(), 1, changes_b);
-    let order = |claim: &TimedClaim| {
-        claim
-            .earlier()
+    let sequenced = |seconds: &[u8]| {
+        seconds
             .iter()
-            .map(|(_, c)| c.frame().local_time.second)
+            .map(|&second| {
+                let mut change = change(second, 4);
+                change.seq = u64::from(second);
+                change
+            })
             .collect::<Vec<_>>()
     };
-    assert_eq!(order(&claim), [1, 2, 9]);
-    assert!(claim.drop_oldest_earlier());
-    assert_eq!(order(&claim), [2, 9], "oldest across the claim goes first");
-    assert!(claim.drop_oldest_earlier());
-    assert!(claim.drop_oldest_earlier());
-    assert!(
-        !claim.drop_oldest_earlier(),
-        "latest changes are never trimmed"
-    );
+    let mut claim = TimedClaim::new(store.clone());
+    claim.add(a.clone(), 1, sequenced(&[1, 2, 3]));
+    claim.add(b.clone(), 1, sequenced(&[9, 10]));
+    (claim, a, b)
+}
+
+fn history_seconds(claim: &TimedClaim) -> Vec<u8> {
+    claim
+        .earlier()
+        .iter()
+        .map(|(_, c)| c.frame().local_time.second)
+        .collect()
+}
+
+#[test]
+fn splitting_moves_the_oldest_history_and_keeps_every_latest_change() {
+    let (store, counters) = store(8, 4);
+    let (mut claim, a, b) = two_reference_claim(&store);
+    assert_eq!(history_seconds(&claim), [1, 2, 9]);
+    assert!(history_seconds(&claim.split_earliest(0)).is_empty());
+
+    let part = claim.split_earliest(2);
+    assert_eq!(history_seconds(&part), [1, 2], "every change is history");
+    assert_eq!(part.latest(&a).map(|c| c.frame()), None);
+    assert_eq!(part.last_frame(), Some(frame(2)), "named after its last");
+    assert_eq!(history_seconds(&claim), [9], "the oldest across the claim");
     assert_eq!(claim.latest(&a).map(|c| c.frame()), Some(frame(3)));
     assert_eq!(claim.latest(&b).map(|c| c.frame()), Some(frame(10)));
+
+    // Asking for more than there is moves every earlier change, never a
+    // reference's latest.
+    let rest = claim.split_earliest(5);
+    assert_eq!(history_seconds(&rest), [9]);
+    assert!(history_seconds(&claim).is_empty());
+    assert_eq!(claim.last_frame(), Some(frame(10)));
+    assert_eq!(
+        claim
+            .last_changes()
+            .map(|(_, c)| c.frame().local_time.second)
+            .collect::<Vec<_>>(),
+        [3, 10]
+    );
+    drop((part, rest, claim));
+    assert_eq!(dropped(&counters), 0, "splitting drops nothing");
+}
+
+#[test]
+fn split_parts_retire_and_return_on_their_own_without_drops() {
+    let (store, counters) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    for second in 1..=3 {
+        store.lock().push(&k, 1, change(second, 4));
+    }
+    let mut claim = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    claim.add(k.clone(), incarnation, drained);
+    let first = claim.split_earliest(1);
+    // A confirmed report sends the first part and returns the rest.
+    drop(claim);
+    first.commit();
+    assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2, 3]);
+
+    // An unconfirmed report retires each part it sends; a later part that
+    // fails returns only itself.
+    store.lock().push(&k, 1, change(4, 4));
+    store.lock().push(&k, 1, change(5, 4));
+    let mut claim = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(&k, 1);
+    claim.add(k.clone(), incarnation, drained);
+    let first = claim.split_earliest(1);
+    first.commit();
+    drop(claim);
+    assert_eq!(seconds(&store.lock().drain(&k, 1).1), [5]);
+    assert_eq!(dropped(&counters), 0);
+}
+
+#[test]
+fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
+    let (mut h, counters) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    for second in 1..=8 {
+        h.push(&k, 1, change(second, 4));
+    }
+    assert_eq!(dropped(&counters), 0, "eight changes fit the local bound");
+    h.drain(&k, 1);
+
+    // A subscriber with a smaller APDU shrinks the bound to two changes.
+    let small = u16::try_from(apdu_for(2, 4)).unwrap();
+    h.set_apdu(&context(1), Some(small));
+    for second in 11..=13 {
+        h.push(&k, 1, change(second, 4));
+    }
+    assert_eq!(seconds(&h.drain(&k, 1).1), [12, 13]);
+    assert_eq!(dropped(&counters), 1);
+
+    // A larger one cannot exceed the local maximum, nor can an unknown one.
+    for subscriber in [Some(u16::MAX), None] {
+        h.set_apdu(&context(1), subscriber);
+        for second in 21..=29 {
+            h.push(&k, 1, change(second, 4));
+        }
+        assert_eq!(h.drain(&k, 1).1.len(), 8, "{subscriber:?}");
+    }
     assert_eq!(dropped(&counters), 3);
-    claim.commit();
+
+    // Room the untimestamped values took is kept for them.
+    h.note_reserve(&context(1), 3 * change_len(4));
+    for second in 31..=36 {
+        h.push(&k, 1, change(second, 4));
+    }
+    assert_eq!(seconds(&h.drain(&k, 1).1), [32, 33, 34, 35, 36]);
+    assert_eq!(dropped(&counters), 4);
 }
 
 #[test]
@@ -460,7 +568,7 @@ fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
                 ..context(process_id)
             };
             let accepted = table
-                .subscribe_multiple(&context, &route, expires, 10, Vec::new())
+                .subscribe_multiple(&context, &route, expires, 10, None, Vec::new())
                 .unwrap();
             assert!(accepted.is_empty());
         }

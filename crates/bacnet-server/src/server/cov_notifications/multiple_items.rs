@@ -7,19 +7,29 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::TimedClaim;
-use crate::cov::CovSubscriptionSnapshot;
+use crate::cov::timed::{TimedChange, TimedClaim};
+use crate::cov::{CovSubscriptionKey, CovSubscriptionSnapshot};
 
 /// Object, property and index of a subscribed coordinate.
 pub(super) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
 
-/// Build the items conveyed for `retained` references. Untimestamped
-/// references supply their prepared current values; timestamped references
-/// supply their claimed changes. `untimed` holds coordinates the context
-/// explicitly subscribes without timestamps.
+/// Each retained reference with its prepared current values (empty for a
+/// timestamped reference, whose claimed latest change supplies them).
+pub(super) type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
+
+/// Queued history conveyed as distinct timestamped values, in capture order.
+pub(super) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
+
+/// Build the items of one notification: `history`, then, unless `retained` is
+/// `None` (a notification carrying history only), the current state of the
+/// `retained` references. Untimestamped references supply their prepared
+/// current values; timestamped references their latest change in `claim`.
+/// `untimed` holds coordinates the context explicitly subscribes without
+/// timestamps.
 pub(super) fn build_items(
     claim: &TimedClaim,
-    retained: &[(&CovSubscriptionSnapshot, &[COVNotificationValue])],
+    history: &History<'_>,
+    retained: Option<&Retained<'_>>,
     reads: &MultipleReads,
     untimed: &HashSet<Coordinate>,
 ) -> Vec<COVNotificationItem> {
@@ -40,7 +50,7 @@ pub(super) fn build_items(
     // values with its own time (repeated coordinates are permitted). A
     // coordinate explicitly subscribed without timestamps is never repeated
     // or timestamped (§13.17.3.1.2.4).
-    for (key, change) in claim.earlier() {
+    for &(key, change) in history {
         let index = item_for(&mut items, key.object());
         let list = &mut items[index].list_of_values;
         for value in change.values() {
@@ -54,8 +64,18 @@ pub(super) fn build_items(
             }
         }
     }
-    let history: Vec<usize> = items.iter().map(|item| item.list_of_values.len()).collect();
-    let start = |index: usize| history.get(index).copied().unwrap_or(0);
+    let Some(retained) = retained else {
+        // Each history value keeps its own time; no current state follows.
+        items.retain(|item| !item.list_of_values.is_empty());
+        for item in &mut items {
+            let values = std::mem::take(&mut item.list_of_values);
+            let rows = values.len();
+            item.list_of_values = collapse_repeats(values, rows);
+        }
+        return items;
+    };
+    let history_rows: Vec<usize> = items.iter().map(|item| item.list_of_values.len()).collect();
+    let start = |index: usize| history_rows.get(index).copied().unwrap_or(0);
     // Current state: one value per coordinate. A timestamped reference
     // contributes its latest change stamped with that change's own time.
     for (sub, values) in retained {
@@ -139,6 +159,8 @@ pub(super) fn build_items(
         item.list_of_values =
             collapse_repeats(std::mem::take(&mut item.list_of_values), start(index));
     }
+    // An object whose history rows were all explicitly untimestamped.
+    items.retain(|item| !item.list_of_values.is_empty());
     items
 }
 

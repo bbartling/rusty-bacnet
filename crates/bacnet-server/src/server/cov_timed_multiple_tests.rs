@@ -129,39 +129,6 @@ async fn failed_send_keeps_changes_for_the_next_notification() {
     h.server.stop().await.unwrap();
 }
 
-#[tokio::test]
-async fn full_history_drops_the_oldest_changes_and_counts_them() {
-    // 206-octet APDU: the context holds three PV + Status_Flags changes.
-    let mut h = Harness::start(ServerConfig {
-        max_apdu_length: 206,
-        ..ServerConfig::default()
-    })
-    .await;
-    h.subscribe(false).await;
-    h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
-    for (second, value) in [(31, 1.0), (32, 2.0), (33, 3.0), (34, 4.0), (35, 5.0)] {
-        h.set_clock(second);
-        h.write_local(value).await;
-    }
-    assert_eq!(h.server.cov_counters().timed_changes_dropped, 2);
-    h.server.comm_state.store(0, Ordering::Release);
-    h.set_clock(36);
-    h.write_local(6.0).await;
-    let report = h.notification().await;
-    assert_eq!(
-        pv_rows(&report),
-        vec![
-            (real(4.0), Some(time(34))),
-            (real(5.0), Some(time(35))),
-            (real(6.0), Some(time(36))),
-        ],
-        "the newest changes survive, oldest first"
-    );
-    assert_eq!(h.server.cov_counters().timed_changes_dropped, 3);
-    h.server.stop().await.unwrap();
-}
-
 /// Hold-off after a failed confirmed report with a 10 ms retry timeout: one
 /// full retry cycle, the timeout times the first attempt and every retry.
 const HOLD_OFF: Duration = Duration::from_millis(10 * (DEFAULT_APDU_RETRIES as u64 + 1));
