@@ -1705,13 +1705,16 @@ not disable the remaining supported AV/BV target Audit policy or add MSV target
 Audit reporting.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
-Analog/Binary/Multi-state Inputs, noncommandable Values and Loop (the control
-algorithm's output), then runs the existing event and COV path after releasing
-the database lock. The corresponding low-level
-`set_present_value_internal` hook bypasses those server notifications. Both deny
-updates while Out_Of_Service to preserve simulation ownership: this is local
-policy for Inputs and the object-clause rule for these Values and Loop, whose
-Present_Value peers may write only while Out_Of_Service is TRUE. Application NULL
+Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
+algorithm's output) and Life Safety Point and Zone, then runs the existing event
+and COV path after releasing the database lock. The corresponding low-level
+`set_present_value_internal` hook bypasses those server notifications. For the
+Inputs, Values and Loop both deny updates while Out_Of_Service to preserve
+simulation ownership: this is local policy for Inputs and the object-clause rule
+for these Values and Loop, whose Present_Value peers may write only while
+Out_Of_Service is TRUE. Peers never write a Life Safety Present_Value, so those
+objects take the update in either state (see
+[Life Safety execution and COV](#life-safety-execution-and-cov)). Application NULL
 is an invalid datatype, not a relinquishment. For network-equivalent writes use
 `write_local`; noncommandable writes remain available without resolved command
 identity. Commandable writes still require a valid source. These access modes are
@@ -3372,6 +3375,28 @@ application detects, is refused. A simulated value notifies through the same
 COV path as any write, and Present_Value, `Silenced` and `Operation_Expected`
 don't follow it; a reset executor sees the simulated `Tracking_Value` in its
 context.
+
+Once the server holds a Point or Zone, the application reaches its
+Present_Value with `BACnetServer::set_present_value_local` and its
+Tracking_Value with `BACnetServer::set_tracking_value_local` (#1123), which go
+through the `BACnetObject::set_present_value_internal` and
+`set_tracking_value_internal` hooks. Both take an Enumerated `LifeSafetyState`,
+standard or from 256 to 65535: another number fails with
+`PROPERTY / VALUE_OUT_OF_RANGE`, another datatype with
+`PROPERTY / INVALID_DATA_TYPE`, an unknown object with `OBJECT / UNKNOWN_OBJECT`
+and any other object type with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+Each sets only its own property: Silenced and Operation_Expected stay put, and
+the object never derives one value from the other, so latching Present_Value
+until reset is the application's rule (keep Present_Value on the alarm state,
+report the live state through Tracking_Value, and commit the post-reset
+Present_Value from the reset executor, whose context sees the values the route
+left). Present_Value isn't decoupled out of service, so it is taken in either
+state; an application Tracking_Value sent while `Out_Of_Service` is TRUE
+replaces the value set aside, as `set_tracking_value` does. Changes notify
+through the Life Safety COV path once the lock is released: Present_Value
+reaches SubscribeCOV and Present_Value property subscribers, Tracking_Value
+only its property subscribers. The built-in objects run no intrinsic
+reporting, so the post-write event pass raises nothing.
 
 `Accepted_Modes` lists the modes a WriteProperty or WritePropertyMultiple of
 `Mode` may select. It starts as every standard `LifeSafetyMode`, and

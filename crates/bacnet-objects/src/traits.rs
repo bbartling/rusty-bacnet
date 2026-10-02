@@ -932,9 +932,30 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// TRUE is required: their Out_Of_Service clause keeps software local to
     /// the device from changing Present_Value.
     ///
+    /// Life Safety Point and Zone opt in with a BACnetLifeSafetyState. Clients
+    /// never write their Present_Value, so they take the application's value in
+    /// service and out of service alike, and the hook leaves Tracking_Value,
+    /// Silenced and Operation_Expected as they are: any latching rule belongs
+    /// to the application.
+    ///
     /// The default fails closed so commandable and other object families do not
     /// acquire privileged `Present_Value` write authority through this hook.
     fn set_present_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply the `Tracking_Value` the local application derived.
+    ///
+    /// Only the built-in Life Safety Point and Zone opt in, with a
+    /// BACnetLifeSafetyState; the property stays read-only over the network in
+    /// service. While `Out_Of_Service` is TRUE a client's simulated value keeps
+    /// being served and this one takes over on the return to service. The
+    /// default fails closed with the same error as
+    /// [`set_present_value_internal`](Self::set_present_value_internal).
+    fn set_tracking_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
