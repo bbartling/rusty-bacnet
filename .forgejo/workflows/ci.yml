@@ -13,7 +13,8 @@ name: CI
 #   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
 #           lint (fmt, file-size cap, no-secret scan, script regressions),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
-#           crate, and each published crate alone with default features),
+#           crate, and each published crate alone with default features, for
+#           Linux, Windows and macOS),
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
 #           and the Python bindings built with maturin, their unittest suite
 #           and the PyO3 crate's own Rust tests.
@@ -143,6 +144,12 @@ jobs:
     container:
       image: ${{ env.CI_IMAGE }}
     timeout-minutes: 45
+    env:
+      # The per-crate default-features check runs for these targets (#981):
+      # Windows and macOS compile different code behind their platform cfgs.
+      # The image has their standard libraries for the release builds. In the
+      # cache key, so a change restarts the cache with their dependencies.
+      DEFAULT_FEATURES_TARGETS: x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@v2
@@ -150,7 +157,7 @@ jobs:
           key: clippy
           cache-bin: false
           cache-on-failure: true
-          env-vars: LINUX_FEATURES
+          env-vars: LINUX_FEATURES DEFAULT_FEATURES_TARGETS
       # Warnings are errors for workspace code only; dependencies are unaffected.
       - name: Clippy (every feature)
         run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$LINUX_FEATURES" -- -D warnings
@@ -162,9 +169,13 @@ jobs:
       - name: Clippy (bacnet-cli, no default features)
         if: ${{ !cancelled() }}
         run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
-      - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types)
+      # One cargo run per crate checks the targets side by side, which costs a
+      # few seconds more than Linux alone did.
+      - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types; Linux, Windows, macOS)
         if: ${{ !cancelled() }}
-        run: bash scripts/ci/check-default-features.sh
+        run: |
+          # shellcheck disable=SC2086 # one argument per target
+          bash scripts/ci/check-default-features.sh $DEFAULT_FEATURES_TARGETS
       - name: Rustdoc (every feature)
         if: ${{ !cancelled() }}
         env:

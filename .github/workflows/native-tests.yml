@@ -66,6 +66,54 @@ jobs:
       run:
         shell: bash
     steps:
+      # CompatTelRunner.exe, the Microsoft Compatibility Appraiser's runner, can
+      # take all four of the Windows runner's CPUs for seconds at a time, long
+      # enough to blow a test's timing budget (#1003). The runner image already
+      # disables the scheduled tasks that run it; during a job it's the
+      # Inventory and Compatibility Appraisal service (InventorySvc) that starts
+      # it, several times, for a software inventory. So this disables and stops
+      # that service, disables any task that runs CompatTelRunner.exe in case a
+      # newer image re-enables one, and stops any running copy. It logs what it
+      # found, takes about two seconds and never fails the job.
+      - name: Stop the Compatibility Appraiser
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $service = Get-Service -Name InventorySvc -ErrorAction SilentlyContinue
+          if (-not $service) {
+            Write-Host 'no InventorySvc service'
+          } else {
+            $was = "$($service.Status), $($service.StartType)"
+            try {
+              Set-Service -Name InventorySvc -StartupType Disabled -ErrorAction Stop
+              Stop-Service -Name InventorySvc -Force -ErrorAction Stop
+              Write-Host "disabled and stopped InventorySvc (was $was)"
+            } catch {
+              Write-Host "could not disable or stop InventorySvc ($was): $($_.Exception.Message)"
+            }
+          }
+          $tasks = @(Get-ScheduledTask | Where-Object { $_.Actions.Execute -match 'compattelrunner' })
+          if (-not $tasks) { Write-Host 'no scheduled task runs CompatTelRunner.exe' }
+          foreach ($task in $tasks) {
+            $name = $task.TaskPath + $task.TaskName
+            if ($task.State -eq 'Disabled') { Write-Host "task $name is disabled"; continue }
+            try {
+              if ($task.State -eq 'Running') { $task | Stop-ScheduledTask -ErrorAction Stop }
+              $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null
+              Write-Host "disabled task $name (was $($task.State))"
+            } catch {
+              Write-Host "could not disable task $name ($($task.State)): $($_.Exception.Message)"
+            }
+          }
+          $running = @(Get-CimInstance Win32_Process -Filter "Name = 'CompatTelRunner.exe'")
+          if (-not $running) { Write-Host 'CompatTelRunner.exe is not running' }
+          foreach ($process in $running) {
+            Write-Host "stopping CompatTelRunner.exe $($process.ProcessId): $($process.CommandLine)"
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+          }
+          exit 0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

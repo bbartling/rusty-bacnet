@@ -13,8 +13,8 @@ its native runners or its services.
 | Platform | Where it is checked |
 | --- | --- |
 | Linux amd64 | Forgejo CI: lint, clippy, rustdoc, tests, Python bindings, MSRV, audit and deny |
-| macOS arm64 | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings |
-| Windows x86_64 (MSVC) | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings |
+| macOS arm64 | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings. Forgejo CI: clippy and rustdoc for each published crate with default features, cross-checked |
+| Windows x86_64 (MSVC) | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings. Forgejo CI: clippy and rustdoc for each published crate with default features, cross-checked |
 
 A PR merges only when both are green on its head SHA: `CI OK` on Forgejo and
 both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
@@ -25,7 +25,7 @@ both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 | --- | --- | --- | --- | --- |
 | CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
@@ -54,8 +54,8 @@ The weekly scheduled run checks the default branch (`dev`) with the Heavy jobs
 too.
 
 Rust caches are keyed per job on the toolchain, `Cargo.lock`, the manifests,
-and, for Clippy and Test, `LINUX_FEATURES`. They're saved even when a job
-fails.
+and, for Clippy and Test, `LINUX_FEATURES` (Clippy also on
+`DEFAULT_FEATURES_TARGETS`). They're saved even when a job fails.
 A new push to a PR cancels its superseded run.
 
 Tests run with [cargo-nextest](https://nexte.st), which gives each test its
@@ -138,7 +138,9 @@ contains:
   (llvm-ar for cargo-xwin, llvm-objdump and llvm-readobj for the artifact
   test), uv for the artifact test's extra Pythons, and `qemu-aarch64-static`
   with the aarch64 glibc to run the arm64 CLI. See
-  [macOS and Windows builds](#macos-and-windows-builds).
+  [macOS and Windows builds](#macos-and-windows-builds). The Clippy job's
+  per-crate default-features check uses the Windows and `aarch64-apple-darwin`
+  targets too.
 
 The jobs no longer spend time on apt, rustup or tool downloads.
 
@@ -244,7 +246,23 @@ client, endpoint, integration and CLI test, the benchmark SC mTLS tests and
 bacnet-transport's BACnet/SC tests; the guard step runs `--no-run` first
 because rustc reads `RUST_MIN_STACK` too, and adds a minute or two to each
 job. The per-crate default-feature checks
-(`scripts/ci/check-default-features.sh`) run on Linux only.
+(`scripts/ci/check-default-features.sh`) aren't here: Forgejo's Clippy job
+runs them for Windows and macOS too, cross-checked (see
+[Local checks](#local-checks)).
+
+Before anything else, the Windows job stops the Microsoft Compatibility
+Appraiser (#1003). Its `CompatTelRunner.exe` can take all four of the runner's
+CPUs for seconds at a time, enough to blow a test's timing budget. The runner
+image already disables the scheduled tasks that run it (those in
+`\Microsoft\Windows\Application Experience\`). During a job, the Inventory and
+Compatibility Appraisal service (`InventorySvc`) starts it instead, several
+times, with its software-inventory module (`-m:aeinv.dll`). A diagnostic run
+with process-creation auditing caught three launches in one job, the last of
+which had used 53 s of CPU in five minutes; with this step, a second run had
+none (October 2026, image windows-2025-vs2026). The step disables and stops that
+service, disables any task that runs `CompatTelRunner.exe` in case a newer
+image re-enables one, stops any running copy, and logs what it found. It
+takes about two seconds and never fails the job.
 
 **Toolchain and tools.** Both runner images ship rustup, and
 `rustup toolchain install` with no arguments installs what
@@ -353,7 +371,14 @@ Clippy runs three ways:
   rustdoc, which is how docs.rs builds.
 
 The last catches code that compiles only when another crate's feature unifies
-in. The individual gates are also runnable anywhere. `FEATURES` is
+in. With no arguments it checks the host; given target triples, it checks
+those, side by side in one cargo run per crate. CI's Clippy job passes
+`DEFAULT_FEATURES_TARGETS`: Linux, `x86_64-pc-windows-msvc` and
+`aarch64-apple-darwin`, whose platform `cfg`s compile different code (#981).
+Neither clippy nor rustdoc links, and no C code builds with default features,
+so another target needs only `rustup target add`, not cargo-xwin or zig.
+
+The individual gates are also runnable anywhere. `FEATURES` is
 `LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:
 
 ```bash
@@ -362,7 +387,7 @@ cargo fmt --all --check
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
-bash scripts/ci/check-default-features.sh
+bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$FEATURES"
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
