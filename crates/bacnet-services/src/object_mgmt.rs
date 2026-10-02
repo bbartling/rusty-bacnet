@@ -12,6 +12,9 @@ use bytes::BytesMut;
 
 use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
+mod error;
+pub use error::CreateObjectError;
+
 // ---------------------------------------------------------------------------
 // CreateObjectRequest
 // ---------------------------------------------------------------------------

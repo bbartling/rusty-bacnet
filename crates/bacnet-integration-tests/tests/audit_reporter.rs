@@ -431,14 +431,18 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
             };
             if step == 2 {
                 match result {
-                    Err(bacnet_types::error::Error::ChangeList {
+                    Err(bacnet_types::error::Error::Structured {
                         class,
                         code,
-                        first_failed_element_number: 1,
-                    }) => assert_eq!(
-                        (class, code),
-                        (not_found.0.to_raw() as u32, not_found.1.to_raw() as u32)
-                    ),
+                        detail,
+                    }) if *detail
+                        == bacnet_types::error::ErrorDetail::FirstFailedElementNumber(1) =>
+                    {
+                        assert_eq!(
+                            (class, code),
+                            (not_found.0.to_raw() as u32, not_found.1.to_raw() as u32)
+                        )
+                    }
                     other => panic!("expected a ChangeList-Error, got {other:?}"),
                 }
             } else {

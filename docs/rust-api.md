@@ -61,17 +61,41 @@ let val = PropertyValue::Null;
 ### Error
 
 ```rust
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, ErrorDetail};
 
 // Protocol error from a remote device
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
-// AddListElement/RemoveListElement error with the failed element's position
-let e = Error::ChangeList { class: 5, code: 81, first_failed_element_number: 2 }; // SERVICES / LIST_ELEMENT_NOT_FOUND
+// A structured error body: here an AddListElement/RemoveListElement
+// ChangeList-Error naming the failed element. Error::protocol builds
+// Error::Structured with a detail, Error::Protocol without one.
+let e = Error::protocol(5, 81, Some(ErrorDetail::FirstFailedElementNumber(2))); // SERVICES / LIST_ELEMENT_NOT_FOUND
+if let Error::Structured { detail, .. } = &e {
+    assert_eq!(**detail, ErrorDetail::FirstFailedElementNumber(2));
+}
 
 // Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
 // RoutedPathCapacityExceeded, UnsupportedTransport, Encoding, etc.
 ```
+
+`ErrorDetail` has one variant per shape of structured error body (Clause 21):
+
+| Variant | Body | Fields |
+|---------|------|--------|
+| `FirstFailedElementNumber(u32)` | ChangeList-Error, CreateObject-Error | Position from 1 of the refused list element or initial value; 0 when no element failed |
+| `FirstFailedWriteAttempt(BACnetObjectPropertyReference)` | WritePropertyMultiple-Error | Object, property and index of the first failed write |
+| `FirstFailedSubscription(BACnetObjectPropertyReference)` | SubscribeCOVPropertyMultiple-Error, first-failed-subscription choice | Monitored object and the refused COV reference's property and index |
+| `PrivateTransfer { vendor_id, service_number, error_parameters }` | ConfirmedPrivateTransfer-Error | The private service, and its encoded error parameters when present |
+| `VtSessionIdentifiers(Vec<u8>)` | VTClose-Error with its list | Local identifiers of the sessions that could not be closed |
+
+A body with nothing beyond the error (SubscribeCOVPropertyMultiple's general
+choice, VTClose-Error without its list) is `Error::Protocol`.
+`bacnet_services::structured_error::detail(&error_pdu)` reads the detail of any
+Error PDU, and each body has its own type for encoding and decoding:
+`list_manipulation::ChangeListError`, `object_mgmt::CreateObjectError`,
+`wpm::WritePropertyMultipleError`,
+`cov_multiple::SubscribeCOVPropertyMultipleError`,
+`private_transfer::PrivateTransferError` and `virtual_terminal::VTCloseError`.
 
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
@@ -2712,9 +2736,9 @@ client.add_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, 
 client.remove_list_element(&mac, nc_oid, PropertyIdentifier::RECIPIENT_LIST, None, element_bytes).await?;
 ```
 
-A device that answers with a ChangeList-Error surfaces as
-`Error::ChangeList { class, code, first_failed_element_number }`; a device that
-sends only the class and code surfaces as `Error::Protocol`.
+A device that answers with a ChangeList-Error surfaces as `Error::Structured`
+with `ErrorDetail::FirstFailedElementNumber`; a device that sends only the
+class and code surfaces as `Error::Protocol`.
 
 ### Private Transfer
 
@@ -3231,7 +3255,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | Variant | Meaning |
 |---------|---------|
 | `Error::Protocol { class, code }` | Remote BACnet error response |
-| `Error::ChangeList { class, code, first_failed_element_number }` | AddListElement/RemoveListElement ChangeList-Error: the error and the failed element's position (0 when no element failed) |
+| `Error::Structured { class, code, detail }` | Remote error whose Clause 21 body adds fields (ChangeList-Error, CreateObject-Error, WritePropertyMultiple-Error and others): `detail` is the boxed `ErrorDetail` |
 | `Error::Timeout(msg)` | APDU retry exhausted |
 | `Error::Reject { reason }` | Remote device rejected request |
 | `Error::Abort { reason }` | Remote device aborted request |

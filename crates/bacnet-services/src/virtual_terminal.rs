@@ -12,6 +12,10 @@ use bytes::BytesMut;
 
 use crate::common::{decode_application, MAX_DECODED_ITEMS};
 
+#[path = "virtual_terminal_error.rs"]
+mod error;
+pub use error::VTCloseError;
+
 /// Decode an application-tagged Unsigned that must fit in eight bits (Unsigned8).
 fn decode_app_u8(data: &[u8], offset: usize, what: &str) -> Result<(u8, usize), Error> {
     let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, what)?;

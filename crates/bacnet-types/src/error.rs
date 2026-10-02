@@ -5,12 +5,13 @@
 //! and timeouts.
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, string::String};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 #[cfg(feature = "std")]
 use std::time::Duration;
 
+use crate::constructed::BACnetObjectPropertyReference;
 use crate::data_link::DataLink;
-use crate::enums::{ErrorClass, ErrorCode};
+use crate::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 
 fn format_protocol_error(class: u32, code: u32) -> String {
     let class_name = ErrorClass::ALL_NAMED
@@ -42,23 +43,21 @@ pub enum Error {
         code: u32,
     },
 
-    /// BACnet ChangeList-Error, the error response of AddListElement and
-    /// RemoveListElement (Clauses 15.1.1.3 and 15.2.1.3, production in
-    /// Clause 21): the error class and code plus the position of the element
-    /// in the request's list that failed.
-    #[error(
-        "{}, first failed element {first_failed_element_number}",
-        format_protocol_error(*.class, *.code)
-    )]
-    ChangeList {
+    /// BACnet error response whose Clause 21 production carries more than the
+    /// class and code: ChangeList-Error, CreateObject-Error,
+    /// WritePropertyMultiple-Error, SubscribeCOVPropertyMultiple-Error,
+    /// ConfirmedPrivateTransfer-Error or VTClose-Error. `detail` holds the
+    /// extra fields; a body whose optional fields are all absent is reported
+    /// as [`Error::Protocol`].
+    #[error("{}, {detail}", format_protocol_error(*.class, *.code))]
+    Structured {
         /// Error class value.
         class: u32,
         /// Error code value.
         code: u32,
-        /// 1-based position of the failed element in the request's List of
-        /// Elements, or 0 when the failure is not about one element (an
-        /// unknown object or property, a target that is not a list).
-        first_failed_element_number: u32,
+        /// The production's fields after the class and code. Boxed so the
+        /// rare structured error does not widen every `Result<_, Error>`.
+        detail: Box<ErrorDetail>,
     },
 
     /// BACnet reject PDU (Clause 20.1.5).
@@ -145,10 +144,107 @@ pub enum Error {
     OutOfRange(String),
 }
 
+/// The fields a Clause 21 error production adds to the error class and code,
+/// one variant per shape. The service the error answers names the production.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorDetail {
+    /// ChangeList-Error (AddListElement, RemoveListElement; Clauses 15.1.1.3
+    /// and 15.2.1.3) and CreateObject-Error (Clause 15.3.1.3): the 1-based
+    /// position of the refused element in the request's List of Elements or
+    /// List of Initial Values, or 0 when the failure is not about one element.
+    FirstFailedElementNumber(u32),
+    /// WritePropertyMultiple-Error (Clause 15.10.1.3): the object, property
+    /// and array index of the first write that failed.
+    FirstFailedWriteAttempt(BACnetObjectPropertyReference),
+    /// SubscribeCOVPropertyMultiple-Error (Clause 13.16.1.3) in its
+    /// first-failed-subscription form: the monitored object and the property
+    /// reference of the COV reference that failed. The other form, a general
+    /// error, has no detail.
+    FirstFailedSubscription(BACnetObjectPropertyReference),
+    /// ConfirmedPrivateTransfer-Error (Clause 16.2.1.3): the vendor and
+    /// service the error answers, and any vendor-defined error parameters.
+    PrivateTransfer {
+        /// Vendor identifier of the private service.
+        vendor_id: u32,
+        /// Vendor-defined service number.
+        service_number: u32,
+        /// Error parameters as encoded inside their context tag 3 frame,
+        /// opaque to the stack; `None` when absent.
+        error_parameters: Option<Vec<u8>>,
+    },
+    /// VTClose-Error (Clause 17.3.1.3) with its list present: the
+    /// requester's local identifiers of the VT sessions that could not be
+    /// closed. Without the list the error has no detail.
+    VtSessionIdentifiers(Vec<u8>),
+}
+
+impl core::fmt::Display for ErrorDetail {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        fn reference(
+            f: &mut core::fmt::Formatter<'_>,
+            what: &str,
+            reference: &BACnetObjectPropertyReference,
+        ) -> core::fmt::Result {
+            write!(
+                f,
+                "{what} {} {}",
+                reference.object_identifier,
+                PropertyIdentifier::from_raw(reference.property_identifier)
+            )?;
+            match reference.property_array_index {
+                Some(index) => write!(f, "[{index}]"),
+                None => Ok(()),
+            }
+        }
+        match self {
+            Self::FirstFailedElementNumber(number) => write!(f, "first failed element {number}"),
+            Self::FirstFailedWriteAttempt(attempt) => {
+                reference(f, "first failed write attempt", attempt)
+            }
+            Self::FirstFailedSubscription(subscription) => {
+                reference(f, "first failed subscription", subscription)
+            }
+            Self::PrivateTransfer {
+                vendor_id,
+                service_number,
+                error_parameters,
+            } => {
+                write!(f, "vendor {vendor_id} service {service_number}")?;
+                match error_parameters {
+                    Some(parameters) => {
+                        write!(f, ", {} octets of error parameters", parameters.len())
+                    }
+                    None => Ok(()),
+                }
+            }
+            Self::VtSessionIdentifiers(sessions) => {
+                f.write_str("VT sessions not closed:")?;
+                for session in sessions {
+                    write!(f, " {session}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Convenience alias for `Result<T, Error>`.
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl Error {
+    /// The error an Error PDU reports: [`Error::Structured`] when its body
+    /// carried a detail, [`Error::Protocol`] otherwise.
+    pub fn protocol(class: u32, code: u32, detail: Option<ErrorDetail>) -> Self {
+        match detail {
+            Some(detail) => Self::Structured {
+                class,
+                code,
+                detail: Box::new(detail),
+            },
+            None => Self::Protocol { class, code },
+        }
+    }
+
     /// Create a decoding error at the given byte offset.
     pub fn decoding(offset: usize, message: impl Into<String>) -> Self {
         Self::Decoding {
@@ -183,16 +279,71 @@ mod tests {
     }
 
     #[test]
-    fn change_list_error_display_names_the_element() {
-        let err = Error::ChangeList {
-            class: 5,
-            code: 81,
-            first_failed_element_number: 2,
+    fn structured_error_display_names_the_detail() {
+        use crate::enums::ObjectType;
+        use crate::primitives::ObjectIdentifier;
+
+        let reference = |index| BACnetObjectPropertyReference {
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 7).unwrap(),
+            property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            property_array_index: index,
         };
-        assert_eq!(
-            err.to_string(),
-            "BACnet error: services / list-element-not-found, first failed element 2"
-        );
+        let private_transfer = |error_parameters| ErrorDetail::PrivateTransfer {
+            vendor_id: 555,
+            service_number: 7,
+            error_parameters,
+        };
+        for (class, code, detail, expected) in [
+            (
+                5,
+                81,
+                ErrorDetail::FirstFailedElementNumber(2),
+                "BACnet error: services / list-element-not-found, first failed element 2",
+            ),
+            (
+                2,
+                40,
+                ErrorDetail::FirstFailedWriteAttempt(reference(Some(3))),
+                "BACnet error: property / write-access-denied, \
+                 first failed write attempt ANALOG_VALUE,7 PRESENT_VALUE[3]",
+            ),
+            (
+                2,
+                44,
+                ErrorDetail::FirstFailedSubscription(reference(None)),
+                "BACnet error: property / not-cov-property, \
+                 first failed subscription ANALOG_VALUE,7 PRESENT_VALUE",
+            ),
+            (
+                5,
+                0,
+                private_transfer(Some(vec![0x21, 1])),
+                "BACnet error: services / other, vendor 555 service 7, \
+                 2 octets of error parameters",
+            ),
+            (
+                5,
+                0,
+                private_transfer(None),
+                "BACnet error: services / other, vendor 555 service 7",
+            ),
+            (
+                5,
+                39,
+                ErrorDetail::VtSessionIdentifiers(vec![1, 4]),
+                "BACnet error: services / vt-session-termination-failure, \
+                 VT sessions not closed: 1 4",
+            ),
+        ] {
+            assert_eq!(
+                Error::protocol(class, code, Some(detail)).to_string(),
+                expected
+            );
+        }
+        assert!(matches!(
+            Error::protocol(2, 31, None),
+            Error::Protocol { class: 2, code: 31 }
+        ));
     }
 
     #[test]
