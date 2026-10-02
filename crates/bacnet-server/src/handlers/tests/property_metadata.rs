@@ -21,6 +21,7 @@ mod network_port;
 mod notification_class;
 mod schedule;
 mod timer;
+mod value_units;
 
 use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};

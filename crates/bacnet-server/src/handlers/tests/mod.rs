@@ -100,6 +100,7 @@ mod life_safety_mode_writes;
 mod life_safety_oos_writes;
 mod life_safety_operation;
 mod life_safety_reset;
+mod lighting_required_rows;
 mod list_element_edits;
 mod list_element_recipients;
 mod list_element_targets;

@@ -15,15 +15,16 @@ use crate::property_metadata::{
 // - Binary Lighting Output (type 55, §12.55 Table 12-69; printed pp. 532-533 / PDF pp. 534-535)
 // Order preserves each legacy projection; DEFAULT_FADE_TIME (readable but
 // unlisted, served constant Unsigned 0) is appended after the Lighting Output
-// legacy rows (Lift FLOOR_NUMBER precedent) and PROPERTY_LIST is appended so
-// the projection helper omits it while required_properties keeps it. Only
-// implemented rows are described: table rows the objects do not serve
-// (Lighting Output Default_Ramp_Rate, Default_Step_Increment, Transition,
-// Feedback_Value, Power, Instantaneous_Power, Min/Max_Actual_Value,
-// Current_Command_Priority, Value_Source family, event/intrinsic/audit/tag/
+// legacy rows (Lift FLOOR_NUMBER precedent), followed by the rows #1092 added
+// (Default_Ramp_Rate, Default_Step_Increment, then Current_Command_Priority
+// on both objects), and PROPERTY_LIST is appended so the projection helper
+// omits it while required_properties keeps it. Only implemented rows are
+// described: table rows the objects do not serve (Lighting Output
+// Transition, Feedback_Value, Power, Instantaneous_Power,
+// Min/Max_Actual_Value, Value_Source family, event/intrinsic/audit/tag/
 // profile rows; Binary Lighting Output Feedback_Value, Power, Polarity,
-// Elapsed_Active_Time family, Current_Command_Priority, Value_Source family,
-// event/intrinsic/audit/tag/profile rows) stay absent until dispatch exists.
+// Elapsed_Active_Time family, Value_Source family, event/intrinsic/audit/
+// tag/profile rows) are all optional and stay absent until dispatch exists.
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
@@ -38,6 +39,12 @@ use crate::property_metadata::{
 // (Description) and ReadOnly where it does not (Reliability).
 // Default_Fade_Time carries the table R code and is readable as constant
 // Unsigned 0 with no write arm, so RequiredRead/ReadOnly.
+// Default_Ramp_Rate and Default_Step_Increment carry the table R code and
+// take range-checked Real writes (Clauses 12.54.17 and 12.54.18 give each a
+// range and the error for a write outside it), so RequiredRead/Always.
+// Current_Command_Priority carries the table R code on both objects and is
+// derived from Priority_Array (Clauses 12.54.39 and 12.55.32), so
+// RequiredRead/ReadOnly.
 // Writability is Always, never WhenOutOfService: dispatch routes every write
 // arm unconditionally and the suites pin in-service writes, so the metadata
 // mirrors dispatch. Presence is None throughout: the implementation models no
@@ -75,6 +82,9 @@ const LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
     PropertyMetadata::new(P::DEFAULT_FADE_TIME, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::DEFAULT_RAMP_RATE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::DEFAULT_STEP_INCREMENT, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -92,6 +102,7 @@ const BINARY_LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -217,6 +228,9 @@ mod tests {
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
             P::DEFAULT_FADE_TIME,
+            P::DEFAULT_RAMP_RATE,
+            P::DEFAULT_STEP_INCREMENT,
+            P::CURRENT_COMMAND_PRIORITY,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -235,6 +249,9 @@ mod tests {
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
             P::DEFAULT_FADE_TIME,
+            P::DEFAULT_RAMP_RATE,
+            P::DEFAULT_STEP_INCREMENT,
+            P::CURRENT_COMMAND_PRIORITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -262,6 +279,23 @@ mod tests {
             PropertyValue::Unsigned(0)
         );
         assert_eq!(
+            object.read_property(P::DEFAULT_RAMP_RATE, None).unwrap(),
+            PropertyValue::Real(100.0)
+        );
+        assert_eq!(
+            object
+                .read_property(P::DEFAULT_STEP_INCREMENT, None)
+                .unwrap(),
+            PropertyValue::Real(1.0)
+        );
+        // Nothing commands the new object, so Relinquish_Default is in effect.
+        assert_eq!(
+            object
+                .read_property(P::CURRENT_COMMAND_PRIORITY, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
+        assert_eq!(
             object.read_property(P::EGRESS_ACTIVE, None).unwrap(),
             PropertyValue::Boolean(false)
         );
@@ -270,6 +304,7 @@ mod tests {
         assert!(object.is_array_property(P::PRIORITY_ARRAY));
         assert!(!object.is_array_property(P::TRACKING_VALUE));
         assert!(!object.is_array_property(P::DEFAULT_FADE_TIME));
+        assert!(!object.is_array_property(P::CURRENT_COMMAND_PRIORITY));
     }
 
     #[test]
@@ -289,6 +324,7 @@ mod tests {
             P::RELIABILITY,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
+            P::CURRENT_COMMAND_PRIORITY,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -302,6 +338,7 @@ mod tests {
             P::OUT_OF_SERVICE,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
+            P::CURRENT_COMMAND_PRIORITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -318,8 +355,15 @@ mod tests {
             object.read_property(P::EGRESS_ACTIVE, None).unwrap(),
             PropertyValue::Boolean(false)
         );
+        assert_eq!(
+            object
+                .read_property(P::CURRENT_COMMAND_PRIORITY, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
         assert!(object.is_array_property(P::PRIORITY_ARRAY));
         assert!(!object.is_array_property(P::BLINK_WARN_ENABLE));
+        assert!(!object.is_array_property(P::CURRENT_COMMAND_PRIORITY));
     }
 
     #[test]
@@ -338,6 +382,8 @@ mod tests {
                     P::BLINK_WARN_ENABLE,
                     P::EGRESS_TIME,
                     P::RELINQUISH_DEFAULT,
+                    P::DEFAULT_RAMP_RATE,
+                    P::DEFAULT_STEP_INCREMENT,
                 ],
             ),
             (
@@ -516,6 +562,8 @@ mod tests {
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
                 (P::BLINK_WARN_ENABLE, PropertyValue::Enumerated(1)),
                 (P::EGRESS_TIME, PropertyValue::Boolean(true)),
+                (P::DEFAULT_RAMP_RATE, PropertyValue::Unsigned(10)),
+                (P::DEFAULT_STEP_INCREMENT, PropertyValue::Double(1.0)),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),
@@ -528,6 +576,7 @@ mod tests {
                 P::EGRESS_ACTIVE,
                 P::STATUS_FLAGS,
                 P::RELIABILITY,
+                P::CURRENT_COMMAND_PRIORITY,
             ] {
                 let value = object.read_property(p, None).unwrap();
                 assert_error(
@@ -555,14 +604,13 @@ mod tests {
             );
         }
 
+        // Optional table rows neither object implements.
         let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
-        assert_unserved(&mut lo, P::DEFAULT_RAMP_RATE);
-        assert_unserved(&mut lo, P::DEFAULT_STEP_INCREMENT);
+        assert_unserved(&mut lo, P::TRANSITION);
         assert_unserved(&mut lo, P::FEEDBACK_VALUE);
-        assert_unserved(&mut lo, P::CURRENT_COMMAND_PRIORITY);
+        assert_unserved(&mut lo, P::POWER);
         let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
         assert_unserved(&mut blo, P::FEEDBACK_VALUE);
         assert_unserved(&mut blo, P::POLARITY);
-        assert_unserved(&mut blo, P::CURRENT_COMMAND_PRIORITY);
     }
 }

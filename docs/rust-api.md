@@ -1882,6 +1882,26 @@ on the Loop carries the value in its next report without being triggered by it.
 Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
 starting value.
 
+The application also feeds an Averaging object its samples. The server doesn't
+read Object_Property_Reference: the application samples the referenced property
+and, in a running server, passes each value to
+`BACnetServer::add_averaging_sample_local(&averaging_id, value)`. Before the
+object is added, `AveragingObject::add_sample(v)` does the same for an `f32`.
+The value may be a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned,
+Enumerated or finite REAL, since the object computes in REAL. Another
+datatype, Double included, fails with INVALID_DATA_TYPE and NaN or an
+infinity with VALUE_OUT_OF_RANGE, and a refused sample counts as neither
+attempted nor valid. Any object other than an Averaging object refuses the call
+with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value,
+Average_Value, Attempted_Samples and Valid_Samples change together, then the
+server's COV path runs. Averaging has no Table 13-1 row, so SubscribeCOV on it
+is refused (`supports_cov` is false), but it takes SubscribeCOVProperty and
+SubscribeCOVPropertyMultiple (`supports_subscribe_cov_property` is true): a
+numeric property is reported when it moves by the subscription's COV increment,
+or on any change if the subscription gives none, and the report carries no
+Status_Flags because the object has none. The statistics are cumulative over
+every sample so far; Window_Interval and Window_Samples aren't served yet.
+
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
 ladder or target mapping. To migrate to 0.11.0, replace that argument with a

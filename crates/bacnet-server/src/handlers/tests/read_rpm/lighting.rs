@@ -173,6 +173,17 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::EGRESS_TIME, None, PropertyValue::Unsigned(600), None)
                 .unwrap();
+            object
+                .write_property(P::DEFAULT_RAMP_RATE, None, PropertyValue::Real(10.0), None)
+                .unwrap();
+            object
+                .write_property(
+                    P::DEFAULT_STEP_INCREMENT,
+                    None,
+                    PropertyValue::Real(0.5),
+                    None,
+                )
+                .unwrap();
         }
         write_common(&mut object, configured);
         let oid = object.object_identifier();
@@ -183,7 +194,10 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
         // 16-slot list (Null 0x00, Real 0x44 + 4 bytes), Some(0) returns the
         // Unsigned size, and Some(1..=16) returns one slot. Every other
         // served row is scalar and rejects an index. 50.0f32 is 0x42480000,
-        // 75.0f32 is 0x42960000.
+        // 75.0f32 is 0x42960000, 100.0f32 is 0x42C80000, 10.0f32 is
+        // 0x41200000, 1.0f32 is 0x3F800000 and 0.5f32 is 0x3F000000.
+        // Current_Command_Priority is Null on Relinquish_Default and the
+        // Unsigned slot number while priority 8 commands the light.
         let pa_whole: &[u8] = if configured {
             &[
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x44, 0x42, 0x48, 0x00, 0x00, 0x00, 0x00,
@@ -350,15 +364,54 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (
+                P::DEFAULT_RAMP_RATE,
+                None,
+                Ok(if configured {
+                    &[0x44, 0x41, 0x20, 0x00, 0x00]
+                } else {
+                    &[0x44, 0x42, 0xC8, 0x00, 0x00]
+                }),
+            ),
+            (
+                P::DEFAULT_RAMP_RATE,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::DEFAULT_STEP_INCREMENT,
+                None,
+                Ok(if configured {
+                    &[0x44, 0x3F, 0x00, 0x00, 0x00]
+                } else {
+                    &[0x44, 0x3F, 0x80, 0x00, 0x00]
+                }),
+            ),
+            (
+                P::DEFAULT_STEP_INCREMENT,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::CURRENT_COMMAND_PRIORITY,
+                None,
+                Ok(if configured { &[0x21, 8] } else { &[0x00] }),
+            ),
+            (
+                P::CURRENT_COMMAND_PRIORITY,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x91, 164, 0x92, 0x01, 0x7C, 0x92, 0x01, 0x7D, 0x92, 0x01,
                     0x7A, 0x92, 0x01, 0x75, 0x92, 0x01, 0x79, 0x92, 0x01, 0x82, 0x91, 111, 0x91,
-                    81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0x76,
+                    81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92,
+                    0x01, 0x78, 0x92, 0x01, 0xAF,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 15])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 18])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 164])),
@@ -374,9 +427,12 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 87])),
             (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 104])),
             (P::PROPERTY_LIST, Some(15), Ok(&[0x92, 0x01, 0x76])),
+            (P::PROPERTY_LIST, Some(16), Ok(&[0x92, 0x01, 0x77])),
+            (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0x78])),
+            (P::PROPERTY_LIST, Some(18), Ok(&[0x92, 0x01, 0xAF])),
             (
                 P::PROPERTY_LIST,
-                Some(16),
+                Some(19),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -384,17 +440,12 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Unserved Lighting Output table rows stay unknown.
-            (P::DEFAULT_RAMP_RATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // Unserved optional Lighting Output table rows stay unknown.
+            (P::TRANSITION, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
-                P::DEFAULT_RAMP_RATE,
+                P::TRANSITION,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::DEFAULT_STEP_INCREMENT,
-                None,
-                Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
             (P::FEEDBACK_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
@@ -556,14 +607,24 @@ fn rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (
+                P::CURRENT_COMMAND_PRIORITY,
+                None,
+                Ok(if configured { &[0x21, 8] } else { &[0x00] }),
+            ),
+            (
+                P::CURRENT_COMMAND_PRIORITY,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x92, 0x01, 0x75, 0x92, 0x01, 0x79, 0x92, 0x01, 0x82, 0x91,
-                    111, 0x91, 81, 0x91, 103, 0x91, 87, 0x91, 104,
+                    111, 0x91, 81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0xAF,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x75])),
@@ -574,9 +635,10 @@ fn rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
             (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 87])),
             (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 104])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[0x92, 0x01, 0xAF])),
             (
                 P::PROPERTY_LIST,
-                Some(11),
+                Some(12),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

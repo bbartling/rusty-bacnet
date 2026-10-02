@@ -408,8 +408,25 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// Override to return `true` for object types that can generate COV
     /// notifications (analog, binary, multi-state I/O/V). Default is `false`.
+    /// This answer admits SubscribeCOV, the whole-object form, and is the
+    /// default for
+    /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property).
     fn supports_cov(&self) -> bool {
         false
+    }
+
+    /// Whether SubscribeCOVProperty and SubscribeCOVPropertyMultiple may
+    /// monitor this object's properties.
+    ///
+    /// Defaults to [`supports_cov`](Self::supports_cov). An object that has
+    /// no whole-object COV criteria, because Clause 13.1's Table 13-1 doesn't
+    /// list its type, can still return `true` here while `supports_cov`
+    /// stays `false`: its property subscriptions then follow Table 13-1a and
+    /// SubscribeCOV is refused. The built-in Averaging object does this.
+    /// [`supports_cov_property`](Self::supports_cov_property) still decides
+    /// each property.
+    fn supports_subscribe_cov_property(&self) -> bool {
+        self.supports_cov()
     }
 
     /// Take pending local target work from a Staging object.
@@ -452,6 +469,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The default preserves the existing behavior of every other COV-capable
     /// object family while enforcing the bounded standardized Life Safety
     /// surface for source-compatible custom Point and Zone implementations.
+    /// Other types answer
+    /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property)
+    /// for every property.
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
         use bacnet_types::enums::ObjectType;
 
@@ -464,7 +484,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
                     | PropertyIdentifier::SILENCED
                     | PropertyIdentifier::OPERATION_EXPECTED
             ),
-            _ => self.supports_cov(),
+            _ => self.supports_subscribe_cov_property(),
         }
     }
 
@@ -486,9 +506,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Present_Value and Status_Flags, in report order.
     ///
     /// The default follows the object type's Table 13-1 row: Loop reports
-    /// Setpoint and Controlled_Variable_Value, and Staging reports
-    /// Present_Stage, whose changes also trigger a notification. Every other
-    /// type reports nothing more. The server leaves out a listed property the
+    /// Setpoint and Controlled_Variable_Value, Pulse Converter reports
+    /// Update_Time, and Staging reports Present_Stage, whose changes also
+    /// trigger a notification. Every other type reports nothing more. The server leaves out a listed property the
     /// object's Property_List lacks. Property subscriptions (SubscribeCOVProperty
     /// and SubscribeCOVPropertyMultiple) report their own property instead.
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
@@ -900,6 +920,20 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _value: PropertyValue,
     ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Record one sample the local application took for an Averaging object.
+    ///
+    /// Only the built-in Averaging object opts in. The server doesn't read
+    /// Object_Property_Reference itself, so the application samples the
+    /// referenced property and passes each value here, and the object updates
+    /// its statistics and sample counts together. The default fails closed
+    /// with the same error as [`set_present_value_internal`](Self::set_present_value_internal).
+    fn add_averaging_sample_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

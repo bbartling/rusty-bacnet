@@ -204,7 +204,9 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    if !object.supports_cov() {
+    // An object can take property subscriptions without supporting
+    // SubscribeCOV (Averaging, which Table 13-1 doesn't list).
+    if !object.supports_subscribe_cov_property() {
         return Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
@@ -385,7 +387,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     'specs: for spec in &request.list_of_cov_subscription_specifications {
         let monitored = spec.monitored_object_identifier;
         let object = match db.get(&monitored) {
-            Some(object) if object.supports_cov() => object,
+            Some(object) if object.supports_subscribe_cov_property() => object,
             found => {
                 let code = match found {
                     None => ErrorCode::UNKNOWN_OBJECT,

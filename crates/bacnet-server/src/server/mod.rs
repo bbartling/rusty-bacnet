@@ -658,6 +658,8 @@ mod active_cov_subscriptions_tests;
 #[cfg(test)]
 mod audit_log_query_tests;
 #[cfg(test)]
+mod averaging_sample_tests;
+#[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
 mod cov_background_tests;
@@ -721,6 +723,8 @@ mod loop_controlled_variable_tests;
 mod loop_cov_tests;
 #[cfg(test)]
 mod notification_transactions_tests;
+#[cfg(test)]
+mod pulse_converter_cov_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
 #[cfg(test)]

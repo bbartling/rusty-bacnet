@@ -31,6 +31,10 @@ pub struct LightingOutputObject {
     blink_warn_enable: bool,
     egress_time: u32,
     egress_active: bool,
+    /// Default_Ramp_Rate in percent per second, within 0.1..=100.0.
+    default_ramp_rate: f32,
+    /// Default_Step_Increment in percent, within 0.1..=100.0.
+    default_step_increment: f32,
     out_of_service: bool,
     status_flags: StatusFlags,
     /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
@@ -55,6 +59,8 @@ impl LightingOutputObject {
             blink_warn_enable: false,
             egress_time: 0,
             egress_active: false,
+            default_ramp_rate: 100.0,
+            default_step_increment: 1.0,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -87,6 +93,38 @@ impl LightingOutputObject {
         self.relinquish_default = value;
         self.recalculate_present_value();
         Ok(())
+    }
+
+    /// Set Default_Ramp_Rate, the percent-per-second rate a ramp request
+    /// without its own rate uses. A new object uses 100.0.
+    ///
+    /// Clause 12.54.17 bounds it to 0.1..=100.0; a value outside that range,
+    /// or a non-finite one, is refused with VALUE_OUT_OF_RANGE and the
+    /// property is left unchanged. WriteProperty applies the same check.
+    pub fn set_default_ramp_rate(&mut self, value: f32) -> Result<(), Error> {
+        self.default_ramp_rate = lighting_percent(value)?;
+        Ok(())
+    }
+
+    /// Set Default_Step_Increment, the percent a step request without its own
+    /// increment adds. A new object uses 1.0.
+    ///
+    /// Clause 12.54.18 bounds it to 0.1..=100.0; a value outside that range,
+    /// or a non-finite one, is refused with VALUE_OUT_OF_RANGE and the
+    /// property is left unchanged. WriteProperty applies the same check.
+    pub fn set_default_step_increment(&mut self, value: f32) -> Result<(), Error> {
+        self.default_step_increment = lighting_percent(value)?;
+        Ok(())
+    }
+}
+
+/// Check a Default_Ramp_Rate or Default_Step_Increment value, which share the
+/// 0.1..=100.0 range.
+fn lighting_percent(value: f32) -> Result<f32, Error> {
+    if (0.1..=100.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(common::value_out_of_range_error())
     }
 }
 
@@ -142,6 +180,15 @@ impl BACnetObject for LightingOutputObject {
                 Ok(PropertyValue::Real(self.relinquish_default))
             }
             p if p == PropertyIdentifier::DEFAULT_FADE_TIME => Ok(PropertyValue::Unsigned(0)),
+            p if p == PropertyIdentifier::DEFAULT_RAMP_RATE => {
+                Ok(PropertyValue::Real(self.default_ramp_rate))
+            }
+            p if p == PropertyIdentifier::DEFAULT_STEP_INCREMENT => {
+                Ok(PropertyValue::Real(self.default_step_increment))
+            }
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -218,6 +265,21 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
+        // DEFAULT_RAMP_RATE and DEFAULT_STEP_INCREMENT go through the
+        // range-checked setters.
+        if property == PropertyIdentifier::DEFAULT_RAMP_RATE {
+            if let PropertyValue::Real(v) = value {
+                return self.set_default_ramp_rate(v);
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::DEFAULT_STEP_INCREMENT {
+            if let PropertyValue::Real(v) = value {
+                return self.set_default_step_increment(v);
+            }
+            return Err(common::invalid_data_type_error());
+        }
+
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -256,3 +318,6 @@ pub use binary::BinaryLightingOutputObject;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod required_rows_tests;

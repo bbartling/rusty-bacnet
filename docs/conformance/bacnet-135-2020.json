@@ -1585,6 +1585,74 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#1062), found during #985. Breaking pre-1.0 wire change: ALL and REQUIRED gain rows, and Property_List follows the Table 12-20 order instead of the order the 0.1.0 import used. Local policy, since an R row leaves writability to the implementation: Action is network-writable, like Setpoint and the gain constants, as tuning a peer may adjust; the units rows and Priority_For_Writing are read-only, like Output_Units and the Schedule's Priority_For_Writing (#1028), and the application sets them with LoopObject setters that refuse units above 65535 or a priority outside 1 to 16 with VALUE_OUT_OF_RANGE. Defaults are NO_UNITS for the four units rows, DIRECT and priority 16. ACTION used to be classified as an array on every object type; it is now an array only on Command. The Loop doesn't run its control algorithm or command the property its Manipulated_Variable_Reference names, so Action and Priority_For_Writing change nothing inside the object; they describe the application's algorithm. Python's add_loop takes the read-only rows as keyword-only arguments and builds the Loop through the same setters. Not claimed: writing Present_Value to the Manipulated_Variable_Reference target at Priority_For_Writing, including the Out_Of_Service case in which that target follows a simulated Present_Value; resolving Controlled_Variable_Reference or Setpoint_Reference (#1063 chose an application route for Controlled_Variable_Value instead); the optional Bias, Maximum_Output and Minimum_Output rows; intrinsic reporting; and the audit, tag and profile rows."
   },
   {
+   "id": "BACNET-12-REQUIRED-ROWS-UNITS-PULSE-LIGHTING",
+   "standard_anchor": "Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51 (Units); Clause 12.23 and Table 12-27, including 12.23.5 Present_Value, 12.23.13 Adjust_Value and 12.23.14-12.23.17; Clause 13.1 and Table 13-1 (Pulse Converter row, COV_Period); Clauses 12.54 and 12.55 with Tables 12-64 and 12-69, including 12.54.17, 12.54.18, 12.54.39 and 12.55.32; Clause 21 BACnetEngineeringUnits, BACnetDateTime and BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "Integer Value, Positive Integer Value and Large Analog Value serve the required Units (BACnetEngineeringUnits, NO_UNITS until the application sets it, read-only over the network). The Pulse Converter serves the required Count and Count_Before_Change (Unsigned), Update_Time and Count_Change_Time (BACnetDateTime), all read-only, and COV_Period (Unsigned 0, read-only), which its COV support makes required. In service its Present_Value is Count times Scale_Factor; a write of Adjust_Value stores the value, keeps the old Count in Count_Before_Change, takes the truncated quotient of the value over Scale_Factor off Count and stamps Count_Change_Time, or fails with PROPERTY / VALUE_OUT_OF_RANGE and changes nothing when Count would leave its range. Its SubscribeCOV notifications carry Update_Time after Present_Value and Status_Flags. Lighting Output serves Default_Ramp_Rate and Default_Step_Increment (REAL, writable within 0.1 to 100.0, VALUE_OUT_OF_RANGE outside it), and both lighting objects serve Current_Command_Priority: the Priority_Array slot Present_Value comes from, or NULL on Relinquish_Default, read-only. Each row is in Property_List, the property metadata, RPM ALL and REQUIRED (COV_Period in OPTIONAL) and the PICS.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/value_types/mod.rs",
+    "crates/bacnet-objects/src/value_types/metadata.rs",
+    "crates/bacnet-objects/src/accumulator/pulse_converter.rs",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata.rs",
+    "crates/bacnet-objects/src/clock.rs",
+    "crates/bacnet-objects/src/traits/defaults.rs",
+    "crates/bacnet-objects/src/lighting/mod.rs",
+    "crates/bacnet-objects/src/lighting/binary.rs",
+    "crates/bacnet-objects/src/lighting/metadata.rs",
+    "crates/bacnet-objects/src/common.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/value_types/tests/units.rs::numeric_value_units_start_at_no_units_and_are_set_locally",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/value_units.rs::rpm_numeric_value_selectors_carry_units",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/value_units.rs::numeric_value_units_read_over_the_wire_and_refuse_writes",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/value_units.rs::pics_numeric_value_units_is_required_and_read_only",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_count_rows_start_at_zero_and_unspecified",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_present_value_is_count_times_scale_factor",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_adjust_value_takes_the_truncated_quotient_off_count",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_out_of_service_decouples_present_value_from_count",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_cov_reports_update_time",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata_tests.rs::property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata_tests.rs::property_metadata_pulse_converter_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_writes.rs::write_property_adjust_value_adjusts_count_and_stamps_the_change",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/accumulator.rs::rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/accumulator.rs::rpm_accumulator_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/accumulator.rs::pics_accumulator_property_metadata_is_exact",
+    "crates/bacnet-server/src/server/pulse_converter_cov_tests.rs::pulse_converter_cov_notification_reports_update_time",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_ramp_rate_and_step_increment_take_writes_within_their_range",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_current_command_priority_names_the_winning_slot",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::binary_lighting_output_current_command_priority_names_the_winning_slot",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::binary_lighting_output_current_command_priority_holds_through_egress",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_binary_lighting_output_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_duo_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/handlers/tests/lighting_required_rows.rs::lighting_output_default_ramp_rate_and_step_increment_over_write_property",
+    "crates/bacnet-server/src/handlers/tests/lighting_required_rows.rs::current_command_priority_follows_present_value_commands_over_the_wire",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/lighting.rs::rpm_lighting_output_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/lighting.rs::rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/lighting.rs::rpm_lighting_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/value_types/tests/units.rs::non_numeric_value_types_have_no_units",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_adjust_value_out_of_range_changes_nothing",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_refuses_a_count_or_scale_past_the_largest_real",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_count_rows_are_read_only_over_the_network",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata_tests.rs::property_metadata_pulse_converter_writes_store_verbatim_with_range_gates",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata_tests.rs::property_metadata_pulse_converter_unserved_rows_stay_unknown",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_writes.rs::write_property_adjust_value_past_zero_is_value_out_of_range_and_atomic",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_writes.rs::write_property_count_rows_are_write_access_denied",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_ramp_rate_and_step_increment_setters_share_the_range",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_duo_unserved_rows_stay_unknown"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1092 (Units, Pulse Converter count rows, lighting rows)"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL, from the #1092 tracking list the #1064 property-set sweep produced. Breaking pre-1.0 wire changes: new rows in Property_List, RPM ALL and REQUIRED, and the PICS, and a Pulse Converter whose Present_Value and Adjust_Value now behave as Clause 12.23 describes. Each row was checked against the 135-2020 table images before it was added. Units: the commandable value macro takes an optional units entry, so only the three numeric types carry the field, with a `units` getter and a `set_units` setter that refuses values above 65535 (the Lift Car_Load_Units precedent); the analog objects likewise keep Units read-only. Pulse Converter: before, Present_Value was a stored REAL that only an out-of-service write changed and Adjust_Value was stored without effect. Now Count is the state: `add_pulses` accumulates input and stamps Update_Time, and Present_Value is computed from Count and Scale_Factor on each read while in service (the clause leaves the timing to the implementation). Going out of service freezes Present_Value and decouples it, as item (a) of 12.23.10 requires; Count keeps accumulating, and returning to service makes Present_Value follow Count again. Every change to Count or Scale_Factor is refused with VALUE_OUT_OF_RANGE if the scaled value would not fit a finite REAL, and an Adjust_Value with a zero Scale_Factor is refused because the quotient is undefined. Timestamps come from the database's Device clock through `clock::stamp_datetime`, shared with the File object's Modification_Date, and are all-unspecified with no clock or before the first change. COV_Period is required by footnote 2 since the object supports COV; it is a constant 0, which Clause 13.1 defines as no periodic notifications, because the server sends none. Table 13-1 reports Update_Time with the Pulse Converter's Present_Value and Status_Flags, so `cov_reported_properties_default` now lists it (reported, not a trigger). Lighting: Default_Ramp_Rate starts at 100.0 and Default_Step_Increment at 1.0, both inside the 0.1 to 100.0 range Clauses 12.54.17 and 12.54.18 set; they are writable, with matching setters. Current_Command_Priority reuses `common::current_command_priority`, which the analog, binary and multi-state outputs and values already share; on Binary Lighting Output it stays at the commanding slot through a WARN_RELINQUISH egress, since the slot holds until the egress ends. Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference."
+  },
+  {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
    "standard_anchor": "Clause 12.11, Table 12-13",
    "priority": "P1",
@@ -2047,7 +2115,7 @@
     "crates/bacnet-encoding/src/constructed/object_property_reference.rs",
     "crates/bacnet-objects/src/reference.rs",
     "crates/bacnet-objects/src/loop_obj.rs",
-    "crates/bacnet-objects/src/accumulator.rs"
+    "crates/bacnet-objects/src/accumulator/pulse_converter.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::golden_vector_unindexed",
@@ -2059,7 +2127,7 @@
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_framed_indexed_reference_reads_back_with_index",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_setpoint_reference_accepts_bacnetsetpointreference_frame",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_local_list_with_index_still_accepted",
-    "crates/bacnet-objects/src/accumulator/mod.rs::tests::pulse_converter_write_framed_indexed_input_reference_lands",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_framed_indexed_input_reference_lands",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector_indexed",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_frame_is_the_absent_alternative",
     "crates/bacnet-objects/src/reference/tests.rs::empty_setpoint_frame_clears_only_on_the_setpoint_arm",
@@ -2085,7 +2153,7 @@
     "crates/bacnet-objects/src/reference/tests.rs::mixed_flat_and_framed_list_is_invalid_data_encoding",
     "crates/bacnet-objects/src/reference/tests.rs::wrong_value_datatypes_are_invalid_data_type",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_device_qualified_reference_rejected_and_preserves",
-    "crates/bacnet-objects/src/accumulator/mod.rs::tests::pulse_converter_write_malformed_framed_input_reference_rejected",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
     "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
    ],
@@ -3750,9 +3818,9 @@
   },
   {
    "id": "BACNET-13-COV-OBJECT-CRITERIA",
-   "standard_anchor": "Clause 13.1 and Table 13-1 (Loop and Staging rows) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15",
+   "standard_anchor": "Clause 13.1 and Table 13-1 (Loop and Staging rows; no Averaging row) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15; Clause 12.5 and Table 12-5 (Averaging samples and the datatypes they may have)",
    "priority": "P1",
-   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment.",
+   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment. An Averaging object, which Table 13-1 doesn't list, refuses SubscribeCOV with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and admits SubscribeCOVProperty and SubscribeCOVPropertyMultiple; a numeric property is reported when it moves by the subscription's COV increment, or on any change without one, with no Status_Flags. A running server's application feeds it samples with BACnetServer::add_averaging_sample_local (Python: add_averaging_sample_local): a BOOLEAN (0 or 1), Signed, Unsigned, Enumerated or finite REAL converted to REAL, other datatypes refused with PROPERTY / INVALID_DATA_TYPE, non-finite REALs with PROPERTY / VALUE_OUT_OF_RANGE and other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and Valid_Samples change together, and a property subscription on one of them is notified.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/traits.rs",
@@ -3763,7 +3831,10 @@
     "crates/bacnet-server/src/cov/observation.rs",
     "crates/bacnet-server/src/server/cov_notifications.rs",
     "crates/bacnet-server/src/server/local_writes.rs",
-    "crates/rusty-bacnet/src/server/server_methods/loop_methods.rs"
+    "crates/rusty-bacnet/src/server/server_methods/loop_methods.rs",
+    "crates/bacnet-objects/src/averaging.rs",
+    "crates/bacnet-server/src/handlers/cov.rs",
+    "crates/rusty-bacnet/src/server/server_methods/averaging_methods.rs"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_cov_notification_reports_setpoint_and_controlled_variable_value",
@@ -3776,22 +3847,35 @@
     "crates/bacnet-server/src/server/loop_controlled_variable_tests.rs::controlled_variable_value_local_rides_the_next_subscribe_cov_report",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service",
     "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopLiveServerTests::test_live_server_serves_settings_and_takes_the_measurement",
-    "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopStubContractTests::test_runtime_and_stub_expose_the_controlled_variable_route"
+    "crates/rusty-bacnet/tests/test_loop_controlled_variable.py::LoopStubContractTests::test_runtime_and_stub_expose_the_controlled_variable_route",
+    "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_sample_hook_converts_each_sampled_datatype_to_real",
+    "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_takes_property_cov_subscriptions_but_not_subscribe_cov",
+    "crates/bacnet-server/src/server/averaging_sample_tests.rs::averaging_sample_local_updates_statistics_and_notifies_property_subscriptions",
+    "crates/bacnet-server/src/server/averaging_sample_tests.rs::averaging_property_subscription_reports_by_its_cov_increment",
+    "crates/bacnet-server/src/server/averaging_sample_tests.rs::averaging_refuses_subscribe_cov_but_admits_property_multiple",
+    "crates/bacnet-endpoint/src/source_reporter_averaging_tests.rs::averaging_sample_route_and_property_cov_admission_survive_wrapping",
+    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingLiveServerTests::test_live_server_takes_samples_and_reports_them",
+    "crates/rusty-bacnet/tests/test_averaging_samples.py::AveragingStubContractTests::test_runtime_and_stub_expose_the_sample_route"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_cov_increment_is_writable_validated_and_drives_cov",
     "crates/bacnet-objects/src/staging/tests.rs::staging_cov_increment_and_reported_present_stage",
     "crates/bacnet-server/src/server/loop_controlled_variable_tests.rs::controlled_variable_value_local_refuses_bad_values_and_targets",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::controlled_variable_value_hook_is_refused_by_other_objects"
+    "crates/bacnet-objects/src/loop_obj/tests.rs::controlled_variable_value_hook_is_refused_by_other_objects",
+    "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_sample_hook_refuses_other_datatypes_and_non_finite_reals",
+    "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_sample_hook_is_refused_by_other_objects",
+    "crates/bacnet-server/src/server/averaging_sample_tests.rs::averaging_sample_local_refuses_bad_values_and_targets"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #988",
     "CHANGELOG.md Unreleased Fixed entry for #985",
     "docs/rust-api.md#building-control-7 Staging COV (Table 13-1)",
-    "CHANGELOG.md Unreleased Added entry for #1063"
+    "CHANGELOG.md Unreleased Added entry for #1063",
+    "CHANGELOG.md Unreleased Added entry for #1083",
+    "docs/rust-api.md#building-control-7 Averaging samples"
    ],
-   "notes": "Split child of BACNET-13-COV-SUBSCRIPTIONS (#985, #988). The server takes the extra values from BACnetObject::cov_reported_properties (a default keyed by object type that custom objects may override) under the same object borrow as Present_Value and Status_Flags, leaves out a declared property the object's Property_List lacks, and sends nothing when a listed one fails to read, as for an unreadable Present_Value. Only trigger values (Present_Stage) are kept in the delivered observation; Setpoint and Controlled_Variable_Value are carried at their current value. A WriteProperty runs a Staging plan before its own fanout, so a stage change and the completion's Status_Flags can arrive in one notification; write_local reports the stage first. Local reading of Table 13-1a: a SubscribeCOVProperty on Present_Value reports Present_Value and Status_Flags only, and a Staging Present_Value property subscription does not fire on a Present_Stage change alone. Not claimed: the extra Table 13-1 values of other COV objects (Access Door Door_Alarm_State, Load Control, Pulse Converter, Credential Data Input, Access Point). #1063 gave Controlled_Variable_Value an application route through the BACnetObject::set_controlled_variable_value_internal hook and the existing local-write path, which runs the COV capture under the database lock and fires after the guard drops; the server doesn't follow Controlled_Variable_Reference. Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062)."
+   "notes": "Split child of BACNET-13-COV-SUBSCRIPTIONS (#985, #988). The server takes the extra values from BACnetObject::cov_reported_properties (a default keyed by object type that custom objects may override) under the same object borrow as Present_Value and Status_Flags, leaves out a declared property the object's Property_List lacks, and sends nothing when a listed one fails to read, as for an unreadable Present_Value. Only trigger values (Present_Stage) are kept in the delivered observation; Setpoint and Controlled_Variable_Value are carried at their current value. A WriteProperty runs a Staging plan before its own fanout, so a stage change and the completion's Status_Flags can arrive in one notification; write_local reports the stage first. Local reading of Table 13-1a: a SubscribeCOVProperty on Present_Value reports Present_Value and Status_Flags only, and a Staging Present_Value property subscription does not fire on a Present_Stage change alone. Not claimed: the extra Table 13-1 values of other COV objects (Access Door Door_Alarm_State, Load Control, Pulse Converter, Credential Data Input, Access Point). #1063 gave Controlled_Variable_Value an application route through the BACnetObject::set_controlled_variable_value_internal hook and the existing local-write path, which runs the COV capture under the database lock and fires after the guard drops; the server doesn't follow Controlled_Variable_Reference. Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062). #1083 gave the Averaging object an application route through the BACnetObject::add_averaging_sample_internal hook and the same local-write path, so the server still doesn't read Object_Property_Reference. Local reading of Clause 13.1: Averaging has no Present_Value and no Table 13-1 row, so it has no whole-object COV criteria and SubscribeCOV stays refused, while Table 13-1a covers its properties. BACnetObject::supports_subscribe_cov_property (default supports_cov) admits the property forms, and the default supports_cov_property follows it. AveragingObject::add_sample now refuses NaN and infinities. Not claimed: Window_Interval, Window_Samples and the sliding window (#1092; the statistics are cumulative), Variance_Value, the timestamps, and the INF / NaN / -INF statistics Clause 12.5 gives an object with no samples (Minimum_Value, Maximum_Value and Average_Value read 0.0 until the first sample)."
   },
   {
    "id": "BACNET-13-VALUE-SOURCE-COV",

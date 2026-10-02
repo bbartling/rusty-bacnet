@@ -256,20 +256,7 @@ impl FileObject {
             description: String::new(),
             file_type: file_type.into(),
             file_size: 0,
-            modification_date: (
-                Date {
-                    year: Date::UNSPECIFIED,
-                    month: Date::UNSPECIFIED,
-                    day: Date::UNSPECIFIED,
-                    day_of_week: Date::UNSPECIFIED,
-                },
-                Time {
-                    hour: Time::UNSPECIFIED,
-                    minute: Time::UNSPECIFIED,
-                    second: Time::UNSPECIFIED,
-                    hundredths: Time::UNSPECIFIED,
-                },
-            ),
+            modification_date: crate::clock::UNSPECIFIED_DATETIME,
             archive: false,
             read_only: false,
             file_access_method: FileAccessMethod::STREAM_ACCESS.to_raw(),
@@ -424,29 +411,8 @@ impl FileObject {
         }
     }
 
-    fn modification_datetime(&self) -> (Date, Time) {
-        let frame = self.clock.as_ref().and_then(|clock| clock.read_clock());
-        match frame {
-            Some(frame) if frame.is_valid_actual_datetime() => (frame.local_date, frame.local_time),
-            _ => (
-                Date {
-                    year: Date::UNSPECIFIED,
-                    month: Date::UNSPECIFIED,
-                    day: Date::UNSPECIFIED,
-                    day_of_week: Date::UNSPECIFIED,
-                },
-                Time {
-                    hour: Time::UNSPECIFIED,
-                    minute: Time::UNSPECIFIED,
-                    second: Time::UNSPECIFIED,
-                    hundredths: Time::UNSPECIFIED,
-                },
-            ),
-        }
-    }
-
     fn mark_modified(&mut self) {
-        self.modification_date = self.modification_datetime();
+        self.modification_date = crate::clock::stamp_datetime(self.clock.as_deref());
         self.archive = false;
     }
 }

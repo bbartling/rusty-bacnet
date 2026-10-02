@@ -16,6 +16,7 @@ pub(super) fn cov_reported_properties_default(
             Value(PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
         ],
         ObjectType::STAGING => &[Trigger(PropertyIdentifier::PRESENT_STAGE)],
+        ObjectType::PULSE_CONVERTER => &[Value(PropertyIdentifier::UPDATE_TIME)],
         _ => &[],
     }
 }
