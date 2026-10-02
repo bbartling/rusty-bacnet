@@ -3045,7 +3045,7 @@
     "crates/bacnet-server/src/handlers/list.rs::object_refusal",
     "crates/bacnet-server/src/handlers/list.rs::Added::request_position",
     "crates/bacnet-server/src/handlers/list.rs::handle_list_element_observed",
-    "crates/bacnet-objects/src/common.rs::at_list_element",
+    "crates/bacnet-objects/src/common/list_element.rs::at_list_element",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::write_property",
     "crates/bacnet-server/src/server/requests/confirmed_response.rs::error_apdu_from_error",
     "crates/bacnet-services/src/list_manipulation/error.rs::ChangeListError",
