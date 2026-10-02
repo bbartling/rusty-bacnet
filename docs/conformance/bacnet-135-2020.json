@@ -92,7 +92,7 @@
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#configured-network-port-snapshots Configured Network Port snapshots",
-    "docs/python-api.md#measurement--file add_bip_network_port",
+    "docs/python-api.md#configured-network-port-snapshots add_bip_network_port",
     "CHANGELOG.md #867"
    ],
    "notes": "Refs #867. Constructor snapshot only: no active socket/NIC association, activation owner, dormant lease or registration API. Changes_Pending remains false because activation-dependent writes are denied; Command is absent. Description/OOS retain object-local behavior. Local B/IP instance/Port ID1..255 is conservative implementation policy, distinct from UDP0. Initial zero number is UNKNOWN, nonzero caller-supplied number CONFIGURED based on provenance. Port399 accepts Unsigned >=50 including non-Device-table51; declared default1476 is independent of Device62 and later live capability validation. Zero mask/gateway and nonempty zero-DNS sentinel do not invent interface facts. Ethernet/VIRTUAL constructors expose common application rows only, not complete link profiles. Both identity database builders use the same construction boundary. No whole NetworkPort, SC, BBMD, foreign, DHCP, router or live receiving-port support claim; #785 and #863 remain separate."
@@ -282,7 +282,7 @@
     "CHANGELOG.md",
     "docs/target-audit-reporters.md#target-audit-reporters",
     "docs/delayed-target-audit.md#delayed-target-audit-reporting",
-    "docs/rust-api.md#logging--trending-5",
+    "docs/rust-api.md#audit-reporter-configuration-and-send-delay",
     "docs/python-api.md#target-audit-reporters"
    ],
    "notes": "Refs #783/#345. None omits the pair; Some0 exposes immediate control; local accepted range 0..3600 seconds and active presence fixed. First-record deadline never extends; captured route/mode/APDU/configuration identity determines batches. Local capacities: 256 records/256KiB global, 64/64KiB per Reporter, separate 64 active sends; 8 historical contexts per Reporter and 256 global including baseline. Whole-Device and Reporter changes reserve contexts and immediate resources before publication; late refusal leaves canonical state and sequence unchanged. TRUE always commands current unsent prefix, FALSE does not cancel it, internal reset does not create WRITE. FALSE after terminal failure means quiescent, not delivered; ACK health is separate from local-send completion. No retries/outbound segmentation/durability. Captured non-NONE level and AUDITING_FAILURE bit continue to filter summaries in this partial profile; normative tension with complete 19.6.6 remains tracked by #345/#732/#783. Earliest loss uses original admission ordinal, not callback or timestamp order. Historical summary cannot alter current health. Mandatory actual changes and dedicated Reporter attempts remain immediate; ordinary pressure does not deny service mutation. First target stop gates application work and retains one absolute three-second drain deadline across cancellation, with ACK/control progress, joined workers and DB uninstall. Source rejects the optional pair and retains current-only loss semantics. This row supersedes only the earlier target no-batching/current-only-loss descriptions; historical slice evidence and global pins/statuses are unchanged. No full Audit/BIBB/BTL claim."
@@ -1250,7 +1250,103 @@
     "CHANGELOG.md Unreleased Changed entry for #979",
     "CHANGELOG.md Unreleased Fixed entry for #979"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#979). Breaking pre-1.0 changes. Credential_Status stored any Enumerated; it is now the BinaryPV newtype and refuses anything but 0 and 1, and ResolvedEnum::from_property names it as a BinaryPV. Present_Value came with the 0.1.0 import (7efc670a), which described it as the credential's active or inactive state, the meaning Credential_Status carries, but kept it in a separate field nothing synchronised; the #678 metadata migration then recorded it as an implementation-extra Optional writable row. It is removed, as #984 did for Calendar and #997 for Elevator Group. The object has no COV support, event state or intrinsic reporting, so nothing else read it. Local policy: Credential_Status starts INACTIVE and stays network-writable, since an R row leaves writability to the implementation, and it is not derived from Reason_For_Disable, which the object doesn't serve. This row covers Credential_Status and the Present_Value removal only. It makes no claim for the unserved Table 12-40 rows (Global_Identifier, Reason_For_Disable, Activation_Time, Expiration_Time, Credential_Disable and the optional rows), for the datatypes of Assigned_Access_Rights and Authentication_Factors, which the object serves as a count and a list of octet strings, or for the Out_Of_Service property it still serves though Table 12-40 has no such row."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#979). Breaking pre-1.0 changes. Credential_Status stored any Enumerated; it is now the BinaryPV newtype and refuses anything but 0 and 1, and ResolvedEnum::from_property names it as a BinaryPV. Present_Value came with the 0.1.0 import (7efc670a), which described it as the credential's active or inactive state, the meaning Credential_Status carries, but kept it in a separate field nothing synchronised; the #678 metadata migration then recorded it as an implementation-extra Optional writable row. It is removed, as #984 did for Calendar and #997 for Elevator Group. The object has no COV support, event state or intrinsic reporting, so nothing else read it. Local policy: Credential_Status starts INACTIVE and stays network-writable, since an R row leaves writability to the implementation, and it is not derived from Reason_For_Disable, which the object doesn't serve. This row covers Credential_Status and the Present_Value removal only. It makes no claim for the unserved Table 12-40 rows (Global_Identifier, Reason_For_Disable, Activation_Time, Expiration_Time, Credential_Disable and the optional rows) or for the datatypes of Assigned_Access_Rights and Authentication_Factors, which the object serves as a count and a list of octet strings. The Out_Of_Service it also served, which Table 12-40 doesn't list, went in #1064 (BACNET-12-UNDEFINED-PROPERTY-ROWS)."
+  },
+  {
+   "id": "BACNET-12-UNDEFINED-PROPERTY-ROWS",
+   "standard_anchor": "Clause 12 property tables: Tables 12-5 (Averaging), 12-12 (Command), 12-14 (Event Enrollment), 12-16 (File), 12-17 (Group), 12-24 (Notification Class), 12-31 (Event Log), 12-32 (Load Control), 12-34 (Structured View), 12-36 (Access Point), 12-37 (Access Zone), 12-38 (Access User), 12-39 (Access Rights) and 12-40 (Access Credential); the Status_Flags descriptions of Clauses 12.10, 12.12, 12.21, 12.27, 12.28, 12.33, 12.34 and 12.35; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "An object serves only the rows its Clause 12 table defines. A row no table defines is absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on it fail with PROPERTY / UNKNOWN_PROPERTY without changing the object. On an object type that has Status_Flags but no Out_Of_Service, the OUT_OF_SERVICE flag stays FALSE.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/common.rs::read_common_properties",
+    "crates/bacnet-objects/src/common.rs::read_identity_properties",
+    "crates/bacnet-objects/src/event_log.rs::EventLogObject",
+    "crates/bacnet-objects/src/command.rs::CommandObject",
+    "crates/bacnet-objects/src/event_enrollment/mod.rs::EventEnrollmentObject",
+    "crates/bacnet-objects/src/notification_class/mod.rs::NotificationClass",
+    "crates/bacnet-objects/src/load_control.rs::LoadControlObject",
+    "crates/bacnet-objects/src/file.rs::FileObject",
+    "crates/bacnet-objects/src/group.rs::GroupObject",
+    "crates/bacnet-objects/src/group.rs::StructuredViewObject",
+    "crates/bacnet-objects/src/averaging.rs::AveragingObject",
+    "crates/bacnet-objects/src/access_control/credential.rs::AccessCredentialObject",
+    "crates/bacnet-objects/src/access_control/rights.rs::AccessRightsObject",
+    "crates/bacnet-objects/src/access_control/user.rs::AccessUserObject",
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-server/src/event_enrollment/mod.rs::evaluate_event_enrollments_report"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/handlers/tests/undefined_property_rows.rs::undefined_rows_are_absent_from_property_list_rpm_all_and_the_pics",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_user_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_rights_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_credential_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_point_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/averaging/metadata.rs::tests::property_metadata_averaging_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_property_metadata_is_complete_and_pins_timestamp_requirements",
+    "crates/bacnet-objects/src/file/metadata.rs::tests::property_metadata_file_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_structured_view_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/load_control/metadata.rs::tests::property_metadata_load_control_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/notification_class/metadata.rs::tests::property_metadata_notification_class_exact_sets_and_indexed_list",
+    "crates/bacnet-objects/src/trend/metadata.rs::tests::property_metadata_log_family_exact_sets_and_indexed_list",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/access_identity.rs::rpm_access_identity_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/access_topology.rs::rpm_access_topology_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/averaging.rs::rpm_averaging_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/command.rs::rpm_command_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/event_enrollment.rs::rpm_metadata_selectors_are_exact_for_event_enrollment",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/file.rs::rpm_metadata_file_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/file.rs::pics::file_property_metadata_is_exact_for_each_single_instance",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/group.rs::rpm_group_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/load_control.rs::rpm_load_control_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/log.rs::rpm_metadata_log_selectors_pics_rows_and_budgets_are_exact",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/notification_class.rs::rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/property_metadata_tests/averaging.rs::pics_averaging_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/property_metadata_tests/command.rs::pics_command_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/property_metadata_tests/group.rs::pics_group_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/property_metadata_tests/load_control.rs::pics_load_control_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/property_metadata_tests/loop_program.rs::pics_loop_program_notification_class_property_metadata_is_exact",
+    "crates/bacnet-server/src/pics/truth_source_tests.rs::pics_log_family_writability_comes_from_runtime_routes"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/undefined_property_rows_tests.rs::rows_outside_the_property_tables_are_unknown",
+    "crates/bacnet-server/src/handlers/tests/undefined_property_rows.rs::rp_rpm_and_wp_find_no_undefined_row",
+    "crates/bacnet-objects/src/event_log/tests.rs::event_log_has_no_out_of_service_or_log_interval",
+    "crates/bacnet-objects/src/file/tests.rs::file_has_no_status_flags_reliability_or_out_of_service",
+    "crates/bacnet-objects/src/notification_class/tests/properties.rs::out_of_service_is_unknown",
+    "crates/bacnet-objects/src/event_enrollment/tests/status_flags.rs::event_enrollment_status_flags_follow_event_state_and_force_out_of_service_false",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_unserved_rows_stay_unknown",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_trio_unserved_rows_stay_unknown",
+    "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_unserved_rows_stay_unknown",
+    "crates/bacnet-objects/src/averaging/metadata.rs::tests::property_metadata_averaging_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/load_control/metadata.rs::tests::property_metadata_load_control_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/notification_class/metadata.rs::tests::property_metadata_notification_class_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/trend/metadata.rs::tests::property_metadata_log_family_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/event_enrollment/tests/out_of_range.rs::out_of_range_enrollment_has_no_out_of_service_gate",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_credential_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_user_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_rights_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/averaging.rs::rpm_averaging_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/command.rs::rpm_command_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/file.rs::rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_group_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_structured_view_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/load_control.rs::rpm_load_control_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/notification_class.rs::rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #1064"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1064). Breaking pre-1.0 wire changes. A sweep compared each object type's served rows (its metadata plus a read and a write probe of every standard property identifier) with its Clause 12 table and removed the rows no table defines: Event Log Out_Of_Service and Log_Interval; Out_Of_Service on Command, Event Enrollment, Notification Class, Load Control, Access Credential and Access Rights; Status_Flags, Reliability and Out_Of_Service on File, Group and Structured View; Present_Value, Status_Flags, Event_State, Reliability and Out_Of_Service on Averaging; Present_Value, Assigned_Access_Rights and Out_Of_Service on Access User; Present_Value on Access Point; Present_Value and Access_Doors on Access Zone. Every one came with the 0.1.0 import (7efc670a), whose object template gave most types Status_Flags, Out_Of_Service and Reliability and some a Present_Value copying another property; the canonical-metadata migrations (#443, #657, #658, #659, #668, #669, #670, #672, #677, #678) then recorded them as compatibility or implementation-extra rows. None was a documented extension with a purpose of its own, so all go, as #984 did for Calendar, #985 for the Trend Logs, #997 for Elevator Group and #979 for the Access Credential Present_Value. Object types with Status_Flags but no Out_Of_Service read their shared rows through the no_out_of_service form of read_common_properties!, which holds the OUT_OF_SERVICE flag FALSE as each of those types requires; before, a write of the stray Out_Of_Service set that flag. File, Group, Structured View and Averaging read only read_identity_properties!. The Event Enrollment evaluator used to skip an enrollment whose Out_Of_Service was TRUE; with the property gone the gate goes too, and Event_Detection_Enable still suspends evaluation. Credential Data Input was a candidate, but Table 12-43 lists Out_Of_Service, so it keeps the row. Color and Color Temperature have no 135-2020 table and were not swept; Lift, Schedule and Loop had no undefined rows. Not covered: the required rows these objects still don't serve, and any datatype review of the rows that remain."
   },
   {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
@@ -1607,7 +1703,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write (allowing a client-supplied replacement Reliability value while Out_Of_Service is TRUE) so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, Escalator/Lift/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate. #978: Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags instead of returning flags fixed at construction. Loop and Schedule derive FAULT from an evaluated or simulated Reliability, OUT_OF_SERVICE from Out_Of_Service and IN_ALARM from their fixed NORMAL Event_State, and a Loop COV subscriber is notified when either write changes Status_Flags. Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's then non-standard compatibility Out_Of_Service never reached its flags. #978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET). #997 likewise removed Status_Flags, Out_Of_Service and Reliability from Elevator Group, whose Table 12-76 has none of them (see BACNET-12-ELEVATOR-GROUP-PROPERTY-SET). #985: Loop Present_Value joined the footnote 7 gate (metadata WhenOutOfService, so the PICS marks it writable), and set_present_value_local now accepts a Loop in service. Trend Log lost its writable compatibility Out_Of_Service and Trend Log Multiple its fixed-FALSE read-only one, as #984 did for Calendar: both are absent from Property_List, the metadata, RPM ALL and OPTIONAL and the PICS, and ReadProperty or WriteProperty on them fails with PROPERTY / UNKNOWN_PROPERTY. Event Log keeps its own Out_Of_Service row, untriaged here."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write (allowing a client-supplied replacement Reliability value while Out_Of_Service is TRUE) so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, Escalator/Lift/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate. #978: Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags instead of returning flags fixed at construction. Loop and Schedule derive FAULT from an evaluated or simulated Reliability, OUT_OF_SERVICE from Out_Of_Service and IN_ALARM from their fixed NORMAL Event_State, and a Loop COV subscriber is notified when either write changes Status_Flags. Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's then non-standard compatibility Out_Of_Service never reached its flags. #978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET). #997 likewise removed Status_Flags, Out_Of_Service and Reliability from Elevator Group, whose Table 12-76 has none of them (see BACNET-12-ELEVATOR-GROUP-PROPERTY-SET). #985: Loop Present_Value joined the footnote 7 gate (metadata WhenOutOfService, so the PICS marks it writable), and set_present_value_local now accepts a Loop in service. Trend Log lost its writable compatibility Out_Of_Service and Trend Log Multiple its fixed-FALSE read-only one, as #984 did for Calendar: both are absent from Property_List, the metadata, RPM ALL and OPTIONAL and the PICS, and ReadProperty or WriteProperty on them fails with PROPERTY / UNKNOWN_PROPERTY. #1064 likewise removed Event Log's writable Out_Of_Service, which Table 12-31 doesn't define (BACNET-12-UNDEFINED-PROPERTY-ROWS)."
   },
   {
    "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",
@@ -4753,7 +4849,7 @@
    ],
    "benchmarks": [],
    "public_claims": [
-    "docs/python-api.md#constructor sc_heartbeat_interval_ms",
+    "docs/python-api.md#heartbeat-interval-and-timeout sc_heartbeat_interval_ms",
     "docs/rust-api.md#bacnetsc-client-transport with_heartbeat_interval_ms"
    ],
    "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because the native heartbeat timeout evidence relies on a test-only timing override rather than formal Annex AB.6.3 timeout conformance tests. Refs #769 distinguishes the accepting Hub optional local probe from the initiating-node requirement: one monotonic origin, checked millisecond policy, strict-exceeds scan-driven ages from reservation, Skip missed ticks, and matching-only ACK activity updates. Serial sends may delay detection; ACK age is not a hard closure deadline. Node timing bounds and this row status remain unchanged."
@@ -5422,7 +5518,7 @@
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#accepted-direct-tls-identity",
-    "docs/python-api.md#required-operational-credentials"
+    "docs/python-api.md#accepted-direct-identity-and-responses"
    ],
    "notes": "Refs #803. Local identity is SHA-256 of exact verified leaf DER plus the existing checked process-wide membership generation; captured before upgrade and admitted under with_current. Same-cert reconnect changes incarnation. Complete admitted work retains its original snapshot after retirement. Real TLS listener-to-network-to-server tests use deterministic queued envelopes and DB barriers; old A segment controls are admitted before replacement, never freshly accepted from retired A. Generic duplicate and LSO replay entries retain direct identity with existing bounds and non-direct canonical keys. #876 makes generic detection pending-only: pending same-socket WP remains suppressed, completed same-socket WP reauthorizes, and completed LSO still replays without reauthorization. Direct partial contexts and Abort cancellation isolate incarnations; non-direct address sweeps cannot remove direct contexts. Hub admission migrates to a distinct scope-only channel with no downstream direct leaf identity. Copy/Eq/Hash and redacted Debug are retained. No mandatory or enabled direct certificate-to-claimed-ID binding, Hub-relayed end-to-end identity, Python principal callback, #524 response socket/replay delivery/segmented-response control confinement, #886 outbound application NPDU intake, broader security-profile promotion or external certification. Source APIs postdate published0.11.0. Independent duplicate-partition and Abort-sweep negative controls are recorded in the scoped evidence narrative."
   },
@@ -5468,7 +5564,7 @@
     "benchmarks": [],
     "public_claims": [
       "docs/rust-api.md#accepted-direct-server-responses",
-      "docs/python-api.md#required-operational-credentials"
+      "docs/python-api.md#accepted-direct-identity-and-responses"
     ],
     "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Clause 5.2.1.2 response selection uses framing-derived path capacity as well as local/requester APDU limits; real TLS exact-boundary, local/routed, independent BVLC, segment-count and too-small cases cover fitting delivery or bounded failure. Sizing metadata is immutable and independent of current membership. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
   },
@@ -5503,7 +5599,7 @@
     "benchmarks": [],
     "public_claims": [
       "docs/rust-api.md#accepted-direct-client-and-endpoint-replies",
-      "docs/python-api.md#required-operational-credentials",
+      "docs/python-api.md#accepted-direct-identity-and-responses",
       "crates/bacnet-endpoint/src/lib.rs"
     ],
     "notes": "Refs GitLab #889 under #524. Selected original-socket policy for inbound confirmed request consumers, not a BACnet requirement against response path switching. Direct provenance OR any capability selects checked issuance before reply_tx; malformed mixed envelopes cannot bypass through a one-shot or generic address send. Existing ordinary client failed-prompt fallback and endpoint failed-prompt completion remain distinct. Saved route crosses the existing bounded endpoint command queue with caller-owned cancellation; queue-full/closed and stop/drop remain bounded. Clause 5.2.1.2 local/routed NPDU and BVLC limits select the existing endpoint SEGMENTATION_NOT_SUPPORTED Abort for oversized ComplexACKs, without adding segmentation; even an unfit Abort fails without fallback. Admitted notification delivery/Device writes retain original execution authority after retirement or missing reply capability. Direct responses have empty Data Options; ordinary endpoint attributes remain unchanged. Real TLS baseline red proves generic egress, not cross-peer disclosure. A/B replacement, prompt-channel attacks, live session teardown, queue cancellation and exact sizing controls require explicit bacnet-endpoint/sc-tls; the standard hosted transport-only feature list does not select these integration cases. Excludes outgoing client transaction/retry policy and controls (#890), native notification traffic (#891), ordinary direct intake/routing (#886), Hub end-to-end identity, Python direct-entry support and full Annex AB/certification. Postdates published0.11.0."
@@ -5543,7 +5639,7 @@
     "benchmarks": [],
     "public_claims": [
       "docs/rust-api.md#bidirectional-direct-traffic",
-      "docs/python-api.md#required-operational-credentials"
+      "docs/python-api.md#accepted-direct-identity-and-responses"
     ],
     "notes": "Refs GitLab #886. Established direct selection includes accepted peers with discovery disabled; broadcast remains Hub-only. The private built-in TLS path couples verified leaf DER SHA-256, committed incarnation and original reply capability; full/resumed real TLS retains authenticated session identity without claiming certificate retransmission or remote client-certificate policy. Custom factories stay application send-only. Shared FIFO64 plus at most one active write, fair read/control turns, finite I/O and current-generation admission preserve bounded ownership. Saturation and uncertain started writes do not replay via Hub; only definitely unstarted retired work permits a fresh route decision. Retained admitted envelopes keep original authority. Real TLS baseline red observes Hub routing and missing outbound intake, not cross-peer disclosure. Public client, server and EndpointSession controls cover actual bidirectional replies and both server segmentation directions; explicit bacnet-endpoint/sc-tls is required for these integration tests. Separate native NotificationTransactions worker controls feed actual network envelopes through its production admission API, not a full subscription-emission lifecycle. Existing canonical peer/Invoke/service/direction/phase correlation remains: Hub/direct path switching and matching replacement-peer terminals are accepted, not same-leaf continuity. Optional strict outgoing route policy, Hub end-to-end identity, Python direct-entry support, full Annex AB and certification remain outside scope. Source APIs postdate published0.11.0; no global evidence pins advanced."
   }

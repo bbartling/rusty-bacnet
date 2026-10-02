@@ -5,6 +5,7 @@
 use super::super::*;
 use super::{make_dest_device, make_time};
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
+use bacnet_types::enums::ErrorCode;
 use bacnet_types::MacAddr;
 
 #[test]
@@ -332,20 +333,35 @@ fn read_event_state_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // normal
 }
 
+/// Table 12-24 has no Out_Of_Service (#1064): a write finds no property and
+/// the OUT_OF_SERVICE status flag stays clear.
 #[test]
-fn write_out_of_service() {
+fn out_of_service_is_unknown() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.write_property(
-        PropertyIdentifier::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
-    let val = nc
-        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(true));
+    for result in [
+        nc.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        ),
+        nc.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(Error::Protocol { code, .. })
+                if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+        ));
+    }
+    assert_eq!(
+        nc.read_property(PropertyIdentifier::STATUS_FLAGS, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0],
+        }
+    );
 }
 
 #[test]

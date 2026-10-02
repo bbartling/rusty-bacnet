@@ -5,16 +5,15 @@ use super::*;
 
 /// BACnet Access Zone object (type 36).
 ///
-/// Represents a physical zone or area controlled by access points.
-/// Present value indicates the occupancy state (AccessZoneOccupancyState).
+/// Represents a physical zone or area controlled by access points. Table
+/// 12-37 has neither Present_Value nor Access_Doors, so the object serves
+/// neither (#1064).
 pub struct AccessZoneObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: AccessZoneOccupancyState,
     global_identifier: u64,
     occupancy_count: u64,
-    access_doors: Vec<ObjectIdentifier>,
     entry_points: Vec<ObjectIdentifier>,
     exit_points: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
@@ -30,10 +29,8 @@ impl AccessZoneObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: AccessZoneOccupancyState::NORMAL,
             global_identifier: 0,
             occupancy_count: 0,
-            access_doors: Vec::new(),
             entry_points: Vec::new(),
             exit_points: Vec::new(),
             status_flags: StatusFlags::empty(),
@@ -64,21 +61,12 @@ impl BACnetObject for AccessZoneObject {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_ZONE.to_raw()))
             }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
-            }
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
                 Ok(PropertyValue::Unsigned(self.global_identifier))
             }
             p if p == PropertyIdentifier::OCCUPANCY_COUNT => {
                 Ok(PropertyValue::Unsigned(self.occupancy_count))
             }
-            p if p == PropertyIdentifier::ACCESS_DOORS => Ok(PropertyValue::List(
-                self.access_doors
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
             p if p == PropertyIdentifier::ENTRY_POINTS => Ok(PropertyValue::List(
                 self.entry_points
                     .iter()
@@ -111,14 +99,6 @@ impl BACnetObject for AccessZoneObject {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = AccessZoneOccupancyState::from_raw(v);
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
                 if let PropertyValue::Unsigned(v) = value {
                     self.global_identifier = v;

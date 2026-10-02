@@ -183,19 +183,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they have no stable headings. 82 bare entries now point at specific
   headings, and Recipient_List, Event_Parameters and BACnetTimeStamp framing
   have a short public statement in `docs/rust-api.md` (#1041).
+- `docs/python-api.md` gives configured Network Port snapshots, the SC
+  heartbeat settings and accepted-direct SC identity and responses their own
+  headings, and `docs/rust-api.md` the Audit Reporter configuration and send
+  delay. The ledger claims for them now point at those sections instead of the
+  nearest one (#1071).
 - Test-only: the endpoint Device-write tests bind port 0 and read the real
   address back, the benchmarks hub-restart test retries on a lost bind instead
   of probing the old address, and the BBMD several-own-rows test reruns on a
   lost port. The macOS limit of the BBMD probe retry is documented (#1068).
+- Test-only: the BBMD restart tests, and the endpoint and benchmarks tests that
+  bind a stopped node's address to prove it was released, run again on fresh
+  ports when another socket takes the port between the stop and the bind. A
+  node that really keeps its port fails every run. A restart rebinds a port the
+  OS chose, without SO_REUSEADDR, and every OS refuses that bind while another
+  socket holds the port, so the macOS limit of the BBMD probe retry does not
+  apply to it (#1070).
 - Test-only: the SC hub shutdown and graceful-shutdown tests that bind a
   stopped hub's address to prove it closed its listener, and the B/IP
   own-broadcast and ephemeral-port restart tests, run again on fresh ports
   when another socket takes the port between the stop and the bind. A node
-  that really keeps its port fails every run. The run limit, the lost-port
-  check and the restart helper are shared in `bacnet-transport`'s test-only
-  `port_ownership` code. The hub probe binds with SO_REUSEADDR on Unix, so it
-  shows the listener closed, not each connection, and on macOS a holder on
-  the wildcard address goes unnoticed; that is documented (#1095).
+  that really keeps its port fails every run. The run limit, lost-port check
+  and restart helper that #1070 added to the BBMD tests move to
+  `bacnet-transport`'s test-only `port_ownership` code, shared by all of these
+  tests. The hub probe binds with SO_REUSEADDR on Unix, so it shows the
+  listener closed, not each connection, and on macOS a holder on the wildcard
+  address goes unnoticed; that is documented (#1095).
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
   prefers dependency versions that support the declared MSRV (1.93). Feature
   resolution is unchanged, and the MSRV CI job still checks the lock file
@@ -899,6 +912,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty or
   WriteProperty on it fails with PROPERTY / UNKNOWN_PROPERTY. Read
   Credential_Status instead.
+
+- **Breaking property sets of fourteen object types (wire):** a sweep of every
+  object type's served properties against its property table in Clause 12
+  (#1064) found rows that no table defines, all carried over from the 0.1.0
+  import. Each is gone from the object's Property_List, property metadata,
+  RPM ALL and OPTIONAL, and PICS rows, and ReadProperty, RPM or WriteProperty
+  on it now fails with PROPERTY / UNKNOWN_PROPERTY:
+  - Event Log (Table 12-31): Out_Of_Service and Log_Interval, both writable.
+  - Command (Table 12-12), Event Enrollment (Table 12-14), Notification Class
+    (Table 12-24), Load Control (Table 12-32), Access Credential
+    (Table 12-40) and Access Rights (Table 12-39): a writable Out_Of_Service.
+  - File (Table 12-16), Group (Table 12-17) and Structured View
+    (Table 12-34): Status_Flags, Reliability and a writable Out_Of_Service.
+  - Averaging (Table 12-5): Present_Value, a copy of Average_Value, plus
+    Status_Flags, Event_State, Reliability and a writable Out_Of_Service.
+  - Access User (Table 12-38): a writable Present_Value that duplicated the
+    user type without tracking User_Type, Assigned_Access_Rights and a
+    writable Out_Of_Service.
+  - Access Point (Table 12-36): a writable Present_Value kept apart from
+    Access_Event.
+  - Access Zone (Table 12-37): a writable Present_Value and Access_Doors.
+
+  Writing the old Out_Of_Service used to set the OUT_OF_SERVICE status flag on
+  the objects that keep Status_Flags, though those object types hold that flag
+  FALSE; it now stays FALSE. An Event Enrollment written out of service used
+  to stop being evaluated; its type has no such switch, so evaluation now
+  always runs unless Event_Detection_Enable is FALSE. Credential Data Input
+  keeps its Out_Of_Service, which Table 12-43 does define. The Rust and Python
+  APIs are unchanged.
 
 - The Lift object's Car_Moving_Direction now accepts every
   BACnetLiftCarDirection value (#998). Its write check admitted only 0 to 3,

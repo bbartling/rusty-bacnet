@@ -5,18 +5,17 @@ use super::*;
 
 /// BACnet Access User object (type 35).
 ///
-/// Represents a person or entity that uses credentials to gain access.
-/// Present value indicates the user type (AccessUserType enumeration).
+/// Represents a person or entity that uses credentials to gain access. Its
+/// kind lives in User_Type; Table 12-38 has no Present_Value,
+/// Assigned_Access_Rights or Out_Of_Service row, so the object serves none of
+/// them (#1064).
 pub struct AccessUserObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: AccessUserType,
     user_type: AccessUserType,
     credentials: Vec<ObjectIdentifier>,
-    assigned_access_rights_count: u32,
     status_flags: StatusFlags,
-    out_of_service: bool,
     reliability: Reliability,
 }
 
@@ -28,12 +27,9 @@ impl AccessUserObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: AccessUserType::ASSET,
             user_type: AccessUserType::ASSET,
             credentials: Vec::new(),
-            assigned_access_rights_count: 0,
             status_flags: StatusFlags::empty(),
-            out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
@@ -53,15 +49,15 @@ impl BACnetObject for AccessUserObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Clause 12.33 holds the OUT_OF_SERVICE flag FALSE.
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_USER.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::USER_TYPE => {
                 Ok(PropertyValue::Enumerated(self.user_type.to_raw()))
@@ -71,9 +67,6 @@ impl BACnetObject for AccessUserObject {
                     .iter()
                     .map(|oid| PropertyValue::ObjectIdentifier(*oid))
                     .collect(),
-            )),
-            p if p == PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS => Ok(PropertyValue::Unsigned(
-                self.assigned_access_rights_count as u64,
             )),
             _ => Err(common::unknown_property_error()),
         }
@@ -86,23 +79,10 @@ impl BACnetObject for AccessUserObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = AccessUserType::from_raw(v);
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
             p if p == PropertyIdentifier::USER_TYPE => {
                 if let PropertyValue::Enumerated(v) = value {
                     self.user_type = AccessUserType::from_raw(v);

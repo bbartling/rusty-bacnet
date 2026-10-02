@@ -8,6 +8,8 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use bacnet_types::enums::ErrorCode;
+use bacnet_types::error::Error;
 
 // ---- OUT_OF_RANGE tests ----
 
@@ -285,20 +287,24 @@ fn out_of_range_event_enable_zero_still_tracks_event_state() {
     );
 }
 
+/// Table 12-14 has no Out_Of_Service (#1064), so a client can't pause an
+/// enrollment that way: the write finds no property and evaluation goes on.
 #[test]
-fn out_of_range_skips_out_of_service() {
+fn out_of_range_enrollment_has_no_out_of_service_gate() {
     let (mut db, ee_oid, _ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
 
-    // Set enrollment to out-of-service
     let obj = db.get_mut(&ee_oid).unwrap();
-    obj.write_property(
-        PropertyIdentifier::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
+    assert!(matches!(
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        ),
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+    ));
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
-    assert!(transitions.is_empty());
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }

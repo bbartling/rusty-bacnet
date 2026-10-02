@@ -182,7 +182,7 @@ fn access_point_create_and_read_defaults() {
     assert_eq!(point.object_name(), "AP-1");
     assert_eq!(
         point
-            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .read_property(PropertyIdentifier::ACCESS_EVENT, None)
             .unwrap(),
         PropertyValue::Enumerated(0)
     );
@@ -203,7 +203,8 @@ fn access_point_object_type() {
 fn access_point_property_list() {
     let point = AccessPointObject::new(1, "AP-1").unwrap();
     let list = point.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    // Table 12-36 has no Present_Value row (#1064).
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::ACCESS_EVENT));
     assert!(list.contains(&PropertyIdentifier::ACCESS_EVENT_TAG));
     assert!(list.contains(&PropertyIdentifier::ACCESS_EVENT_TIME));
@@ -313,7 +314,7 @@ fn access_user_create_and_read_defaults() {
     let user = AccessUserObject::new(1, "USER-1").unwrap();
     assert_eq!(user.object_name(), "USER-1");
     assert_eq!(
-        user.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        user.read_property(PropertyIdentifier::USER_TYPE, None)
             .unwrap(),
         PropertyValue::Enumerated(0)
     );
@@ -333,10 +334,11 @@ fn access_user_object_type() {
 fn access_user_property_list() {
     let user = AccessUserObject::new(1, "USER-1").unwrap();
     let list = user.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::USER_TYPE));
     assert!(list.contains(&PropertyIdentifier::CREDENTIALS));
-    assert!(list.contains(&PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS));
+    // Table 12-38 has neither of these rows (#1064).
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS));
 }
 
 #[test]
@@ -373,9 +375,9 @@ fn access_zone_create_and_read_defaults() {
     let zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
     assert_eq!(zone.object_name(), "ZONE-1");
     assert_eq!(
-        zone.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        zone.read_property(PropertyIdentifier::OCCUPANCY_COUNT, None)
             .unwrap(),
-        PropertyValue::Enumerated(0)
+        PropertyValue::Unsigned(0)
     );
 }
 
@@ -393,22 +395,18 @@ fn access_zone_object_type() {
 fn access_zone_property_list() {
     let zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
     let list = zone.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::GLOBAL_IDENTIFIER));
     assert!(list.contains(&PropertyIdentifier::OCCUPANCY_COUNT));
-    assert!(list.contains(&PropertyIdentifier::ACCESS_DOORS));
     assert!(list.contains(&PropertyIdentifier::ENTRY_POINTS));
+    // Table 12-37 has neither of these rows (#1064).
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::ACCESS_DOORS));
     assert!(list.contains(&PropertyIdentifier::EXIT_POINTS));
 }
 
 #[test]
 fn access_zone_read_lists_empty() {
     let zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
-    assert_eq!(
-        zone.read_property(PropertyIdentifier::ACCESS_DOORS, None)
-            .unwrap(),
-        PropertyValue::List(vec![])
-    );
     assert_eq!(
         zone.read_property(PropertyIdentifier::ENTRY_POINTS, None)
             .unwrap(),
