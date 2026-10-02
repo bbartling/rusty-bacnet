@@ -12,8 +12,8 @@ use crate::property_metadata::{
 };
 
 // Unlike single-channel Trend Log, the interval and monitored-reference rows
-// have a required base classification. Keep their existing write routes and
-// the read-only Out_Of_Service compatibility row unchanged.
+// have a required base classification. Keep their existing write routes.
+// Table 12-35 defines no Out_Of_Service, so there is no such row (#985).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -28,7 +28,6 @@ const BASE: &[PropertyMetadata] = &[
     TOTAL_RECORD_COUNT_METADATA,
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::LOGGING_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, RequiredRead, None, ReadOnly),

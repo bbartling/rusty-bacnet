@@ -109,15 +109,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Supply a supported object's logical `Present_Value` from Rust application code.
     ///
-    /// Analog, Binary and Multi-state Inputs and noncommandable Values opt in.
+    /// Analog, Binary and Multi-state Inputs, noncommandable Values and Loop
+    /// (the control algorithm's output) opt in.
     /// Binary Input values are logical INACTIVE/ACTIVE states after Polarity,
     /// not raw physical states. The update runs the existing post-write
     /// intrinsic-event and COV processing after the database lock is released;
-    /// configured delays and distribution policy still control delivery.
+    /// configured delays and distribution policy still control delivery, and a
+    /// COV_Increment still filters Present_Value reports.
     ///
     /// Applications are denied while `Out_Of_Service` is TRUE to protect a
     /// client's simulation value. This is local policy for Inputs and required
-    /// by the object clauses for the supported Values. NULL is an invalid
+    /// by the object clauses for the supported Values and Loop. NULL is an invalid
     /// application value. Other object families fail closed; use
     /// [`BACnetServer::write_local`] for network-equivalent writes and sourced
     /// commands on commandable objects. Python exposure is tracked in #503.

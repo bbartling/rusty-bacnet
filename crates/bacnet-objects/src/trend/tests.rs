@@ -478,7 +478,7 @@ fn trendlog_multiple_property_list() {
     assert!(props.contains(&PropertyIdentifier::LOG_BUFFER));
     assert!(props.contains(&PropertyIdentifier::LOGGING_TYPE));
     assert!(props.contains(&PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY));
-    assert!(props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(!props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
     assert!(props.contains(&PropertyIdentifier::RELIABILITY));
 }
 
@@ -572,44 +572,77 @@ fn trendlog_multiple_write_log_enable() {
 /// (Clause 12.24) and intrinsic-reporting exception for a client-supplied
 /// Reliability value while Out_Of_Service is TRUE. The log owns the property as a logging
 /// status/fault indication, so no-write is the conformant posture; a client
-/// write is refused PROPERTY / WRITE_ACCESS_DENIED in and out of service.
+/// write is refused PROPERTY / WRITE_ACCESS_DENIED.
 #[test]
 fn trendlog_reliability_is_not_network_writable() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
     assert!(!tl.is_writable_property(PropertyIdentifier::RELIABILITY));
 
-    for context in ["in service", "out of service"] {
-        let result = tl.write_property(
-            PropertyIdentifier::RELIABILITY,
-            None,
-            PropertyValue::Enumerated(1),
-            None,
-        );
-        match result.expect_err("Reliability write must be refused") {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-                assert_eq!(
-                    code,
-                    ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-                    "{context}"
-                );
-            }
-            other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+    let result = tl.write_property(
+        PropertyIdentifier::RELIABILITY,
+        None,
+        PropertyValue::Enumerated(1),
+        None,
+    );
+    match result.expect_err("Reliability write must be refused") {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
         }
-        assert_eq!(
-            tl.read_property(PropertyIdentifier::RELIABILITY, None)
-                .unwrap(),
-            PropertyValue::Enumerated(0),
-            "a refused write must leave Reliability untouched ({context})"
-        );
+        other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+    }
+    assert_eq!(
+        tl.read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0),
+        "a refused write must leave Reliability untouched"
+    );
+}
 
-        tl.write_property(
+/// Tables 12-29 and 12-35 define no Out_Of_Service for Trend Log or Trend Log
+/// Multiple (#985, as #984 did for Calendar): the row is gone from
+/// Property_List and the metadata, and reads and writes find no property.
+#[test]
+fn trend_logs_have_no_out_of_service_property() {
+    let objects: [Box<dyn BACnetObject>; 2] = [
+        Box::new(TrendLogObject::new(1, "TL-1", 100).unwrap()),
+        Box::new(TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap()),
+    ];
+    for mut object in objects {
+        let kind = object.object_identifier().object_type();
+        assert!(
+            !object
+                .property_list()
+                .contains(&PropertyIdentifier::OUT_OF_SERVICE),
+            "{kind:?}"
+        );
+        assert!(!object
+            .property_metadata()
+            .iter()
+            .any(|row| row.property_identifier == PropertyIdentifier::OUT_OF_SERVICE));
+        assert!(!object.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+        let read = object
+            .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .map(|_| ());
+        let write = object.write_property(
             PropertyIdentifier::OUT_OF_SERVICE,
             None,
             PropertyValue::Boolean(true),
             None,
-        )
-        .expect("Out_Of_Service stays writable");
+        );
+        for result in [read, write] {
+            match result.expect_err("no Out_Of_Service property") {
+                Error::Protocol { class, code } => {
+                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{kind:?}");
+                    assert_eq!(
+                        code,
+                        ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                        "{kind:?}"
+                    );
+                }
+                other => panic!("expected PROPERTY / UNKNOWN_PROPERTY, got {other:?}"),
+            }
+        }
     }
 }
 

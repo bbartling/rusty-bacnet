@@ -1661,11 +1661,13 @@ not disable the remaining supported AV/BV target Audit policy or add MSV target
 Audit reporting.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
-Analog/Binary/Multi-state Inputs and noncommandable Values, then runs the existing
-event and COV path after releasing the database lock. The corresponding low-level
+Analog/Binary/Multi-state Inputs, noncommandable Values and Loop (the control
+algorithm's output), then runs the existing event and COV path after releasing
+the database lock. The corresponding low-level
 `set_present_value_internal` hook bypasses those server notifications. Both deny
 updates while Out_Of_Service to preserve simulation ownership: this is local
-policy for Inputs and the object-clause rule for these Values. Application NULL
+policy for Inputs and the object-clause rule for these Values and Loop, whose
+Present_Value peers may write only while Out_Of_Service is TRUE. Application NULL
 is an invalid datatype, not a relinquishment. For network-equivalent writes use
 `write_local`; noncommandable writes remain available without resolved command
 identity. Commandable writes still require a valid source. These access modes are
@@ -1825,7 +1827,11 @@ writes may replace individual or whole `Stages`, `Target_References`, and
 configured `Stage_Names` arrays, but array lengths are fixed after construction
 so coupled configuration cannot pass through an invalid intermediate shape.
 `Max_Pres_Value` is derived from the final stage limit. Staging does not
-advertise intrinsic reporting or COV.
+advertise intrinsic reporting. It supports COV (Table 13-1): a SubscribeCOV
+notification carries Present_Value, Status_Flags and Present_Stage, and fires
+when Present_Value moves by the writable `COV_Increment` (default 0), when
+Status_Flags changes (including a target-plan completion that changes
+Reliability), or when Present_Stage changes.
 
 #### Lighting & Color (4)
 
