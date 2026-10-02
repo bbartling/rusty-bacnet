@@ -1,11 +1,14 @@
 use super::*;
 use bacnet_encoding::constructed::{
     decode_calendar_entry, decode_calendar_entry_list, decode_destination, decode_destination_list,
-    encode_calendar_entry, encode_calendar_entry_list, encode_destination, encode_destination_list,
+    decode_device_object_property_reference, encode_calendar_entry, encode_calendar_entry_list,
+    encode_destination, encode_destination_list, encode_device_object_property_reference,
 };
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::list_manipulation::ListElementRequest;
-use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDestination};
+use bacnet_types::constructed::{
+    BACnetCalendarEntry, BACnetDestination, BACnetDeviceObjectPropertyReference,
+};
 use bytes::Bytes;
 use std::mem::{discriminant, Discriminant};
 
@@ -45,7 +48,7 @@ fn position(index: usize) -> u32 {
 /// element is refused. A refusal of one element is `Error::Structured` naming
 /// its position; a refusal of the request or its target is `Error::Protocol`.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
-    handle_list_element_observed(db, service_data, false, |_, _, _| {})
+    handle_list_element_observed(db, service_data, false, |_, _, _| {}).map(|_| ())
 }
 
 /// Handle a RemoveListElement request.
@@ -57,7 +60,7 @@ pub fn handle_remove_list_element(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<(), Error> {
-    handle_list_element_observed(db, service_data, true, |_, _, _| {})
+    handle_list_element_observed(db, service_data, true, |_, _, _| {}).map(|_| ())
 }
 
 /// How a list's elements travel in the request and how the object holds them.
@@ -70,14 +73,20 @@ enum ElementCodec {
     /// BACnetCalendarEntry entries under their Clause 21 CHOICE tags, held as
     /// a `PropertyValue::List` with one encoded entry per element (#996).
     CalendarEntries,
+    /// BACnetDeviceObjectPropertyReference members, held as their encodings
+    /// back to back in `ApplicationData` (#1121).
+    References,
 }
 
 impl ElementCodec {
     /// The codec the property's datatype implies, known even when the object
     /// is missing. Only a BACnetLIST of BACnetDestination, the Recipient_List
     /// of Notification Class and Notification Forwarder (Tables 12-24 and
-    /// 12-58), takes the destination codec, and only Calendar's Date_List, a
-    /// BACnetLIST of BACnetCalendarEntry (Table 12-11), the calendar codec.
+    /// 12-58), takes the destination codec, only Calendar's Date_List, a
+    /// BACnetLIST of BACnetCalendarEntry (Table 12-11), the calendar codec,
+    /// and only the Schedule's List_Of_Object_Property_References, a BACnetLIST
+    /// of BACnetDeviceObjectPropertyReference (Table 12-28), the reference
+    /// codec.
     fn for_datatype(object_type: ObjectType, property: PropertyIdentifier) -> Self {
         match property {
             PropertyIdentifier::RECIPIENT_LIST
@@ -91,6 +100,11 @@ impl ElementCodec {
             PropertyIdentifier::DATE_LIST if object_type == ObjectType::CALENDAR => {
                 Self::CalendarEntries
             }
+            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                if object_type == ObjectType::SCHEDULE =>
+            {
+                Self::References
+            }
             _ => Self::Values,
         }
     }
@@ -99,7 +113,9 @@ impl ElementCodec {
     fn holds(self, stored: &PropertyValue) -> bool {
         match self {
             Self::Values | Self::CalendarEntries => matches!(stored, PropertyValue::List(_)),
-            Self::Destinations => matches!(stored, PropertyValue::ApplicationData(_)),
+            Self::Destinations | Self::References => {
+                matches!(stored, PropertyValue::ApplicationData(_))
+            }
         }
     }
 
@@ -114,6 +130,8 @@ impl ElementCodec {
             Self::CalendarEntries => {
                 decode_each(elements, decode_calendar_entry).map(Elements::CalendarEntries)
             }
+            Self::References => decode_each(elements, decode_device_object_property_reference)
+                .map(Elements::References),
         }
     }
 
@@ -139,6 +157,11 @@ impl ElementCodec {
                     );
                 }
                 Ok(Elements::CalendarEntries(entries))
+            }
+            (Self::References, PropertyValue::ApplicationData(bytes)) => {
+                decode_each(bytes, decode_device_object_property_reference)
+                    .map(Elements::References)
+                    .map_err(|_| invalid_data_type())
             }
             _ => unreachable!("list_target admits only the form the codec edits"),
         }
@@ -166,6 +189,7 @@ enum Elements {
     Values(Vec<PropertyValue>),
     Destinations(Vec<BACnetDestination>),
     CalendarEntries(Vec<BACnetCalendarEntry>),
+    References(Vec<BACnetDeviceObjectPropertyReference>),
 }
 
 /// Where the elements an AddListElement adds sit in the edited list: after
@@ -254,6 +278,30 @@ impl Elements {
                     added,
                 })
             }
+            (Self::References(stored), Self::References(edits)) => {
+                // The Schedule takes the result through its whole-list write,
+                // which refuses a member in another device or past its cap
+                // and names it (#1121). Such a member is never stored, so a
+                // removal doesn't find it.
+                let (list, added) = edit(
+                    stored,
+                    edits,
+                    remove,
+                    |buf, member| {
+                        encode_device_object_property_reference(buf, member);
+                        Ok(())
+                    },
+                    |_| true,
+                )?;
+                let mut bytes = BytesMut::new();
+                for member in &list {
+                    encode_device_object_property_reference(&mut bytes, member);
+                }
+                Ok(Edited {
+                    value: PropertyValue::ApplicationData(bytes.to_vec()),
+                    added,
+                })
+            }
             _ => unreachable!("one codec decodes both lists"),
         }
     }
@@ -261,10 +309,10 @@ impl Elements {
 
 /// Apply the service procedures of Clauses 15.1.2 and 15.2.2 to one list, all
 /// or nothing. Elements compare whole, since no property served here narrows
-/// the comparison in its description (Recipient_List, Date_List and the
-/// Values lists all compare whole). Two elements are the same exactly when
-/// their canonical encodings are, which also keeps the work linear in the list
-/// sizes.
+/// the comparison in its description (Recipient_List, Date_List,
+/// List_Of_Object_Property_References and the Values lists all compare
+/// whole). Two elements are the same exactly when their canonical encodings
+/// are, which also keeps the work linear in the list sizes.
 ///
 /// AddListElement appends each element not yet present, a repeat within the
 /// request once; an element already present is identical, so updating it in
@@ -461,8 +509,9 @@ fn list_target(
         ));
     }
     if !codec.holds(&current) {
-        // A list held in a form neither codec edits, such as a framed list of
-        // references, cannot change through these services.
+        // A list held in a form its codec doesn't edit, such as the framed
+        // COV subscription lists of a standalone Device, cannot change
+        // through these services.
         return Err(Refusal::read(
             ErrorClass::PROPERTY,
             ErrorCode::WRITE_ACCESS_DENIED,
@@ -477,13 +526,13 @@ fn list_target(
 /// Target errors (lookup, read, array index, not a list) keep their precedence
 /// over element errors, and go out with element number 0. Element errors
 /// (decode, datatype, not found, and the object's refusal of the edited list)
-/// name their element.
+/// name their element. Returns the object written.
 pub(crate) fn handle_list_element_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
     remove: bool,
     mut before: impl FnMut(&ObjectDatabase, &ListElementRequest, Option<&PropertyValue>),
-) -> Result<(), Error> {
+) -> Result<ObjectIdentifier, Error> {
     let request = ListElementRequest::decode(service_data)?;
     let codec = ElementCodec::for_datatype(
         request.object_identifier.object_type(),
@@ -502,9 +551,17 @@ pub(crate) fn handle_list_element_observed(
             return Err(error);
         }
     };
-    let edits = edits.map_err(|position| {
+    let mut edits = edits.map_err(|position| {
         element_error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, position)
     })?;
+    // A reference naming this device stands for the local one, so it matches
+    // the stored member and is added in that form (#1122).
+    if let Elements::References(members) = &mut edits {
+        let local = crate::schedule_references::local_device(db);
+        for member in members {
+            crate::schedule_references::localize_member(member, local);
+        }
+    }
     // Decode the stored list before observation or mutation.
     let stored = codec.stored(&current)?;
     before(db, &request, Some(&current));
@@ -517,5 +574,6 @@ pub(crate) fn handle_list_element_observed(
             value,
             None,
         )
-        .map_err(|error| object_refusal(error, remove, &added))
+        .map_err(|error| object_refusal(error, remove, &added))?;
+    Ok(request.object_identifier)
 }

@@ -1540,8 +1540,9 @@ a constructed single value, a whole array or an indexed array element, returns
 `SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
 unknown property and array-index errors come first, and element datatype errors
 after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
-destination codec. A list the object holds framed with no element codec, such as
-Schedule's List_Of_Object_Property_References, returns
+destination codec, and only Schedule's List_Of_Object_Property_References the
+reference codec (#1121). A list the object holds framed with no element codec,
+such as the standalone Device's COV subscription lists, returns
 `PROPERTY/WRITE_ACCESS_DENIED`.
 
 Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
@@ -1559,7 +1560,8 @@ by the new ones in request order, through `write_property`. A refusal there
 that names an element, as `Error::Structured` with
 `ErrorDetail::FirstFailedElementNumber` holding its position in that list,
 goes out naming the request element at that position; the built-in Alarm_Values,
-Fault_Signals and Date_List writers all name it. A stored element named that
+Fault_Signals, Date_List and Schedule reference-list writers all name it. A
+stored element named that
 way is no element of the request, so the response names element 0. A refusal
 that names no element, for an element's datatype, encoding, range or space,
 names the first element the list would have gained, which is exact when one
@@ -1777,15 +1779,23 @@ out-of-service value of another datatype, counts for nothing.
 
 List_Of_Object_Property_References and Priority_For_Writing are
 network-writable too (#1088), through the setters' checks. The list is written
-whole, as the bytes a read returns; a member naming a Device is refused with
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, since the Schedule writes only local
-targets. After a change the next pass sends the current Present_Value to the new
-list at the new priority (in service only inside Effective_Period; out of
-service at once), and relinquishes, with a NULL at the old priority, each slot
-the Schedule holds that the change leaves behind: a dropped reference, or every
-reference when the priority moves. A Schedule holds slots from a write of a
-non-NULL value until it leaves its Effective_Period, so one out of season
-clears nothing another Schedule may own.
+whole, as the bytes a read returns, or edited by AddListElement and
+RemoveListElement, which write the result back whole through the same check
+(#1121). The Schedule writes only local targets, so a member naming another
+device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A member naming the
+Device the server answers for is the local reference it stands for: the server
+drops that Device member before the Schedule decodes the value, and it reads
+back without it (#1122). `ScheduleObject` itself can't tell which Device holds
+it, so written directly it refuses every Device member. Each refusal of a
+member names its position, as `Error::Structured` with
+`ErrorDetail::FirstFailedElementNumber`, which AddListElement reports as the
+request element. After a change the next pass sends the current Present_Value
+to the new list at the new priority (in service only inside Effective_Period;
+out of service at once), and relinquishes, with a NULL at the old priority,
+each slot the Schedule holds that the change leaves behind: a dropped
+reference, or every reference when the priority moves. A Schedule holds slots
+from a write of a non-NULL value until it leaves its Effective_Period, so one
+out of season clears nothing another Schedule may own.
 
 While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
 primitive value, NULL included (INVALID_DATA_TYPE otherwise, and

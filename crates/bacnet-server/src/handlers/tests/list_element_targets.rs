@@ -352,9 +352,9 @@ fn framed_lists_of_other_elements_never_take_the_destination_codec() {
     };
     let mut framed = BytesMut::new();
     bacnet_encoding::constructed::encode_destination_list(&mut framed, &[destination]);
-    // Schedule's list of BACnetDeviceObjectPropertyReference is held framed,
-    // like Recipient_List, but has no element codec here: WriteProperty
-    // replaces it whole (#1088), the list services can't edit it.
+    // Schedule's list of BACnetDeviceObjectPropertyReference is held as raw
+    // bytes, like Recipient_List, but takes its own reference codec (#1121):
+    // a destination is not a reference, so the first element is refused.
     assert_both_services_refuse(
         &mut db,
         &[(
@@ -364,7 +364,7 @@ fn framed_lists_of_other_elements_never_take_the_destination_codec() {
             framed.to_vec(),
         )],
         ErrorClass::PROPERTY,
-        ErrorCode::WRITE_ACCESS_DENIED,
-        0,
+        ErrorCode::INVALID_DATA_TYPE,
+        1,
     );
 }

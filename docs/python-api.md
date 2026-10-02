@@ -2310,11 +2310,12 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |
+| `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
 
 ```python
 from rusty_bacnet import (
     BacnetError, BacnetProtocolError, BacnetTimeoutError,
-    BacnetRejectError, BacnetAbortError,
+    BacnetRejectError, BacnetAbortError, BacnetTransportError,
 )
 
 try:
@@ -2343,6 +2344,22 @@ except BacnetError as e:
 | `vt_session_identifiers` | VT-Close error that lists them | Local identifiers of the sessions that could not be closed |
 
 `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
+
+`BacnetTransportError` derives from both `BacnetError` and `OSError`, so either `except` clause catches it. Its `errno` is the operating system's code when it reported one, otherwise the code for the failure's kind where one exists (`None` if not), and `strerror` is the message:
+
+```python
+import errno
+
+try:
+    await hub.start()
+except OSError as e:
+    if e.errno == errno.EADDRINUSE:
+        print("port already in use")
+    else:
+        raise
+```
+
+`errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises a plain `OSError` instead.
 
 ---
 

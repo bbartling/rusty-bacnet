@@ -169,7 +169,7 @@ pub(crate) fn handle_write_property_multiple_observed(
             reference.property_array_index,
             &attempt.value,
         ) {
-            Ok(value) => value,
+            Ok(value) => crate::schedule_references::localize(db, oid, property, value),
             Err(error) => return semantic_failure(error, reference, committed_oids),
         };
         if property == PropertyIdentifier::OBJECT_NAME {
@@ -340,7 +340,8 @@ pub(crate) fn decode_write_property_value(
         };
     }
     // The Schedule decodes its list of references itself, an empty list
-    // included (#1088).
+    // included (#1088), once the handler has put members naming this device
+    // in their local form (#1122).
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
@@ -489,6 +490,7 @@ pub(crate) fn handle_write_property_observed(
         request.property_array_index,
         &request.property_value,
     )?;
+    let value = crate::schedule_references::localize(db, oid, request.property_identifier, value);
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         check_and_prepare_name_write(db, &oid, &value)?;
     }

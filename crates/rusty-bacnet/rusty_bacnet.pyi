@@ -1450,6 +1450,21 @@ class BacnetAbortError(BacnetError):
     """
     reason: int
 
+class BacnetTransportError(BacnetError, OSError):
+    """Raised when a transport socket or I/O operation fails.
+
+    Covers a failed bind or listen (B/IP, B/IPv6, ``ScHub.start``), a refused
+    or failed dial, and other socket errors. It is also an ``OSError``:
+    ``errno`` is the operating system's code when it reported one, else the
+    code for the failure's kind (for example ``errno.EADDRINUSE``), else
+    ``None``; ``strerror`` is the message. ``except OSError`` and
+    ``except BacnetError`` both catch it. Unlike a bare ``OSError`` it is
+    not narrowed to ``ConnectionRefusedError`` and the like, so test
+    ``errno``.
+    """
+    errno: int | None
+    strerror: str | None
+
 
 # ---------------------------------------------------------------------------
 # Serial ports
