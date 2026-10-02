@@ -271,6 +271,11 @@ pub(super) struct AdmissionRuntime {
     pub(super) bindings: Option<super::ScHubCertificateBindings>,
     pub(super) policy: Option<ScHubAdmissionPolicy>,
     pub(super) denied: AtomicU64,
+    /// WebSocket-upgrade deadlines armed, one per TLS success. Paused-clock
+    /// tests wait for it before advancing, since the hub finishes TLS after
+    /// the peer does (#1042).
+    #[cfg(test)]
+    pub(super) upgrade_deadlines_armed: std::sync::atomic::AtomicUsize,
 }
 
 impl AdmissionRuntime {
@@ -280,6 +285,8 @@ impl AdmissionRuntime {
             bindings: None,
             policy,
             denied: AtomicU64::new(0),
+            #[cfg(test)]
+            upgrade_deadlines_armed: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 

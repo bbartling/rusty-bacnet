@@ -23,6 +23,18 @@ pub(super) async fn poll_io<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+/// Lets the tasks that the last clock advance woke run before a test checks
+/// that a deadline has not fired yet. The current-thread runtime polls the
+/// test body before tasks woken in the same scheduler pass, so a check made
+/// straight after `advance` cannot see an expiry. Each yield lets the queued
+/// tasks run once; one is enough for a hub deadline expiry today, and the
+/// rest leave room.
+pub(super) async fn settle() {
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+}
+
 pub(super) async fn until(predicate: impl Fn() -> bool) {
     poll_io(async {
         while !predicate() {
