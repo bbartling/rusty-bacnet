@@ -2,6 +2,9 @@ use super::*;
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_services::list_manipulation::ListElementRequest;
 
+#[path = "audit_reporter_list_destination_tests.rs"]
+mod destinations;
+
 fn list_request(
     target: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -48,27 +51,33 @@ async fn values(fixture: &Fixture) -> PropertyValue {
 }
 
 #[tokio::test]
-async fn audit_reporter_list_success_duplicates_and_noop_preserve_delta_and_preimage() {
+async fn audit_reporter_list_duplicates_and_absent_elements_preserve_delta_and_preimage() {
     let mut fixture = list_server(vec![1]).await;
     let target = oid(ObjectType::MULTI_STATE_INPUT, 1);
-    for (step, (service, delta, before, after)) in [
+    // The list gains one 2 from a doubled 2, and removing an absent 3 is an
+    // execution failure the log records with the unchanged pre-image (#1027).
+    let not_found = (ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND);
+    for (step, (service, delta, before, after, result)) in [
         (
             ConfirmedServiceChoice::ADD_LIST_ELEMENT,
             vec![0x21, 2, 0x21, 2],
             vec![1],
-            vec![1, 2, 2],
+            vec![1, 2],
+            None,
         ),
         (
             ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
             vec![0x21, 2],
-            vec![1, 2, 2],
+            vec![1, 2],
             vec![1],
+            None,
         ),
         (
             ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
             vec![0x21, 3],
             vec![1],
             vec![1],
+            Some(not_found),
         ),
     ]
     .into_iter()
@@ -85,7 +94,12 @@ async fn audit_reporter_list_success_duplicates_and_noop_preserve_delta_and_prei
             ),
         )
         .await;
-        assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}");
+        match result {
+            None => assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}"),
+            Some((class, code)) => {
+                assert_eq!(change_list_error(response, service), (class, code, 1))
+            }
+        }
         assert_eq!(
             values(&fixture).await,
             PropertyValue::List(after.into_iter().map(PropertyValue::Unsigned).collect())
@@ -119,7 +133,7 @@ async fn audit_reporter_list_success_duplicates_and_noop_preserve_delta_and_prei
                 target_priority: None,
                 target_value: Some(delta),
                 current_value: Some(before.into_iter().flat_map(|value| [0x21, value]).collect()),
-                result: None,
+                result,
             }
         );
     }
@@ -136,13 +150,30 @@ const SERVICES: [ConfirmedServiceChoice; 2] = [
     ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
 ];
 
-fn error_fields(response: Apdu, service: ConfirmedServiceChoice) -> (ErrorClass, ErrorCode) {
+/// The ChangeList-Error both list services answer with (#1026): the class,
+/// code and First Failed Element Number.
+fn change_list_error(
+    response: Apdu,
+    service: ConfirmedServiceChoice,
+) -> (ErrorClass, ErrorCode, u32) {
     let Apdu::Error(error) = response else {
         panic!("{response:?}")
     };
     assert_eq!(error.service_choice, service);
-    assert!(error.error_data.is_empty());
-    (error.error_class, error.error_code)
+    let body = bacnet_services::list_manipulation::ChangeListError::try_from(&error).unwrap();
+    (
+        body.error_class,
+        body.error_code,
+        body.first_failed_element_number,
+    )
+}
+
+/// A ChangeList-Error that names no element: a refusal of the request or its
+/// target.
+fn error_fields(response: Apdu, service: ConfirmedServiceChoice) -> (ErrorClass, ErrorCode) {
+    let (class, code, element) = change_list_error(response, service);
+    assert_eq!(element, 0, "{class:?}/{code:?}");
+    (class, code)
 }
 
 #[tokio::test]
@@ -224,6 +255,7 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
     }
     let mut fixture = list_server((0..1024).collect()).await;
     let before = values(&fixture).await;
+    // Unsigned 2000 is new, so it is the element that does not fit.
     let response = dispatch(
         &fixture.server,
         SERVICES[0],
@@ -231,7 +263,7 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
             target,
             PropertyIdentifier::ALARM_VALUES,
             None,
-            vec![0x21, 2],
+            vec![0x22, 0x07, 0xD0],
         ),
     )
     .await;
@@ -239,7 +271,10 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
         ErrorClass::RESOURCES,
         ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
     );
-    assert_eq!(error_fields(response, SERVICES[0]), expected);
+    assert_eq!(
+        change_list_error(response, SERVICES[0]),
+        (expected.0, expected.1, 1)
+    );
     assert_eq!(values(&fixture).await, before);
     settle().await;
     let records = notifications(&fixture.transport.sent);
@@ -380,11 +415,13 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
             };
             // Ordinary target: committed success, then indexed execution failure.
             // Reporter target: network read-only list failure bypasses selection/WRITE.
+            // RemoveListElement names the present 1, AddListElement a new 2.
+            let element = if service == SERVICES[0] { 2 } else { 1 };
             for (step, index) in [None, Some(1)].into_iter().enumerate() {
                 let response = dispatch(
                     &fixture.server,
                     service,
-                    list_request(object, property, index, vec![0x21, 2]),
+                    list_request(object, property, index, vec![0x21, element]),
                 )
                 .await;
                 let result = if step == 0 && !self_target {
@@ -404,10 +441,10 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
             }
             assert_eq!(
                 values(&fixture).await,
-                PropertyValue::List(if service == SERVICES[0] && !self_target {
-                    vec![PropertyValue::Unsigned(1), PropertyValue::Unsigned(2)]
-                } else {
-                    vec![PropertyValue::Unsigned(1)]
+                PropertyValue::List(match (service == SERVICES[0], self_target) {
+                    (_, true) => vec![PropertyValue::Unsigned(1)],
+                    (true, false) => vec![PropertyValue::Unsigned(1), PropertyValue::Unsigned(2)],
+                    (false, false) => vec![],
                 })
             );
             fixture.server.stop().await.unwrap();
@@ -428,7 +465,18 @@ async fn audit_reporter_list_value_bounds_preserve_empty_and_omit_large() {
             (16, 17),
         ] {
             let mut fixture = list_server(vec![1; current_count]).await;
-            let delta = [0x21, 2].repeat(delta_count);
+            // AddListElement adds a 2 (once); RemoveListElement removes the 1s,
+            // which an empty list does not have (#1027).
+            let (element, result) = if service == SERVICES[0] {
+                (2, None)
+            } else {
+                (
+                    1,
+                    (current_count == 0 && delta_count > 0)
+                        .then_some((ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND)),
+                )
+            };
+            let delta = [0x21, element].repeat(delta_count);
             let response = dispatch(
                 &fixture.server,
                 service,
@@ -440,7 +488,12 @@ async fn audit_reporter_list_value_bounds_preserve_empty_and_omit_large() {
                 ),
             )
             .await;
-            assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}");
+            match result {
+                None => assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}"),
+                Some((class, code)) => {
+                    assert_eq!(change_list_error(response, service), (class, code, 1))
+                }
+            }
             settle().await;
             let records = notifications(&fixture.transport.sent);
             assert_eq!(records.len(), 1);
@@ -452,7 +505,7 @@ async fn audit_reporter_list_value_bounds_preserve_empty_and_omit_large() {
                 records[0].notifications[0].current_value,
                 (current_count <= 16).then(|| [0x21, 1].repeat(current_count))
             );
-            assert_eq!(records[0].notifications[0].result, None);
+            assert_eq!(records[0].notifications[0].result, result);
             fixture.server.stop().await.unwrap();
         }
     }
@@ -527,6 +580,8 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
             let list = fixture.counting(list);
             fixture.server.db.write().await.add(list).unwrap();
             *fixture.execution_error.lock().unwrap() = Some(error);
+            // A present element for RemoveListElement, so both reach the write.
+            let element = if service == SERVICES[0] { 2 } else { 1 };
             let response = dispatch(
                 &fixture.server,
                 service,
@@ -534,7 +589,7 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
                     oid(ObjectType::MULTI_STATE_INPUT, 1),
                     PropertyIdentifier::ALARM_VALUES,
                     None,
-                    vec![0x21, 2],
+                    vec![0x21, element],
                 ),
             )
             .await;
@@ -553,143 +608,5 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
             assert_eq!(fixture.writes.load(Ordering::Acquire), 0);
             fixture.server.stop().await.unwrap();
         }
-    }
-}
-
-#[tokio::test]
-async fn audit_reporter_list_framed_destinations_decode_before_observation() {
-    use bacnet_objects::notification_class::NotificationClass;
-    use bacnet_types::{
-        bitstring::{DaysOfWeek, EventTransitionBits},
-        constructed::BACnetDestination,
-        primitives::Time,
-    };
-    let target = oid(ObjectType::NOTIFICATION_CLASS, 1);
-    let destination = BACnetDestination {
-        valid_days: DaysOfWeek::all(),
-        from_time: Time {
-            hour: 0,
-            minute: 0,
-            second: 0,
-            hundredths: 0,
-        },
-        to_time: Time {
-            hour: 23,
-            minute: 59,
-            second: 0,
-            hundredths: 0,
-        },
-        recipient: BACnetRecipient::Device(oid(ObjectType::DEVICE, 20)),
-        process_identifier: 1,
-        issue_confirmed_notifications: false,
-        transitions: EventTransitionBits::all(),
-    };
-    let mut delta = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(
-        &mut delta,
-        std::slice::from_ref(&destination),
-    );
-    assert!(delta.len() <= 32);
-    for service in SERVICES {
-        let mut fixture = list_server(vec![1]).await;
-        let mut object = NotificationClass::new(1, "destinations").unwrap();
-        object.add_destination(destination.clone());
-        fixture
-            .server
-            .db
-            .write()
-            .await
-            .add(Box::new(object))
-            .unwrap();
-        // A valid frame followed by a valid TLV that is NOT a destination
-        // distinguishes service decoding from the late framed decoder.
-        for object in [target, oid(ObjectType::NOTIFICATION_CLASS, 999)] {
-            let mut malformed = delta.to_vec();
-            malformed.extend_from_slice(&[0x21, 2]);
-            let request = list_request(object, PropertyIdentifier::RECIPIENT_LIST, None, malformed);
-            assert!(ListElementRequest::decode(&request).is_ok());
-            let response = dispatch(&fixture.server, service, request).await;
-            let expected = if object == target {
-                (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE)
-            } else {
-                (ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
-            };
-            assert_eq!(error_fields(response, service), expected);
-        }
-        settle().await;
-        assert!(notifications(&fixture.transport.sent).is_empty());
-        assert_eq!(
-            fixture
-                .server
-                .db
-                .read()
-                .await
-                .get(&target)
-                .unwrap()
-                .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
-                .unwrap(),
-            PropertyValue::ApplicationData(delta.to_vec())
-        );
-        let response = dispatch(
-            &fixture.server,
-            service,
-            list_request(
-                target,
-                PropertyIdentifier::RECIPIENT_LIST,
-                None,
-                delta.to_vec(),
-            ),
-        )
-        .await;
-        assert!(matches!(response, Apdu::SimpleAck(_)));
-        settle().await;
-        let records = notifications(&fixture.transport.sent);
-        assert_eq!(records.len(), 1);
-        let record = &records[0].notifications[0];
-        assert_eq!(record.target_value, Some(delta.to_vec()));
-        assert_eq!(record.current_value, Some(delta.to_vec()));
-        assert_eq!(record.result, None);
-        let after = if service == SERVICES[0] {
-            [delta.as_ref(), delta.as_ref()].concat()
-        } else {
-            vec![]
-        };
-        assert_eq!(
-            fixture
-                .server
-                .db
-                .read()
-                .await
-                .get(&target)
-                .unwrap()
-                .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
-                .unwrap(),
-            PropertyValue::ApplicationData(after)
-        );
-        // Valid framed content with an unknown object is an execution failure.
-        let response = dispatch(
-            &fixture.server,
-            service,
-            list_request(
-                oid(ObjectType::NOTIFICATION_CLASS, 999),
-                PropertyIdentifier::RECIPIENT_LIST,
-                None,
-                delta.to_vec(),
-            ),
-        )
-        .await;
-        assert_eq!(
-            error_fields(response, service),
-            (ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
-        );
-        settle().await;
-        let records = notifications(&fixture.transport.sent);
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[1].notifications[0].current_value, None);
-        assert_eq!(
-            records[1].notifications[0].result,
-            Some((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))
-        );
-        fixture.server.stop().await.unwrap();
     }
 }

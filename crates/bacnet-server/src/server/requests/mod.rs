@@ -26,6 +26,8 @@ mod mutation_boundary_tests;
 #[cfg(test)]
 mod mutation_entry_tests;
 #[cfg(test)]
+mod mutation_list_wire_tests;
+#[cfg(test)]
 mod mutation_provenance_tests;
 #[cfg(test)]
 mod mutation_tests;

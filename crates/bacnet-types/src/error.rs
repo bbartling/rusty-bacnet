@@ -42,6 +42,25 @@ pub enum Error {
         code: u32,
     },
 
+    /// BACnet ChangeList-Error, the error response of AddListElement and
+    /// RemoveListElement (Clauses 15.1.1.3 and 15.2.1.3, production in
+    /// Clause 21): the error class and code plus the position of the element
+    /// in the request's list that failed.
+    #[error(
+        "{}, first failed element {first_failed_element_number}",
+        format_protocol_error(*.class, *.code)
+    )]
+    ChangeList {
+        /// Error class value.
+        class: u32,
+        /// Error code value.
+        code: u32,
+        /// 1-based position of the failed element in the request's List of
+        /// Elements, or 0 when the failure is not about one element (an
+        /// unknown object or property, a target that is not a list).
+        first_failed_element_number: u32,
+    },
+
     /// BACnet reject PDU (Clause 20.1.5).
     #[error("BACnet reject: reason={reason}")]
     Reject {
@@ -161,6 +180,19 @@ mod tests {
         };
         assert!(err2.to_string().contains("class=999"));
         assert!(err2.to_string().contains("code=999"));
+    }
+
+    #[test]
+    fn change_list_error_display_names_the_element() {
+        let err = Error::ChangeList {
+            class: 5,
+            code: 81,
+            first_failed_element_number: 2,
+        };
+        assert_eq!(
+            err.to_string(),
+            "BACnet error: services / list-element-not-found, first failed element 2"
+        );
     }
 
     #[test]

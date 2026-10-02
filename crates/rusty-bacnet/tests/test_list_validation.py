@@ -3,7 +3,7 @@ import asyncio
 import socket
 import unittest
 
-from rusty_bacnet import BACnetClient, ObjectIdentifier, ObjectType, PropertyIdentifier
+from rusty_bacnet import BACnetClient, BacnetProtocolError, ObjectIdentifier, ObjectType, PropertyIdentifier
 
 OID = ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 1)
 PID = PropertyIdentifier.from_raw(600)
@@ -70,3 +70,27 @@ class ListValidationTests(unittest.IsolatedAsyncioTestCase):
                                 reply = b"\x81\x0a\x00\x09\x01\x00\x20" + bytes((packet[8], service))
                                 await loop.sock_sendto(peer, reply, sender)
                                 await asyncio.wait_for(operation, 2)
+
+    async def test_change_list_error_reaches_python_with_its_element_number(self):
+        loop = asyncio.get_running_loop()
+        # ChangeList-Error: [0] { SERVICES 5, LIST_ELEMENT_NOT_FOUND 81 } then [1] 2.
+        # A device answering with only the class and code gives no element number.
+        replies = ((b"\x0e\x91\x05\x91\x51\x0f\x19\x02", 2), (b"\x91\x05\x91\x51", None))
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(("127.0.0.1", 0))
+            peer.setblocking(False)
+            address = f"127.0.0.1:{peer.getsockname()[1]}"
+            async with BACnetClient(interface="127.0.0.1", port=0) as client:
+                for body, element in replies:
+                    for service, call in zip((8, 9), calls(client, b"\x21\x01\x21\x02", None, address)):
+                        with self.subTest(service=service, element=element):
+                            operation = call()
+                            packet, sender = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)
+                            npdu = b"\x01\x00" + bytes((0x50, packet[8], service)) + body
+                            reply = b"\x81\x0a" + (4 + len(npdu)).to_bytes(2, "big") + npdu
+                            await loop.sock_sendto(peer, reply, sender)
+                            with self.assertRaises(BacnetProtocolError) as raised:
+                                await asyncio.wait_for(operation, 2)
+                            self.assertEqual(raised.exception.error_class, 5)
+                            self.assertEqual(raised.exception.error_code, 81)
+                            self.assertEqual(raised.exception.first_failed_element_number, element)

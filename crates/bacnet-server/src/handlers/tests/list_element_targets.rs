@@ -53,27 +53,15 @@ fn read(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdentifier
     db.get(&oid).unwrap().read_property(property, None).unwrap()
 }
 
-fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, context: &str) {
-    match result {
-        Err(Error::Protocol {
-            class: got_class,
-            code: got_code,
-        }) => assert_eq!(
-            (got_class, got_code),
-            (class.to_raw() as u32, code.to_raw() as u32),
-            "{context}: expected {class:?}/{code:?}"
-        ),
-        other => panic!("{context}: expected {class:?}/{code:?}, got {other:?}"),
-    }
-}
-
 /// Run both services over every case; each must refuse with `class`/`code`
-/// and leave the target property as it was.
+/// and leave the target property as it was. `element` is the First Failed
+/// Element Number: zero for every refusal of the target (#1026).
 fn assert_both_services_refuse(
     db: &mut ObjectDatabase,
     cases: &[(ObjectIdentifier, PropertyIdentifier, Option<u32>, Vec<u8>)],
     class: ErrorClass,
     code: ErrorCode,
+    element: u32,
 ) {
     for (name, service) in LIST_SERVICES {
         for (oid, property, index, elements) in cases {
@@ -82,7 +70,7 @@ fn assert_both_services_refuse(
                 .get(oid)
                 .and_then(|object| object.read_property(*property, None).ok());
             let result = service(db, &request(*oid, *property, *index, elements));
-            assert_refused(result, class, code, &context);
+            assert_eq!(list_refusal(result), (class, code, element), "{context}");
             let after = db
                 .get(oid)
                 .and_then(|object| object.read_property(*property, None).ok());
@@ -141,6 +129,7 @@ fn list_services_refuse_scalar_properties_as_not_a_list() {
         &cases,
         ErrorClass::SERVICES,
         ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        0,
     );
 }
 
@@ -188,6 +177,7 @@ fn list_services_refuse_constructed_single_values_as_not_a_list() {
         &cases,
         ErrorClass::SERVICES,
         ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        0,
     );
     // Removing an absent member once wrote the unchanged pair back as a
     // priority-16 command; a refusal leaves Priority_Array as it was.
@@ -226,6 +216,7 @@ fn list_services_refuse_arrays_and_array_elements_as_not_a_list() {
         &cases,
         ErrorClass::SERVICES,
         ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        0,
     );
 }
 
@@ -236,6 +227,7 @@ fn list_target_errors_precede_element_errors_in_clause_order() {
     let vendor = PropertyIdentifier::from_raw(9999);
     // Object, then property, then the array index, then the list kind, and
     // only then the elements' datatype. Every case carries a malformed tail.
+    // Only the last refusal is about an element, the second (#1026).
     let ladder: [(
         ObjectIdentifier,
         PropertyIdentifier,
@@ -301,11 +293,17 @@ fn list_target_errors_precede_element_errors_in_clause_order() {
         ),
     ];
     for (oid, property, index, class, code) in ladder {
+        let element = if code == ErrorCode::INVALID_DATA_TYPE {
+            2
+        } else {
+            0
+        };
         assert_both_services_refuse(
             &mut db,
             &[(oid, property, index, MALFORMED.to_vec())],
             class,
             code,
+            element,
         );
     }
     // The same list accepts well-formed elements, so the last rung is about
@@ -364,5 +362,6 @@ fn framed_lists_of_other_elements_never_take_the_destination_codec() {
         )],
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
+        0,
     );
 }

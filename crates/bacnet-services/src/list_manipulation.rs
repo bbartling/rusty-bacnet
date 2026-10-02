@@ -6,6 +6,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+mod error;
+pub use error::ChangeListError;
+
 /// AddListElement-Request / RemoveListElement-Request service parameters.
 ///
 /// Both services share the same PDU structure.

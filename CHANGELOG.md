@@ -307,6 +307,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now check out with LF line endings on every OS (`.gitattributes`), so
   Windows checkouts match the repository (#950).
 
+- CI's per-crate default-features check (clippy and rustdoc for each published
+  crate on its own, plus `no_std` `bacnet-types`) now runs for Windows
+  (`x86_64-pc-windows-msvc`) and macOS (`aarch64-apple-darwin`) as well as
+  Linux, cross-checked on the Linux runner, so code and docs behind a platform
+  `cfg` are checked with default features too. `scripts/ci/check-default-features.sh`
+  takes target triples, and one cargo run per crate checks them side by side,
+  which adds seconds rather than a minute per target (#981). Before it builds,
+  the native Windows job disables and stops the Inventory and Compatibility
+  Appraisal service (`InventorySvc`), which started the Compatibility
+  Appraiser's `CompatTelRunner.exe` several times a job, and any running copy
+  of it. Its bursts on every CPU could blow a test's timing budget (#1003).
+
 - The pinned development, CI and release toolchain moves from Rust 1.97.1 to
   1.99.0 (`rust-toolchain.toml`, the CI image, which also takes rustup 1.29.1,
   the Docker example and the docs); the MSRV stays 1.93. Clippy 1.99's new
@@ -357,6 +369,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagnostics()` (#956).
 
 ### Fixed
+
+- **Breaking wire format and Rust API:** AddListElement and RemoveListElement
+  now answer every error with a ChangeList-Error, which carries the First
+  Failed Element Number, instead of a plain class and code (#1026). The number
+  is the position, counted from 1, of the request element that failed, or 0
+  when the request or its target was refused (authorization, unknown object or
+  property, array index, not a list, write access). A peer that only parses the
+  plain form no longer reads these errors. The client decodes the new form, which
+  it used to drop as undecodable, and returns the new
+  `Error::ChangeList { class, code, first_failed_element_number }`; a device
+  that still sends only a class and code returns `Error::Protocol` as before.
+  `TsmResponse::Error` gains `first_failed_element_number`, and
+  `bacnet_services::list_manipulation::ChangeListError` encodes and decodes the
+  body. In Python, `BacnetProtocolError` gains `first_failed_element_number`,
+  `None` for other errors.
+
+- **Breaking list service behaviour:** AddListElement and RemoveListElement now
+  compare whole elements and follow the add and remove rules of Clauses 15.1
+  and 15.2 (#1027). AddListElement leaves an element that is already present as
+  it is, a repeat within the request included, instead of appending a second
+  copy. RemoveListElement refuses the whole request with SERVICES /
+  LIST_ELEMENT_NOT_FOUND when any element is absent, instead of skipping it,
+  and with PROPERTY / INVALID_DATA_TYPE when an element's datatype differs from
+  the stored elements', and removes nothing in either case. This holds for
+  lists of values, Recipient_List destinations and Calendar Date_List entries.
+  An element the server cannot decode, or that the object refuses, is reported
+  with its position as above. Adding a fault that Escalator Fault_Signals
+  already holds now succeeds and changes nothing, where it was refused as out
+  of range.
 
 - **Breaking Python panic exception:** a Python process that used the bindings
   no longer segfaults at exit while a Tokio thread completes an awaited

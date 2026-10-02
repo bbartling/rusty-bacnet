@@ -1389,9 +1389,14 @@ class BacnetProtocolError(BacnetError):
     Attributes:
         error_class: The BACnet error class (integer).
         error_code: The BACnet error code (integer).
+        first_failed_element_number: For an AddListElement or
+            RemoveListElement ChangeList-Error, the position (from 1) of the
+            element that failed, or 0 when the request failed for another
+            reason; None for every other error.
     """
     error_class: int
     error_code: int
+    first_failed_element_number: Optional[int]
 
 class BacnetTimeoutError(BacnetError):
     """Raised when a BACnet operation times out."""
@@ -2069,7 +2074,9 @@ class BACnetClient:
         client access; indexes outside u32 raise OverflowError. Empty-valued,
         constructed/context/vendor elements are retained without remote datatype
         validation. Shared limits: 1 MiB per tag, 32 context levels including the
-        service wrapper; application Boolean has no payload bytes.
+        service wrapper; application Boolean has no payload bytes. A device
+        error raises BacnetProtocolError with first_failed_element_number set
+        when the device answers with a ChangeList-Error.
         """
         ...
 
@@ -2087,7 +2094,9 @@ class BACnetClient:
         client access; indexes outside u32 raise OverflowError. Empty-valued,
         constructed/context/vendor elements are retained without remote datatype
         validation. Shared limits: 1 MiB per tag, 32 context levels including the
-        service wrapper; application Boolean has no payload bytes.
+        service wrapper; application Boolean has no payload bytes. A device
+        error raises BacnetProtocolError with first_failed_element_number set
+        when the device answers with a ChangeList-Error.
         """
         ...
 

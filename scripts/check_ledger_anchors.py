@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that every `file::test` evidence anchor in the conformance ledger resolves.
+"""Check that every evidence anchor and public claim in the conformance ledger resolves.
 
 An anchor is `path/to/file.rs` (file must exist) or `path/to/file.rs::[mod::]name`
 where `name` must be a test function defined in that file: `fn name(` carrying a
@@ -11,6 +11,11 @@ are `file.py::Class::test`, `file.py::Class.test`, `file.py::Class` or `file.py:
 Entry syntax: an optional trailing ` (free-text note)` is ignored, `a; b` lists
 several anchors, and `{x,y}` expands in the file path or the test list. A path
 with no `::` may be a directory or file and only has to exist.
+
+A `public_claims` entry is `path[#heading-slug] [free-text note]`. The file must
+exist and a `#slug` must match a heading in it (GitHub slug rules, so a heading
+rename or removal is caught). A claim on `README.md` must name its section: a
+bare `README.md` is rejected because a reader cannot check it.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "conformance" / "bacnet-135-2020.json"
 FIELDS = ("positive_tests", "negative_tests")
+FENCE = "`" * 3
 TEST_ATTR = re.compile(r"#\[\s*(?:[\w:]+::)?(?:test|rstest|test_case|wasm_bindgen_test)\b")
 
 
@@ -128,6 +134,57 @@ def stale_anchors(data: dict, root: Path = ROOT) -> list[tuple[str, str, str]]:
     return out
 
 
+def _heading_slugs(src: str) -> set[str]:
+    """GitHub-style anchors of the Markdown headings in `src` (fenced code skipped)."""
+    slugs: set[str] = set()
+    seen: dict[str, int] = {}
+    fenced = False
+    for line in src.split("\n"):
+        if line.lstrip().startswith((FENCE, "~~~")):
+            fenced = not fenced
+            continue
+        m = None if fenced else re.match(r"#{1,6}\s+(.*?)\s*#*\s*$", line)
+        if not m:
+            continue
+        text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", m.group(1)).replace("`", "").lower()
+        slug = re.sub(r"[^\w\- ]", "", text).replace(" ", "-")
+        n = seen.get(slug, 0)
+        seen[slug] = n + 1
+        slugs.add(slug if n == 0 else f"{slug}-{n}")
+    return slugs
+
+
+def resolve_claim(claim: str, root: Path = ROOT) -> str | None:
+    """Return None if a `public_claims` entry resolves, else a reason string."""
+    target = claim.split(None, 1)[0] if claim.strip() else ""
+    path_s, _, slug = target.partition("#")
+    if not path_s:
+        return "empty claim"
+    path = root / path_s
+    if not path.is_file():
+        return f"file `{path_s}` does not exist"
+    if not slug:
+        if Path(path_s).name == "README.md":
+            return "README.md claim names no section (use `README.md#heading-slug`)"
+        return None
+    src = _source(path)
+    if src is None:
+        return "file unreadable"
+    if slug not in _heading_slugs(src):
+        return f"no heading `#{slug}` in `{path_s}`"
+    return None
+
+
+def stale_claims(data: dict, root: Path = ROOT) -> list[tuple[str, str, str]]:
+    out = []
+    for row in data["rows"]:
+        for claim in row.get("public_claims", []):
+            why = resolve_claim(claim, root)
+            if why:
+                out.append((row["id"], claim, why))
+    return out
+
+
 def self_test() -> list[str]:
     """The resolver must flag a fixture anchor that cannot resolve."""
     bad = [
@@ -135,7 +192,14 @@ def self_test() -> list[str]:
         "scripts/no_such_file.rs::x",
         "crates/bacnet-server/src/server/confirmed_tracker_tests.rs::no_such_test_anywhere",
     ]
-    return [a for a in bad if resolve(a) is None]
+    bad_claims = [
+        "README.md",
+        "README.md supported services",
+        "README.md#no-such-heading-anywhere",
+        "docs/no_such_file.md#x",
+        "docs/rust-api.md#no-such-heading-anywhere",
+    ]
+    return [a for a in bad if resolve(a) is None] + [c for c in bad_claims if resolve_claim(c) is None]
 
 
 def check(data: dict) -> int:
@@ -148,7 +212,12 @@ def check(data: dict) -> int:
         print(f"stale anchor in {row_id}: {anchor} ({why})")
     if stale:
         print(f"{len(stale)} stale ledger test anchor(s)")
-    return 1 if (stale or failures) else 0
+    claims = stale_claims(data)
+    for row_id, claim, why in claims:
+        print(f"stale public claim in {row_id}: {claim} ({why})")
+    if claims:
+        print(f"{len(claims)} stale ledger public claim(s)")
+    return 1 if (stale or claims or failures) else 0
 
 
 def main() -> int:

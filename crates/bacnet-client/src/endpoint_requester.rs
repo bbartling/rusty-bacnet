@@ -444,10 +444,7 @@ impl EndpointRequester {
                     Apdu::ComplexAck(ack) if !ack.segmented => TsmResponse::ComplexAck {
                         service_data: ack.service_ack.clone(),
                     },
-                    Apdu::Error(error) => TsmResponse::Error {
-                        class: error.error_class.to_raw() as u32,
-                        code: error.error_code.to_raw() as u32,
-                    },
+                    Apdu::Error(error) => TsmResponse::from_error_pdu(error),
                     Apdu::Reject(reject) => TsmResponse::Reject {
                         reason: reject.reject_reason.to_raw(),
                     },
