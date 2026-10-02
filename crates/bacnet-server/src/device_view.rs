@@ -2,17 +2,25 @@
 //! This request-scoped adapter never changes the database or service dispatch.
 use crate::cov::active::LiveDeviceCov;
 use bacnet_objects::{
+    audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
     database::ObjectDatabase,
     device::EXECUTED_SERVICES,
+    event::EnrollmentSummaryCapability,
+    event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource},
+    file::{FileConfiguration, FileStorage},
+    log_buffer::LogRecordIdentity,
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
-    traits::BACnetObject,
+    traits::{BACnetObject, CovReportedProperty},
 };
 use bacnet_types::{
+    calendar::SpecificDate,
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, ServiceSupported},
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
 };
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone, Copy)]
 pub(crate) enum DeviceExecution {
@@ -289,9 +297,85 @@ impl BACnetObject for DeviceReadView<'_> {
             self.object.is_writable_property(property)
         }
     }
-    fn log_record_identities_internal(
-        &self,
-    ) -> Option<Vec<bacnet_objects::log_buffer::LogRecordIdentity>> {
+    /// A frozen copy can't carry this request's executor-owned values, so a
+    /// Device offers none and a caller reads the view itself.
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        if self.is_device() {
+            None
+        } else {
+            self.object.cov_snapshot_internal()
+        }
+    }
+
+    // Every other read-only query is the wrapped object's own answer (#1076);
+    // `tests::every_read_query_has_a_forwarding_check` fails when the trait
+    // gains one this list lacks. The mutating hooks keep their trait defaults:
+    // the view borrows the object shared and serves reads only.
+    fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
+        self.object.audit_object_policy_internal()
+    }
+    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
+        self.object.audit_reporter_internal()
+    }
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        self.object.next_monotonic_deadline_internal()
+    }
+    fn binary_lighting_blink_count_internal(&self) -> u64 {
+        self.object.binary_lighting_blink_count_internal()
+    }
+    fn is_createable(&self) -> bool {
+        self.object.is_createable()
+    }
+    fn is_deleteable(&self) -> bool {
+        self.object.is_deleteable()
+    }
+    fn supports_cov(&self) -> bool {
+        self.object.supports_cov()
+    }
+    fn staging_generation_internal(&self) -> Option<u64> {
+        self.object.staging_generation_internal()
+    }
+    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+        self.object.enrollment_summary_capability_internal()
+    }
+    fn supports_cov_property(&self, property: P) -> bool {
+        self.object.supports_cov_property(property)
+    }
+    fn cov_increment(&self) -> Option<f32> {
+        self.object.cov_increment()
+    }
+    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+        self.object.cov_reported_properties()
+    }
+    fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
+        self.object.calendar_state_internal(day)
+    }
+    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
+        self.object.enrollment_eval_state_internal()
+    }
+    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+        self.object.enrollment_eval_source_internal()
+    }
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        self.object.reliability_evaluation_inhibited_internal()
+    }
+    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        self.object.audit_log_storage_internal()
+    }
+    fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
+        self.object.audit_log_forwarding_internal()
+    }
+    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
+        self.object.file_configuration_internal()
+    }
+    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+        self.object.file_storage_internal()
+    }
+    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
         self.object.log_record_identities_internal()
     }
 }
+
+#[cfg(test)]
+#[path = "device_view_tests.rs"]
+mod tests;
