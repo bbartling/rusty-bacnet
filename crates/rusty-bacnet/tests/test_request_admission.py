@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import inspect
 import socket
 import unittest
@@ -74,6 +75,19 @@ def packet(apdu: bytes) -> bytes:
     return b"\x81\x0a" + (4 + len(npdu)).to_bytes(2, "big") + npdu
 
 
+def dispatched(counters) -> int:
+    """Confirmed requests that reached admission, whichever way it went."""
+    return counters["confirmed_admitted_total"] + counters["confirmed_overloaded_total"]
+
+
+# Requests sent before waiting for the server to dispatch them all: about
+# 4.3 KB of datagrams, which fits whole in any OS's default UDP receive buffer
+# and in the transport's 256-slot ingress queues, so none is dropped.
+WINDOW = 8
+# The recovery probe's invoke ID; the burst uses the IDs below it.
+PROBE = 250
+
+
 class AdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.server = BACnetServer(123, interface="127.0.0.1", port=0,
@@ -85,20 +99,35 @@ class AdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.sock.bind(("127.0.0.1", 0))
         self.sock.setblocking(False)
         self.loop = asyncio.get_running_loop()
+        self.replies: asyncio.Queue[bytes] = asyncio.Queue()
+        self.reader: asyncio.Task[None] | None = None
 
     async def asyncTearDown(self):
+        if self.reader is not None:
+            self.reader.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.reader
         await self.server.stop()
         self.sock.close()
 
     async def send(self, apdu):
         await self.loop.sock_sendto(self.sock, packet(apdu), self.address)
 
-    async def receive(self):
-        wire, _ = await asyncio.wait_for(self.loop.sock_recvfrom(self.sock, 2048), 2)
-        self.assertEqual(wire[:2], b"\x81\x0a")
-        self.assertEqual(int.from_bytes(wire[2:4], "big"), len(wire))
-        self.assertEqual(wire[4], 1)
-        return wire[6:]
+    async def read_replies(self):
+        # Keep the client socket drained so no reply is lost to a full buffer.
+        while True:
+            wire, _ = await self.loop.sock_recvfrom(self.sock, 2048)
+            self.replies.put_nowait(wire)
+
+    async def reply_until(self, predicate):
+        async with asyncio.timeout(2):
+            while True:
+                wire = await self.replies.get()
+                self.assertEqual(wire[:2], b"\x81\x0a")
+                self.assertEqual(int.from_bytes(wire[2:4], "big"), len(wire))
+                self.assertEqual(wire[4], 1)
+                if predicate(wire[6:]):
+                    return wire[6:]
 
     async def counters_until(self, predicate):
         async with asyncio.timeout(2):
@@ -125,41 +154,39 @@ class AdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.server.start()
         ip, port = (await self.server.local_address()).rsplit(":", 1)
         self.address = (ip, int(port))
-        # A bounded loopback burst of RPM work exercises the installed policy.
-        # Rust held-transport tests provide the deterministic barrier evidence;
-        # this artifact test deliberately does not claim exact UDP delivery counts.
-        counters = await self.server.request_admission_counters()
-        for batch in range(8):
-            body = b"\x0c\x02\x00\x00\x7b\x1e" + b"\x09\x4d" * (256 + batch) + b"\x1f"
-            for invoke in range(128):
-                await self.send(bytes([0, 5, invoke, 14]) + body)
-            counters = await self.server.request_admission_counters()
+        self.reader = asyncio.create_task(self.read_replies())
+        # Windows of back-to-back RPMs on loopback UDP, until one overloads the
+        # single confirmed slot. Idle active counts alone don't end a burst:
+        # they also occur while later requests still wait in the server's
+        # socket buffer or ingress queue, and a probe sent then is overloaded
+        # behind them (#991). Each window fits there whole and every invoke ID
+        # is distinct, so no request is dropped or taken for a duplicate, and
+        # once admitted + overloaded equals the number sent, the server has
+        # dispatched every request.
+        body = b"\x0c\x02\x00\x00\x7b\x1e" + b"\x09\x4d" * 256 + b"\x1f"
+        sent = 0
+        while sent + WINDOW <= PROBE:
+            for _ in range(WINDOW):
+                await self.send(bytes([0, 5, sent, 14]) + body)
+                sent += 1
+            counters = await self.counters_until(lambda c: dispatched(c) == sent)
             self.assertLessEqual(counters["confirmed_active"], 1)
             if counters["confirmed_overloaded_total"]:
                 break
         self.assertGreater(counters["confirmed_overloaded_total"], 0)
         self.assertGreater(counters["confirmed_admitted_total"], 0)
+        # The first overload always finds one of the 8 Abort workers free.
+        self.assertGreater(counters["abort_admitted_total"], 0)
         self.assertLessEqual(counters["abort_active"], 8)
         # At least one resource Abort is observable on the actual local wire.
-        async with asyncio.timeout(2):
-            while True:
-                response = await self.receive()
-                if response[0] == 0x71 and response[2] == 9:
-                    break
-        await self.counters_until(lambda c: c["confirmed_active"] == c["abort_active"] == 0)
-        # Drain existing replies before a distinct request used as a recovery probe.
-        while True:
-            try:
-                self.sock.recvfrom(2048)
-            except BlockingIOError:
-                break
-        await self.send(b"\x00\x05\xfa\x0c")
-        async with asyncio.timeout(2):
-            while True:
-                response = await self.receive()
-                if response[1] == 250:
-                    break
+        await self.reply_until(lambda r: r[0] == 0x71 and r[2] == 9)
+        # Nothing is left to dispatch, so idle counts now mean the slot is free.
+        idle = await self.counters_until(lambda c: c["confirmed_active"] == c["abort_active"] == 0)
+        await self.send(bytes([0, 5, PROBE, 12]))
+        response = await self.reply_until(lambda r: r[1] == PROBE)
         self.assertEqual(response[0] >> 4, 5)  # Error proves normal handler execution.
         counters = await self.counters_until(lambda c: c["confirmed_active"] == c["abort_active"] == 0)
+        self.assertEqual(dispatched(counters), sent + 1)
+        self.assertEqual(counters["confirmed_admitted_total"], idle["confirmed_admitted_total"] + 1)
         self.assertEqual(counters["confirmed_overloaded_total"],
                          counters["abort_admitted_total"] + counters["confirmed_fallback_dropped_total"])
