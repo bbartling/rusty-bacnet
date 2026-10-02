@@ -75,3 +75,6 @@ mod acknowledge_alarm_object_family_tests;
 
 #[cfg(test)]
 mod acked_transitions_tests;
+
+#[cfg(test)]
+mod undefined_property_rows_tests;

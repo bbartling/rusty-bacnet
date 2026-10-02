@@ -101,4 +101,19 @@ impl CommittedCov {
     pub(crate) fn is_empty(&self) -> bool {
         self.coarse.is_empty() && self.life_safety.is_empty()
     }
+
+    /// Add this fanout to a request's own, leaving out objects the request
+    /// already fans out for.
+    pub(crate) fn merge_into(
+        self,
+        coarse: &mut Vec<ObjectIdentifier>,
+        life_safety: &mut Vec<LifeSafetyCovChange>,
+    ) {
+        for oid in self.coarse {
+            if !coarse.contains(&oid) {
+                coarse.push(oid);
+            }
+        }
+        life_safety.extend(self.life_safety);
+    }
 }

@@ -35,15 +35,15 @@ use crate::property_metadata::{
 // rows with no write arm, so RequiredRead/ReadOnly. Door_Status, Lock_Status,
 // Secured_Status, Door_Alarm_State, and Door_Members carry the table O code
 // with no write arm, so Optional/ReadOnly.
-// Point Present_Value is an implementation-extra row (Table 12-36 has no
-// Present_Value row) with a routed Enumerated arm, so Optional/Always.
+// Table 12-36 has no Present_Value row, so the point serves none (#1064
+// removed the implementation-extra row the 0.1.0 import carried).
 // Access_Event, Access_Event_Tag, Access_Event_Time, Access_Doors, and
 // Event_State carry the table R code with no write arm, so
 // RequiredRead/ReadOnly.
 // Zone Global_Identifier carries the table W code with the routed Unsigned
-// arm, so RequiredWrite/Always. Present_Value and Access_Doors are
-// implementation-extra rows (Present_Value with a routed arm, so
-// Optional/Always; Access_Doors with none, so Optional/ReadOnly).
+// arm, so RequiredWrite/Always. Table 12-37 has neither Present_Value nor
+// Access_Doors, so the zone serves neither (#1064 removed the
+// implementation-extra rows the 0.1.0 import carried).
 // Occupancy_Count carries the table O code with no arm, so
 // Optional/ReadOnly; Entry_Points and Exit_Points carry the table R code
 // with no arm, so RequiredRead/ReadOnly. Status_Flags and Reliability carry
@@ -86,7 +86,6 @@ const ACCESS_POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, Optional, None, Always),
     PropertyMetadata::new(P::ACCESS_EVENT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACCESS_EVENT_TAG, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACCESS_EVENT_TIME, RequiredRead, None, ReadOnly),
@@ -103,10 +102,8 @@ const ACCESS_ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, Optional, None, Always),
     PropertyMetadata::new(P::GLOBAL_IDENTIFIER, RequiredWrite, None, Always),
     PropertyMetadata::new(P::OCCUPANCY_COUNT, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::ACCESS_DOORS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::ENTRY_POINTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EXIT_POINTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -288,7 +285,6 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::ACCESS_EVENT,
             P::ACCESS_EVENT_TAG,
             P::ACCESS_EVENT_TIME,
@@ -315,9 +311,10 @@ mod tests {
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
         assert!(!object.supports_cov());
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(0)
+        // Table 12-36 has no Present_Value row (#1064).
+        assert_error(
+            object.read_property(P::PRESENT_VALUE, None).unwrap_err(),
+            ErrorCode::UNKNOWN_PROPERTY,
         );
         assert_eq!(
             object.read_property(P::ACCESS_EVENT, None).unwrap(),
@@ -362,10 +359,8 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::PRESENT_VALUE,
             P::GLOBAL_IDENTIFIER,
             P::OCCUPANCY_COUNT,
-            P::ACCESS_DOORS,
             P::ENTRY_POINTS,
             P::EXIT_POINTS,
             P::STATUS_FLAGS,
@@ -387,10 +382,13 @@ mod tests {
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
         assert!(!object.supports_cov());
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(0)
-        );
+        // Table 12-37 has neither of these rows (#1064).
+        for property in [P::PRESENT_VALUE, P::ACCESS_DOORS] {
+            assert_error(
+                object.read_property(property, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
         assert_eq!(
             object.read_property(P::GLOBAL_IDENTIFIER, None).unwrap(),
             PropertyValue::Unsigned(0)
@@ -399,7 +397,7 @@ mod tests {
             object.read_property(P::OCCUPANCY_COUNT, None).unwrap(),
             PropertyValue::Unsigned(0)
         );
-        for p in [P::ACCESS_DOORS, P::ENTRY_POINTS, P::EXIT_POINTS] {
+        for p in [P::ENTRY_POINTS, P::EXIT_POINTS] {
             assert_eq!(
                 object.read_property(p, None).unwrap(),
                 PropertyValue::List(vec![])
@@ -424,16 +422,11 @@ mod tests {
             ),
             (
                 || Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
-                &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::PRESENT_VALUE],
+                &[P::DESCRIPTION, P::OUT_OF_SERVICE],
             ),
             (
                 || Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
-                &[
-                    P::DESCRIPTION,
-                    P::OUT_OF_SERVICE,
-                    P::PRESENT_VALUE,
-                    P::GLOBAL_IDENTIFIER,
-                ],
+                &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::GLOBAL_IDENTIFIER],
             ),
         ];
         for (make, writable) in cases {
@@ -619,23 +612,6 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            point
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(5), None)
-                .unwrap();
-            assert_eq!(
-                point.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(5)
-            );
-            assert_error(
-                point
-                    .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(5.0), None)
-                    .unwrap_err(),
-                ErrorCode::INVALID_DATA_TYPE,
-            );
-            assert_eq!(
-                point.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(5)
-            );
             for p in [
                 P::ACCESS_EVENT,
                 P::ACCESS_EVENT_TAG,
@@ -660,12 +636,6 @@ mod tests {
                 None,
             )
             .unwrap();
-            zone.write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(2), None)
-                .unwrap();
-            assert_eq!(
-                zone.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(2)
-            );
             zone.write_property(
                 P::GLOBAL_IDENTIFIER,
                 None,
@@ -678,7 +648,6 @@ mod tests {
                 PropertyValue::Unsigned(99)
             );
             for (p, value) in [
-                (P::PRESENT_VALUE, PropertyValue::Real(2.0)),
                 (P::GLOBAL_IDENTIFIER, PropertyValue::Enumerated(99)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
@@ -694,7 +663,6 @@ mod tests {
             );
             for p in [
                 P::OCCUPANCY_COUNT,
-                P::ACCESS_DOORS,
                 P::ENTRY_POINTS,
                 P::EXIT_POINTS,
                 P::STATUS_FLAGS,
@@ -733,11 +701,16 @@ mod tests {
         assert_unserved(&mut door, P::DOOR_EXTENDED_PULSE_TIME);
         assert_unserved(&mut door, P::DOOR_UNLOCK_DELAY_TIME);
         assert_unserved(&mut door, P::CURRENT_COMMAND_PRIORITY);
-        // Authentication_Status is the Table 12-36 R row with no read arm.
+        // Authentication_Status is the Table 12-36 R row with no read arm;
+        // Present_Value is no Table 12-36 row (#1064).
         let mut point = AccessPointObject::new(1, "AP-1").unwrap();
         assert_unserved(&mut point, P::AUTHENTICATION_STATUS);
-        // Occupancy_State is the Table 12-37 row with no read arm.
+        assert_unserved(&mut point, P::PRESENT_VALUE);
+        // Occupancy_State is the Table 12-37 row with no read arm;
+        // Present_Value and Access_Doors are no Table 12-37 rows (#1064).
         let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
         assert_unserved(&mut zone, P::OCCUPANCY_STATE);
+        assert_unserved(&mut zone, P::PRESENT_VALUE);
+        assert_unserved(&mut zone, P::ACCESS_DOORS);
     }
 }

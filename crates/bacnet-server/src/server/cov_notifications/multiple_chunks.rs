@@ -225,7 +225,7 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
     for (count, too_large) in plan {
         let part = claim.split_oldest(count);
         if too_large {
-            part.discard("a timestamped change exceeds the notification size on its own");
+            part.discard();
             continue;
         }
         parts.push((content.history(&part.in_order()), part));

@@ -346,11 +346,6 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
 fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = AccessPointObject::new(7, "AP-7").unwrap();
-        if configured {
-            object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(2), None)
-                .unwrap();
-        }
         write_common(&mut object, configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -360,11 +355,8 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
         let unspec_event_time: &[u8] =
             &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (
-                P::PRESENT_VALUE,
-                None,
-                Ok(if configured { &[0x91, 2] } else { &[0x91, 0] }),
-            ),
+            // Table 12-36 has no Present_Value row (#1064).
+            (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PRESENT_VALUE,
                 Some(0),
@@ -444,24 +436,23 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x91, 247, 0x92, 0x01, 0x42, 0x91, 250, 0x91, 246, 0x91,
-                    36, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x91, 247, 0x92, 0x01, 0x42, 0x91, 250, 0x91, 246, 0x91, 36, 0x91,
+                    111, 0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 9])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 247])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x42])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 250])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 246])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 36])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 247])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x42])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 250])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 246])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 36])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 111])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 81])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(11),
+                Some(10),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -491,9 +482,6 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
         let mut object = AccessZoneObject::new(7, "ZONE-7").unwrap();
         if configured {
             object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-                .unwrap();
-            object
                 .write_property(
                     P::GLOBAL_IDENTIFIER,
                     None,
@@ -507,11 +495,8 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (
-                P::PRESENT_VALUE,
-                None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
-            ),
+            // Table 12-37 has no Present_Value or Access_Doors row (#1064).
+            (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PRESENT_VALUE,
                 Some(0),
@@ -533,7 +518,7 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ACCESS_DOORS, None, Ok(EMPTY)),
+            (P::ACCESS_DOORS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::ACCESS_DOORS,
                 Some(0),
@@ -600,24 +585,22 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x92, 0x01, 0x43, 0x92, 0x01, 0x22, 0x91, 246, 0x92, 0x01,
-                    0x0c, 0x92, 0x01, 0x0d, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x92, 0x01, 0x43, 0x92, 0x01, 0x22, 0x92, 0x01, 0x0c, 0x92, 0x01,
+                    0x0d, 0x91, 111, 0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x43])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x22])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 246])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0x0c])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x0d])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x43])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x22])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x0c])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x0d])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 111])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 81])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(11),
+                Some(9),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

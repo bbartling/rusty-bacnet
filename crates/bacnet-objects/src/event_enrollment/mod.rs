@@ -51,7 +51,6 @@ pub struct EventEnrollmentObject {
     notification_class: u32,
     fault_parameters: Option<FaultParameters>,
     status_flags: StatusFlags,
-    out_of_service: bool,
     reliability: Reliability,
     /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): Clause
     /// 12.12 feeds this value to the enrollment's algorithm as its
@@ -102,7 +101,6 @@ impl EventEnrollmentObject {
             notification_class: 0,
             fault_parameters: None,
             status_flags: StatusFlags::empty(),
-            out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             // Absent so the delay behavior equals the normative pTimeDelay
             // fallback until a client writes the property — never an error,
@@ -272,7 +270,10 @@ impl BACnetObject for EventEnrollmentObject {
                 self.event_state,
             ));
         }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-14 has no Out_Of_Service (#1064).
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
@@ -436,11 +437,6 @@ impl BACnetObject for EventEnrollmentObject {
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
-        }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
@@ -617,17 +613,20 @@ impl BACnetObject for EventEnrollmentObject {
     /// to be able to *write* this property, so refusing the write would be
     /// interoperably hostile.
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        common::is_common_writable(property)
-            || matches!(
-                property,
-                PropertyIdentifier::NOTIFY_TYPE
-                    | PropertyIdentifier::NOTIFICATION_CLASS
-                    | PropertyIdentifier::EVENT_ENABLE
-                    | PropertyIdentifier::EVENT_DETECTION_ENABLE
-                    | PropertyIdentifier::EVENT_PARAMETERS
-                    | PropertyIdentifier::FAULT_PARAMETERS
-                    | PropertyIdentifier::TIME_DELAY_NORMAL
-            )
+        // Table 12-14 has no Out_Of_Service (#1064), so of the common
+        // writable rows only the name and description apply.
+        matches!(
+            property,
+            PropertyIdentifier::OBJECT_NAME
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::NOTIFY_TYPE
+                | PropertyIdentifier::NOTIFICATION_CLASS
+                | PropertyIdentifier::EVENT_ENABLE
+                | PropertyIdentifier::EVENT_DETECTION_ENABLE
+                | PropertyIdentifier::EVENT_PARAMETERS
+                | PropertyIdentifier::FAULT_PARAMETERS
+                | PropertyIdentifier::TIME_DELAY_NORMAL
+        )
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

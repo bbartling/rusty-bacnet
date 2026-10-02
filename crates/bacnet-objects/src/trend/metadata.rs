@@ -75,16 +75,13 @@ mod tests {
         }
     }
 
-    fn objects(capacity: u32, logging_type: u32, oos: bool) -> [Box<dyn BACnetObject>; 3] {
+    fn objects(capacity: u32, logging_type: u32) -> [Box<dyn BACnetObject>; 3] {
         let mut trend = TrendLogObject::new(1, "TL-1", capacity).unwrap();
         let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", capacity).unwrap();
-        let mut event = EventLogObject::new(1, "EL-1", capacity).unwrap();
+        let event = EventLogObject::new(1, "EL-1", capacity).unwrap();
         trend.set_logging_type(logging_type);
         multiple.set_logging_type(logging_type);
-        // Only Event Log carries Out_Of_Service; the Trend Logs have none.
-        event
-            .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(oos), None)
-            .unwrap();
+        // None of the three has Out_Of_Service (Tables 12-29, 12-35, 12-31).
         [Box::new(trend), Box::new(multiple), Box::new(event)]
     }
 
@@ -130,12 +127,13 @@ mod tests {
         ];
         for capacity in [0, 1, 3] {
             for logging_type in [0, 1, 2] {
-                for object in objects(capacity, logging_type, false) {
+                for object in objects(capacity, logging_type) {
                     let kind = object.object_identifier().object_type();
                     let mut all = base.to_vec();
                     let mut required = base_required.to_vec();
                     if kind == ObjectType::EVENT_LOG {
-                        all.insert(13, P::OUT_OF_SERVICE);
+                        // Table 12-31 has no Log_Interval (#1064).
+                        all.retain(|&p| p != P::LOG_INTERVAL);
                     }
                     if kind != ObjectType::EVENT_LOG {
                         all.extend([P::LOGGING_TYPE, P::LOG_DEVICE_OBJECT_PROPERTY]);
@@ -209,106 +207,105 @@ mod tests {
 
     #[test]
     fn property_metadata_log_family_write_capabilities_match_dispatch() {
-        for oos in [false, true] {
-            for logging_type in [0, 1, 2] {
-                for mut object in objects(8, logging_type, oos) {
-                    object.bind_clock_internal(Some(Arc::new(FixedClock)));
-                    let kind = object.object_identifier().object_type();
-                    let metadata = object.property_metadata().into_owned();
-                    for row in &metadata {
-                        let p = row.property_identifier;
-                        let capability = match p {
-                            P::LOG_ENABLE
-                            | P::LOG_INTERVAL
-                            | P::STOP_WHEN_FULL
-                            | P::RECORD_COUNT
-                            | P::DESCRIPTION => Always,
-                            P::OUT_OF_SERVICE => Always,
-                            _ => ReadOnly,
-                        };
-                        assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
-                        assert_eq!(object.is_writable_property(p), capability.is_writable());
-                        let value = match p {
-                            P::LOG_ENABLE => PropertyValue::Boolean(false),
-                            P::LOG_INTERVAL => PropertyValue::Unsigned(17),
-                            P::STOP_WHEN_FULL => PropertyValue::Boolean(true),
-                            P::RECORD_COUNT => PropertyValue::Unsigned(0),
-                            _ => object.read_property(p, None).unwrap(),
-                        };
-                        let result = object.write_property(p, None, value, None);
-                        if capability == Always {
-                            result.unwrap();
-                        } else {
-                            assert_error(
-                                result.unwrap_err(),
-                                ErrorClass::PROPERTY,
-                                ErrorCode::WRITE_ACCESS_DENIED,
-                            );
-                        }
-                        let before = object.read_property(p, None).unwrap();
-                        if capability == Always && matches!(p, P::DESCRIPTION | P::OUT_OF_SERVICE) {
-                            object
-                                .write_property(p, None, PropertyValue::Null, None)
-                                .unwrap();
-                            assert_eq!(object.read_property(p, None).unwrap(), before);
-                            assert_error(
-                                object
-                                    .write_property(p, None, PropertyValue::Unsigned(1), None)
-                                    .unwrap_err(),
-                                ErrorClass::PROPERTY,
-                                ErrorCode::INVALID_DATA_TYPE,
-                            );
-                            continue;
-                        }
+        for logging_type in [0, 1, 2] {
+            for mut object in objects(8, logging_type) {
+                object.bind_clock_internal(Some(Arc::new(FixedClock)));
+                let kind = object.object_identifier().object_type();
+                let metadata = object.property_metadata().into_owned();
+                for row in &metadata {
+                    let p = row.property_identifier;
+                    let capability = match p {
+                        P::LOG_ENABLE
+                        | P::LOG_INTERVAL
+                        | P::STOP_WHEN_FULL
+                        | P::RECORD_COUNT
+                        | P::DESCRIPTION => Always,
+                        _ => ReadOnly,
+                    };
+                    assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
+                    assert_eq!(object.is_writable_property(p), capability.is_writable());
+                    let value = match p {
+                        P::LOG_ENABLE => PropertyValue::Boolean(false),
+                        P::LOG_INTERVAL => PropertyValue::Unsigned(17),
+                        P::STOP_WHEN_FULL => PropertyValue::Boolean(true),
+                        P::RECORD_COUNT => PropertyValue::Unsigned(0),
+                        _ => object.read_property(p, None).unwrap(),
+                    };
+                    let result = object.write_property(p, None, value, None);
+                    if capability == Always {
+                        result.unwrap();
+                    } else {
+                        assert_error(
+                            result.unwrap_err(),
+                            ErrorClass::PROPERTY,
+                            ErrorCode::WRITE_ACCESS_DENIED,
+                        );
+                    }
+                    let before = object.read_property(p, None).unwrap();
+                    if capability == Always && p == P::DESCRIPTION {
+                        object
+                            .write_property(p, None, PropertyValue::Null, None)
+                            .unwrap();
+                        assert_eq!(object.read_property(p, None).unwrap(), before);
                         assert_error(
                             object
-                                .write_property(p, None, PropertyValue::Null, None)
+                                .write_property(p, None, PropertyValue::Unsigned(1), None)
                                 .unwrap_err(),
                             ErrorClass::PROPERTY,
-                            if capability == Always {
-                                ErrorCode::INVALID_DATA_TYPE
-                            } else {
-                                ErrorCode::WRITE_ACCESS_DENIED
-                            },
+                            ErrorCode::INVALID_DATA_TYPE,
                         );
+                        continue;
                     }
                     assert_error(
                         object
-                            .write_property(P::RECORD_COUNT, None, PropertyValue::Unsigned(1), None)
+                            .write_property(p, None, PropertyValue::Null, None)
                             .unwrap_err(),
                         ErrorClass::PROPERTY,
-                        ErrorCode::INVALID_DATA_TYPE,
+                        if capability == Always {
+                            ErrorCode::INVALID_DATA_TYPE
+                        } else {
+                            ErrorCode::WRITE_ACCESS_DENIED
+                        },
                     );
-                    for p in [
-                        P::PRESENT_VALUE,
-                        P::PRIORITY_ARRAY,
-                        P::START_TIME,
-                        P::STOP_TIME,
-                        P::ALL,
-                    ] {
-                        assert!(!object.is_writable_property(p));
-                        assert_error(
-                            object.read_property(p, None).unwrap_err(),
-                            ErrorClass::PROPERTY,
-                            ErrorCode::UNKNOWN_PROPERTY,
-                        );
-                        assert_error(
-                            object
-                                .write_property(p, None, PropertyValue::Null, None)
-                                .unwrap_err(),
-                            ErrorClass::PROPERTY,
-                            ErrorCode::UNKNOWN_PROPERTY,
-                        );
-                    }
-                    assert_eq!(object.property_metadata().as_ref(), metadata);
                 }
+                assert_error(
+                    object
+                        .write_property(P::RECORD_COUNT, None, PropertyValue::Unsigned(1), None)
+                        .unwrap_err(),
+                    ErrorClass::PROPERTY,
+                    ErrorCode::INVALID_DATA_TYPE,
+                );
+                // No log object has Out_Of_Service (#985, #1064).
+                for p in [
+                    P::PRESENT_VALUE,
+                    P::PRIORITY_ARRAY,
+                    P::START_TIME,
+                    P::STOP_TIME,
+                    P::ALL,
+                    P::OUT_OF_SERVICE,
+                ] {
+                    assert!(!object.is_writable_property(p));
+                    assert_error(
+                        object.read_property(p, None).unwrap_err(),
+                        ErrorClass::PROPERTY,
+                        ErrorCode::UNKNOWN_PROPERTY,
+                    );
+                    assert_error(
+                        object
+                            .write_property(p, None, PropertyValue::Null, None)
+                            .unwrap_err(),
+                        ErrorClass::PROPERTY,
+                        ErrorCode::UNKNOWN_PROPERTY,
+                    );
+                }
+                assert_eq!(object.property_metadata().as_ref(), metadata);
             }
         }
     }
 
     #[test]
     fn property_metadata_log_capability_does_not_bypass_clock_validation() {
-        for mut object in objects(3, 0, false) {
+        for mut object in objects(3, 0) {
             let metadata = object.property_metadata().into_owned();
             for (p, value) in [
                 (P::LOG_ENABLE, PropertyValue::Boolean(false)),

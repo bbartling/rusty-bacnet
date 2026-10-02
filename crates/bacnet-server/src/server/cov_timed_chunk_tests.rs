@@ -654,3 +654,54 @@ async fn a_change_too_large_for_any_notification_is_dropped_and_counted() {
     h.no_notification().await;
     h.server.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_subscriber_too_small_for_any_timestamped_change_warns_once_per_admission() {
+    // The smallest maximum APDU a request can advertise. One timestamped
+    // Present_Value and Status_Flags change of AV-1 takes 58 octets or more.
+    const TINY_APDU: u16 = 50;
+    for confirmed in [false, true] {
+        let warnings = crate::cov::timed::DropWarningCount::default();
+        let _guard = warnings.install();
+        let mut h = Harness::start(ServerConfig::default()).await;
+        h.request_max_apdu = TINY_APDU;
+        h.subscribe(confirmed).await;
+        // Not even the initial report's change fits: it is dropped, counted
+        // and logged.
+        h.no_notification().await;
+        // Changes dropped and warnings logged so far.
+        let seen = |h: &Harness| {
+            (
+                h.server.cov_counters().timed_changes_dropped,
+                warnings.get(),
+            )
+        };
+        assert_eq!(seen(&h), (1, 1), "confirmed: {confirmed}");
+        // Every later change goes the same way: each is counted, and the
+        // context does not warn again (#1039).
+        for second in 1..=3 {
+            h.set_clock(second);
+            h.write_local(f32::from(second)).await;
+        }
+        h.no_notification().await;
+        assert_eq!(seen(&h), (4, 1), "confirmed: {confirmed}");
+        // Re-admitting the reference warns afresh, once.
+        h.subscribe(confirmed).await;
+        h.set_clock(4);
+        h.write_local(4.0).await;
+        h.no_notification().await;
+        assert_eq!(seen(&h), (6, 2), "confirmed: {confirmed}");
+        // Without timestamps the same values fit the same subscriber.
+        h.subscribe_process(857, confirmed, vec![(av1(), vec![(PV, false)])], Some(10))
+            .await;
+        let report = h.notification().await;
+        assert!(apdu_len(&report, confirmed) <= usize::from(TINY_APDU));
+        assert_eq!(pv_rows(&report), vec![(real(4.0), None)]);
+        if confirmed {
+            h.ack().await;
+        }
+        h.no_notification().await;
+        assert_eq!(seen(&h), (6, 2), "confirmed: {confirmed}");
+        h.server.stop().await.unwrap();
+    }
+}

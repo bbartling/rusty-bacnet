@@ -114,15 +114,13 @@ pub fn read_property_list_property(
     }
 }
 
-/// Common read_property match arms shared by all object types.
-///
-/// Handles: OBJECT_IDENTIFIER, OBJECT_NAME, DESCRIPTION, STATUS_FLAGS,
-///          OUT_OF_SERVICE, RELIABILITY, PROPERTY_LIST, and the
-///          unknown-property fallback.
+/// Read arms for the properties every object type has: OBJECT_IDENTIFIER,
+/// OBJECT_NAME, DESCRIPTION and PROPERTY_LIST. Any other property yields
+/// `None`, leaving it to the caller's own arms and unknown-property fallback.
 ///
 /// The caller must provide `self` which has fields: `oid`, `name`,
-/// `description`, `status_flags`, `out_of_service`, `reliability`.
-macro_rules! read_common_properties {
+/// `description`.
+macro_rules! read_identity_properties {
     ($self:expr, $property:expr, $array_index:expr) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::OBJECT_IDENTIFIER => Some(Ok(
@@ -134,24 +132,6 @@ macro_rules! read_common_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::DESCRIPTION => Some(Ok(
                 bacnet_types::primitives::PropertyValue::CharacterString($self.description.clone()),
             )),
-            p if p == bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS => {
-                // Compute StatusFlags dynamically. Objects with event detection
-                // should handle STATUS_FLAGS before calling this macro to include
-                // IN_ALARM from their event_state; this default uses NORMAL.
-                Some(Ok(common::compute_status_flags(
-                    $self.status_flags,
-                    $self.reliability,
-                    $self.out_of_service,
-                    // default: no IN_ALARM (non-event objects)
-                    bacnet_types::enums::EventState::NORMAL,
-                )))
-            }
-            p if p == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Boolean($self.out_of_service),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::RELIABILITY => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Enumerated($self.reliability.to_raw()),
-            )),
             p if p == bacnet_types::enums::PropertyIdentifier::PROPERTY_LIST => {
                 let props = $self.property_list();
                 Some($crate::common::read_property_list_property(
@@ -161,6 +141,56 @@ macro_rules! read_common_properties {
             }
             _ => None,
         }
+    };
+}
+pub(crate) use read_identity_properties;
+
+/// Common read_property match arms shared by most object types.
+///
+/// Handles: the [`read_identity_properties!`] rows plus STATUS_FLAGS,
+///          OUT_OF_SERVICE and RELIABILITY. Any other property yields `None`.
+///
+/// The caller must provide `self` which has fields: `oid`, `name`,
+/// `description`, `status_flags`, `out_of_service`, `reliability`.
+///
+/// The `no_out_of_service` form is for object types whose property table has
+/// Status_Flags and Reliability but no Out_Of_Service (#1064). It needs no
+/// `out_of_service` field, leaves OUT_OF_SERVICE to the caller's
+/// unknown-property fallback, and holds the OUT_OF_SERVICE flag FALSE.
+macro_rules! read_common_properties {
+    (@status $self:expr, $property:expr, $array_index:expr, $out_of_service:expr) => {{
+        let out_of_service: Option<bool> = $out_of_service;
+        match $property {
+            p if p == bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS => {
+                // Compute StatusFlags dynamically. Objects with event detection
+                // should handle STATUS_FLAGS before calling this macro to include
+                // IN_ALARM from their event_state; this default uses NORMAL.
+                Some(Ok($crate::common::compute_status_flags(
+                    $self.status_flags,
+                    $self.reliability,
+                    out_of_service.unwrap_or(false),
+                    // default: no IN_ALARM (non-event objects)
+                    bacnet_types::enums::EventState::NORMAL,
+                )))
+            }
+            p if p == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE => out_of_service
+                .map(|value| Ok(bacnet_types::primitives::PropertyValue::Boolean(value))),
+            p if p == bacnet_types::enums::PropertyIdentifier::RELIABILITY => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Enumerated($self.reliability.to_raw()),
+            )),
+            _ => $crate::common::read_identity_properties!($self, $property, $array_index),
+        }
+    }};
+    ($self:expr, $property:expr, $array_index:expr, no_out_of_service) => {
+        $crate::common::read_common_properties!(@status $self, $property, $array_index, None)
+    };
+    ($self:expr, $property:expr, $array_index:expr) => {
+        $crate::common::read_common_properties!(
+            @status $self,
+            $property,
+            $array_index,
+            Some($self.out_of_service)
+        )
     };
 }
 pub(crate) use read_common_properties;
@@ -878,11 +908,11 @@ pub(crate) fn write_cov_increment(
 // PICS writability helpers
 // ──────────────────────────────────────────────────────────────────────────
 //
-// `is_common_writable` is the property set shared by the core object types'
-// `is_writable_property` overrides; it mirrors the out-of-service, name and
-// description write arms, so PICS and runtime dispatch agree. The
-// commandable predicate is test-only: property-metadata tests use it to
-// check commandable objects against their `write_priority_array!` arms.
+// Both predicates are test-only. Property-metadata tests use
+// `is_common_writable` to check the core object types against their
+// out-of-service, name and description write arms, and the commandable
+// predicate to check commandable objects against their
+// `write_priority_array!` arms.
 
 /// Writable commandable-object properties shared by all commandable types
 /// (AnalogOutput, AnalogValue, BinaryOutput, BinaryValue, MultiStateOutput,
@@ -909,6 +939,7 @@ pub(crate) fn is_commandable_property_writable(
 /// via `write_out_of_service` or
 /// `write_out_of_service_with_reliability_restore`, plus `write_object_name`
 /// and `write_description`).
+#[cfg(test)]
 #[inline]
 pub(crate) fn is_common_writable(property: bacnet_types::enums::PropertyIdentifier) -> bool {
     matches!(

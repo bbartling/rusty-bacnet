@@ -11,8 +11,9 @@ use crate::property_metadata::{
 
 // Preserve the readable surface and legacy order. Record_Count retains its
 // optional base code and is included only when the object's read route has it.
-// The implemented status properties are optional, not additional required rows.
-const BASE: [PropertyMetadata; 15] = [
+// Table 12-16 has no Status_Flags, Reliability or Out_Of_Service, so there are
+// no such rows (#1064).
+const BASE: [PropertyMetadata; 12] = [
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
@@ -23,9 +24,6 @@ const BASE: [PropertyMetadata; 15] = [
     PropertyMetadata::new(P::ARCHIVE, RequiredWrite, None, Always),
     PropertyMetadata::new(P::READ_ONLY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::FILE_ACCESS_METHOD, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::STATUS_FLAGS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RECORD_COUNT, Optional, None, ReadOnly),
 ];
@@ -102,9 +100,6 @@ mod tests {
             P::ARCHIVE,
             P::READ_ONLY,
             P::FILE_ACCESS_METHOD,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ];
         let mut object = FileObject::new(1, "FILE-1", "raw").unwrap();
         object.set_data(vec![1, 2, 3]);
@@ -189,12 +184,10 @@ mod tests {
                 object.set_read_only(read_only);
                 for row in object.property_metadata().into_owned() {
                     let p = row.property_identifier;
-                    let writable = matches!(
-                        p,
-                        P::DESCRIPTION | P::OUT_OF_SERVICE | P::ARCHIVE | P::FILE_TYPE
-                    ) || (!read_only
-                        && ((p == P::FILE_SIZE && method == 1)
-                            || (p == P::RECORD_COUNT && method == 0)));
+                    let writable = matches!(p, P::DESCRIPTION | P::ARCHIVE | P::FILE_TYPE)
+                        || (!read_only
+                            && ((p == P::FILE_SIZE && method == 1)
+                                || (p == P::RECORD_COUNT && method == 0)));
                     assert_eq!(
                         row.write_capability,
                         if writable { Always } else { ReadOnly },
@@ -214,7 +207,16 @@ mod tests {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
                     }
                 }
-                for p in [P::PRESENT_VALUE, P::ALL, P::RECORD_COUNT] {
+                // Table 12-16 has no Status_Flags, Reliability or
+                // Out_Of_Service (#1064).
+                for p in [
+                    P::PRESENT_VALUE,
+                    P::ALL,
+                    P::RECORD_COUNT,
+                    P::STATUS_FLAGS,
+                    P::RELIABILITY,
+                    P::OUT_OF_SERVICE,
+                ] {
                     if object.property_list().contains(&p) {
                         continue;
                     }

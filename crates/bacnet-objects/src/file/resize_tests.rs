@@ -438,7 +438,6 @@ fn resize_writability_and_failure_atomicity_follow_runtime_eligibility() {
     let mut stream = stream_file(&[1, 2, 3]);
     for property in [
         PropertyIdentifier::DESCRIPTION,
-        PropertyIdentifier::OUT_OF_SERVICE,
         PropertyIdentifier::ARCHIVE,
         PropertyIdentifier::FILE_TYPE,
         PropertyIdentifier::FILE_SIZE,

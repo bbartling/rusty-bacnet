@@ -321,48 +321,6 @@ fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
     assert_eq!(event_state(&db, &ee_oid), EventState::NORMAL);
 }
 
-/// Foreign-state recovery respects OUT_OF_SERVICE like any other pass (the
-/// gate runs before evaluation).
-#[test]
-fn out_of_service_skips_evaluation_even_for_a_wedged_state() {
-    let (mut db, ee_oid) = setup_on_notification_class(
-        EventType::CHANGE_OF_STATE,
-        BACnetEventParameter::ChangeOfState {
-            time_delay: 0,
-            list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
-        },
-        1,
-    );
-    assert_eq!(
-        evaluate_event_enrollments(&mut db, 1)[0].change.to,
-        EventState::OFFNORMAL
-    );
-    db.get_mut(&ee_oid)
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(true),
-            None,
-        )
-        .unwrap();
-    rewrite_params(
-        &mut db,
-        &ee_oid,
-        BACnetEventParameter::OutOfRange {
-            time_delay: 0,
-            low_limit: 20.0,
-            high_limit: 80.0,
-            deadband: 2.0,
-        },
-    );
-    assert!(
-        evaluate_event_enrollments(&mut db, 1).is_empty(),
-        "OOS gate precedes evaluation — no recovery while out of service"
-    );
-    assert_eq!(event_state(&db, &ee_oid), EventState::OFFNORMAL);
-}
-
 /// FLOATING_LIMIT's reachable set is the same {NORMAL, HIGH_LIMIT,
 /// LOW_LIMIT} triple, and its normalization is shared with OUT_OF_RANGE —
 /// pin it independently anyway: a HIGH_LIMIT left under FL parameters whose

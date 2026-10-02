@@ -1740,6 +1740,21 @@ does not prevent subsequent target writes. `set_weekly_schedule`,
 non-primitive values, non-specific or repeated times, out-of-range priorities
 and calendar entries.
 
+Weekly_Schedule, Exception_Schedule and Effective_Period are network-writable
+(#1057): whole, or one element of either array by index. A write is decoded
+with the shared codecs in `bacnet_encoding::constructed` and refused, unchanged,
+wherever the setters would refuse it, with the same errors (DUPLICATE_ENTRY for
+a time given twice in one list). Writing Exception_Schedule's index 0 resizes
+it, appending empty events (a wholly unspecified date, priority 16); it holds at
+most 1,024 events, from writes or `add_exception` (RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY). After a WriteProperty, WritePropertyMultiple or
+`write_local` commits to a Schedule, the server runs that Schedule's
+evaluation at once, as the tick would, and fans COV out for the targets it
+writes. Reliability is CONFIGURATION_ERROR, with FAULT in Status_Flags, while
+the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
+are not all of one datatype (#1056); the Schedule still writes its references.
+Whether each referenced property accepts that datatype is not checked.
+
 `CalendarObject` evaluates Present_Value from the bound Device clock's local
 date on every read (#1029): TRUE when any Date_List entry matches, FALSE
 without a clock. `set_present_value` is gone; `is_active_on(day)` answers for
@@ -2468,12 +2483,31 @@ a confirmed report defers return to the queue without that check, so the bound
 never drops what the report just planned to send. Changes returned by a failed
 notification wait while a newer change of the same reference is in flight; once a
 newer change is delivered, older ones are dropped rather than delivered as stale
-state. These drops increment `CovCounters::timed_changes_dropped` and log a
-warning; splitting is not counted. Untimestamped references left out as too large
+state. Every one of these drops increments `CovCounters::timed_changes_dropped`;
+splitting is not counted. The log gets one warning per context for each cause
+(bound overflow, too large for any notification, superseded), and later drops for
+that cause are logged at debug level only, until the context is admitted afresh: a
+timestamped reference of it is subscribed again, or an admission changes the
+maximum APDU its notifications must fit (#1039). The counter is therefore the
+running signal. Untimestamped references left out as too large
 are counted apart, in `CovCounters::untimed_references_oversized`: nothing of
 theirs is lost, since the next fanout reads their values again, and the count is
 per report rather than per change. `CovSubscriptionTable::with_max_apdu_length`
 sets the local maximum (the full server uses its configured capacity).
+
+A subscriber whose maximum APDU cannot hold one timestamped change of its
+references receives no timestamped changes at all: the subscription is accepted,
+and each change is dropped and counted as above (#1039). The standard defines no
+error for refusing a subscription because the subscriber's APDU is too small, so
+the server does not refuse it. Measured with this encoder, one timestamped change
+of a REAL Present_Value with its Status_Flags takes 58 to 64 octets in an
+unconfirmed notification and 60 to 66 in a confirmed one (more for larger
+subscriber process identifiers and lifetimes), and a Binary Present_Value with its
+Status_Flags 55 to 63. Both are over the 50 octets of the smallest maximum APDU a
+request can advertise, and well within the next size, 128. The same values
+without timestamps take 36 to 44 octets, so a 50-octet subscriber should subscribe
+with Timestamped=FALSE. At 128 or 206 octets, only large values such as long
+character strings or lists can exceed one notification.
 
 Changes are reported as soon as they happen. When their notification fails or is
 held back (a failed send, a confirmed report that went unacknowledged,

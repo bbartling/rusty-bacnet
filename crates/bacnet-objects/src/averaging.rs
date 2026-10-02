@@ -4,34 +4,32 @@
 //! a referenced object property.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::borrow::Cow;
 
-use crate::common::{self, read_common_properties};
+use crate::common::{self, read_identity_properties};
 use crate::traits::BACnetObject;
 
 mod metadata;
 
 /// BACnet Averaging object (type 18).
 ///
-/// Accumulates sample values and computes min/max/average statistics.
-/// The `present_value` property reflects the current average.
+/// Accumulates sample values and computes min/max/average statistics. The
+/// running average is Average_Value; Table 12-5 has no Present_Value,
+/// Status_Flags, Event_State, Reliability or Out_Of_Service, so the object
+/// serves none of them (#1064).
 pub struct AveragingObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: f32,
     minimum_value: f32,
     maximum_value: f32,
     average_value: f32,
     attempted_samples: u32,
     valid_samples: u32,
     object_property_reference: Option<BACnetObjectPropertyReference>,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: Reliability,
 }
 
 impl AveragingObject {
@@ -42,16 +40,12 @@ impl AveragingObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0.0,
             minimum_value: f32::MAX,
             maximum_value: f32::MIN,
             average_value: 0.0,
             attempted_samples: 0,
             valid_samples: 0,
             object_property_reference: None,
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 
@@ -69,7 +63,6 @@ impl AveragingObject {
 
         // Running average: avg = avg_prev + (value - avg_prev) / n
         self.average_value += (value - self.average_value) / self.valid_samples as f32;
-        self.present_value = self.average_value;
     }
 
     /// Set the object property reference (the property being averaged).
@@ -100,15 +93,12 @@ impl BACnetObject for AveragingObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::AVERAGING.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Real(self.present_value))
             }
             p if p == PropertyIdentifier::MINIMUM_VALUE => {
                 if self.valid_samples == 0 {
@@ -148,9 +138,6 @@ impl BACnetObject for AveragingObject {
                     }
                 }
             }
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
-            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -163,11 +150,6 @@ impl BACnetObject for AveragingObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
             return result;
         }
         // Clause 12.5 Table 12-5 types Object_Property_Reference as
@@ -222,7 +204,7 @@ mod tests {
             PropertyValue::Enumerated(ObjectType::AVERAGING.to_raw())
         );
         assert_eq!(
-            avg.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            avg.read_property(PropertyIdentifier::AVERAGE_VALUE, None)
                 .unwrap(),
             PropertyValue::Real(0.0)
         );
@@ -281,12 +263,6 @@ mod tests {
         } else {
             panic!("Expected Real");
         }
-
-        // present_value should equal average_value
-        let pv = avg
-            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-            .unwrap();
-        assert_eq!(pv, val);
     }
 
     #[test]
@@ -314,16 +290,22 @@ mod tests {
     fn averaging_property_list() {
         let avg = AveragingObject::new(1, "AVG-1").unwrap();
         let props = avg.property_list();
-        assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
         assert!(props.contains(&PropertyIdentifier::MINIMUM_VALUE));
         assert!(props.contains(&PropertyIdentifier::MAXIMUM_VALUE));
         assert!(props.contains(&PropertyIdentifier::AVERAGE_VALUE));
         assert!(props.contains(&PropertyIdentifier::ATTEMPTED_SAMPLES));
         assert!(props.contains(&PropertyIdentifier::VALID_SAMPLES));
         assert!(props.contains(&PropertyIdentifier::OBJECT_PROPERTY_REFERENCE));
-        assert!(props.contains(&PropertyIdentifier::STATUS_FLAGS));
-        assert!(props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
-        assert!(props.contains(&PropertyIdentifier::RELIABILITY));
+        // Table 12-5 defines none of these (#1064).
+        for absent in [
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::EVENT_STATE,
+        ] {
+            assert!(!props.contains(&absent), "{absent:?}");
+        }
     }
 
     #[test]
@@ -457,11 +439,6 @@ mod tests {
         );
         assert_eq!(
             avg.read_property(PropertyIdentifier::AVERAGE_VALUE, None)
-                .unwrap(),
-            PropertyValue::Real(42.0)
-        );
-        assert_eq!(
-            avg.read_property(PropertyIdentifier::PRESENT_VALUE, None)
                 .unwrap(),
             PropertyValue::Real(42.0)
         );

@@ -43,14 +43,17 @@ fn group_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
             )
             .unwrap();
         // Exercise the unconditional write route so large encodings persist.
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
+        // Only Global Group has Out_Of_Service (Table 12-57).
+        if object.object_identifier().object_type() == ObjectType::GLOBAL_GROUP {
+            object
+                .write_property(
+                    P::OUT_OF_SERVICE,
+                    None,
+                    PropertyValue::Boolean(configured),
+                    None,
+                )
+                .unwrap();
+        }
     }
     objects
 }
@@ -64,9 +67,6 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::OBJECT_TYPE,
             P::LIST_OF_GROUP_MEMBERS,
             P::PRESENT_VALUE,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ],
         ObjectType::GLOBAL_GROUP => vec![
             P::OBJECT_IDENTIFIER,
@@ -89,9 +89,6 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::NODE_SUBTYPE,
             P::SUBORDINATE_LIST,
             P::SUBORDINATE_ANNOTATIONS,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ],
     };
     let optional = match kind {
