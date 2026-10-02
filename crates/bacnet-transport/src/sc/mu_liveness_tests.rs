@@ -1,5 +1,6 @@
 //! Local admission policy, not a universal AB.6.3 invalid-frame rule.
-//! Real std::Instant timing; these tests require progressing WebSocket writes.
+//! Real-time timing unless a test says otherwise; these tests require
+//! progressing WebSocket writes.
 
 use crate::sc::heartbeat_validation_tests::start_timed;
 use crate::sc::*;
@@ -185,7 +186,9 @@ async fn mu_liveness_rejected_traffic_keeps_original_idle_timeout_and_reconnects
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+// Paused clock: each 30 ms silence window sat within one 100 ms interval of
+// the last refresh, so on real time a runner stall could let a probe in (#1017).
+#[tokio::test(start_paused = true)]
 async fn mu_liveness_valid_npdu_data_options_and_heartbeat_request_restore_activity() {
     let (mut transport, mut rx, ws) = start_timed().await;
     for heartbeat_request in [false, true] {
@@ -194,7 +197,7 @@ async fn mu_liveness_valid_npdu_data_options_and_heartbeat_request_restore_activ
         ws.send(&wire(&[0x62, 0, 0], false)).await.unwrap();
         assert_eq!(recv(&ws).await, nak(0x62));
         // Keep accepted traffic flowing longer than the original 1s timeout.
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
         while started.elapsed() < Duration::from_millis(1200) {
             if heartbeat_request {
                 ws.send(&[0x0A, 0, 0x66, 0x77]).await.unwrap();

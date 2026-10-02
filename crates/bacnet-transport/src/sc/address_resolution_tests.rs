@@ -515,7 +515,7 @@ async fn address_resolution_silence_and_codes_never_consult_expired_budget() {
             panic!("unexpected receive")
         }
     }
-    let expired = RejectionBudget::new(Instant::now() - Duration::from_secs(1), 1);
+    let expired = RejectionBudget::new(tokio::time::Instant::now() - Duration::from_secs(1), 1);
     // Forbidden request shapes must consult the budget (expiry surfaces).
     for body in [vec![0x00], vec![0x01, 0x02], b"wss://a.example/".to_vec()] {
         for source in [None, Some([0x22; 6])] {
