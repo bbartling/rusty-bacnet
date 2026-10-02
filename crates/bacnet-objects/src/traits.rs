@@ -982,10 +982,14 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// Only the built-in Averaging object opts in. The server doesn't read
     /// Object_Property_Reference itself, so the application samples the
-    /// referenced property and passes each value here, and the object updates
-    /// its statistics and sample counts together. The default fails closed
-    /// with the same error as [`set_present_value_internal`](Self::set_present_value_internal).
-    fn add_averaging_sample_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+    /// referenced property and passes each value here, or `None` when the
+    /// attempt produced no value, and the object updates its sample window,
+    /// statistics and counts together. The default fails closed with the same
+    /// error as [`set_present_value_internal`](Self::set_present_value_internal).
+    fn add_averaging_sample_internal(
+        &mut self,
+        _sample: Option<PropertyValue>,
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
