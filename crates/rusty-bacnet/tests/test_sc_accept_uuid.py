@@ -7,6 +7,10 @@ import ssl
 from rusty_bacnet import BACnetClient, BACnetServer, BacnetError
 import test_sc_hub_mtls as mtls
 
+# How long a native node waits for a Connect-Accept after its Connect-Request:
+# the SC transport's connect_timeout_ms default, which neither binding changes.
+CONNECT_TIMEOUT = 10
+
 
 class AcceptUuidTests(mtls.MtlsFixture):
     # Reuse the existing bounded independent wire and certificate fixtures,
@@ -69,8 +73,9 @@ class AcceptUuidTests(mtls.MtlsFixture):
                     await asyncio.wait_for(drain(), 5)
                 else:
                     # No response is allowed even at native connect timeout.
-                    # Keep this peer alive beyond the default 10-second budget.
-                    self.assertEqual(await asyncio.wait_for(reader.read(1), 15), b"")
+                    # Keep this peer alive beyond it.
+                    self.assertEqual(
+                        await asyncio.wait_for(reader.read(1), CONNECT_TIMEOUT + 5), b"")
                 outcome.set_result(None)
             except Exception as error:
                 outcome.set_exception(error)
@@ -83,7 +88,12 @@ class AcceptUuidTests(mtls.MtlsFixture):
         # PyO3 returns an awaitable Future, not necessarily a coroutine.
         started = asyncio.ensure_future(node.start() if api is BACnetServer else node.__aenter__())
         try:
-            await asyncio.wait_for(nil_checked.wait(), 3)
+            # The checks mean something only while the native node still waits
+            # for an Accept, so its connect timeout bounds the dial, TLS,
+            # upgrade and checks together. They take about 0.4 s on Windows,
+            # but a fixed 3 s failed there when a background task took every
+            # vCPU for seconds during the TLS handshake (#983).
+            await asyncio.wait_for(nil_checked.wait(), CONNECT_TIMEOUT)
             self.assertFalse(started.done(), "invalid Accept completed native SC startup")
             if recover:
                 release_valid.set()
@@ -91,7 +101,7 @@ class AcceptUuidTests(mtls.MtlsFixture):
                 await self.stop_server(node)
             else:
                 with self.assertRaisesRegex(BacnetError, "[Tt]imeout|timed out"):
-                    await asyncio.wait_for(started, 15)
+                    await asyncio.wait_for(started, CONNECT_TIMEOUT + 5)
             await asyncio.wait_for(outcome, 5)
         finally:
             if not started.done():
