@@ -57,6 +57,7 @@ fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
     )
 }
 
+mod access_door_oos_writes;
 mod access_required_rows;
 mod access_typed_values;
 mod acknowledge_alarm;
@@ -69,6 +70,7 @@ mod atomic_read_file_budget;
 mod atomic_write_file_budget;
 mod audit_log_query;
 mod audit_recipient_writes;
+mod averaging_window_writes;
 mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;
 mod calendar_date_list;

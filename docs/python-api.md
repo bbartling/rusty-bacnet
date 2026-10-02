@@ -1888,7 +1888,12 @@ server.add_command(instance=1, name="Command")
 server.add_timer(instance=1, name="Timer")
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
-server.add_averaging(instance=1, name="Averaging")
+server.add_averaging(
+    instance=1,
+    name="Averaging",
+    window_interval=900,  # seconds the window spans (900 when omitted)
+    window_samples=15,  # samples it holds, 1..=1440 (15 when omitted)
+)
 server.add_staging(
     instance=1,
     name="Two-stage fan",
@@ -1938,20 +1943,27 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 the Loop's Action (DIRECT until written).
 
 The application feeds an Averaging object too, because the server doesn't
-read its Object_Property_Reference: it samples the referenced property and
-passes each value with `await server.add_averaging_sample_local(averaging_id,
-PropertyValue.real(21.5))`. A BOOLEAN (counted as 0 or 1), Signed, Unsigned
-and Enumerated sample is accepted as well as a finite REAL. Another datatype,
-Double included, raises INVALID_DATA_TYPE and NaN or an infinity
-VALUE_OUT_OF_RANGE, and a refused sample isn't counted; other objects raise
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value,
-Average_Value, Attempted_Samples and Valid_Samples change together and go
-through the server's COV path. SubscribeCOV on an Averaging object is refused,
-since Table 13-1 has no row for it, but a property subscription
-(SubscribeCOVProperty or SubscribeCOVPropertyMultiple) is notified when its
-property moves by the subscription's COV increment, or on any change without
-one; the report has no Status_Flags. The statistics cover every sample so far,
-since Window_Interval and Window_Samples aren't served yet.
+read its Object_Property_Reference: about every Window_Interval /
+Window_Samples seconds it samples the referenced property and passes the
+result with `await server.add_averaging_sample_local(averaging_id,
+PropertyValue.real(21.5))`, or `None` when the read failed. A BOOLEAN (counted
+as 0 or 1), Signed, Unsigned and Enumerated sample is accepted as well as a
+finite REAL. Another datatype, Double included, raises INVALID_DATA_TYPE and
+NaN or an infinity VALUE_OUT_OF_RANGE, and a refused sample isn't counted;
+other objects raise OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The object keeps the
+most recent Window_Samples attempts and treats each call as the next one;
+Minimum_Value, Maximum_Value and Average_Value cover the valid samples among
+them, Attempted_Samples counts the attempts and Valid_Samples the valid ones.
+With no valid sample in the window the statistics read `math.inf`,
+`-math.inf` and NaN. Peers can write Window_Interval and Window_Samples, and a
+write of either, of Object_Property_Reference, or of zero to Attempted_Samples
+empties the window; out-of-range values raise VALUE_OUT_OF_RANGE. The
+statistics and counts change together and go through the server's COV path.
+SubscribeCOV on an Averaging object is refused, since Table 13-1 has no row for
+it, but a property subscription (SubscribeCOVProperty or
+SubscribeCOVPropertyMultiple) is notified when its property moves by the
+subscription's COV increment, or on any change without one, and always when it
+moves to or from NaN or an infinity; the report has no Status_Flags.
 
 #### Lighting
 
@@ -2003,7 +2015,9 @@ SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
 Access_Event_Tag and Access_Event_Time on an Access Point; Update_Time on a
 Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
-on a Load Control.
+on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
+its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
+footnote 1); returning it to service brings back the door's own values.
 
 #### Transportation
 

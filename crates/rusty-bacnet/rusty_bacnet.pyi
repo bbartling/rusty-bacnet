@@ -2680,7 +2680,21 @@ class BACnetServer:
         """Add a validated local-target Staging object before start()."""
 
     # --- Averaging ---
-    def add_averaging(self, instance: int, name: str) -> None: ...
+    def add_averaging(
+        self,
+        instance: int,
+        name: str,
+        *,
+        window_interval: int | None = None,
+        window_samples: int | None = None,
+    ) -> None:
+        """Add an Averaging object before start().
+
+        ``window_interval`` sets Window_Interval in seconds (900 when omitted)
+        and ``window_samples`` sets Window_Samples (15 when omitted). Peers
+        can write both, and each write discards the samples. An interval of 0,
+        or a sample count of 0 or above 1440, raises VALUE_OUT_OF_RANGE.
+        """
 
     # --- Value objects ---
     def add_integer_value(self, instance: int, name: str) -> None: ...
@@ -2843,21 +2857,27 @@ class BACnetServer:
     def add_averaging_sample_local(
         self,
         object_id: ObjectIdentifier,
-        value: PropertyValue,
+        value: PropertyValue | None,
     ) -> Awaitable[None]:
         """Record one sample of an Averaging object's referenced property, taken by the application.
 
-        The server doesn't read Object_Property_Reference itself. The value is
-        a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned,
-        Enumerated or finite REAL: another datatype, Double included, raises
+        The server doesn't read Object_Property_Reference itself, so the
+        application samples it about every Window_Interval / Window_Samples
+        seconds. The value is a BOOLEAN (FALSE and TRUE count as 0 and 1),
+        Signed, Unsigned, Enumerated or finite REAL; ``None`` records an
+        attempt that produced no value, which counts toward Attempted_Samples
+        but not Valid_Samples. Another datatype, Double included, raises
         INVALID_DATA_TYPE and NaN or an infinity VALUE_OUT_OF_RANGE, and a
         refused sample isn't counted. An unknown object raises UNKNOWN_OBJECT
         and any object other than an Averaging object
-        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value,
-        Average_Value and the sample counts change together. A
-        SubscribeCOVProperty on one of them is notified when it changes (by
-        the subscription's COV increment, if it gave one); SubscribeCOV on an
-        Averaging object is refused.
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Each call fills the next slot of
+        the Window_Samples window, dropping the oldest once it is full, and
+        Minimum_Value, Maximum_Value, Average_Value and the sample counts
+        change together; with no valid sample in the window they read
+        positive infinity, negative infinity and NaN. A SubscribeCOVProperty
+        on one of them is notified when it changes (by the subscription's COV
+        increment, if it gave one); SubscribeCOV on an Averaging object is
+        refused.
         """
         ...
 
