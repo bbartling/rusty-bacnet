@@ -681,6 +681,7 @@ mod failures;
 mod initial;
 mod routed;
 mod schedule;
+mod simulation;
 mod wpm_prefix;
 
 #[path = "life_safety_cov_tests/identity.rs"]
