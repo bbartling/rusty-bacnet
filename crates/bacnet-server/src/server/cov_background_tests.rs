@@ -62,7 +62,9 @@ fn database_flags(db: &ObjectDatabase) -> u8 {
 /// A Schedule commanding AV-1's Present_Value at its fixed priority 16.
 fn av1_schedule(db: &mut ObjectDatabase) {
     let mut object = ScheduleObject::new(1, "SCH-1", PropertyValue::Real(0.0)).unwrap();
-    object.add_object_property_reference(BACnetObjectPropertyReference::new(av1(), PV.to_raw()));
+    object
+        .add_object_property_reference(BACnetObjectPropertyReference::new(av1(), PV.to_raw()))
+        .unwrap();
     db.add(Box::new(object)).unwrap();
 }
 

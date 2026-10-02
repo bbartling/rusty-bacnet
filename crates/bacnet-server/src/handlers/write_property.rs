@@ -339,11 +339,14 @@ pub(crate) fn decode_write_property_value(
             _ => Err(invalid_data_encoding_error()),
         };
     }
+    // The Schedule decodes its list of references itself, an empty list
+    // included (#1088).
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
             | PropertyIdentifier::VALUE_SOURCE
             | PropertyIdentifier::EFFECTIVE_PERIOD
+            | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
     ) {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }

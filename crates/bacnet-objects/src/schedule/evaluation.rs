@@ -43,6 +43,45 @@ pub struct ScheduleWrite {
     pub references: Vec<BACnetObjectPropertyReference>,
 }
 
+/// How one target took a [`ScheduleWrite`], as the server reports it back
+/// through
+/// [`complete_schedule_write`](crate::traits::BACnetObject::complete_schedule_write)
+/// (#1086).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleTargetOutcome {
+    /// The target took the value.
+    Accepted,
+    /// The target refused the value's datatype: INVALID_DATA_TYPE or
+    /// DATATYPE_NOT_SUPPORTED.
+    DatatypeRefused,
+    /// Any other failure, a missing target object included; it says nothing
+    /// about the datatype.
+    Failed,
+}
+
+impl ScheduleTargetOutcome {
+    /// Classify the result of one target write.
+    pub fn of(result: &Result<(), Error>) -> Self {
+        let code = match result {
+            Ok(()) => return Self::Accepted,
+            Err(Error::Protocol { code, .. } | Error::Structured { code, .. }) => *code,
+            Err(_) => return Self::Failed,
+        };
+        let datatype = [
+            ErrorCode::INVALID_DATA_TYPE,
+            ErrorCode::DATATYPE_NOT_SUPPORTED,
+        ];
+        if datatype
+            .iter()
+            .any(|refusal| refusal.to_raw() as u32 == code)
+        {
+            Self::DatatypeRefused
+        } else {
+            Self::Failed
+        }
+    }
+}
+
 impl ScheduleObject {
     /// Present_Value per Clause 12.24.4 at `time` on `today`, or `None` when
     /// `today` is outside Effective_Period.

@@ -79,10 +79,12 @@ fn at(hour: u8, minute: u8) -> Time {
 /// A database holding a Device (the command source), Analog Output 2
 /// (relinquish default 0.0) and `schedule`, which commands its Present_Value.
 fn database(clock: &Arc<SettableClock>, mut schedule: ScheduleObject) -> ObjectDatabase {
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
-        target(),
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            target(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
     let mut db = ObjectDatabase::new();
     db.set_clock_reader(Some(clock.clone()));
     db.add(Box::new(

@@ -47,10 +47,12 @@ fn schedule_object(configuration: u8, out_of_service: bool) -> ScheduleObject {
                 })
                 .unwrap();
         }
-        object.add_object_property_reference(BACnetObjectPropertyReference::new(
-            ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
-            P::PRESENT_VALUE.to_raw(),
-        ));
+        object
+            .add_object_property_reference(BACnetObjectPropertyReference::new(
+                ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
+                P::PRESENT_VALUE.to_raw(),
+            ))
+            .unwrap();
     }
     object
         .write_property(

@@ -1,6 +1,8 @@
 //! The Schedule's Reliability (#1056): CONFIGURATION_ERROR while the non-NULL
 //! values of Weekly_Schedule, Exception_Schedule and Schedule_Default are not
-//! all of one datatype, from the setters and from network writes alike.
+//! all of one datatype, from the setters and from network writes alike; and
+//! (#1086) while a referenced property refused the schedule's datatype at its
+//! last write.
 
 use super::*;
 use crate::traits::ReliabilityEvaluation;
@@ -272,10 +274,12 @@ fn out_of_service_keeps_the_simulated_reliability_until_return() {
 fn a_misconfigured_schedule_still_writes_its_references() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(10.0)).unwrap();
     let target = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap();
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        target,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
+    sched
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            target,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
     sched
         .set_weekly_schedule(
             0,
@@ -297,4 +301,146 @@ fn a_misconfigured_schedule_still_writes_its_references() {
         .tick_schedule(monday, at(17, 0), &no_calendars)
         .expect("a change writes");
     assert_eq!(write.value, PropertyValue::Boolean(false));
+}
+
+// --- The reference half (#1086) -----------------------------------------------
+
+fn target(object_type: ObjectType, instance: u32) -> BACnetObjectPropertyReference {
+    BACnetObjectPropertyReference::new(
+        ObjectIdentifier::new(object_type, instance).unwrap(),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )
+}
+
+fn av2() -> BACnetObjectPropertyReference {
+    target(ObjectType::ANALOG_VALUE, 2)
+}
+
+fn bv3() -> BACnetObjectPropertyReference {
+    target(ObjectType::BINARY_VALUE, 3)
+}
+
+/// Default 10.0, commanding AV-2 and BV-3, with the write the first tick owes.
+fn commanding() -> (ScheduleObject, ScheduleWrite) {
+    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(10.0)).unwrap();
+    sched
+        .set_object_property_references(vec![av2(), bv3()])
+        .unwrap();
+    let monday = SpecificDate::new(2026, 9, 14).unwrap();
+    let write = sched
+        .tick_schedule(monday, at(9, 0), &|_| false)
+        .expect("the first pass in the period writes");
+    (sched, write)
+}
+
+use ScheduleTargetOutcome::{Accepted, DatatypeRefused, Failed};
+
+#[test]
+fn a_target_refusing_the_datatype_faults_the_schedule_until_it_takes_one() {
+    let (mut sched, write) = commanding();
+    assert!(!sched.complete_schedule_write(&write, &[Accepted, Accepted]));
+    assert_fault(&sched, false, "both took the Real");
+
+    assert!(sched.complete_schedule_write(&write, &[Accepted, DatatypeRefused]));
+    assert_fault(&sched, true, "BV-3 refused the Real");
+    assert!(!sched.complete_schedule_write(&write, &[Accepted, DatatypeRefused]));
+    // Any other failure says nothing about the datatype.
+    assert!(!sched.complete_schedule_write(&write, &[Failed, Failed]));
+    assert_fault(&sched, true, "a later write failed otherwise");
+
+    assert!(sched.complete_schedule_write(&write, &[Accepted, Accepted]));
+    assert_fault(&sched, false, "BV-3 took the Real");
+}
+
+#[test]
+fn only_a_value_of_the_schedules_datatype_counts() {
+    let (mut sched, write) = commanding();
+    let refs = write.references.clone();
+    for value in [PropertyValue::Null, PropertyValue::Boolean(true)] {
+        let other = ScheduleWrite {
+            value,
+            priority: 16,
+            references: refs.clone(),
+        };
+        assert!(!sched.complete_schedule_write(&other, &[DatatypeRefused, DatatypeRefused]));
+        assert_fault(&sched, false, "a NULL or another datatype");
+    }
+    // Out of service a client's Real, refused, counts once back in service.
+    sched
+        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+        .unwrap();
+    assert!(!sched.complete_schedule_write(&write, &[Accepted, DatatypeRefused]));
+    assert_eq!(reliability(&sched), Reliability::NO_FAULT_DETECTED);
+    sched
+        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(false), None)
+        .unwrap();
+    assert_fault(&sched, true, "back in service");
+}
+
+#[test]
+fn a_dropped_reference_takes_its_refusal_with_it() {
+    let (mut sched, write) = commanding();
+    sched.complete_schedule_write(&write, &[Accepted, DatatypeRefused]);
+    assert_fault(&sched, true, "BV-3 refused the Real");
+    sched.set_object_property_references(vec![av2()]).unwrap();
+    assert_fault(&sched, false, "BV-3 left the list");
+    // A report about a reference no longer listed is ignored.
+    assert!(!sched.complete_schedule_write(&write, &[Accepted, DatatypeRefused]));
+    assert_fault(&sched, false, "a stale report");
+}
+
+#[test]
+fn the_reference_fault_combines_with_the_content_fault() {
+    let (mut sched, write) = commanding();
+    sched
+        .set_weekly_schedule(0, vec![tv(8, PropertyValue::Boolean(true))])
+        .unwrap();
+    assert_fault(&sched, true, "mixed contents");
+    sched.complete_schedule_write(&write, &[DatatypeRefused, Accepted]);
+    // Consistent contents leave the reference fault standing.
+    sched.set_weekly_schedule(0, Vec::new()).unwrap();
+    assert_fault(&sched, true, "AV-2 still refuses");
+    sched.complete_schedule_write(&write, &[Accepted, Accepted]);
+    assert_fault(&sched, false, "both halves consistent");
+
+    // A Reliability the application applied is left alone either way.
+    sched
+        .set_reliability_internal(Reliability::OVER_RANGE)
+        .unwrap();
+    assert!(!sched.complete_schedule_write(&write, &[DatatypeRefused, Accepted]));
+    assert_eq!(reliability(&sched), Reliability::OVER_RANGE);
+    assert!(!sched.complete_schedule_write(&write, &[Accepted, Accepted]));
+    assert_eq!(reliability(&sched), Reliability::OVER_RANGE);
+}
+
+#[test]
+fn target_outcomes_classify_the_write_error() {
+    let protocol = |code: ErrorCode| Error::Protocol {
+        class: ErrorClass::PROPERTY.to_raw() as u32,
+        code: code.to_raw() as u32,
+    };
+    let cases = [
+        (Ok(()), Accepted),
+        (Err(protocol(ErrorCode::INVALID_DATA_TYPE)), DatatypeRefused),
+        (
+            Err(protocol(ErrorCode::DATATYPE_NOT_SUPPORTED)),
+            DatatypeRefused,
+        ),
+        (
+            Err(Error::protocol(
+                ErrorClass::PROPERTY.to_raw() as u32,
+                ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                Some(bacnet_types::error::ErrorDetail::FirstFailedElementNumber(
+                    1,
+                )),
+            )),
+            DatatypeRefused,
+        ),
+        (Err(protocol(ErrorCode::WRITE_ACCESS_DENIED)), Failed),
+        (Err(protocol(ErrorCode::VALUE_OUT_OF_RANGE)), Failed),
+        (Err(Error::Reject { reason: 0 }), Failed),
+    ];
+    for (result, outcome) in cases {
+        assert_eq!(ScheduleTargetOutcome::of(&result), outcome, "{result:?}");
+    }
 }

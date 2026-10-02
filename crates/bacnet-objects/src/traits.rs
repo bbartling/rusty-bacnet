@@ -28,7 +28,7 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
-use crate::schedule::ScheduleWrite;
+use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 /// Process-local monotonic time source used by internal object lifecycles.
 #[doc(hidden)]
@@ -586,10 +586,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// `calendar_active` answers for a special event whose period references
     /// a Calendar: whether that Calendar is TRUE on `today`. Returns the
-    /// writes owed when Present_Value changed or the object has just entered
-    /// its Effective_Period, with the complete local references, target array
-    /// indices included. Only meaningful for Schedule objects; default returns
-    /// `None`.
+    /// writes owed when Present_Value changed, the object has just entered
+    /// its Effective_Period, or its references or priority changed since the
+    /// last write, with the complete local references, target array indices
+    /// included. Only meaningful for Schedule objects; default returns `None`.
     fn tick_schedule(
         &mut self,
         _today: SpecificDate,
@@ -599,15 +599,33 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Take the write that a Present_Value written while Out_Of_Service was
-    /// TRUE owes the references (Clause 12.24.14), once per written value.
+    /// Take the writes this schedule owes its targets apart from its
+    /// calculation, each once, in order: a NULL to every priority slot a
+    /// change of List_Of_Object_Property_References or Priority_For_Writing
+    /// left behind (#1088), then the Present_Value owed out of service, for a
+    /// client's write (Clause 12.24.14) or a change of those two properties.
     ///
-    /// A schedule pass collects it before calling
-    /// [`tick_schedule`](Self::tick_schedule), so the written value reaches
-    /// the targets ahead of any calculated one; it needs no clock. Only
-    /// meaningful for Schedule objects; default returns `None`.
-    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
-        None
+    /// A schedule pass collects them before calling
+    /// [`tick_schedule`](Self::tick_schedule), so they reach the targets ahead
+    /// of any calculated value; they need no clock. Only meaningful for
+    /// Schedule objects; default returns none.
+    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
+        Vec::new()
+    }
+
+    /// Report how each target took `write`, one of this schedule's writes:
+    /// `outcomes` holds one entry per member of `write.references`, in order.
+    ///
+    /// A Schedule judges the reference half of its Reliability from these
+    /// (Clause 12.24.13, #1086). Returns whether a readable property, such as
+    /// Reliability, changed. Only meaningful for Schedule objects; default
+    /// returns `false`.
+    fn complete_schedule_write(
+        &mut self,
+        _write: &ScheduleWrite,
+        _outcomes: &[ScheduleTargetOutcome],
+    ) -> bool {
+        false
     }
 
     /// Whether this Calendar's Date_List matches `day`: its Present_Value on

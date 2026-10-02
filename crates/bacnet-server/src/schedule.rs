@@ -6,10 +6,16 @@
 //! that commits to a Schedule runs the same evaluation for that Schedule at
 //! once, since a change to what it holds can change its value (#1057).
 //!
-//! Each pass first sends on a Present_Value a client wrote while the Schedule
-//! was out of service (Clause 12.24.14, #1055), through the same target
-//! writes, then calculates. That write needs no clock; the calculation
-//! does, and a Schedule out of service skips it.
+//! Each pass first sends what a Schedule owes apart from its calculation,
+//! through the same target writes: the NULLs that relinquish slots a change
+//! of its references or priority left behind (#1088), then a Present_Value a
+//! client wrote while it was out of service (Clause 12.24.14, #1055). Those
+//! need no clock. Then it calculates; that needs the clock, and a Schedule
+//! out of service skips it.
+//!
+//! After each write the pass tells the Schedule how every target took it, so
+//! a target that refuses the schedule's datatype faults it (Clause 12.24.13,
+//! #1086).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,6 +24,7 @@ use crate::committed_cov::{BackgroundCommit, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
@@ -116,13 +123,13 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
         let Some(obj) = db_w.get_mut(&oid) else {
             continue;
         };
-        // A simulated value goes first, so a calculated one written in the
-        // same pass, after a return to service, lands last.
-        if let Some(write) = obj.take_simulated_schedule_write() {
+        // Owed writes go first, so a calculated value written in the same
+        // pass, after a return to service, lands last.
+        for write in obj.take_owed_schedule_writes() {
             debug!(
                 schedule = %oid,
                 refs = write.references.len(),
-                "Schedule Present_Value written out of service, writing to controlled properties"
+                "Schedule owes a write outside its calculation, writing to controlled properties"
             );
             writes.push((oid, write));
         }
@@ -140,39 +147,57 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
     }
 
     for (initiator, write) in writes {
-        let origin = crate::command_source::resolve_local(
-            db_w,
-            crate::LocalCommandSource::Object(initiator),
-        )
-        .ok();
-        // Clause 12.24.4: a failed member does not stop the others.
-        for reference in write.references {
-            let target_oid = reference.object_identifier;
-            let prop_id = reference.property_identifier;
-            commit.before_change(db_w, target_oid);
-            if let Some(target_obj) = db_w.get_mut(&target_oid) {
-                let prop = PropertyIdentifier::from_raw(prop_id);
-                if let Err(e) = crate::command_source::write_target(
-                    target_obj,
-                    prop,
-                    reference.property_array_index,
-                    write.value.clone(),
-                    Some(write.priority),
-                    origin.as_ref(),
-                ) {
-                    warn!(
-                        target = %target_oid,
-                        property = prop_id,
-                        error = %e,
-                        "Schedule failed to write to controlled property"
-                    );
-                } else {
-                    commit.changed(target_oid);
-                }
-            }
-        }
+        deliver(db_w, &mut commit, initiator, &write);
     }
     commit
+}
+
+/// Write one Schedule write to each of its targets, then report how each took
+/// it to the Schedule.
+fn deliver(
+    db_w: &mut ObjectDatabase,
+    commit: &mut BackgroundCommit,
+    initiator: ObjectIdentifier,
+    write: &ScheduleWrite,
+) {
+    let origin =
+        crate::command_source::resolve_local(db_w, crate::LocalCommandSource::Object(initiator))
+            .ok();
+    // Clause 12.24.4: a failed member does not stop the others.
+    let mut outcomes = Vec::with_capacity(write.references.len());
+    for reference in &write.references {
+        let target_oid = reference.object_identifier;
+        let prop_id = reference.property_identifier;
+        commit.before_change(db_w, target_oid);
+        let Some(target_obj) = db_w.get_mut(&target_oid) else {
+            outcomes.push(ScheduleTargetOutcome::Failed);
+            continue;
+        };
+        let result = crate::command_source::write_target(
+            target_obj,
+            PropertyIdentifier::from_raw(prop_id),
+            reference.property_array_index,
+            write.value.clone(),
+            Some(write.priority),
+            origin.as_ref(),
+        );
+        match &result {
+            Ok(()) => commit.changed(target_oid),
+            Err(e) => warn!(
+                target = %target_oid,
+                property = prop_id,
+                error = %e,
+                "Schedule failed to write to controlled property"
+            ),
+        }
+        outcomes.push(ScheduleTargetOutcome::of(&result));
+    }
+    let reliability_changed = db_w
+        .get_mut(&initiator)
+        .is_some_and(|schedule| schedule.complete_schedule_write(write, &outcomes));
+    if reliability_changed {
+        commit.changed(initiator);
+    }
 }
 
 #[cfg(test)]

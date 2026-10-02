@@ -19,12 +19,12 @@ fn pics_schedule_property_metadata_is_exact() {
         (P::WEEKLY_SCHEDULE, true, true),
         (P::EXCEPTION_SCHEDULE, true, true),
         (P::EFFECTIVE_PERIOD, false, true),
-        (P::LIST_OF_OBJECT_PROPERTY_REFERENCES, false, false),
+        (P::LIST_OF_OBJECT_PROPERTY_REFERENCES, false, true),
         (P::STATUS_FLAGS, false, false),
         (P::EVENT_STATE, true, false),
         (P::RELIABILITY, false, true),
         (P::OUT_OF_SERVICE, false, true),
-        (P::PRIORITY_FOR_WRITING, false, false),
+        (P::PRIORITY_FOR_WRITING, false, true),
         (P::PROPERTY_LIST, false, false),
     ];
     // Empty, weekly-only, exception-only, and combined configurations expose

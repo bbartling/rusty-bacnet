@@ -19,18 +19,20 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::ObjectType;
 
-fn sch5() -> ObjectIdentifier {
+pub(super) fn sch5() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::SCHEDULE, 5).unwrap()
 }
 
-fn schedule(db: &mut ObjectDatabase) {
+pub(super) fn schedule(db: &mut ObjectDatabase) {
     let mut schedule = ScheduleObject::new(5, "SCH-5", PropertyValue::Real(10.0)).unwrap();
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(av1(), PV.to_raw()));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(av1(), PV.to_raw()))
+        .unwrap();
     db.add(Box::new(schedule)).unwrap();
 }
 
 /// Tuesday's daily schedule: `value` from 15:00.
-fn from_three(value: f32) -> Vec<u8> {
+pub(super) fn from_three(value: f32) -> Vec<u8> {
     [&[0x0E, 0xB4, 15, 0, 0, 0][..], &real(value), &[0x0F]].concat()
 }
 
@@ -44,7 +46,7 @@ fn every_day(value: f32) -> Vec<u8> {
     .concat()
 }
 
-async fn start() -> Harness {
+pub(super) async fn start() -> Harness {
     let mut h = Harness::start_with(ServerConfig::default(), schedule).await;
     h.subscribe_cov().await;
     // The initial report carries the default the start-up tick wrote.
@@ -55,7 +57,11 @@ async fn start() -> Harness {
     h
 }
 
-async fn read(h: &Harness, oid: ObjectIdentifier, property: PropertyIdentifier) -> PropertyValue {
+pub(super) async fn read(
+    h: &Harness,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+) -> PropertyValue {
     h.server
         .database()
         .read()
@@ -67,7 +73,7 @@ async fn read(h: &Harness, oid: ObjectIdentifier, property: PropertyIdentifier) 
 }
 
 /// AV-1's Present_Value, and the value its COV notification reports.
-async fn assert_commanded(h: &Harness, value: f32) {
+pub(super) async fn assert_commanded(h: &Harness, value: f32) {
     assert_eq!(read(h, av1(), PV).await, PropertyValue::Real(value));
     assert_eq!(read(h, sch5(), PV).await, PropertyValue::Real(value));
     let notification = h.cov_notification().await;
@@ -75,7 +81,7 @@ async fn assert_commanded(h: &Harness, value: f32) {
     assert_eq!(notification.list_of_values[0].value, real(value));
 }
 
-async fn write_property(
+pub(super) async fn write_property(
     h: &mut Harness,
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -97,7 +103,7 @@ async fn write_property(
 }
 
 /// WritePropertyMultiple of `properties` on SCH-5, in order.
-async fn write_property_multiple(
+pub(super) async fn write_property_multiple(
     h: &mut Harness,
     properties: Vec<(PropertyIdentifier, Vec<u8>)>,
 ) -> Result<(), ErrorCode> {
@@ -124,7 +130,7 @@ async fn write_property_multiple(
 }
 
 /// Wait for the SimpleACK or Error answering the last request sent.
-async fn response(h: &Harness) -> Result<(), ErrorCode> {
+pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
     let invoke_id = h.invoke_id;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

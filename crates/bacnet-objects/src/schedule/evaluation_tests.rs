@@ -408,7 +408,7 @@ fn references() -> Vec<BACnetObjectPropertyReference> {
 
 fn with_references(mut sched: ScheduleObject) -> ScheduleObject {
     for reference in references() {
-        sched.add_object_property_reference(reference);
+        sched.add_object_property_reference(reference).unwrap();
     }
     sched
 }

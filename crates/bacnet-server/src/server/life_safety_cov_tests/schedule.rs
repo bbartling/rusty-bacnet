@@ -12,10 +12,12 @@ async fn tick(db: &Arc<RwLock<ObjectDatabase>>) -> crate::committed_cov::Committ
 #[tokio::test]
 async fn live_schedule_retains_actual_life_safety_status_delta() {
     let mut schedule = ScheduleObject::new(1, "schedule", PropertyValue::Boolean(false)).unwrap();
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
-        point_oid(),
-        PropertyIdentifier::OUT_OF_SERVICE.to_raw(),
-    ));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            point_oid(),
+            PropertyIdentifier::OUT_OF_SERVICE.to_raw(),
+        ))
+        .unwrap();
     schedule
         .write_property(
             PropertyIdentifier::SCHEDULE_DEFAULT,
@@ -81,16 +83,20 @@ async fn schedule_indexed_target_and_later_unindexed_target_survive_failure() {
         ScheduleObject::new(2, "schedule", PropertyValue::CharacterString("Home".into())).unwrap();
     // An invalid index must not prevent either subsequent valid target write.
     for index in [3, 2] {
-        schedule.add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
-            target_oid,
-            PropertyIdentifier::STATE_TEXT.to_raw(),
-            index,
-        ));
+        schedule
+            .add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
+                target_oid,
+                PropertyIdentifier::STATE_TEXT.to_raw(),
+                index,
+            ))
+            .unwrap();
     }
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
-        target_oid,
-        PropertyIdentifier::DESCRIPTION.to_raw(),
-    ));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            target_oid,
+            PropertyIdentifier::DESCRIPTION.to_raw(),
+        ))
+        .unwrap();
     schedule
         .write_property(
             PropertyIdentifier::SCHEDULE_DEFAULT,
@@ -137,10 +143,12 @@ async fn schedule_unindexed_command_retains_fixed_priority_sixteen() {
     let target_oid = target.object_identifier();
     let mut schedule =
         ScheduleObject::new(3, "command schedule", PropertyValue::Unsigned(1)).unwrap();
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            target_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
     schedule
         .write_property(
             PropertyIdentifier::SCHEDULE_DEFAULT,
