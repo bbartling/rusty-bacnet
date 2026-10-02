@@ -120,7 +120,7 @@ fn assert_cases(
     assert_eq!(&prefix[..], b"prefix");
 }
 
-fn write_common(object: &mut dyn BACnetObject, configured: bool) {
+fn write_description(object: &mut dyn BACnetObject) {
     object
         .write_property(
             P::DESCRIPTION,
@@ -129,6 +129,10 @@ fn write_common(object: &mut dyn BACnetObject, configured: bool) {
             None,
         )
         .unwrap();
+}
+
+fn write_common(object: &mut dyn BACnetObject, configured: bool) {
+    write_description(object);
     object
         .write_property(
             P::OUT_OF_SERVICE,
@@ -148,6 +152,11 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
             let lift2 = ObjectIdentifier::new(ObjectType::LIFT, 2).unwrap();
             object.add_member(lift1);
             object.add_member(lift2);
+            object
+                .set_machine_room_id(
+                    ObjectIdentifier::new(ObjectType::POSITIVE_INTEGER_VALUE, 9).unwrap(),
+                )
+                .unwrap();
             object
                 .write_property(P::GROUP_ID, None, PropertyValue::Unsigned(47), None)
                 .unwrap();
@@ -178,7 +187,8 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
                 ])
                 .unwrap();
         }
-        write_common(&mut object, configured);
+        // Elevator Group has no Out_Of_Service (Table 12-76).
+        write_description(&mut object);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
@@ -193,6 +203,22 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
             EMPTY
         };
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
+            // POSITIVE_INTEGER_VALUE is object type 48 (0x0C000000); with no
+            // machine room number the instance is 4194303 (0x3FFFFF).
+            (
+                P::MACHINE_ROOM_ID,
+                None,
+                Ok(if configured {
+                    &[0xC4, 0x0C, 0x00, 0x00, 0x09]
+                } else {
+                    &[0xC4, 0x0C, 0x3F, 0xFF, 0xFF]
+                }),
+            ),
+            (
+                P::MACHINE_ROOM_ID,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (
                 P::GROUP_ID,
                 None,
@@ -254,56 +280,24 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
-            (
-                P::STATUS_FLAGS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
-            (
-                P::RELIABILITY,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x92, 0x01, 0xD1, 0x92, 0x01, 0x59, 0x92, 0x01, 0xD3, 0x92, 0x01,
-                    0xD6, 0x92, 0x01, 0xD7, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x92, 0x01, 0xDA, 0x92, 0x01, 0xD1, 0x92, 0x01, 0x59, 0x92, 0x01,
+                    0xD3, 0x92, 0x01, 0xD6, 0x92, 0x01, 0xD7,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 9])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0xD1])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x59])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0xD3])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0xD6])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0xD7])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0xDA])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0xD1])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x59])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0xD3])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0xD6])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0xD7])),
             (
                 P::PROPERTY_LIST,
-                Some(10),
+                Some(8),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -311,13 +305,16 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Unserved ElevatorGroup table rows stay unknown.
-            (P::MACHINE_ROOM_ID, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // Table 12-76 defines none of these, so the group doesn't serve
+            // them (#997).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
-                P::MACHINE_ROOM_ID,
+                P::STATUS_FLAGS,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         assert_cases(&db, oid, cases);
     }
@@ -538,7 +535,7 @@ fn rpm_lift_indexed_reads_and_bytes_are_unchanged() {
                 .write_property(
                     P::CAR_MOVING_DIRECTION,
                     None,
-                    PropertyValue::Enumerated(2),
+                    PropertyValue::Enumerated(LiftCarDirection::DOWN.to_raw()),
                     None,
                 )
                 .unwrap();
@@ -579,10 +576,11 @@ fn rpm_lift_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // A fresh lift is STOPPED (2); DOWN is 4.
             (
                 P::CAR_MOVING_DIRECTION,
                 None,
-                Ok(if configured { &[0x91, 2] } else { &[0x91, 1] }),
+                Ok(if configured { &[0x91, 4] } else { &[0x91, 2] }),
             ),
             (
                 P::CAR_MOVING_DIRECTION,

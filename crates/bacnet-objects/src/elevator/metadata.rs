@@ -17,9 +17,10 @@ use crate::property_metadata::{
 // projection helper omits it while required_properties keeps it. Lift
 // FLOOR_NUMBER (readable but unlisted, aliasing Tracking_Value) is appended
 // after the legacy rows (LoadControl EVENT_STATE precedent) so the served
-// projection gains exactly one row. Only implemented rows are described:
-// table rows the objects do not serve (ElevatorGroup Machine_Room_ID and
-// audit/tag/profile rows; Escalator Elevator_Group, Group_ID,
+// projection gains exactly one row. ElevatorGroup Machine_Room_ID follows
+// Object_Type, its Table 12-76 neighbour among the served rows (#997). Only
+// implemented rows are described: table rows the objects do not serve
+// (ElevatorGroup audit/tag/profile rows; Escalator Elevator_Group, Group_ID,
 // Installation_ID, event/intrinsic/audit/tag/profile rows; Lift
 // Elevator_Group, Group_ID, Installation_ID, Passenger_Alarm, Fault_Signals,
 // door/deck/call/event/intrinsic/audit/tag/profile rows) stay absent until
@@ -32,17 +33,16 @@ use crate::property_metadata::{
 // network write route stay RequiredRead/ReadOnly; table-R rows with a write
 // arm are RequiredRead/Always. Table-O served rows are Optional, with Always
 // exactly where dispatch accepts the write.
-// Status_Flags, Out_Of_Service, and Reliability on ElevatorGroup are served
-// through the shared common read arms but Table 12-76 carries no such rows,
-// so the NetworkPort precedent keeps them RequiredRead/ReadOnly and
-// RequiredRead/Always (Out_Of_Service has the routed Boolean arm). Lift and
+// Table 12-76 has no Status_Flags, Out_Of_Service, or Reliability row, so
+// ElevatorGroup serves none of them (#997, as #984 did for Calendar). Lift and
 // Escalator Tables 12-77/12-78 do list them (Status_Flags R, Out_Of_Service
-// R, Reliability O), which agrees with the same capabilities. Tracking_Value
-// is served with a write arm but appears in neither Table 12-77 production
-// nor the Lift property descriptions, so it stays Optional/Always rather
-// than advertising a required row the table does not define; Floor_Number
-// mirrors its Tracking_Value readback with no write arm, so
-// Optional/ReadOnly.
+// R, Reliability O): Status_Flags and Reliability are RequiredRead/ReadOnly
+// and Optional/ReadOnly, and Out_Of_Service is RequiredRead/Always through
+// its routed Boolean arm. Tracking_Value is served with a write arm but
+// appears in neither Table 12-77 production nor the Lift property
+// descriptions, so it stays Optional/Always rather than advertising a
+// required row the table does not define; Floor_Number mirrors its
+// Tracking_Value readback with no write arm, so Optional/ReadOnly.
 // Writability is Always, never WhenOutOfService: the Lift §12.59 and
 // Escalator §12.60 Out_Of_Service descriptions gate simulation writes behind
 // Out_Of_Service TRUE (items (c)-(e)), but dispatch routes every write arm
@@ -62,14 +62,12 @@ const ELEVATOR_GROUP_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::MACHINE_ROOM_ID, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::GROUP_ID, RequiredRead, None, Always),
     PropertyMetadata::new(P::GROUP_MEMBERS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::GROUP_MODE, Optional, None, Always),
     PropertyMetadata::new(P::LANDING_CALLS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::LANDING_CALL_CONTROL, Optional, None, Always),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -216,24 +214,20 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
+            P::MACHINE_ROOM_ID,
             P::GROUP_ID,
             P::GROUP_MEMBERS,
             P::GROUP_MODE,
             P::LANDING_CALLS,
             P::LANDING_CALL_CONTROL,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
+            P::MACHINE_ROOM_ID,
             P::GROUP_ID,
             P::GROUP_MEMBERS,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -351,7 +345,6 @@ mod tests {
                 || Box::new(ElevatorGroupObject::new(1, "EG-1").unwrap()),
                 &[
                     P::DESCRIPTION,
-                    P::OUT_OF_SERVICE,
                     P::GROUP_ID,
                     P::GROUP_MODE,
                     P::LANDING_CALL_CONTROL,
@@ -385,14 +378,17 @@ mod tests {
         for (make, writable) in cases {
             for out_of_service in [false, true] {
                 let mut object = make();
-                object
-                    .write_property(
-                        P::OUT_OF_SERVICE,
-                        None,
-                        PropertyValue::Boolean(out_of_service),
-                        None,
-                    )
-                    .unwrap();
+                // Elevator Group has no Out_Of_Service (Table 12-76).
+                if object.property_list().contains(&P::OUT_OF_SERVICE) {
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                }
                 let original = object.property_metadata().into_owned();
                 for row in &original {
                     let p = row.property_identifier;
@@ -436,64 +432,50 @@ mod tests {
 
     #[test]
     fn property_metadata_elevator_group_writes_store_verbatim() {
-        for out_of_service in [false, true] {
-            let mut object = ElevatorGroupObject::new(1, "EG-1").unwrap();
-            object
-                .write_property(
-                    P::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(out_of_service),
-                    None,
-                )
-                .unwrap();
-            // Routed arms store verbatim in both states.
-            for (p, value, expected) in [
-                (
-                    P::GROUP_ID,
-                    PropertyValue::Unsigned(47),
-                    PropertyValue::Unsigned(47),
-                ),
-                (
-                    P::GROUP_MODE,
-                    PropertyValue::Enumerated(2),
-                    PropertyValue::Enumerated(2),
-                ),
-                // BACnetLandingCallStatus: floor [0] 5, direction [1] UP.
-                (
-                    P::LANDING_CALL_CONTROL,
-                    PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
-                    PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
-                ),
-            ] {
-                object.write_property(p, None, value, None).unwrap();
-                assert_eq!(object.read_property(p, None).unwrap(), expected);
-            }
-            // Mistyped values are rejected without changing state.
-            for (p, value) in [
-                (P::GROUP_ID, PropertyValue::Enumerated(47)),
-                (P::GROUP_MODE, PropertyValue::Unsigned(2)),
-                (P::LANDING_CALL_CONTROL, PropertyValue::Unsigned(1)),
-                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-                (
-                    P::OUT_OF_SERVICE,
-                    PropertyValue::CharacterString("invalid".into()),
-                ),
-            ] {
-                assert_error(
-                    object.write_property(p, None, value, None).unwrap_err(),
-                    ErrorCode::INVALID_DATA_TYPE,
-                );
-            }
-            // Group_Members and Landing_Calls have no network write route:
-            // even their read-back values are denied on write.
-            for p in [P::GROUP_MEMBERS, P::LANDING_CALLS] {
-                let value = object.read_property(p, None).unwrap();
-                assert_error(
-                    object.write_property(p, None, value, None).unwrap_err(),
-                    ErrorCode::WRITE_ACCESS_DENIED,
-                );
-                assert!(!object.is_writable_property(p));
-            }
+        let mut object = ElevatorGroupObject::new(1, "EG-1").unwrap();
+        // Routed arms store verbatim.
+        for (p, value, expected) in [
+            (
+                P::GROUP_ID,
+                PropertyValue::Unsigned(47),
+                PropertyValue::Unsigned(47),
+            ),
+            (
+                P::GROUP_MODE,
+                PropertyValue::Enumerated(2),
+                PropertyValue::Enumerated(2),
+            ),
+            // BACnetLandingCallStatus: floor [0] 5, direction [1] UP.
+            (
+                P::LANDING_CALL_CONTROL,
+                PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
+                PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
+            ),
+        ] {
+            object.write_property(p, None, value, None).unwrap();
+            assert_eq!(object.read_property(p, None).unwrap(), expected);
+        }
+        // Mistyped values are rejected without changing state.
+        for (p, value) in [
+            (P::GROUP_ID, PropertyValue::Enumerated(47)),
+            (P::GROUP_MODE, PropertyValue::Unsigned(2)),
+            (P::LANDING_CALL_CONTROL, PropertyValue::Unsigned(1)),
+            (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+        ] {
+            assert_error(
+                object.write_property(p, None, value, None).unwrap_err(),
+                ErrorCode::INVALID_DATA_TYPE,
+            );
+        }
+        // Machine_Room_ID, Group_Members and Landing_Calls have no network
+        // write route: even their read-back values are denied on write.
+        for p in [P::MACHINE_ROOM_ID, P::GROUP_MEMBERS, P::LANDING_CALLS] {
+            let value = object.read_property(p, None).unwrap();
+            assert_error(
+                object.write_property(p, None, value, None).unwrap_err(),
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+            assert!(!object.is_writable_property(p));
         }
     }
 
@@ -663,12 +645,13 @@ mod tests {
                 object.read_property(P::FLOOR_NUMBER, None).unwrap(),
                 PropertyValue::Unsigned(5)
             );
-            // Car_Moving_Direction admits 0..=3 and refuses the rest.
+            // Car_Moving_Direction admits BACnetLiftCarDirection and refuses
+            // its reserved range (lift_car_moving_direction.rs covers the rest).
             object
                 .write_property(
                     P::CAR_MOVING_DIRECTION,
                     None,
-                    PropertyValue::Enumerated(2),
+                    PropertyValue::Enumerated(4),
                     None,
                 )
                 .unwrap();
@@ -677,7 +660,7 @@ mod tests {
                     .write_property(
                         P::CAR_MOVING_DIRECTION,
                         None,
-                        PropertyValue::Enumerated(4),
+                        PropertyValue::Enumerated(6),
                         None,
                     )
                     .unwrap_err(),
@@ -685,7 +668,7 @@ mod tests {
             );
             assert_eq!(
                 object.read_property(P::CAR_MOVING_DIRECTION, None).unwrap(),
-                PropertyValue::Enumerated(2)
+                PropertyValue::Enumerated(4)
             );
             // Car_Load admits 0..=100 percent and refuses the rest.
             object
@@ -761,9 +744,11 @@ mod tests {
             );
         }
 
-        // Machine_Room_ID is the Table 12-76 R row with no read arm.
+        // Table 12-76 defines no Status_Flags, Out_Of_Service or Reliability.
         let mut group = ElevatorGroupObject::new(1, "EG-1").unwrap();
-        assert_unserved(&mut group, P::MACHINE_ROOM_ID);
+        assert_unserved(&mut group, P::STATUS_FLAGS);
+        assert_unserved(&mut group, P::OUT_OF_SERVICE);
+        assert_unserved(&mut group, P::RELIABILITY);
         // Elevator_Group, Group_ID, and Installation_ID are Table 12-78 R
         // rows with no read arm on Escalator.
         let mut escalator = EscalatorObject::new(1, "ESC-1").unwrap();

@@ -11,14 +11,12 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
+            (P::MACHINE_ROOM_ID, false, false),
             (P::GROUP_ID, false, true),
             (P::GROUP_MEMBERS, false, false),
             (P::GROUP_MODE, true, true),
             (P::LANDING_CALLS, true, false),
             (P::LANDING_CALL_CONTROL, true, true),
-            (P::STATUS_FLAGS, false, false),
-            (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::ESCALATOR => vec![
@@ -97,14 +95,17 @@ fn pics_elevator_property_metadata_is_exact() {
                         )
                         .unwrap();
                 }
-                object
-                    .write_property(
-                        P::OUT_OF_SERVICE,
-                        None,
-                        PropertyValue::Boolean(out_of_service),
-                        None,
-                    )
-                    .unwrap();
+                // Elevator Group has no Out_Of_Service (Table 12-76).
+                if kind != ObjectType::ELEVATOR_GROUP {
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                }
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
