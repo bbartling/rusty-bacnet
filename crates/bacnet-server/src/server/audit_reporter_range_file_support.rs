@@ -119,6 +119,14 @@ impl BACnetObject for Probe {
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         property == PropertyIdentifier::WEEKLY_SCHEDULE
     }
+    // Present_Value is a vendor list here, so a ReadRange can reach a
+    // property outside the configuration audit level.
+    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::LOG_BUFFER | PropertyIdentifier::PRESENT_VALUE
+        )
+    }
     fn read_property(
         &self,
         property: PropertyIdentifier,

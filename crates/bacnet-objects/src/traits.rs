@@ -312,9 +312,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Whether `property` is a BACnetLIST on this object.
     ///
     /// AddListElement and RemoveListElement (Clauses 15.1 and 15.2) edit only
-    /// BACnetLIST properties. The server's handlers ask this before decoding
-    /// any element and refuse every other target, including an array element,
-    /// with SERVICES / PROPERTY_IS_NOT_A_LIST. Like
+    /// BACnetLIST properties, and ReadRange (Clause 15.8) reads only them. The
+    /// server's handlers ask this before decoding any element or selecting any
+    /// item, and refuse every other target, including an array element, with
+    /// SERVICES / PROPERTY_IS_NOT_A_LIST. Like
     /// [`Self::is_array_property`], the answer follows the property's datatype,
     /// not the shape of a value read: a whole array also reads as a list, and
     /// constructed single values often read as framed bytes.

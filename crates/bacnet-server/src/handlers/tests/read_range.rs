@@ -12,6 +12,8 @@ use bacnet_types::primitives::{Date, Time};
 
 #[path = "read_range_pages.rs"]
 mod pages;
+#[path = "read_range_targets.rs"]
+mod targets;
 #[path = "read_range_wire.rs"]
 mod wire;
 
@@ -340,9 +342,11 @@ fn by_sequence_uses_exact_wrapped_identity_without_sorting() {
 
 #[test]
 fn by_sequence_rejects_unnumbered_properties_and_misalignment() {
+    // DATE_LIST is a BACnetLIST whose items carry no sequence number, even
+    // when the object supplies identities for it.
     for (property, identities) in [
         (
-            PropertyIdentifier::PROPERTY_LIST,
+            PropertyIdentifier::DATE_LIST,
             Some(vec![identity(1, 1), identity(2, 2)]),
         ),
         (PropertyIdentifier::LOG_BUFFER, None),

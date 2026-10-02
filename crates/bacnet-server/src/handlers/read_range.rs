@@ -2,9 +2,12 @@ use std::ops::Range;
 
 use super::*;
 use bacnet_objects::log_buffer::LogRecordIdentity;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_items.rs"]
+mod items;
 #[path = "read_range_page.rs"]
 mod page;
 pub(crate) use page::ReadRangeFailure;
@@ -235,32 +238,48 @@ struct PreparedReadRange {
     identities: Option<Vec<LogRecordIdentity>>,
 }
 
-fn prepare_read_range(
-    db: &ObjectDatabase,
-    request: ReadRangeRequest,
-) -> Result<PreparedReadRange, Error> {
+/// Resolve the ReadRange target to its list items, in the order the service
+/// procedure of Clause 15.8 implies and #999 follows for the list services:
+/// the object, the property, a supplied array index, and then whether the
+/// target is a BACnetLIST at all. The last check follows the property's
+/// datatype, never the shape of the value read: a whole array also reads as
+/// a list, and a constructed single value can read as framed bytes.
+fn read_range_items<'db>(
+    db: &'db ObjectDatabase,
+    request: &ReadRangeRequest,
+) -> Result<(&'db dyn BACnetObject, Vec<PropertyValue>), Error> {
     let object = db.get(&request.object_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
-    if request.property_array_index.is_some()
-        && !object.is_array_property(request.property_identifier)
-    {
+    let property = request.property_identifier;
+    let index = request.property_array_index;
+    if index.is_some() && !object.is_array_property(property) {
+        // Read the whole property first so an unknown one keeps its error.
+        object.read_property(property, None)?;
         return Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         });
     }
-    let value = object.read_property(request.property_identifier, request.property_array_index)?;
-    let items = match value {
-        PropertyValue::List(items) => items,
-        _ => {
-            return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32,
-            });
-        }
-    };
+    let value = object.read_property(property, index)?;
+    // An indexed array element is never a list: 135-2020 defines no
+    // BACnetARRAY of BACnetLIST property.
+    if index.is_some() || !object.is_list_property(property) {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32,
+        });
+    }
+    let items = items::list_items(request.object_identifier.object_type(), property, value)?;
+    Ok((object, items))
+}
+
+fn prepare_read_range(
+    db: &ObjectDatabase,
+    request: ReadRangeRequest,
+) -> Result<PreparedReadRange, Error> {
+    let (object, items) = read_range_items(db, &request)?;
 
     let mut resident_identities = None;
     let (selection, first_sequence_number) = match &request.range {

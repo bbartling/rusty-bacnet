@@ -8,7 +8,25 @@ from pathlib import Path
 from typing import Any
 
 import rusty_bacnet
-from rusty_bacnet import BACnetServer
+from rusty_bacnet import BACnetClient, BACnetServer, ObjectIdentifier, ObjectType, PropertyIdentifier
+
+CALENDAR = ObjectIdentifier(ObjectType.CALENDAR, 1)
+# ReadRange of Calendar:1 Date_List, a BACnetLIST (ReadRange refuses arrays
+# such as Object_List): context object identifier [0], property identifier [1].
+REQUEST = b"\x0c\x01\x80\x00\x01\x19\x17"
+
+
+def date_entries(count):
+    """Distinct date [0] calendar entries, five octets each like an object identifier."""
+    return [bytes([0x0C, 126, 1 + i // 28, 1 + i % 28, 0xFF]) for i in range(count)]
+
+
+async def fill_date_list(server, entries):
+    address = await server.local_address()
+    async with BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000) as client:
+        for start in range(0, len(entries), 64):
+            await client.add_list_element(address, CALENDAR, PropertyIdentifier.DATE_LIST,
+                                          b"".join(entries[start:start + 64]))
 
 
 class ReadRangeConstructorTests(unittest.TestCase):
@@ -54,9 +72,8 @@ class ReadRangeNativeTests(unittest.IsolatedAsyncioTestCase):
         return apdu
 
     async def test_directional_pages_bytes_peer_limits_and_abort_wire(self):
-        # Device:123 Object_List contains device then six registered AI objects.
-        request = b"\x0c\x02\x00\x00\x7b\x19\x4c"
-        objects = [b"\xc4\x02\x00\x00\x7b"] + [b"\xc4" + i.to_bytes(4, "big") for i in range(1, 7)]
+        request = REQUEST
+        entries = date_entries(7)
         for policy, capacity in [({}, 7), ({"read_range_max_returned_items": 1}, 1),
                                  ({"read_range_max_returned_items": 2}, 2),
                                  ({"read_range_max_service_ack_bytes": 24}, 2),
@@ -65,13 +82,13 @@ class ReadRangeNativeTests(unittest.IsolatedAsyncioTestCase):
                                  ({"read_range_max_service_ack_bytes": 13}, 0)]:
             server = BACnetServer(123, interface="127.0.0.1", port=0,
                                   broadcast_address="127.0.0.1", **policy)
-            for i in range(1, 7):
-                server.add_analog_input(i, f"AI-{i}")
+            server.add_calendar(1, "CAL-1")
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(("127.0.0.1", 0))
             sock.setblocking(False)
             try:
                 await server.start()
+                await fill_date_list(server, entries)
                 for routed in [False, True]:
                     for segmented in [False, True]:
                         for peer in [0, 3]:
@@ -88,7 +105,7 @@ class ReadRangeNativeTests(unittest.IsolatedAsyncioTestCase):
                                     if n == 0:
                                         self.assertEqual(apdu, bytes([0x71, invoke, 1]))
                                     else:
-                                        chosen = objects[-n:] if direction < 0 else objects[:n]
+                                        chosen = entries[-n:] if direction < 0 else entries[:n]
                                         flags = (0x40 if direction < 0 else 0x80) | 0x20 if n < 7 else 0xc0
                                         ack = request + bytes([0x3a, 5, flags, 0x49, n, 0x5e]) + b"".join(chosen) + b"\x5f"
                                         self.assertEqual(apdu, bytes([0x30, invoke, 26]) + ack)
@@ -104,30 +121,30 @@ class ReadRangeNativeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_257_and_forward_backward_continuation(self):
         server = BACnetServer(123, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1")
-        for i in range(1, 257):
-            server.add_analog_input(i, f"AI-{i}")
-        objects = [b"\xc4\x02\x00\x00\x7b"] + [b"\xc4" + i.to_bytes(4, "big") for i in range(1, 257)]
-        request = b"\x0c\x02\x00\x00\x7b\x19\x4c"
+        server.add_calendar(1, "CAL-1")
+        entries = date_entries(257)
+        request = REQUEST
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("127.0.0.1", 0))
         sock.setblocking(False)
         try:
             await server.start()
+            await fill_date_list(server, entries)
             for backwards in [False, True]:
                 reference = 257 if backwards else 1
                 count = -257 if backwards else 257
                 service = request + b"\x3e\x22" + reference.to_bytes(2, "big") + b"\x32" + count.to_bytes(2, "big", signed=True) + b"\x3f"
                 apdu = await self.exchange(server, sock, service, True, True, 5, 77)
                 flags = 0x60 if backwards else 0xa0
-                chosen = objects[1:] if backwards else objects[:256]
+                chosen = entries[1:] if backwards else entries[:256]
                 self.assertEqual(apdu, b"\x30\x4d\x1a" + request + bytes([0x3a, 5, flags, 0x4a, 1, 0, 0x5e]) + b"".join(chosen) + b"\x5f")
                 reference = 1 if backwards else 257
                 service = request + b"\x3e\x22" + reference.to_bytes(2, "big") + bytes([0x31, 255 if backwards else 1, 0x3f])
                 final = await self.exchange(server, sock, service, True, True, 5, 78)
                 flags = 0x80 if backwards else 0x40
-                last = objects[0] if backwards else objects[-1]
+                last = entries[0] if backwards else entries[-1]
                 self.assertEqual(final, b"\x30\x4e\x1a" + request + bytes([0x3a, 5, flags, 0x49, 1, 0x5e]) + last + b"\x5f")
-                self.assertEqual((last + b"".join(chosen)) if backwards else (b"".join(chosen) + last), b"".join(objects))
+                self.assertEqual((last + b"".join(chosen)) if backwards else (b"".join(chosen) + last), b"".join(entries))
         finally:
             await server.stop()
             sock.close()

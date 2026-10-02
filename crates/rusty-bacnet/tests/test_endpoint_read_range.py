@@ -18,6 +18,7 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
         target.add_analog_input(1, "AI-1")
         target.add_analog_input(2, "AI-2")
         target.add_trend_log(1, "Empty log")
+        target.add_calendar(1, "CAL-1")
         endpoint = BipEndpoint(device_instance=9124, interface="127.0.0.1", port=0)
         await target.start()
         await endpoint.start()
@@ -25,9 +26,13 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
             role = await endpoint.client()
             self.assertEqual(role.service_scope(), {"initiates": ["read_property", "read_range", "read_property_multiple", "write_property"], "executes": []})
             address = await target.local_address()
-            oid = ObjectIdentifier(ObjectType.DEVICE, 9123)
-            pid = PropertyIdentifier.OBJECT_LIST
+            # ReadRange reads a BACnetLIST, not an array such as Object_List:
+            # four date [0] entries in Calendar 1's Date_List.
+            oid = ObjectIdentifier(ObjectType.CALENDAR, 1)
+            pid = PropertyIdentifier.DATE_LIST
+            entries = b"".join(bytes([0x0C, 126, 9, day, 0xFF]) for day in range(1, 5))
             async with BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=1000) as client:
+                await client.add_list_element(address, oid, pid, entries)
                 for options, count in (({}, 4), ({"range_type": "position", "reference_index": 1, "count": 2}, 2),
                                        ({"range_type": "position", "reference_index": 0, "count": 2}, 0)):
                     async with asyncio.timeout(5):
@@ -41,7 +46,7 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(all(type(flag) is bool for flag in actual["result_flags"]))
                     self.assertIsNone(actual["first_sequence_number"])
                     if count == 4:
-                        self.assertEqual(actual["item_data"], b"\xc4\x02\x00\x23\xa3\xc4\x00\x00\x00\x01\xc4\x00\x00\x00\x02\xc4\x05\x00\x00\x01")
+                        self.assertEqual(actual["item_data"], entries)
                 log = ObjectIdentifier(ObjectType.TREND_LOG, 1)
                 for reader in (role, client):
                     result = await reader.read_range(address, log, PropertyIdentifier.LOG_BUFFER,
