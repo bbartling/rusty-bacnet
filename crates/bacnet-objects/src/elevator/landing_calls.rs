@@ -73,11 +73,8 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<BACnetLandingCallStat
 /// the proprietary range 1024..=65535 (Clause 23.1). 6..=1023 is reserved.
 pub(super) fn validate(status: &BACnetLandingCallStatus) -> Result<(), Error> {
     if let LandingCallCommand::Direction(direction) = status.command {
-        let raw = direction.to_raw();
-        let named = LiftCarDirection::ALL_NAMED
-            .iter()
-            .any(|&(_, value)| value == direction);
-        if !(named || (1024..=65535).contains(&raw)) {
+        if !super::named_or_proprietary(LiftCarDirection::ALL_NAMED, direction, direction.to_raw())
+        {
             return Err(common::value_out_of_range_error());
         }
     }

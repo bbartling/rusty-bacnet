@@ -427,7 +427,7 @@ impl<W: WebSocketPort> DirectShared<W> {
         self.cache.lock().await.insert(vmac, uris, now);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sc-tls"))]
     fn pooled_get(&self, vmac: &Vmac, now: Instant) -> Option<PooledDirect> {
         self.pool.lock().unwrap().get(vmac, now)
     }

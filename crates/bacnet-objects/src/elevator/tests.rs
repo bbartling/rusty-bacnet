@@ -2,7 +2,9 @@ use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
 
 mod escalator_status_writability;
+mod group_properties;
 mod landing_calls;
+mod lift_car_moving_direction;
 
 /// Escalator write-domain tests run with Out_Of_Service enabled so they do not
 /// set policy for writes while the object is in service.
@@ -144,7 +146,11 @@ fn elevator_group_property_list() {
     assert!(list.contains(&PropertyIdentifier::GROUP_MODE));
     assert!(list.contains(&PropertyIdentifier::LANDING_CALLS));
     assert!(list.contains(&PropertyIdentifier::LANDING_CALL_CONTROL));
-    assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
+    assert!(list.contains(&PropertyIdentifier::MACHINE_ROOM_ID));
+    // Table 12-76 defines none of these (#997).
+    assert!(!list.contains(&PropertyIdentifier::STATUS_FLAGS));
+    assert!(!list.contains(&PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(!list.contains(&PropertyIdentifier::RELIABILITY));
 }
 
 // --- EscalatorObject ---
@@ -515,7 +521,7 @@ fn lift_create_and_read_defaults() {
     assert_eq!(
         lift.read_property(PropertyIdentifier::CAR_MOVING_DIRECTION, None)
             .unwrap(),
-        PropertyValue::Enumerated(1) // stopped
+        PropertyValue::Enumerated(2) // STOPPED
     );
 }
 

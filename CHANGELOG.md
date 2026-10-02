@@ -405,6 +405,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direction; `landing_calls()` and `landing_call_control()` read them back. A
   Landing_Call_Control write doesn't add to the list.
 
+- **Breaking Elevator Group property set (wire):** the Elevator Group object
+  now serves the properties its table defines (Clause 12.58, Table 12-76)
+  (#997). It no longer serves Status_Flags, Out_Of_Service or Reliability,
+  which the table doesn't list, so a client that read them from an Elevator
+  Group now gets an error. They are gone from its Property_List, its property
+  metadata, RPM ALL, and its PICS rows, and ReadProperty or WriteProperty on
+  any of them fails with PROPERTY / UNKNOWN_PROPERTY. It gains the required
+  Machine_Room_ID, a BACnetObjectIdentifier naming the Positive Integer Value
+  object that holds the number of the group's machine room. It names instance
+  4194303 of that type, the value for a room with no number, until the
+  application calls the new `ElevatorGroupObject::set_machine_room_id`, which
+  refuses any other object type; `machine_room_id()` reads it back. It is
+  read-only over the network, so a WriteProperty fails with
+  WRITE_ACCESS_DENIED. Group_ID, an Unsigned8, now refuses a write above 255
+  with VALUE_OUT_OF_RANGE and keeps its value; before, it stored any Unsigned.
+
+- The Lift object's Car_Moving_Direction now accepts every
+  BACnetLiftCarDirection value (#998). Its write check admitted only 0 to 3,
+  numbered as if 1 were STOPPED and 3 DOWN, so it refused DOWN (4),
+  UP_AND_DOWN (5) and the proprietary values 1024 to 65535 that Clause 23.1
+  allows for this enumeration. It now accepts the six named values and that range, and still
+  refuses the reserved values 6 to 1023 and anything above 65535 with
+  VALUE_OUT_OF_RANGE, leaving the stored value unchanged. A new Lift now reads
+  STOPPED (2), as intended, instead of NONE (1). The value is stored as
+  `LiftCarDirection`, as #932 did for the other enumerated fields.
+
 - In a timestamped COV-multiple report, a field subscribed with timestamps no
   longer goes out without a Time_Of_Change (#987). Before, when its own selector
   had not changed in that round and an untimestamped sibling reference carried

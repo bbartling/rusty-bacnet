@@ -191,7 +191,7 @@ fn empty_npdu_direct_connection_is_pure_in_all_states_and_codec_stays_permissive
 async fn empty_npdu_silent_and_other_empty_functions_never_consult_expired_budget() {
     use super::rejection::{reject, RejectionBudget};
     let (client, hub) = LoopbackWebSocket::pair();
-    let budget = RejectionBudget::new(Instant::now() - Duration::from_secs(1), 1);
+    let budget = RejectionBudget::new(tokio::time::Instant::now() - Duration::from_secs(1), 1);
     for destination in [Some(BROADCAST_VMAC), Some([1; 6]), Some([0x44; 6])] {
         let raw = routed(Some([0x22; 6]), destination, 0, &[]);
         assert_eq!(

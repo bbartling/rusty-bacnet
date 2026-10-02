@@ -3,7 +3,9 @@
 
 use std::future::{poll_fn, Future};
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use bacnet_types::error::Error;
 
@@ -13,6 +15,8 @@ use crate::sc_frame::{first_must_understand_destination_option_marker, ScMessage
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RejectionExpired;
 
+/// Heartbeat budget left for a rejection NAK send. `last_activity` is on
+/// tokio's clock, like the receive loop's heartbeat bookkeeping it comes from.
 #[derive(Clone, Copy)]
 pub(super) struct RejectionBudget {
     last_activity: Instant,

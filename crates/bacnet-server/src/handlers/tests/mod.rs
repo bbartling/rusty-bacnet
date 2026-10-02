@@ -53,6 +53,7 @@ mod detection_enable_summary;
 mod device_description_writes;
 mod device_event;
 mod elevator_landing_calls;
+mod elevator_properties;
 mod enrollment_summary_budget;
 mod enrollment_summary_filters;
 mod enrollment_summary_recipients;

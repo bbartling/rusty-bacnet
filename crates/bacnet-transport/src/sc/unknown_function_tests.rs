@@ -122,7 +122,7 @@ async fn unknown_function_silence_and_known_codes_never_consult_expired_budget()
             panic!("unexpected receive")
         }
     }
-    let expired = RejectionBudget::new(Instant::now() - Duration::from_secs(1), 1);
+    let expired = RejectionBudget::new(tokio::time::Instant::now() - Duration::from_secs(1), 1);
     for raw in [0x0D, 0x42, 0xFF] {
         for source in [None, Some([0x22; 6]), Some([0; 6]), Some(BROADCAST_VMAC)] {
             for dest in [

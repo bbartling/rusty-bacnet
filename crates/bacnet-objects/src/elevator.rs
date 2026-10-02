@@ -6,8 +6,8 @@
 
 use bacnet_types::constructed::BACnetLandingCallStatus;
 use bacnet_types::enums::{
-    EscalatorFault, EscalatorMode, EscalatorOperationDirection, LiftGroupMode, ObjectType,
-    PropertyIdentifier, Reliability,
+    EscalatorFault, EscalatorMode, EscalatorOperationDirection, LiftCarDirection, LiftGroupMode,
+    ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -19,17 +19,33 @@ use crate::traits::BACnetObject;
 mod landing_calls;
 mod metadata;
 
+/// Whether `raw` is in the domain of one of this family's extensible Clause 21
+/// enumerations: one of its named values (`named` is its `ALL_NAMED` table,
+/// `value` is `raw` as that type), or the proprietary range 1024..=65535 that
+/// Clause 23.1 (Table 23-1) opens for each of them. Every other value is
+/// reserved or too large, and a write of it is refused with
+/// VALUE_OUT_OF_RANGE.
+fn named_or_proprietary<T: Copy + PartialEq>(named: &[(&str, T)], value: T, raw: u32) -> bool {
+    named.iter().any(|&(_, named)| named == value) || (1024..=65_535).contains(&raw)
+}
+
 // ===========================================================================
 // ElevatorGroupObject (type 57)
 // ===========================================================================
 
 /// BACnet Elevator Group object — manages a group of lifts.
+///
+/// The object serves only properties its table (Clause 12.58, Table 12-76)
+/// defines. That table has no Status_Flags, Out_Of_Service or Reliability, so
+/// reads and writes of those return UNKNOWN_PROPERTY.
 pub struct ElevatorGroupObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Group identifier (Unsigned).
-    group_id: u64,
+    /// The Positive Integer Value object holding the machine room's number.
+    machine_room_id: ObjectIdentifier,
+    /// Group identifier (Unsigned8).
+    group_id: u8,
     /// List of lift ObjectIdentifiers in this group.
     group_members: Vec<ObjectIdentifier>,
     /// Group mode.
@@ -38,9 +54,6 @@ pub struct ElevatorGroupObject {
     landing_calls: Vec<BACnetLandingCallStatus>,
     /// The last call written to Landing_Call_Control.
     landing_call_control: BACnetLandingCallStatus,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: Reliability,
 }
 
 impl ElevatorGroupObject {
@@ -51,15 +64,37 @@ impl ElevatorGroupObject {
             oid,
             name: name.into(),
             description: String::new(),
+            machine_room_id: ObjectIdentifier::new(
+                ObjectType::POSITIVE_INTEGER_VALUE,
+                ObjectIdentifier::MAX_INSTANCE,
+            )?,
             group_id: 0,
             group_members: Vec::new(),
             group_mode: LiftGroupMode::UNKNOWN,
             landing_calls: Vec::new(),
             landing_call_control: landing_calls::initial_landing_call_control(),
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED,
         })
+    }
+
+    /// The Positive Integer Value object served as Machine_Room_ID. Until the
+    /// application sets one it names instance 4194303, which Clause 12.58
+    /// uses when the machine room has no identification number.
+    pub fn machine_room_id(&self) -> ObjectIdentifier {
+        self.machine_room_id
+    }
+
+    /// Set the Positive Integer Value object whose Present_Value holds the
+    /// number of the machine room this group is in (Clause 12.58).
+    ///
+    /// Machine_Room_ID is read-only over the network, so this is the only way
+    /// to change it. A reference to any other object type is refused with
+    /// VALUE_OUT_OF_RANGE and the property is left unchanged.
+    pub fn set_machine_room_id(&mut self, oid: ObjectIdentifier) -> Result<(), Error> {
+        if oid.object_type() != ObjectType::POSITIVE_INTEGER_VALUE {
+            return Err(common::value_out_of_range_error());
+        }
+        self.machine_room_id = oid;
+        Ok(())
     }
 
     /// Add a lift member to this elevator group.
@@ -104,14 +139,30 @@ impl BACnetObject for ElevatorGroupObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
+        // No read_common_properties!: it would serve Status_Flags,
+        // Out_Of_Service and Reliability, which Table 12-76 doesn't define.
         match property {
+            p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
+                Ok(PropertyValue::ObjectIdentifier(self.oid))
+            }
+            p if p == PropertyIdentifier::OBJECT_NAME => {
+                Ok(PropertyValue::CharacterString(self.name.clone()))
+            }
+            p if p == PropertyIdentifier::DESCRIPTION => {
+                Ok(PropertyValue::CharacterString(self.description.clone()))
+            }
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::ELEVATOR_GROUP.to_raw(),
             )),
-            p if p == PropertyIdentifier::GROUP_ID => Ok(PropertyValue::Unsigned(self.group_id)),
+            p if p == PropertyIdentifier::PROPERTY_LIST => {
+                common::read_property_list_property(&self.property_list(), array_index)
+            }
+            p if p == PropertyIdentifier::MACHINE_ROOM_ID => {
+                Ok(PropertyValue::ObjectIdentifier(self.machine_room_id))
+            }
+            p if p == PropertyIdentifier::GROUP_ID => {
+                Ok(PropertyValue::Unsigned(u64::from(self.group_id)))
+            }
             p if p == PropertyIdentifier::GROUP_MEMBERS => {
                 let items: Vec<PropertyValue> = self
                     .group_members
@@ -143,18 +194,15 @@ impl BACnetObject for ElevatorGroupObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
             p if p == PropertyIdentifier::GROUP_ID => {
                 if let PropertyValue::Unsigned(v) = value {
-                    self.group_id = v;
+                    // Group_ID is an Unsigned8 (Table 12-76).
+                    self.group_id =
+                        u8::try_from(v).map_err(|_| common::value_out_of_range_error())?;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -316,13 +364,11 @@ impl BACnetObject for EscalatorObject {
             }
             p if p == PropertyIdentifier::ESCALATOR_MODE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    let named = EscalatorMode::ALL_NAMED
-                        .iter()
-                        .any(|&(_, value)| value.to_raw() == v);
-                    if !(named || (1024..=65535).contains(&v)) {
+                    let mode = EscalatorMode::from_raw(v);
+                    if !named_or_proprietary(EscalatorMode::ALL_NAMED, mode, v) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.escalator_mode = EscalatorMode::from_raw(v);
+                    self.escalator_mode = mode;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -330,19 +376,13 @@ impl BACnetObject for EscalatorObject {
             }
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
                 if let PropertyValue::Enumerated(v) = value {
-                    // Accept the six named values of the Clause 21
-                    // BACnetEscalatorOperationDirection production plus
-                    // proprietary extensions (Clause 23.1: 1024..=65535);
-                    // 6..=1023 is reserved and undefined in the 2020
-                    // production. Validate before mutating so a refused
-                    // write leaves the prior value intact.
-                    let named = EscalatorOperationDirection::ALL_NAMED
-                        .iter()
-                        .any(|&(_, value)| value.to_raw() == v);
-                    if !(named || (1024..=65535).contains(&v)) {
+                    // Validate before mutating so a refused write leaves the
+                    // prior value intact.
+                    let direction = EscalatorOperationDirection::from_raw(v);
+                    if !named_or_proprietary(EscalatorOperationDirection::ALL_NAMED, direction, v) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.operation_direction = EscalatorOperationDirection::from_raw(v);
+                    self.operation_direction = direction;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -371,13 +411,10 @@ impl BACnetObject for EscalatorObject {
                     let PropertyValue::Enumerated(raw) = value else {
                         return Err(common::invalid_data_type_error());
                     };
-                    let named = EscalatorFault::ALL_NAMED
-                        .iter()
-                        .any(|&(_, value)| value.to_raw() == raw);
-                    if !(named || (1024..=65535).contains(&raw)) {
+                    let fault = EscalatorFault::from_raw(raw);
+                    if !named_or_proprietary(EscalatorFault::ALL_NAMED, fault, raw) {
                         return Err(common::value_out_of_range_error());
                     }
-                    let fault = EscalatorFault::from_raw(raw);
                     if !seen.insert(fault) {
                         return Err(common::value_out_of_range_error());
                     }
@@ -424,8 +461,9 @@ pub struct LiftObject {
     tracking_value: u64,
     /// Car position (Unsigned).
     car_position: u64,
-    /// Car moving direction (Enumerated: 0=unknown, 1=stopped, 2=up, 3=down).
-    car_moving_direction: u32,
+    /// Car moving direction (BACnetLiftCarDirection, Clause 21); proprietary
+    /// extensions (Clause 23.1) are preserved as raw values.
+    car_moving_direction: LiftCarDirection,
     /// Car door status (List of Unsigned).
     car_door_status: Vec<u64>,
     /// Car load as a percentage (Unsigned).
@@ -454,7 +492,7 @@ impl LiftObject {
             description: String::new(),
             tracking_value: 1,
             car_position: 1,
-            car_moving_direction: 1, // stopped
+            car_moving_direction: LiftCarDirection::STOPPED,
             car_door_status: Vec::new(),
             car_load: 0,
             landing_doors: num_floors as u64,
@@ -494,9 +532,9 @@ impl BACnetObject for LiftObject {
             p if p == PropertyIdentifier::CAR_POSITION => {
                 Ok(PropertyValue::Unsigned(self.car_position))
             }
-            p if p == PropertyIdentifier::CAR_MOVING_DIRECTION => {
-                Ok(PropertyValue::Enumerated(self.car_moving_direction))
-            }
+            p if p == PropertyIdentifier::CAR_MOVING_DIRECTION => Ok(PropertyValue::Enumerated(
+                self.car_moving_direction.to_raw(),
+            )),
             p if p == PropertyIdentifier::CAR_DOOR_STATUS => {
                 let items: Vec<PropertyValue> = self
                     .car_door_status
@@ -561,10 +599,11 @@ impl BACnetObject for LiftObject {
             }
             p if p == PropertyIdentifier::CAR_MOVING_DIRECTION => {
                 if let PropertyValue::Enumerated(v) = value {
-                    if v > 3 {
+                    let direction = LiftCarDirection::from_raw(v);
+                    if !named_or_proprietary(LiftCarDirection::ALL_NAMED, direction, v) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.car_moving_direction = v;
+                    self.car_moving_direction = direction;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())

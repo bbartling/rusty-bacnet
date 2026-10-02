@@ -859,7 +859,70 @@
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #980"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#980). Breaking pre-1.0 retype, on the wire and in the Rust API: Landing_Call_Control was a raw Enumerated and Landing_Calls an Unsigned count, and the unused public BACnetAssignedLandingCalls is removed. Local policies: before any write Landing_Call_Control reads a placeholder of floor 0 with direction UNKNOWN, because the datatype has no empty form; the application owns Landing_Calls through set_landing_calls, and a Landing_Call_Control write doesn't add to it, since only the supervisory controller knows when a call becomes active or is served; following the Clause 15.9.1.3 error table, a well-formed member that exceeds its type (floor-number or destination above 255, a direction of 2^32 or more) is VALUE_OUT_OF_RANGE, like a direction above 65535, while a malformed member anywhere in the value takes precedence as INVALID_DATA_ENCODING; the codec reports the former as a local Error::OutOfRange (not a Protocol error, which would read as a remote Error-PDU) and the object maps it to PROPERTY / VALUE_OUT_OF_RANGE. The object accepts the write either as one ApplicationData or as the service decoder's one-element-per-member List, as the Loop reference properties do. Not covered here: the object's other Table 12-76 gaps (Machine_Room_ID is absent, Group_ID isn't range-checked to Unsigned8, and Status_Flags, Out_Of_Service and Reliability are served though the table lists none of them), the footnote that limits Group_Mode and both landing-call properties to groups of lifts, and any dispatching behavior."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#980). Breaking pre-1.0 retype, on the wire and in the Rust API: Landing_Call_Control was a raw Enumerated and Landing_Calls an Unsigned count, and the unused public BACnetAssignedLandingCalls is removed. Local policies: before any write Landing_Call_Control reads a placeholder of floor 0 with direction UNKNOWN, because the datatype has no empty form; the application owns Landing_Calls through set_landing_calls, and a Landing_Call_Control write doesn't add to it, since only the supervisory controller knows when a call becomes active or is served; following the Clause 15.9.1.3 error table, a well-formed member that exceeds its type (floor-number or destination above 255, a direction of 2^32 or more) is VALUE_OUT_OF_RANGE, like a direction above 65535, while a malformed member anywhere in the value takes precedence as INVALID_DATA_ENCODING; the codec reports the former as a local Error::OutOfRange (not a Protocol error, which would read as a remote Error-PDU) and the object maps it to PROPERTY / VALUE_OUT_OF_RANGE. The object accepts the write either as one ApplicationData or as the service decoder's one-element-per-member List, as the Loop reference properties do. Not covered here: the object's property set, which BACNET-12-ELEVATOR-GROUP-PROPERTY-SET covers (#997: Machine_Room_ID added, Group_ID held to Unsigned8, and Status_Flags, Out_Of_Service and Reliability removed), the footnote that limits Group_Mode and both landing-call properties to groups of lifts, and any dispatching behavior."
+  },
+  {
+   "id": "BACNET-12-ELEVATOR-GROUP-PROPERTY-SET",
+   "standard_anchor": "Clause 12.58 and Table 12-76; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "The Elevator Group serves the rows Table 12-76 defines. Machine_Room_ID is a required BACnetObjectIdentifier naming the Positive Integer Value object that holds the number of the group's machine room, or instance 4194303 when the room has no number; it is readable, and a network write is refused with PROPERTY / WRITE_ACCESS_DENIED. Group_ID is a required Unsigned8, and a write above 255 is refused with PROPERTY / VALUE_OUT_OF_RANGE without changing the stored value. Status_Flags, Out_Of_Service and Reliability are not Table 12-76 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on any of them fail with PROPERTY / UNKNOWN_PROPERTY.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/elevator.rs::ElevatorGroupObject",
+    "crates/bacnet-objects/src/elevator/metadata.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_machine_room_id_starts_as_the_no_number_reference",
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_group_id_accepts_the_unsigned8_range",
+    "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_group_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_trio_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_elevator_group_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/elevator.rs::rpm_elevator_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/elevator.rs::pics_elevator_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_has_no_status_flags_out_of_service_or_reliability",
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_machine_room_id_is_read_only_over_the_network",
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_set_machine_room_id_takes_only_positive_integer_values",
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_group_id_refuses_values_above_255_atomically",
+    "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_trio_unserved_rows_stay_unknown",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_elevator_group_properties_outside_table_12_76_are_unknown",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_elevator_group_machine_room_id_reads_but_refuses_writes",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_elevator_group_group_id_holds_to_unsigned8"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #997"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#997). Breaking pre-1.0 removal: Elevator Group used to serve Status_Flags, Out_Of_Service and Reliability through the shared common read arms, all three listed as required, with a routed Out_Of_Service write; now they are unknown properties. The object has no COV support, event state or intrinsic reporting, and the server's COV flag capture, event-notification payloads, GetAlarmSummary, GetEventInformation and GetEnrollmentSummary already treat an object without these properties as absent, so none needs an Elevator Group case. Local policies: the application sets Machine_Room_ID through set_machine_room_id, which refuses a reference to any object type other than Positive Integer Value with VALUE_OUT_OF_RANGE, as set_landing_calls does for a reserved direction; Group_ID stays network-writable, since an R row leaves writability to the implementation, and is stored as a u8, so neither the constructor (which starts it at 0) nor any local path can hold a larger value. This row covers the served property set only. It makes no claim that the Machine_Room_ID object exists in the device, nor for the footnote that limits Group_Mode and both landing-call properties to groups of lifts, the audit, tag and profile rows, or any dispatching behavior."
+  },
+  {
+   "id": "BACNET-12-LIFT-CAR-MOVING-DIRECTION",
+   "standard_anchor": "Clause 12.59 and Table 12-77; Clause 21 BACnetLiftCarDirection; Clause 23.1 Table 23-1; Clause 15.9.1.3",
+   "priority": "P1",
+   "requirement_summary": "The Lift object's Car_Moving_Direction is a BACnetLiftCarDirection. Its named values UNKNOWN (0), NONE (1), STOPPED (2), UP (3), DOWN (4) and UP_AND_DOWN (5), and the proprietary range 1024..=65535 that Table 23-1 opens for this enumeration, are accepted on write and read back unchanged. A reserved value (6..=1023) or one above 65535 is refused with PROPERTY / VALUE_OUT_OF_RANGE, and a value that isn't Enumerated with PROPERTY / INVALID_DATA_TYPE, both without changing the stored value. A new Lift reads STOPPED.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/elevator.rs::LiftObject"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_is_typed_and_starts_stopped",
+    "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_accepts_every_named_value",
+    "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_keeps_proprietary_values",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_car_moving_direction_accepts_the_bacnet_lift_car_direction_domain",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_lift_indexed_reads_and_bytes_are_unchanged"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_refuses_reserved_values_atomically",
+    "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_refuses_values_above_65535_atomically",
+    "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_refuses_wrong_datatypes_atomically",
+    "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_lift_writes_store_verbatim_with_range_gates"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #998"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#998). The write check used to admit only 0..=3, numbered as if 1 were STOPPED and 3 DOWN, so DOWN, UP_AND_DOWN and every proprietary value were refused, and a new Lift read NONE (1) where STOPPED was meant. The value is now stored as the LiftCarDirection newtype, as #932 did for the other enumerated fields, and the domain check is the one the Escalator enumerations and the landing-call direction share. The Car_Moving_Direction description lists UNKNOWN, STOPPED, UP and DOWN as the values the property takes; the write check follows the datatype and also accepts NONE and UP_AND_DOWN, leaving that choice to the application. Car_Moving_Direction stays writable in service and out of service, as before. Not covered here: the Lift object's other Table 12-77 gaps (Car_Position and Car_Load datatypes, the absent required rows such as Elevator_Group, Group_ID, Installation_ID, Passenger_Alarm and Fault_Signals), Car_Assigned_Direction, and intrinsic reporting."
   },
   {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",
@@ -1191,7 +1254,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write (allowing a client-supplied replacement Reliability value while Out_Of_Service is TRUE) so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, elevator/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate. #978: Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags instead of returning flags fixed at construction. Loop and Schedule derive FAULT from an evaluated or simulated Reliability, OUT_OF_SERVICE from Out_Of_Service and IN_ALARM from their fixed NORMAL Event_State, and a Loop COV subscriber is notified when either write changes Status_Flags. Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's non-standard compatibility Out_Of_Service never reaches its flags. #978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET)."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write (allowing a client-supplied replacement Reliability value while Out_Of_Service is TRUE) so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, Escalator/Lift/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate. #978: Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags instead of returning flags fixed at construction. Loop and Schedule derive FAULT from an evaluated or simulated Reliability, OUT_OF_SERVICE from Out_Of_Service and IN_ALARM from their fixed NORMAL Event_State, and a Loop COV subscriber is notified when either write changes Status_Flags. Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's non-standard compatibility Out_Of_Service never reaches its flags. #978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET). #997 likewise removed Status_Flags, Out_Of_Service and Reliability from Elevator Group, whose Table 12-76 has none of them (see BACNET-12-ELEVATOR-GROUP-PROPERTY-SET)."
   },
   {
    "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",

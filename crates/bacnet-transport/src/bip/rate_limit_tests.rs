@@ -39,12 +39,21 @@ async fn send_raw(
     }
 }
 
+/// Pin the limiter's window clock for a quota-exhaustion test. These tests
+/// fill the quota and then wait out silence in real time, so a stalled runner
+/// could otherwise start a new window before the over-limit request (#1017).
+fn freeze_window(limiter: &std::sync::Mutex<ManagementRateLimiter>) {
+    limiter.lock().unwrap().freeze_clock(Instant::now());
+}
+
 fn test_ctx(
     socket: Arc<super::BipSocket>,
     bbmd: Option<BbmdState>,
     npdu_tx: mpsc::Sender<ReceivedNpdu>,
 ) -> RecvContext {
     let local_port = socket.local_addr().unwrap().port();
+    let management_limiter = Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new()));
+    freeze_window(&management_limiter);
     RecvContext {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket,
@@ -53,7 +62,7 @@ fn test_ctx(
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        management_limiter,
         fanout: None,
         force_dbtn_forward_failure: false,
     }
@@ -180,6 +189,7 @@ async fn rate_limit_silences_17th_register_from_same_ip() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    freeze_window(&bbmd_transport.management_limiter);
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
     let dest = SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port);
@@ -216,6 +226,7 @@ async fn rate_limit_source_quota_ignores_udp_port() {
         ..Default::default()
     });
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    freeze_window(&bbmd_transport.management_limiter);
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
     let dest = SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port);
@@ -256,6 +267,7 @@ async fn rate_limit_source_quota_ignores_udp_port() {
 async fn rate_limit_bounds_non_bbmd_naks() {
     let mut server = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _rx = server.start().await.unwrap();
+    freeze_window(&server.management_limiter);
     let server_mac = server.local_mac().to_vec();
     let (ip, port) = decode_bip_mac(&server_mac).unwrap();
     let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
@@ -313,18 +325,7 @@ async fn rate_limit_discards_malformed_and_unauthorized_before_normal_handling()
 
     // Empty ACL denies every Delete-FDT-Entry sender.
     let state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
-    let ctx = RecvContext {
-        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
-        socket: Arc::clone(&server_socket),
-        npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
-        broadcast_addr: Ipv4Addr::LOCALHOST,
-        broadcast_port: local_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
-        fanout: None,
-        force_dbtn_forward_failure: false,
-    };
+    let ctx = test_ctx(Arc::clone(&server_socket), Some(state), npdu_tx);
 
     async fn recv_one(peer: &UdpSocket) -> Option<BvllMessage> {
         let mut buf = [0u8; 2048];
@@ -427,6 +428,7 @@ async fn rate_limit_write_bdt_still_naks_after_quota_exhaustion() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
     let _rx = bbmd_transport.start().await.unwrap();
+    freeze_window(&bbmd_transport.management_limiter);
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (ip, port) = decode_bip_mac(&bbmd_mac).unwrap();
     let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);

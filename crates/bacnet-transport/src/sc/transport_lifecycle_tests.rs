@@ -210,7 +210,11 @@ async fn sc_connect_recv_error_clears_pending_request() {
     hub_task.await.unwrap();
 }
 
-#[tokio::test]
+// The heartbeat tests run on tokio's paused clock. On real time, a runner
+// stall made a test deadline and a transport tick fall due in the same driver
+// turn, and the test future was polled first, so the test saw a timeout or a
+// stale state before the transport got to act (#1017).
+#[tokio::test(start_paused = true)]
 async fn sc_heartbeat_sent_periodically() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -258,7 +262,7 @@ async fn sc_heartbeat_sent_periodically() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_heartbeat_ack_requires_matching_message_id() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -297,18 +301,22 @@ async fn sc_heartbeat_ack_requires_matching_message_id() {
     encode_sc_message(&mut buf, &ack);
     ws_hub.send(&buf).await.unwrap();
 
+    // An ignored ack leaves the link idle since start, so it drops on the
+    // first tick past the 300 ms timeout, 300 ms after this heartbeat. An
+    // accepted ack would hold it up one more 100 ms interval: check halfway.
     assert!(
         wait_for_connection_state(
             &conn,
             ScConnectionState::Disconnected,
-            Duration::from_millis(500)
+            Duration::from_millis(350)
         )
-        .await
+        .await,
+        "a mismatched Heartbeat-ACK must not count as activity"
     );
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_heartbeat_ack_rejects_vmac_fields() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -347,18 +355,22 @@ async fn sc_heartbeat_ack_rejects_vmac_fields() {
     encode_sc_message(&mut buf, &ack);
     ws_hub.send(&buf).await.unwrap();
 
+    // An ignored ack leaves the link idle since start, so it drops on the
+    // first tick past the 300 ms timeout, 300 ms after this heartbeat. An
+    // accepted ack would hold it up one more 100 ms interval: check halfway.
     assert!(
         wait_for_connection_state(
             &conn,
             ScConnectionState::Disconnected,
-            Duration::from_millis(500)
+            Duration::from_millis(350)
         )
-        .await
+        .await,
+        "a Heartbeat-ACK carrying VMACs must not count as activity"
     );
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_inbound_bvlc_activity_defers_client_heartbeat() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -408,7 +420,7 @@ async fn sc_inbound_bvlc_activity_defers_client_heartbeat() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_inbound_bvlc_activity_resets_heartbeat_timeout() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -466,7 +478,7 @@ async fn sc_inbound_bvlc_activity_resets_heartbeat_timeout() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_heartbeat_timeout_disconnects() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
