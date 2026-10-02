@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Averaging samples and property COV (wire, breaking API):** a running
+  server's application can now feed an Averaging object its samples (#1083).
+  Before, only `AveragingObject::add_sample` could, and nothing reached the
+  concrete type once the server held the object.
+  - The server doesn't read Object_Property_Reference. The application
+    samples that property and calls `BACnetServer::add_averaging_sample_local`
+    (Python: `BACnetServer.add_averaging_sample_local`), which goes through the
+    new `BACnetObject::add_averaging_sample_internal` hook. A BOOLEAN (counted
+    as 0 or 1), Signed, Unsigned, Enumerated or finite REAL is accepted, as
+    Clause 12.5 computes in REAL. Another datatype, Double included, fails with
+    INVALID_DATA_TYPE, and NaN or an infinity with VALUE_OUT_OF_RANGE; a
+    refused sample counts as neither attempted nor valid. An unknown object
+    fails with UNKNOWN_OBJECT, and any object other than an Averaging object
+    with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+  - Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and
+    Valid_Samples change together, then the server's COV path runs.
+    SubscribeCOVProperty and SubscribeCOVPropertyMultiple on an Averaging
+    object, which answered OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, are now
+    admitted and report by the Table 13-1a criteria, without Status_Flags
+    since the object has none. SubscribeCOV stays refused, as Table 13-1 has
+    no Averaging row. The new `BACnetObject::supports_subscribe_cov_property`
+    (default: `supports_cov`) admits the property forms, and the default
+    `supports_cov_property` now follows it.
+  - `AveragingObject::add_sample` now returns `Result<(), Error>` and refuses
+    NaN or an infinity, which used to corrupt the average for good.
+
 - **Breaking Life Safety and Global Group required rows (wire and Rust API):**
   Life Safety Point, Life Safety Zone and Global Group now serve required rows
   of their Clause 12 tables that they lacked. Each new row is in Property_List,
@@ -81,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     misconfigured Schedule keeps writing its references: Clause 12.24.4 makes
     those writes unconditional, and a target that can't take a value refuses
     only that write. Whether each referenced property accepts the datatype is
-    not checked yet.
+    judged from the writes (#1086, below).
 
 - **Schedule Present_Value while Out_Of_Service (wire):** a Schedule's
   Present_Value is now writable while Out_Of_Service is TRUE, and each
@@ -100,10 +126,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before the return still goes out first.
   - A Reliability simulated meanwhile doesn't hold the write back, and the
     written value's datatype doesn't count towards CONFIGURATION_ERROR.
-  - New public hook `BACnetObject::take_simulated_schedule_write`, which the
+  - New public hook `BACnetObject::take_owed_schedule_writes` (named
+    `take_simulated_schedule_write` until #1088 widened it), which the
     schedule pass calls before `tick_schedule`. A value written on the
     object directly, outside the server's write paths, goes out at the next
     tick; it needs no valid Device clock.
+
+- **Schedule reference and priority writes, and the reference half of
+  Reliability (wire, breaking):** List_Of_Object_Property_References and
+  Priority_For_Writing are now network-writable, and a target that refuses
+  the schedule's datatype faults the Schedule (#1088, #1086).
+  - WriteProperty, WritePropertyMultiple and `write_local` take
+    Priority_For_Writing as an Unsigned from 1 to 16 (VALUE_OUT_OF_RANGE
+    otherwise), and the reference list whole, in the form a read returns. A
+    member that names a Device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the
+    error Clause 12.24.10 gives a Schedule that writes only objects in its
+    own device, as this one does; a member of another datatype is
+    INVALID_DATA_TYPE, a malformed one INVALID_DATA_ENCODING, and more than
+    1,024 members RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A refused write
+    changes nothing. Before, both properties answered WRITE_ACCESS_DENIED;
+    the PICS now lists them writable. AddListElement and RemoveListElement
+    still can't edit the list.
+  - After a change, the pass the write triggers sends the current
+    Present_Value to the new list at the new priority, if the Schedule is
+    writing at all (in service, only inside Effective_Period). It also
+    relinquishes, with a NULL at the old priority, every slot the Schedule
+    holds that the change leaves behind: a dropped reference, or every
+    reference when the priority moves. A Schedule holds a slot from a write of
+    a non-NULL value until it leaves its Effective_Period, so a Schedule out
+    of season clears nothing that another Schedule on the same targets may now
+    command (Clause 12.24.6).
+  - Reliability is also CONFIGURATION_ERROR while a referenced property
+    refused, with INVALID_DATA_TYPE or DATATYPE_NOT_SUPPORTED, the last value
+    of the schedule's datatype written to it. The fault shows at the first
+    such write, clears when that target takes a value or leaves the list, and
+    combines with the contents check under the same rule: the object clears
+    only a fault it raised. A NULL, or a value of another datatype written
+    while Out_Of_Service, counts for nothing. The Schedule keeps writing its
+    other targets.
+  - Breaking: `ScheduleObject::add_object_property_reference` returns
+    `Result` (the 1,024 cap), and `set_object_property_references` replaces
+    the list. `BACnetObject::take_owed_schedule_writes` returns every owed
+    write, relinquishments first, as a `Vec`. The new
+    `BACnetObject::complete_schedule_write` hook takes one
+    `ScheduleTargetOutcome` per reference after each write; the bundled
+    server calls it.
 
 - Staging objects support COV (#988). A SubscribeCOV notification carries
   Present_Value, Status_Flags and Present_Stage, and goes out when
@@ -730,6 +797,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MAX_RECIPIENT_LIST_DESTINATIONS` names the cap,
   `NotificationClass::add_destination` returns `Result` and refuses past it,
   and the `recipient_list` field is private: read it with `recipient_list()`.
+
+- **Breaking Rust API:** `ScHub::start`, and every other hub start method,
+  now returns `Error::Transport` with the OS's `io::Error` when it can't bind
+  its listen address or read the bound address back, as the B/IP transports
+  do (#1104). Before, it returned `Error::Encoding` with the error's text, so
+  a caller had to match the message to tell an address in use from other
+  failures; now `ErrorKind::AddrInUse` says so. The `bacnet-sc-hub` benchmark
+  binary names the listen address and the error kind when its bind fails, and
+  the benchmarks hub-restart test reads that kind to spot a port another
+  process took. Test-only: the SC hub test that restarts on its first port
+  runs again from a fresh port when another socket takes that port while no
+  hub holds it, like the other hub restart and release tests (#1095).
+
+- **Breaking wire behaviour:** a SubscribeCOVPropertyMultiple reference that
+  asks for timestamps while the Device has no valid clock is now refused on
+  its own, in request order like any other failed reference (#1102). The
+  error names it in the failed-subscription choice, still SERVICES /
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and the references before it stay
+  subscribed and get their initial notification; those after it are not
+  processed. Before, any timestamped reference refused the whole request with
+  the general choice, even after references that would have been accepted.
+  Timestamped is an option of each reference, and Clause 13.16.2 keeps the
+  general error for failures before any reference is processed.
+
 - **Breaking Rust API (wire behaviour for AddListElement):** when an object
   refuses an AddListElement that adds several new elements, the
   ChangeList-Error now names the element it refused (#1048). The object
@@ -918,15 +1009,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed one are not processed. Before, one refused reference left the whole
   request without effect. A request that fails at its first reference, or
   before any reference (inconsistent or out-of-range lifetime and delay,
-  timestamped references without a valid clock, authorization), still changes
-  and reports nothing (Clause 13.16.2). The subscription caps are checked one
-  reference at a time as well (#1059). A renewal or a repeat of an earlier
-  reference takes no slot, and the first reference that would go past the
-  recipient's quota or the table's capacity is named in a RESOURCES /
-  NO_SPACE_TO_ADD_LIST_ELEMENT failed-subscription error; the whole request
-  used to go out with the general choice. `CovSubscriptionTable::subscribe_multiple`
-  now fails with `MultipleRefusal`, which carries the error, the position of
-  the refused reference and the snapshots kept before it.
+  authorization), still changes and reports nothing (Clause 13.16.2). The
+  subscription caps are checked one reference at a time as well (#1059). A
+  renewal or a repeat of an earlier reference takes no slot, and the first
+  reference that would go past the recipient's quota or the table's capacity
+  is named in a RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT failed-subscription
+  error; the whole request used to go out with the general choice.
+  `CovSubscriptionTable::subscribe_multiple` now fails with `MultipleRefusal`,
+  which carries the error, the position of the refused reference and the
+  snapshots kept before it.
 
 - Python's `BacnetProtocolError` gains `first_failed_write_attempt` and
   `first_failed_subscription` (object, property and index dicts, typed

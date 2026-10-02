@@ -323,10 +323,12 @@ fn list_target_errors_precede_element_errors_in_clause_order() {
 fn framed_lists_of_other_elements_never_take_the_destination_codec() {
     let mut db = ObjectDatabase::new();
     let mut schedule = ScheduleObject::new(1, "SCH-1", PropertyValue::Real(0.0)).unwrap();
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
-        ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
     let oid = schedule.object_identifier();
     db.add(Box::new(schedule)).unwrap();
     let destination = BACnetDestination {
@@ -351,7 +353,8 @@ fn framed_lists_of_other_elements_never_take_the_destination_codec() {
     let mut framed = BytesMut::new();
     bacnet_encoding::constructed::encode_destination_list(&mut framed, &[destination]);
     // Schedule's list of BACnetDeviceObjectPropertyReference is held framed,
-    // like Recipient_List, but has no element codec here and no write route.
+    // like Recipient_List, but has no element codec here: WriteProperty
+    // replaces it whole (#1088), the list services can't edit it.
     assert_both_services_refuse(
         &mut db,
         &[(

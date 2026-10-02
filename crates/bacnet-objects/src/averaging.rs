@@ -1,7 +1,8 @@
 //! Averaging (type 18) object per ASHRAE 135-2020 Clause 12.5.
 //!
 //! Computes running statistics (min, max, average) over sampled values from
-//! a referenced object property.
+//! a referenced object property. The application takes the samples: the
+//! object doesn't read Object_Property_Reference itself.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -50,7 +51,13 @@ impl AveragingObject {
     }
 
     /// Add a sample value, updating min/max/average and counts.
-    pub fn add_sample(&mut self, value: f32) {
+    ///
+    /// NaN or an infinity fails with PROPERTY / VALUE_OUT_OF_RANGE and leaves
+    /// the statistics unchanged. Like other direct setters this bypasses the
+    /// server's COV fanout; once the object is in a running server, its
+    /// application calls `BACnetServer::add_averaging_sample_local` instead.
+    pub fn add_sample(&mut self, value: f32) -> Result<(), Error> {
+        common::reject_non_finite(value)?;
         self.attempted_samples += 1;
         self.valid_samples += 1;
 
@@ -63,6 +70,7 @@ impl AveragingObject {
 
         // Running average: avg = avg_prev + (value - avg_prev) / n
         self.average_value += (value - self.average_value) / self.valid_samples as f32;
+        Ok(())
     }
 
     /// Set the object property reference (the property being averaged).
@@ -76,6 +84,23 @@ impl AveragingObject {
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
+    }
+}
+
+/// Convert an application sample to the REAL the statistics are kept in.
+///
+/// Clause 12.5 names five datatypes a sampled property may have (BOOLEAN,
+/// INTEGER, Unsigned, Enumerated and REAL) and computes in REAL. FALSE and
+/// TRUE count as 0 and 1, and an Enumerated counts as its Unsigned value.
+/// Anything else, Double included, fails with PROPERTY / INVALID_DATA_TYPE.
+fn sample_as_real(value: &PropertyValue) -> Result<f32, Error> {
+    match *value {
+        PropertyValue::Boolean(active) => Ok(if active { 1.0 } else { 0.0 }),
+        PropertyValue::Signed(v) => Ok(v as f32),
+        PropertyValue::Unsigned(v) => Ok(v as f32),
+        PropertyValue::Enumerated(v) => Ok(v as f32),
+        PropertyValue::Real(v) => Ok(v),
+        _ => Err(common::invalid_data_type_error()),
     }
 }
 
@@ -183,7 +208,22 @@ impl BACnetObject for AveragingObject {
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
+
+    fn supports_subscribe_cov_property(&self) -> bool {
+        // Table 13-1 has no Averaging row, so SubscribeCOV stays refused
+        // (supports_cov is false). A property subscription uses the Table
+        // 13-1a criterion for its datatype; the object has no Status_Flags to
+        // add to the report.
+        true
+    }
+
+    fn add_averaging_sample_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.add_sample(sample_as_real(&value)?)
+    }
 }
+
+#[cfg(test)]
+mod sample_tests;
 
 #[cfg(test)]
 mod tests {
@@ -213,9 +253,9 @@ mod tests {
     #[test]
     fn averaging_add_samples() {
         let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-        avg.add_sample(10.0);
-        avg.add_sample(20.0);
-        avg.add_sample(30.0);
+        avg.add_sample(10.0).unwrap();
+        avg.add_sample(20.0).unwrap();
+        avg.add_sample(30.0).unwrap();
 
         assert_eq!(
             avg.read_property(PropertyIdentifier::ATTEMPTED_SAMPLES, None)
@@ -232,9 +272,9 @@ mod tests {
     #[test]
     fn averaging_min_max() {
         let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-        avg.add_sample(15.0);
-        avg.add_sample(5.0);
-        avg.add_sample(25.0);
+        avg.add_sample(15.0).unwrap();
+        avg.add_sample(5.0).unwrap();
+        avg.add_sample(25.0).unwrap();
 
         assert_eq!(
             avg.read_property(PropertyIdentifier::MINIMUM_VALUE, None)
@@ -251,9 +291,9 @@ mod tests {
     #[test]
     fn averaging_average_value() {
         let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-        avg.add_sample(10.0);
-        avg.add_sample(20.0);
-        avg.add_sample(30.0);
+        avg.add_sample(10.0).unwrap();
+        avg.add_sample(20.0).unwrap();
+        avg.add_sample(30.0).unwrap();
 
         let val = avg
             .read_property(PropertyIdentifier::AVERAGE_VALUE, None)
@@ -425,7 +465,7 @@ mod tests {
     #[test]
     fn averaging_single_sample() {
         let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-        avg.add_sample(42.0);
+        avg.add_sample(42.0).unwrap();
 
         assert_eq!(
             avg.read_property(PropertyIdentifier::MINIMUM_VALUE, None)

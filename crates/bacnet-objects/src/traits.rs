@@ -28,7 +28,7 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
-use crate::schedule::ScheduleWrite;
+use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 /// Process-local monotonic time source used by internal object lifecycles.
 #[doc(hidden)]
@@ -408,8 +408,25 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// Override to return `true` for object types that can generate COV
     /// notifications (analog, binary, multi-state I/O/V). Default is `false`.
+    /// This answer admits SubscribeCOV, the whole-object form, and is the
+    /// default for
+    /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property).
     fn supports_cov(&self) -> bool {
         false
+    }
+
+    /// Whether SubscribeCOVProperty and SubscribeCOVPropertyMultiple may
+    /// monitor this object's properties.
+    ///
+    /// Defaults to [`supports_cov`](Self::supports_cov). An object that has
+    /// no whole-object COV criteria, because Clause 13.1's Table 13-1 doesn't
+    /// list its type, can still return `true` here while `supports_cov`
+    /// stays `false`: its property subscriptions then follow Table 13-1a and
+    /// SubscribeCOV is refused. The built-in Averaging object does this.
+    /// [`supports_cov_property`](Self::supports_cov_property) still decides
+    /// each property.
+    fn supports_subscribe_cov_property(&self) -> bool {
+        self.supports_cov()
     }
 
     /// Take pending local target work from a Staging object.
@@ -452,6 +469,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The default preserves the existing behavior of every other COV-capable
     /// object family while enforcing the bounded standardized Life Safety
     /// surface for source-compatible custom Point and Zone implementations.
+    /// Other types answer
+    /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property)
+    /// for every property.
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
         use bacnet_types::enums::ObjectType;
 
@@ -464,7 +484,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
                     | PropertyIdentifier::SILENCED
                     | PropertyIdentifier::OPERATION_EXPECTED
             ),
-            _ => self.supports_cov(),
+            _ => self.supports_subscribe_cov_property(),
         }
     }
 
@@ -586,10 +606,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// `calendar_active` answers for a special event whose period references
     /// a Calendar: whether that Calendar is TRUE on `today`. Returns the
-    /// writes owed when Present_Value changed or the object has just entered
-    /// its Effective_Period, with the complete local references, target array
-    /// indices included. Only meaningful for Schedule objects; default returns
-    /// `None`.
+    /// writes owed when Present_Value changed, the object has just entered
+    /// its Effective_Period, or its references or priority changed since the
+    /// last write, with the complete local references, target array indices
+    /// included. Only meaningful for Schedule objects; default returns `None`.
     fn tick_schedule(
         &mut self,
         _today: SpecificDate,
@@ -599,15 +619,33 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Take the write that a Present_Value written while Out_Of_Service was
-    /// TRUE owes the references (Clause 12.24.14), once per written value.
+    /// Take the writes this schedule owes its targets apart from its
+    /// calculation, each once, in order: a NULL to every priority slot a
+    /// change of List_Of_Object_Property_References or Priority_For_Writing
+    /// left behind (#1088), then the Present_Value owed out of service, for a
+    /// client's write (Clause 12.24.14) or a change of those two properties.
     ///
-    /// A schedule pass collects it before calling
-    /// [`tick_schedule`](Self::tick_schedule), so the written value reaches
-    /// the targets ahead of any calculated one; it needs no clock. Only
-    /// meaningful for Schedule objects; default returns `None`.
-    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
-        None
+    /// A schedule pass collects them before calling
+    /// [`tick_schedule`](Self::tick_schedule), so they reach the targets ahead
+    /// of any calculated value; they need no clock. Only meaningful for
+    /// Schedule objects; default returns none.
+    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
+        Vec::new()
+    }
+
+    /// Report how each target took `write`, one of this schedule's writes:
+    /// `outcomes` holds one entry per member of `write.references`, in order.
+    ///
+    /// A Schedule judges the reference half of its Reliability from these
+    /// (Clause 12.24.13, #1086). Returns whether a readable property, such as
+    /// Reliability, changed. Only meaningful for Schedule objects; default
+    /// returns `false`.
+    fn complete_schedule_write(
+        &mut self,
+        _write: &ScheduleWrite,
+        _outcomes: &[ScheduleTargetOutcome],
+    ) -> bool {
+        false
     }
 
     /// Whether this Calendar's Date_List matches `day`: its Present_Value on
@@ -900,6 +938,20 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _value: PropertyValue,
     ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Record one sample the local application took for an Averaging object.
+    ///
+    /// Only the built-in Averaging object opts in. The server doesn't read
+    /// Object_Property_Reference itself, so the application samples the
+    /// referenced property and passes each value here, and the object updates
+    /// its statistics and sample counts together. The default fails closed
+    /// with the same error as [`set_present_value_internal`](Self::set_present_value_internal).
+    fn add_averaging_sample_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

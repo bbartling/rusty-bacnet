@@ -1,15 +1,28 @@
-//! The Schedule's own Reliability evaluation (#1056).
+//! The Schedule's own Reliability evaluation (#1056, #1086).
 //!
 //! Clause 12.24.13 ties Reliability to the schedule's configuration being
-//! consistent. The half this object can check on its own is the contents:
-//! leaving NULLs aside, every value in Weekly_Schedule, Exception_Schedule
-//! and Schedule_Default must be of a single datatype. When they are not,
-//! Reliability is CONFIGURATION_ERROR, and Status_Flags reports FAULT through
-//! the usual Reliability mapping.
+//! consistent, in two halves. When either fails, Reliability is
+//! CONFIGURATION_ERROR, and Status_Flags reports FAULT through the usual
+//! Reliability mapping.
 //!
-//! The other half, whether every referenced property accepts that datatype,
-//! needs the target objects, which only the database holds; it is not
-//! evaluated here.
+//! The contents: leaving NULLs aside, every value in Weekly_Schedule,
+//! Exception_Schedule and Schedule_Default must be of a single datatype. The
+//! object checks this on every change to them.
+//!
+//! The references: every member of List_Of_Object_Property_References must
+//! accept that datatype. Only the target objects can say, so the object
+//! learns it from its writes (#1086): the server reports how each target took
+//! a write through `complete_schedule_write`, and a member that refused the
+//! value for its datatype (INVALID_DATA_TYPE or DATATYPE_NOT_SUPPORTED) faults
+//! the Schedule until a later write to it succeeds or it leaves the list. The
+//! fault therefore shows at the first write, not at configuration time; the
+//! clause already lets a remote member's fault wait for a write. Only a value
+//! of a datatype the schedule itself holds counts, so a NULL, or a value of
+//! another datatype a client wrote to Present_Value out of service, says
+//! nothing about the configuration. Any other failure, an unknown object or a
+//! denied write, leaves a member's standing as it was. Deciding beforehand
+//! instead would need a model of each target property's datatype, which the
+//! objects don't publish, or a guess from the target's current value.
 //!
 //! A misconfigured schedule keeps evaluating and writing its references.
 //! Clause 12.24.4 makes those writes unconditional, Reliability only reports
@@ -20,38 +33,81 @@
 //! The evaluation owns only the fault it raised. A Reliability applied through
 //! `set_reliability_internal` stays until that caller changes it, and while
 //! Out_Of_Service is TRUE the client's simulated value is left alone; the
-//! return to service restores the saved value and evaluates again.
+//! return to service restores the saved value and evaluates again. Refusals
+//! reported meanwhile are kept for that evaluation.
+
+use std::mem::discriminant;
 
 use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::PropertyValue;
 
-use super::ScheduleObject;
+use super::{ScheduleObject, ScheduleTargetOutcome, ScheduleWrite};
 use crate::traits::ReliabilityEvaluation;
 
 impl ScheduleObject {
-    /// Whether the non-NULL values of Weekly_Schedule, Exception_Schedule and
-    /// Schedule_Default are all of one datatype. With no such values at all
-    /// there is nothing to disagree.
-    pub(super) fn values_share_one_datatype(&self) -> bool {
+    /// The non-NULL values of Weekly_Schedule, Exception_Schedule and
+    /// Schedule_Default.
+    fn scheduled_values(&self) -> impl Iterator<Item = &PropertyValue> {
         let weekly = self.weekly_schedule.iter().flatten();
         let exceptions = self
             .exception_schedule
             .iter()
             .flat_map(|event| &event.list_of_time_values);
-        let mut datatypes = weekly
+        weekly
             .chain(exceptions)
             .map(|time_value| &time_value.value)
             .chain(std::iter::once(&self.schedule_default))
             .filter(|value| **value != PropertyValue::Null)
-            .map(std::mem::discriminant);
+    }
+
+    /// Whether the non-NULL values of Weekly_Schedule, Exception_Schedule and
+    /// Schedule_Default are all of one datatype. With no such values at all
+    /// there is nothing to disagree.
+    pub(super) fn values_share_one_datatype(&self) -> bool {
+        let mut datatypes = self.scheduled_values().map(discriminant);
         match datatypes.next() {
             Some(first) => datatypes.all(|datatype| datatype == first),
             None => true,
         }
     }
 
-    /// Re-run the consistency check after the contents changed or the object
-    /// returned to service.
+    /// Take how each target took `write`, one outcome per reference in order,
+    /// and re-check Reliability; returns whether it changed.
+    pub(super) fn complete_write(
+        &mut self,
+        write: &ScheduleWrite,
+        outcomes: &[ScheduleTargetOutcome],
+    ) -> bool {
+        let datatype = discriminant(&write.value);
+        if !self
+            .scheduled_values()
+            .any(|value| discriminant(value) == datatype)
+        {
+            return false;
+        }
+        for (reference, outcome) in write.references.iter().zip(outcomes) {
+            match outcome {
+                ScheduleTargetOutcome::Accepted => {
+                    self.refusing_references
+                        .retain(|refusing| refusing != reference);
+                }
+                ScheduleTargetOutcome::DatatypeRefused
+                    if self.list_of_object_property_references.contains(reference)
+                        && !self.refusing_references.contains(reference) =>
+                {
+                    self.refusing_references.push(reference.clone());
+                }
+                _ => {}
+            }
+        }
+        matches!(
+            self.recompute_reliability(),
+            ReliabilityEvaluation::Changed { .. }
+        )
+    }
+
+    /// Re-run the consistency check after the contents or the references
+    /// changed, a write was reported, or the object returned to service.
     ///
     /// Raises CONFIGURATION_ERROR over NO_FAULT_DETECTED, and clears it only
     /// if this evaluation raised it. Does nothing while Out_Of_Service is
@@ -60,7 +116,8 @@ impl ScheduleObject {
         if self.out_of_service {
             return ReliabilityEvaluation::Unchanged;
         }
-        let misconfigured = !self.values_share_one_datatype();
+        let misconfigured =
+            !self.values_share_one_datatype() || !self.refusing_references.is_empty();
         let new_reliability = if self.owns_configuration_error {
             if misconfigured {
                 Reliability::CONFIGURATION_ERROR

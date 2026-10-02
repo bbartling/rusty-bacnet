@@ -190,8 +190,10 @@ impl Process {
     }
 
     /// Like [`hub_url`](Self::hub_url), but `None` when the hub exited because
-    /// another socket held its listen address (EADDRINUSE, or Windows'
-    /// WSAEACCES for a port without SO_REUSEADDR); any other exit still fails.
+    /// another socket held its listen address; any other exit still fails. The
+    /// hub reports the bind error's kind: `AddrInUse`, or on Windows
+    /// `PermissionDenied` (WSAEACCES) for a port held without sharing, the
+    /// kinds `port_retry`'s `lost_to_another_socket` accepts.
     pub async fn hub_url_unless_bind_lost(&mut self) -> Option<String> {
         let end = Instant::now() + DEADLINE;
         loop {
@@ -205,16 +207,9 @@ impl Process {
             }
             if self.child.try_wait().unwrap().is_some() {
                 let (_, stderr) = self.output();
-                let lost = stderr.contains("Hub bind failed")
-                    && [
-                        "in use",
-                        "os error 98",
-                        "os error 48",
-                        "os error 10048",
-                        "os error 10013",
-                    ]
-                    .iter()
-                    .any(|marker| stderr.contains(marker));
+                let lost = stderr.contains("Hub bind failed on ")
+                    && (stderr.contains("(AddrInUse)")
+                        || (cfg!(windows) && stderr.contains("(PermissionDenied)")));
                 assert!(lost, "hub exited: {stderr}");
                 return None;
             }

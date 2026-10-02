@@ -1,5 +1,7 @@
 use super::*;
-use bacnet_objects::schedule::{CalendarObject, ScheduleObject, ScheduleWrite};
+use bacnet_objects::schedule::{
+    CalendarObject, ScheduleObject, ScheduleTargetOutcome, ScheduleWrite,
+};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetObjectPropertyReference};
 use bacnet_types::primitives::Time;
@@ -13,7 +15,9 @@ fn source_reporter_forwards_complete_schedule_targets() {
     let mut schedule =
         ScheduleObject::new(3, "wrapped schedule", PropertyValue::Unsigned(1)).unwrap();
     for reference in &refs {
-        schedule.add_object_property_reference(reference.clone());
+        schedule
+            .add_object_property_reference(reference.clone())
+            .unwrap();
     }
     schedule
         .write_property(
@@ -61,15 +65,63 @@ fn source_reporter_forwards_complete_schedule_targets() {
     ] {
         object.write_property(property, None, value, None).unwrap();
     }
+    let simulated = ScheduleWrite {
+        value: PropertyValue::Unsigned(5),
+        priority: 16,
+        references: refs.clone(),
+    };
+    assert_eq!(object.take_owed_schedule_writes(), [simulated]);
+    assert!(object.take_owed_schedule_writes().is_empty());
+
+    // A dropped reference is relinquished through the wrapper, and a target
+    // refusing the schedule's datatype faults it (#1088, #1086).
+    // AO-2 Present_Value: object [0], property [1].
+    let kept = vec![0x0C, 0x00, 0x40, 0x00, 0x02, 0x19, 85];
+    object
+        .write_property(
+            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+            None,
+            PropertyValue::ApplicationData(kept),
+            None,
+        )
+        .unwrap();
     assert_eq!(
-        object.take_simulated_schedule_write(),
-        Some(ScheduleWrite {
-            value: PropertyValue::Unsigned(5),
-            priority: 16,
-            references: refs,
-        })
+        object.take_owed_schedule_writes(),
+        [
+            ScheduleWrite {
+                value: PropertyValue::Null,
+                priority: 16,
+                references: vec![refs[1].clone()],
+            },
+            ScheduleWrite {
+                value: PropertyValue::Unsigned(5),
+                priority: 16,
+                references: vec![refs[0].clone()],
+            },
+        ]
     );
-    assert!(object.take_simulated_schedule_write().is_none());
+    object
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    assert!(object.complete_schedule_write(
+        &ScheduleWrite {
+            value: PropertyValue::Unsigned(2),
+            priority: 16,
+            references: vec![refs[0].clone()],
+        },
+        &[ScheduleTargetOutcome::DatatypeRefused],
+    ));
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
 }
 
 #[test]

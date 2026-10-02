@@ -2801,6 +2801,27 @@ class BACnetServer:
         """
         ...
 
+    def add_averaging_sample_local(
+        self,
+        object_id: ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Awaitable[None]:
+        """Record one sample of an Averaging object's referenced property, taken by the application.
+
+        The server doesn't read Object_Property_Reference itself. The value is
+        a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned,
+        Enumerated or finite REAL: another datatype, Double included, raises
+        INVALID_DATA_TYPE and NaN or an infinity VALUE_OUT_OF_RANGE, and a
+        refused sample isn't counted. An unknown object raises UNKNOWN_OBJECT
+        and any object other than an Averaging object
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value,
+        Average_Value and the sample counts change together. A
+        SubscribeCOVProperty on one of them is notified when it changes (by
+        the subscription's COV increment, if it gave one); SubscribeCOV on an
+        Averaging object is refused.
+        """
+        ...
+
     def comm_state(self) -> Awaitable[int]:
         """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
         ...

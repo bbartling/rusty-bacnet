@@ -37,15 +37,19 @@ fn rpm_schedule_indexed_reads_and_reference_wire_bytes() {
                     event_priority: 3,
                 })
                 .unwrap();
-            object.add_object_property_reference(BACnetObjectPropertyReference::new(
-                ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
-                P::PRESENT_VALUE.to_raw(),
-            ));
-            object.add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
-                ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 7).unwrap(),
-                P::STATE_TEXT.to_raw(),
-                2,
-            ));
+            object
+                .add_object_property_reference(BACnetObjectPropertyReference::new(
+                    ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 2).unwrap(),
+                    P::PRESENT_VALUE.to_raw(),
+                ))
+                .unwrap();
+            object
+                .add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
+                    ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 7).unwrap(),
+                    P::STATE_TEXT.to_raw(),
+                    2,
+                ))
+                .unwrap();
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();

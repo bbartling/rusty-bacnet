@@ -19,7 +19,7 @@ use bacnet_objects::event_enrollment::{
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::schedule::ScheduleWrite;
+use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
     BACnetObject, CovReportedProperty, LifeSafetyOperationOutcome, MonotonicClock,
@@ -239,6 +239,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.supports_cov()
     }
 
+    fn supports_subscribe_cov_property(&self) -> bool {
+        self.wrapped.supports_subscribe_cov_property()
+    }
+
     fn take_staging_write_plan_internal(&mut self) -> Option<StagingWritePlan> {
         self.wrapped.take_staging_write_plan_internal()
     }
@@ -304,8 +308,16 @@ impl BACnetObject for SourceReporter {
         self.wrapped.tick_schedule(today, time, calendar_active)
     }
 
-    fn take_simulated_schedule_write(&mut self) -> Option<ScheduleWrite> {
-        self.wrapped.take_simulated_schedule_write()
+    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
+        self.wrapped.take_owed_schedule_writes()
+    }
+
+    fn complete_schedule_write(
+        &mut self,
+        write: &ScheduleWrite,
+        outcomes: &[ScheduleTargetOutcome],
+    ) -> bool {
+        self.wrapped.complete_schedule_write(write, outcomes)
     }
 
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
@@ -405,6 +417,10 @@ impl BACnetObject for SourceReporter {
         value: PropertyValue,
     ) -> Result<(), Error> {
         self.wrapped.set_controlled_variable_value_internal(value)
+    }
+
+    fn add_averaging_sample_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.wrapped.add_averaging_sample_internal(value)
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

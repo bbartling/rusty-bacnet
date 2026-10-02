@@ -402,15 +402,19 @@ fn read_range_splits_framed_schedule_references() {
     let av = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
     // The first carries the optional array index, so each element's length
     // differs and only the reference codec finds the boundary.
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
-        av,
-        PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
-        8,
-    ));
-    schedule.add_object_property_reference(BACnetObjectPropertyReference::new(
-        av,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new_indexed(
+            av,
+            PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+            8,
+        ))
+        .unwrap();
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(
+            av,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ))
+        .unwrap();
     let schedule = add(&mut db, schedule);
     let ack = call(
         &db,

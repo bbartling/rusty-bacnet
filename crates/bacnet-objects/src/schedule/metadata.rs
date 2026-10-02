@@ -27,13 +27,13 @@ const BASE: &[PropertyMetadata] = &[
         P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
         RequiredRead,
         None,
-        ReadOnly,
+        Always,
     ),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -172,6 +172,8 @@ mod tests {
                     | P::WEEKLY_SCHEDULE
                     | P::EXCEPTION_SCHEDULE
                     | P::EFFECTIVE_PERIOD
+                    | P::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                    | P::PRIORITY_FOR_WRITING
                     | P::OUT_OF_SERVICE
                     | P::DESCRIPTION => Always,
                     P::PRESENT_VALUE | P::RELIABILITY => WhenOutOfService,
