@@ -293,12 +293,12 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
 /// header, when the caller has it; the context's notifications fit it.
 ///
 /// A failure before any COV reference is processed (inconsistent or out of
-/// range timing, timestamps without a clock) keeps nothing and carries the
-/// bare class and code. Otherwise the references are processed in request
-/// order until one fails, whether its object, its property or the
-/// subscription caps refuse it (#1059): the error names that reference, and
-/// the [`MultipleRefusal`] carries the references kept before it, which are
-/// owed their initial notifications like an accepted request's (#1058).
+/// range timing) keeps nothing and carries the bare class and code. Otherwise
+/// the references are processed in request order until one fails, whether
+/// its object, its property, its timestamping or the subscription caps refuse
+/// it (#1059, #1102): the error names that reference, and the
+/// [`MultipleRefusal`] carries the references kept before it, which are owed
+/// their initial notifications like an accepted request's (#1058).
 pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     table: &mut CovSubscriptionTable,
     db: &ObjectDatabase,
@@ -354,13 +354,6 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         .then(|| db.clock_frame())
         .flatten()
         .filter(|frame| frame.is_valid_actual_datetime());
-    if timestamped && admission_clock.is_none() {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
-        }
-        .into());
-    }
 
     let lifetime = request.lifetime.expect("validated COV-multiple lifetime");
     let max_notification_delay = request
@@ -411,9 +404,25 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
             let property_identifier = cov_ref.monitored_property.property_identifier;
             let property_array_index = cov_ref.monitored_property.property_array_index;
 
-            if let Err(error) =
-                validate_cov_property(object, property_identifier, property_array_index)
-            {
+            // Timestamped is an option of each reference, so a missing clock
+            // fails the reference that asks for timestamps, after its object
+            // and property, rather than the request (Clause 13.16.2, #1102).
+            // Neither error table has a row for it; SERVICES /
+            // OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED is Clause 18.5's code for
+            // a parameter needing functionality the device lacks, the pair
+            // DeviceCommunicationControl gives a clockless device (16.1.1.3).
+            let refused = validate_cov_property(object, property_identifier, property_array_index)
+                .and_then(|()| {
+                    if cov_ref.timestamped && admission_clock.is_none() {
+                        Err(Error::Protocol {
+                            class: ErrorClass::SERVICES.to_raw() as u32,
+                            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                        })
+                    } else {
+                        Ok(())
+                    }
+                });
+            if let Err(error) = refused {
                 failure = Some(subscription_error(
                     error,
                     monitored,
@@ -462,7 +471,9 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     ) {
         Ok(accepted) => (accepted, failure.map(|error| (validated, error))),
         // A subscription cap stopped admission before the validated
-        // references ran out.
+        // references ran out. A context has no storage or limit of its own,
+        // so a new one whose first reference finds no room is refused here
+        // too, and the general context error is never sent (#1102).
         Err(MultipleRefusal {
             error,
             refused: Some(position),

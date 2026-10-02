@@ -229,13 +229,14 @@ async fn files_der_ca_and_key_match_fail_before_bind_or_dial() {
     }
     assert!(listener.accept().now_or_never().is_none());
     // Valid hub reaches bind and reports the actually occupied address, in
-    // the OS's own words for it (Windows doesn't say "Address already in use").
+    // the OS's own words for it (Windows doesn't say "Address already in use"),
+    // followed by the error kind (#1104).
     let in_use = std::net::TcpListener::bind(&address).unwrap_err();
     assert_eq!(in_use.kind(), std::io::ErrorKind::AddrInUse);
     failed_stderr(
         &mut replace(&files.secure_hub(), "--listen", &address),
         &files,
-        &format!("Hub bind failed: {in_use}"),
+        &format!("Hub bind failed on {address}: {in_use} (AddrInUse)"),
     )
     .await;
 }

@@ -327,14 +327,28 @@ async fn a_refusal_of_the_whole_request_keeps_and_reports_nothing() {
         refusal(answer(&h).await),
         (ErrorClass::SERVICES, ErrorCode::VALUE_OUT_OF_RANGE, None)
     );
-    // Without a clock no reference can be timestamped, so the whole request
-    // is refused, the untimestamped references before the timestamped one
-    // included.
+    h.no_notification().await;
+    assert_eq!(kept(&h, 64).await, [(1, PV)]);
+    assert_eq!(h.server.cov_table.read().await.len(), before);
+    assert_eq!(delays(&h, 64).await, [Some(10)]);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_a_clock_the_timestamped_reference_is_refused_and_the_earlier_ones_stay() {
+    let mut h = Harness::start_with(ServerConfig::default(), with_av2).await;
     h.server.database().write().await.set_clock_reader(None);
+    // Timestamped is an option of each reference, so a missing clock refuses
+    // only the reference that asks for it (#1102). The untimestamped ones
+    // before it stay and get their initial report; the reference after it is
+    // not processed.
     h.subscribe_process(
-        64,
+        66,
         false,
-        vec![(av(1), vec![(PV, false), (OOS, false), (EVENT_STATE, true)])],
+        vec![
+            (av(1), vec![(PV, false), (OOS, false), (EVENT_STATE, true)]),
+            (av(2), vec![(PV, false)]),
+        ],
         Some(20),
     )
     .await;
@@ -343,13 +357,31 @@ async fn a_refusal_of_the_whole_request_keeps_and_reports_nothing() {
         (
             ErrorClass::SERVICES,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            None
+            names(av(1), EVENT_STATE)
+        )
+    );
+    assert_eq!(
+        reported(&h.notification().await),
+        [(1, OOS), (1, PV), (1, SF)]
+    );
+    h.no_notification().await;
+    assert_eq!(kept(&h, 66).await, [(1, OOS), (1, PV)]);
+    assert_eq!(delays(&h, 66).await, [Some(20), Some(20)]);
+
+    // As the first reference it is refused alone, and nothing changes.
+    h.subscribe_process(66, false, vec![(av(2), vec![(PV, true)])], Some(30))
+        .await;
+    assert_eq!(
+        refusal(answer(&h).await),
+        (
+            ErrorClass::SERVICES,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            names(av(2), PV)
         )
     );
     h.no_notification().await;
-    assert_eq!(kept(&h, 64).await, [(1, PV)]);
-    assert_eq!(h.server.cov_table.read().await.len(), before);
-    assert_eq!(delays(&h, 64).await, [Some(10)]);
+    assert_eq!(kept(&h, 66).await, [(1, OOS), (1, PV)]);
+    assert_eq!(delays(&h, 66).await, [Some(20), Some(20)]);
     h.server.stop().await.unwrap();
 }
 

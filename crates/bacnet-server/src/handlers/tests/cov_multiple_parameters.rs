@@ -174,7 +174,7 @@ fn subscribe_cov_property_multiple_context_delay_is_last_write_wins_per_form() {
 }
 
 #[test]
-fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
+fn clockless_timestamped_first_reference_is_refused_by_name_but_can_cancel() {
     use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 
     let db = make_db_with_ai();
@@ -203,16 +203,33 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
     let mut buf = BytesMut::new();
     subscribe.encode(&mut buf).unwrap();
 
-    // A request-level refusal: nothing processed, nothing kept.
+    // The timestamped reference itself is refused (#1102); as the first
+    // reference, nothing before it is kept.
     let refusal = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
         .unwrap_err();
-    assert!(refusal.refused.is_none() && refusal.committed.is_empty());
-    assert!(matches!(
-        refusal.error,
-        Error::Protocol { class, code }
-            if class == ErrorClass::SERVICES.to_raw() as u32
-                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
-    ));
+    assert_eq!(refusal.refused, Some(0));
+    assert!(refusal.committed.is_empty());
+    match refusal.error {
+        Error::Structured {
+            class,
+            code,
+            detail,
+        } => {
+            assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
+            assert_eq!(
+                code,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
+            );
+            assert_eq!(
+                *detail,
+                ErrorDetail::FirstFailedSubscription(BACnetObjectPropertyReference::new(
+                    oid,
+                    PropertyIdentifier::PRESENT_VALUE.to_raw()
+                ))
+            );
+        }
+        other => panic!("expected a refusal naming the reference, got {other:?}"),
+    }
     assert!(table.is_empty(), "rejection must precede table mutation");
 
     // Seed through the context owner: clockless wire admission is rejected.

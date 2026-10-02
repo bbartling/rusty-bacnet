@@ -177,7 +177,10 @@ impl ScHub {
     /// Requires [`ScHubTlsConfig`]: explicit CA trust, mandatory client certificate
     /// verification, and TLS 1.3-only local policy. Uses default handshake budgets.
     /// A zero UUID or reserved local VMAC returns a configuration error before
-    /// binding, as on every public startup route. Raw TLS acceptors are not accepted:
+    /// binding, as on every public startup route. A failed bind returns
+    /// [`Error::Transport`](bacnet_types::error::Error::Transport) with the OS
+    /// error, so [`std::io::ErrorKind::AddrInUse`] marks an occupied address.
+    /// Raw TLS acceptors are not accepted:
     ///
     /// ```compile_fail,E0308
     /// use bacnet_transport::sc_hub::ScHub;
@@ -288,13 +291,15 @@ impl ScHub {
             tls_config.broadcast_rate_policy(),
         )?);
         let tls_acceptor = tls_config.into_acceptor();
+        // The OS error stays intact, as on the B/IP transports, so a caller can
+        // tell a port held by another socket from other failures by its kind.
         let listener = TcpListener::bind(bind_addr)
             .await
-            .map_err(|e| bacnet_types::error::Error::Encoding(format!("Hub bind failed: {e}")))?;
+            .map_err(bacnet_types::error::Error::Transport)?;
 
-        let local_addr = listener.local_addr().map_err(|e| {
-            bacnet_types::error::Error::Encoding(format!("Hub could not read local address: {e}"))
-        })?;
+        let local_addr = listener
+            .local_addr()
+            .map_err(bacnet_types::error::Error::Transport)?;
 
         debug!("BACnet/SC hub listening on {local_addr}");
 

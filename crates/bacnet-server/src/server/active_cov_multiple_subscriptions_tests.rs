@@ -417,14 +417,14 @@ async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_u
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         ),
         (
-            // A clockless server cannot report timestamps; the whole request
-            // is refused, the valid renewal before the timestamped reference
-            // included.
+            // A clockless server cannot report timestamps, so the timestamped
+            // reference is refused (#1102); the valid renewal after it is not
+            // processed.
             subscribe(
                 92,
                 false,
                 Some((900, 99)),
-                vec![(av(1), vec![plain(PV), (FLAGS, None, None, true)])],
+                vec![(av(1), vec![(FLAGS, None, None, true), plain(PV)])],
             ),
             ErrorClass::SERVICES,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
