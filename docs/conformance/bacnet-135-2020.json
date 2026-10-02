@@ -2893,8 +2893,9 @@
    ],
    "benchmarks": [],
    "public_claims": [
-    "docs/rust-api.md Error and Error Handling",
-    "docs/python-api.md Exceptions",
+    "docs/rust-api.md#error Error",
+    "docs/rust-api.md#error-handling Error Handling",
+    "docs/python-api.md#exceptions Exceptions",
     "crates/rusty-bacnet/rusty_bacnet.pyi BacnetProtocolError",
     "CHANGELOG.md #1047"
    ],
