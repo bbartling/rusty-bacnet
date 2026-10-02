@@ -203,6 +203,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
 }
 
 const CUSTOM: PropertyIdentifier = PropertyIdentifier::from_raw(5000);
+const CUSTOM_LIST: PropertyIdentifier = PropertyIdentifier::from_raw(5001);
 
 #[derive(Default)]
 struct Calls {
@@ -308,6 +309,9 @@ impl BACnetObject for ExtendedReporter {
     }
     fn is_array_property(&self, p: PropertyIdentifier) -> bool {
         p == CUSTOM || self.reporter.is_array_property(p)
+    }
+    fn is_list_property(&self, p: PropertyIdentifier) -> bool {
+        p == CUSTOM_LIST || self.reporter.is_list_property(p)
     }
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
@@ -513,6 +517,8 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(object.property_list().contains(&CUSTOM));
         assert_eq!(object.required_properties().as_ref(), &[CUSTOM]);
         assert!(object.is_array_property(CUSTOM));
+        assert!(object.is_list_property(CUSTOM_LIST));
+        assert!(!object.is_list_property(CUSTOM));
         assert!(object.is_writable_property(CUSTOM));
         assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(7));
         object

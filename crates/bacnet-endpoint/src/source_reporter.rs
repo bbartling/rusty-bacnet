@@ -217,6 +217,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.is_array_property(property)
     }
 
+    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
+        self.wrapped.is_list_property(property)
+    }
+
     fn is_createable(&self) -> bool {
         self.wrapped.is_createable()
     }

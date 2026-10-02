@@ -2513,6 +2513,43 @@
    "notes": "Refs #798. Local structural preflight reuses tag decoding and its 1 MiB per-tag length bound and 32-level context depth, including the service outer [3]. Application Boolean consumes no payload. Empty-valued elements, context/constructed/vendor values, unknown application tags and opaque primitive contents remain available; this does not validate every primitive representation or the remote property datatype. A malformed late tail leaves the existing output prefix unchanged. Native u32 extraction failures remain Python OverflowError; index zero, empty bytes and framing failures become synchronous ValueError. Inbound grammar/error precedence and #279 all-elements-before-mutation behavior are unchanged and retain independent raw fixtures. No broader list-property or complete service conformance claim."
   },
   {
+   "id": "BACNET-15-LIST-ELEMENT-TARGET-KIND",
+   "standard_anchor": "Clauses 15.1.1.3.1 and 15.2.1.3.1 with the service procedures of 15.1 and 15.2 (printed732/734, PDF734/736); Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); local licensed source inspected",
+   "priority": "P1",
+   "requirement_summary": "Inbound AddListElement and RemoveListElement decide from the target property's datatype, before decoding any element, whether it is a BACnetLIST, and refuse every other target (scalar, constructed single value, whole array or indexed array element) with SERVICES / PROPERTY_IS_NOT_A_LIST. Unknown object, unknown property and array-index errors take precedence, and element datatype errors follow. The destination codec serves only BACnetLIST of BACnetDestination properties.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-server/src/handlers/list.rs::list_target",
+    "crates/bacnet-server/src/handlers/list.rs::handle_list_element_observed",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::is_list_property",
+    "crates/bacnet-objects/src/traits/defaults.rs::list_property_default",
+    "crates/bacnet-endpoint/src/source_reporter.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/traits/defaults.rs::tests::list_classification_follows_the_datatype_and_never_overlaps_arrays",
+    "crates/bacnet-server/src/handlers/list.rs::add_and_remove_list_element_mutate_msi_alarm_values",
+    "crates/bacnet-server/src/handlers/list.rs::add_list_element_to_framed_recipient_list_appends",
+    "crates/bacnet-server/src/handlers/list.rs::remove_list_element_from_framed_recipient_list_leaves_rest",
+    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_response",
+    "crates/bacnet-endpoint/src/source_reporter_forwarding_tests.rs::custom_capabilities_clocks_indexes_and_private_state_are_retained"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_services_refuse_scalar_properties_as_not_a_list",
+    "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_services_refuse_constructed_single_values_as_not_a_list",
+    "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_services_refuse_arrays_and_array_elements_as_not_a_list",
+    "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_target_errors_precede_element_errors_in_clause_order",
+    "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::framed_lists_of_other_elements_never_take_the_destination_codec",
+    "crates/bacnet-server/src/handlers/list.rs::add_list_element_rejects_array_index_on_alarm_values",
+    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_execution_failures_keep_response_state_and_known_fields"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md BACnetObject Trait list services",
+    "CHANGELOG.md #999"
+   ],
+   "notes": "Refs #999. BACnetObject::is_list_property is a provided method beside is_array_property; its default classifies by Clause 12 datatype, including the type-dependent Alarm_Values / Fault_Values, List_Of_Object_Property_References, Present_Value (a list only on Group) and Member_Of (a single reference on Audit Log). The 2020 tables define no BACnetARRAY of BACnetLIST, so an indexed array element is never a list. An index on a non-array is refused as PROPERTY / PROPERTY_IS_NOT_AN_ARRAY after a whole-property read, so absence keeps its UNKNOWN_PROPERTY precedence. Recipient_List of Notification Class and Notification Forwarder alone takes the destination codec; a list held framed with no element codec (Schedule List_Of_Object_Property_References, the standalone Device COV subscription lists, all read-only) returns PROPERTY / WRITE_ACCESS_DENIED instead of being decoded as destinations. Before, a RemoveListElement naming absent members of a value that reads as several members (DateTime Value Present_Value) was acknowledged and wrote a priority-16 command; it is now refused with nothing written. Audit observation is unchanged in kind: a target refusal with well-formed elements reports the response error and the readable pre-image. The Error PDU still carries only class and code, not the First Failed Element Number of the ChangeList-Error form. No broader list-property or complete service conformance claim."
+  },
+  {
    "id": "BACNET-15-WPM-OUTBOUND-VALIDATION",
    "standard_anchor": "Clause 15.10 and 15.10.3.2 / Table 15-17 (printed754-756/PDF756-758)",
    "priority": "P1",

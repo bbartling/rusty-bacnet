@@ -179,7 +179,7 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
                 PropertyIdentifier::OBJECT_IDENTIFIER,
                 None,
                 vec![0x21, 2],
-                (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED),
+                (ErrorClass::SERVICES, ErrorCode::PROPERTY_IS_NOT_A_LIST),
                 Some(vec![0xc4, 0x03, 0x40, 0, 1]),
             ),
             (
@@ -187,8 +187,8 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 vec![0x21, 2],
-                // List services are not command producers; tracked PV fails closed.
-                (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED),
+                // A scalar target is refused before any write is attempted.
+                (ErrorClass::SERVICES, ErrorCode::PROPERTY_IS_NOT_A_LIST),
                 Some(vec![0x91, 0]),
             ),
         ] {
@@ -520,14 +520,19 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
                 false,
             ),
         ] {
-            let mut fixture = list_server(vec![1]).await;
+            // The list itself must reach its write for the scripted error to fire.
+            let mut fixture = server(reporter()).await;
+            let mut list = MultiStateInputObject::new(1, "list", 3).unwrap();
+            list.set_alarm_values(vec![1]);
+            let list = fixture.counting(list);
+            fixture.server.db.write().await.add(list).unwrap();
             *fixture.execution_error.lock().unwrap() = Some(error);
             let response = dispatch(
                 &fixture.server,
                 service,
                 list_request(
-                    oid(ObjectType::BINARY_VALUE, 1),
-                    PropertyIdentifier::PRESENT_VALUE,
+                    oid(ObjectType::MULTI_STATE_INPUT, 1),
+                    PropertyIdentifier::ALARM_VALUES,
                     None,
                     vec![0x21, 2],
                 ),

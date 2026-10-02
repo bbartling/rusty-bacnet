@@ -3,11 +3,15 @@ use bacnet_encoding::{constructed::decode_destination_list, primitives::decode_a
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::constructed::BACnetDestination;
 
-fn invalid_data_type() -> Error {
+fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+        class: class.to_raw() as u32,
+        code: code.to_raw() as u32,
     }
+}
+
+fn invalid_data_type() -> Error {
+    protocol_error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE)
 }
 
 /// Handle an AddListElement request.
@@ -27,14 +31,143 @@ pub fn handle_remove_list_element(
     handle_list_element_observed(db, service_data, true, |_, _, _| {})
 }
 
+/// How a list's elements travel in the request and how the object holds them.
+#[derive(Clone, Copy)]
+enum ElementCodec {
+    /// Consecutive application-tagged values, held as `PropertyValue::List`.
+    Values,
+    /// BACnetDestination entries, held as the framed list in `ApplicationData`.
+    Destinations,
+}
+
+impl ElementCodec {
+    /// The codec the property's datatype implies, known even when the object
+    /// is missing. Only a BACnetLIST of BACnetDestination, the Recipient_List
+    /// of Notification Class and Notification Forwarder (Tables 12-24 and
+    /// 12-58), takes the destination codec.
+    fn for_datatype(object_type: ObjectType, property: PropertyIdentifier) -> Self {
+        let destinations = property == PropertyIdentifier::RECIPIENT_LIST
+            && matches!(
+                object_type,
+                ObjectType::NOTIFICATION_CLASS | ObjectType::NOTIFICATION_FORWARDER
+            );
+        if destinations {
+            Self::Destinations
+        } else {
+            Self::Values
+        }
+    }
+
+    /// Whether the object holds the list in the form this codec edits.
+    fn holds(self, stored: &PropertyValue) -> bool {
+        match self {
+            Self::Values => matches!(stored, PropertyValue::List(_)),
+            Self::Destinations => matches!(stored, PropertyValue::ApplicationData(_)),
+        }
+    }
+
+    fn decode(self, elements: &[u8]) -> Result<ListEdits, Error> {
+        match self {
+            Self::Destinations => decode_destination_list(elements).map(ListEdits::Destinations),
+            Self::Values => {
+                let mut values = Vec::new();
+                let mut offset = 0;
+                while offset < elements.len() {
+                    let (value, next) = decode_application_value(elements, offset)?;
+                    values.push(value);
+                    offset = next;
+                }
+                Ok(ListEdits::Values(values))
+            }
+        }
+    }
+}
+
 enum ListEdits {
     Values(Vec<PropertyValue>),
     Destinations(Vec<BACnetDestination>),
 }
 
+/// A request refused before any element is applied. `current` is the target
+/// property's value when it could be read, kept for the observer's pre-image.
+struct Refusal {
+    error: Error,
+    current: Option<PropertyValue>,
+}
+
+impl Refusal {
+    fn unread(error: Error) -> Self {
+        Self {
+            error,
+            current: None,
+        }
+    }
+
+    fn read(class: ErrorClass, code: ErrorCode, current: PropertyValue) -> Self {
+        Self {
+            error: protocol_error(class, code),
+            current: Some(current),
+        }
+    }
+}
+
+/// Resolve the target list without looking at the elements. The checks run in
+/// the order the service procedures of Clauses 15.1 and 15.2 imply: the
+/// object, the property, a supplied array index, and then whether the target
+/// is a BACnetLIST at all. Element datatype errors come only after every one
+/// of these has passed.
+fn list_target(
+    db: &ObjectDatabase,
+    request: &ListElementRequest,
+    codec: ElementCodec,
+) -> Result<PropertyValue, Refusal> {
+    let object = db.get(&request.object_identifier).ok_or_else(|| {
+        Refusal::unread(protocol_error(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ))
+    })?;
+    let property = request.property_identifier;
+    let index = request.property_array_index;
+    let read = |index| {
+        object
+            .read_property(property, index)
+            .map_err(Refusal::unread)
+    };
+    if index.is_some() && !object.is_array_property(property) {
+        // Read the whole property first so an unknown one keeps its error.
+        return Err(Refusal::read(
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            read(None)?,
+        ));
+    }
+    let current = read(index)?;
+    // An indexed array element is never a list: 135-2020 defines no
+    // BACnetARRAY of BACnetLIST property.
+    if index.is_some() || !object.is_list_property(property) {
+        return Err(Refusal::read(
+            ErrorClass::SERVICES,
+            ErrorCode::PROPERTY_IS_NOT_A_LIST,
+            current,
+        ));
+    }
+    if !codec.holds(&current) {
+        // A list held in a form neither codec edits, such as a framed list of
+        // references, cannot change through these services.
+        return Err(Refusal::read(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+            current,
+        ));
+    }
+    Ok(current)
+}
+
 /// Decode once and observe only executable requests. The callback borrows the
 /// pre-image already needed by execution; it never causes a second property read.
-/// Lookup/read errors keep their original precedence over element decode errors.
+/// Target errors (lookup, read, array index, not a list) keep their precedence
+/// over element decode errors.
 pub(crate) fn handle_list_element_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -42,45 +175,19 @@ pub(crate) fn handle_list_element_observed(
     mut before: impl FnMut(&ObjectDatabase, &ListElementRequest, Option<&PropertyValue>),
 ) -> Result<(), Error> {
     let request = ListElementRequest::decode(service_data)?;
-
-    let current = db
-        .get(&request.object_identifier)
-        .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        })
-        .and_then(|object| {
-            object.read_property(request.property_identifier, request.property_array_index)
-        });
-    // A missing/unreadable NotificationClass Recipient_List still has a known
-    // framed datatype. For readable properties, retain the existing shape-based
-    // execution choice, including the strict handling of ApplicationData.
-    let framed = matches!(&current, Ok(PropertyValue::ApplicationData(_)))
-        || (current.is_err()
-            && request.object_identifier.object_type() == ObjectType::NOTIFICATION_CLASS
-            && request.property_identifier == PropertyIdentifier::RECIPIENT_LIST);
-    let edits = if framed {
-        decode_destination_list(&request.list_of_elements).map(ListEdits::Destinations)
-    } else {
-        let mut values = Vec::new();
-        let mut offset = 0;
-        let decode = || -> Result<Vec<PropertyValue>, Error> {
-            while offset < request.list_of_elements.len() {
-                let (value, next) = decode_application_value(&request.list_of_elements, offset)?;
-                if current.is_ok() {
-                    values.push(value);
-                }
-                offset = next;
-            }
-            Ok(values)
-        };
-        decode().map(ListEdits::Values)
-    };
-    let current = match current {
+    let codec = ElementCodec::for_datatype(
+        request.object_identifier.object_type(),
+        request.property_identifier,
+    );
+    let target = list_target(db, &request, codec);
+    // Every request decodes its elements once, with the codec its datatype
+    // implies; a refused request reaches the observer only if they decode.
+    let edits = codec.decode(&request.list_of_elements);
+    let current = match target {
         Ok(current) => current,
-        Err(error) => {
+        Err(Refusal { error, current }) => {
             if edits.is_ok() {
-                before(db, &request, None);
+                before(db, &request, current.as_ref());
             }
             return Err(error);
         }
@@ -89,7 +196,7 @@ pub(crate) fn handle_list_element_observed(
     let value = match edits {
         ListEdits::Destinations(edits) => {
             let PropertyValue::ApplicationData(bytes) = &current else {
-                unreachable!()
+                unreachable!("list_target admits only framed destination lists")
             };
             // Decode BOTH lists before observation or mutation. A malformed
             // stored frame must not be treated as an empty list on removal.
@@ -107,9 +214,8 @@ pub(crate) fn handle_list_element_observed(
         }
         ListEdits::Values(edits) => {
             before(db, &request, Some(&current));
-            let mut items = match current {
-                PropertyValue::List(items) => items,
-                _ => Vec::new(),
+            let PropertyValue::List(mut items) = current else {
+                unreachable!("list_target admits only lists of values")
             };
             if remove {
                 items.retain(|item| !edits.contains(item));
