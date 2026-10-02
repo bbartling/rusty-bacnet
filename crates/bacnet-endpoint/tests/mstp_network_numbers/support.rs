@@ -1,4 +1,5 @@
 //! One real serial/MAC owner; gates observe admission without replacing transport behavior.
+use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use bacnet_objects::{analog::AnalogInputObject, database::ObjectDatabase};
 use bacnet_server::server::{BACnetServer, ServerConfig};
@@ -53,12 +54,25 @@ impl Drop for SignalOnDrop<'_> {
     }
 }
 pub struct ObservedSerial {
-    inner: LoopbackSerial,
-    writes: mpsc::UnboundedSender<MstpFrame>,
+    /// Live until drop, which takes it before signalling `serial_dropped`.
+    inner: Option<LoopbackSerial>,
+    /// Live until drop, as for `inner`.
+    writes: Option<mpsc::UnboundedSender<MstpFrame>>,
     gates: Arc<Gates>,
+}
+impl ObservedSerial {
+    fn wire(&self) -> &LoopbackSerial {
+        self.inner.as_ref().expect("serial wire is live until drop")
+    }
 }
 impl Drop for ObservedSerial {
     fn drop(&mut self) {
+        // A Drop body runs before the struct's fields drop. Close the simulated
+        // wire and the frame observer explicitly first, so a waiter that sees the
+        // permit also sees peer writes fail; in DedicatedThread mode that waiter
+        // runs on another thread.
+        drop(self.inner.take());
+        drop(self.writes.take());
         self.gates.serial_dropped.add_permits(1);
     }
 }
@@ -74,12 +88,16 @@ impl SerialPort for ObservedSerial {
             // Cancellation may stop a write before any simulated bytes complete.
             std::future::pending::<()>().await;
         }
-        self.inner.write(data).await?;
-        self.writes.send(frame).expect("observer stays attached");
+        self.wire().write(data).await?;
+        self.writes
+            .as_ref()
+            .expect("observer is live until drop")
+            .send(frame)
+            .expect("observer stays attached");
         Ok(())
     }
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        self.inner.read(buf).await
+        self.wire().read(buf).await
     }
 }
 
@@ -133,29 +151,45 @@ impl TransportPort for GatedTransport {
     }
 }
 
+/// The three application owners of one MS/TP link's local Number controls.
+#[derive(Clone, Copy, Debug)]
+pub enum Role {
+    Server,
+    Endpoint,
+    /// Standalone client: no Device object, database or configured authority.
+    Client,
+}
+
 pub enum Owner {
     Server(Box<BACnetServer<GatedTransport>>),
     Endpoint(Box<EndpointSession<GatedTransport>>),
+    Client(Box<BACnetClient<GatedTransport>>),
 }
 impl Owner {
-    async fn start(server: bool, transport: GatedTransport) -> Self {
+    async fn start(role: Role, transport: GatedTransport) -> Self {
         let mut db = ObjectDatabase::new();
         let mut analog = AnalogInputObject::new(1, "number-progress", 0).unwrap();
         analog.set_present_value(42.0);
         db.add(Box::new(analog)).unwrap();
-        if server {
-            Self::Server(Box::new(
+        match role {
+            Role::Server => Self::Server(Box::new(
                 bounded(BACnetServer::start(ServerConfig::default(), db, transport))
                     .await
                     .unwrap(),
-            ))
-        } else {
-            let mut session =
-                EndpointSession::new(transport, SessionRole::Both, Default::default())
-                    .unwrap()
-                    .with_database(db);
-            bounded(session.start()).await.unwrap();
-            Self::Endpoint(Box::new(session))
+            )),
+            Role::Endpoint => {
+                let mut session =
+                    EndpointSession::new(transport, SessionRole::Both, Default::default())
+                        .unwrap()
+                        .with_database(db);
+                bounded(session.start()).await.unwrap();
+                Self::Endpoint(Box::new(session))
+            }
+            Role::Client => Self::Client(Box::new(
+                bounded(BACnetClient::start(ClientConfig::default(), transport))
+                    .await
+                    .unwrap(),
+            )),
         }
     }
     pub async fn stop(&mut self) {
@@ -164,6 +198,9 @@ impl Owner {
                 owner.stop().await.unwrap();
             }
             Self::Endpoint(owner) => {
+                owner.stop().await.unwrap();
+            }
+            Self::Client(owner) => {
                 owner.stop().await.unwrap();
             }
         }
@@ -251,8 +288,8 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (GatedTran
     let (tx, writes) = mpsc::unbounded_channel();
     let transport = MstpTransport::new(
         ObservedSerial {
-            inner: serial,
-            writes: tx,
+            inner: Some(serial),
+            writes: Some(tx),
             gates: gates.clone(),
         },
         MstpConfig {
@@ -284,7 +321,7 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (GatedTran
         },
     )
 }
-pub async fn fixture(server: bool, mode: MstpExecutionMode, gates: Arc<Gates>) -> (Owner, Peer) {
+pub async fn fixture(role: Role, mode: MstpExecutionMode, gates: Arc<Gates>) -> (Owner, Peer) {
     let (transport, peer) = transport(mode, gates).await;
-    (Owner::start(server, transport).await, peer)
+    (Owner::start(role, transport).await, peer)
 }

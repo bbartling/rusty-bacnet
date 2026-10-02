@@ -93,15 +93,17 @@ learning with configured-source precedence. See `BACNET-06-NONROUTER-NETWORK-NUM
 in the [evidence rows](support-summary.md#ledger-rows) and the
 [control contract](../rust-api.md#local-network-number-controls).
 This is not complete active Network Port profile conformance; #863 remains the
-same-device multiport/router residual. Pending configuration, rebind, BBMD,
-foreign-device, DHCP and other-link support are not claimed. See the [Rust contract](../rust-api.md#registered-bip-network-port).
+same-device multiport/router residual. #879 extended the controls, without a
+registered port, to the other built-in links (sections below). Pending
+configuration, rebind, BBMD or foreign-device registration authority, DHCP and
+configured numbers on other links are not claimed. See the [Rust contract](../rust-api.md#registered-bip-network-port).
 Global evidence pins remain unchanged.
 
 ## SC local nonrouter Network Number controls
 
 The SC slice of #879 extends `BACNET-06-NONROUTER-NETWORK-NUMBER` to full
 servers and shared endpoints using the existing owner and bounded control worker.
-Clauses 6.4.14–6.4.15 and 6.5.2.2 admit local unicast or broadcast What-Is;
+Clauses 6.4.19–6.4.20 and 6.5.2.2 admit local unicast or broadcast What-Is;
 known owners reply by local broadcast. Only logical-broadcast NNI teaches state.
 SC starts UNKNOWN without configured SC registration and never borrows another
 Network Port object. Configured-source precedence and learned response flag zero
@@ -117,8 +119,9 @@ APDU handler and admitted Audit ACK progress, caller-owned Number cancellation,
 stop cancellation and joined cleanup. They are not OS/TLS backpressure tests.
 A started send may have reached wire; detached ordinary APDU ownership is unchanged.
 
-Parent #879 remains incomplete for other links and standalone clients; #863
-multiport routing and #518 SC control-origin authorization remain separate.
+An NPDU from a direct-connection peer is never logical group: it may query but
+cannot teach. #863 multiport routing and #518 SC control-origin authorization
+remain separate.
 No SC configured Network Port, authenticated Hub-relayed leaf, whole Annex AB,
 or complete Network Port profile is claimed. Global evidence pins stay unchanged.
 
@@ -144,9 +147,36 @@ filter compensates for sender-namespace multicast reflection. These wire tests
 are separate from the unchanged deterministic owner lifecycle gates above.
 
 No IPv6 endpoint builder, number setter, configured IPv6 Network Port, Python
-foreign-device API, complete Annex U/Network Port profile or #879 closure is
-claimed. B/IP BBMD/foreign-device ownership, MS/TP, Ethernet and standalone-client
-controls remain outside this slice. Global evidence pins stay unchanged.
+foreign-device API or complete Annex U/Network Port profile is claimed. The
+other links have their own slices, summarised below. Global evidence pins stay
+unchanged.
+
+## Local Network Number owners per link (#879)
+
+#879 is complete for every built-in nonrouter link. Each transport opts in
+through `TransportPort::supports_local_nonrouter_number_controls`; the full
+server, shared endpoint and standalone client consume that one capability and
+enable the network layer's single pre-start control receiver, with no
+per-transport branch. Only the in-process `LoopbackTransport` keeps the false
+default. No owner sends a startup announcement: Clause 6.4.20 asks that of
+configured routers. Clause 6.4.19 lets a query arrive by local unicast or
+broadcast; Clause 6.4.20 lets only a local broadcast teach.
+
+| Link | Owners | Logical broadcast on ingress | Reply egress | Evidence label |
+|---|---|---|---|---|
+| B/IP NORMAL | server, endpoint, client | Original-Broadcast; Forwarded-NPDU from any UDP sender (compatibility policy) | Original-Broadcast | real UDP loopback; a registered port supplies the configured number |
+| B/IP BBMD | server, endpoint, client | Original-Broadcast, Forwarded-NPDU from a BDT peer, DBTN from a registered foreign device | Original-Broadcast, also forwarded to BDT/FDT (#937) | real UDP loopback; broadcast capture on Linux |
+| B/IP foreign device | server, endpoint, client | Forwarded-NPDU from any UDP sender (compatibility policy) | DBTN to the configured BBMD | real UDP loopback |
+| B/IPv6 normal | server, client | multicast Original-Broadcast or Forwarded-NPDU | multicast Original-Broadcast on the selected link | isolated Linux IPv6 link, ignored in ordinary CI; installed Python qualification |
+| B/IPv6 foreign device | server, client | Forwarded-NPDU from the configured BBMD | DBTN to that BBMD | isolated Linux IPv6 link, ignored in ordinary CI |
+| BACnet/SC | server, endpoint, client | Hub-relayed broadcast VMAC only | Hub broadcast, including for direct queries | real constrained-TLS Hub and direct peers |
+| MS/TP | server, endpoint, client | frames to station 255 | DataNotExpectingReply to station 255 | LoopbackSerial simulator in both execution modes; no RS-485 timing |
+| Linux Ethernet | server, client | all-FF destination | all-FF LLC frame | two-container NET_RAW virtual link, opt-in; no physical LAN |
+
+There is no B/IPv6 or Ethernet endpoint builder and no Python Ethernet or B/IPv6
+foreign-device API. Shared-endpoint BBMD/foreign modes remain experimental.
+Configured numbers exist only through a registered NORMAL B/IP Network Port;
+every other link starts UNKNOWN.
 
 ## Endpoint WriteProperty source WRITE
 
