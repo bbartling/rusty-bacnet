@@ -5,8 +5,9 @@ use alloc::vec::Vec;
 
 /// One entry in a Staging object's `Stages` array.
 ///
-/// The wire production is `BACnetStageLimitValue ::= SEQUENCE { limit REAL,
-/// values BITSTRING, deadband REAL }`. `values` stores the logical bits in
+/// On the wire (`BACnetStageLimitValue`, Clause 21) the three fields go out
+/// application-tagged in declaration order: the limit as a REAL, the values
+/// as a BIT STRING, then the deadband as a REAL. `values` stores the logical bits in
 /// target-reference order; the encoding crate owns their MSB-first packing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetStageLimitValue {

@@ -1,7 +1,7 @@
 //! Energy_Meter and Energy_Meter_Ref, the optional pair the Lift (Clause
 //! 12.59, Table 12-77) and Escalator (Clause 12.60, Table 12-78) tables
-//! share: the accumulated energy consumption in kilowatt-hours, or a
-//! reference to the object that holds it instead.
+//! share: the car's or escalator's running energy total in kilowatt-hours,
+//! or a reference to a meter object that keeps that total instead.
 //!
 //! Clauses 12.59 and 12.60 tie the two together: while Energy_Meter_Ref is
 //! initialized (its object instance isn't 4194303), Energy_Meter reads 0.0.
@@ -166,8 +166,8 @@ macro_rules! energy_meter_accessors {
             self.energy_meter.reference()
         }
 
-        /// Set the object that indicates the accumulated energy consumption
-        #[doc = concat!("of this ", $object, ", served as Energy_Meter_Ref.")]
+        /// Point Energy_Meter_Ref at the meter object that totals the energy
+        #[doc = concat!("used by this ", $object, ".")]
         ///
         /// Energy_Meter_Ref is read-only over the network, so this is the
         /// only way to change it. The object must be an Accumulator, Pulse

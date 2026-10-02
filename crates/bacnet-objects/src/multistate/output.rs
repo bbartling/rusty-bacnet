@@ -320,9 +320,9 @@ impl BACnetObject for MultiStateOutputObject {
                 // Checked for representability but deliberately NOT range-checked against
                 // Number_Of_States, unlike Present_Value. Clause 12.19 treats a
                 // Feedback_Value outside the state set as a condition to be *reported* —
-                // Reliability must retain CONFIGURATION_ERROR while any of those
-                // properties except Present_Value remains outside the valid range
-                // — not as a value to refuse. Feedback_Value reflects a sensed quantity
+                // for the Number_Of_States-bounded properties apart from Present_Value,
+                // an out-of-range value pins Reliability at CONFIGURATION_ERROR until
+                // fixed — not as a value to refuse. Feedback_Value reflects a sensed quantity
                 // determined by local policy, so it can legitimately fall
                 // outside the configured range; refusing it would make CONFIGURATION_ERROR
                 // unreachable. The object-owned evaluator applies that reliability.

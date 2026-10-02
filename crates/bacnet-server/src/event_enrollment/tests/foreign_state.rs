@@ -285,7 +285,7 @@ fn foreign_high_limit_recovers_under_cobs_params() {
 
 /// Zero-padded comparison width (review F2): mask [FF FF], alarm [00 01],
 /// monitored [00] — the alarm's second significant byte never observed — is
-/// NOT a match ("equals a listed alarm value" over the whole width). The
+/// NOT a match (an alarm pattern must agree over the whole width). The
 /// truncating comparison reported OFFNORMAL on the shared first byte.
 #[test]
 fn cobs_mask_wider_than_monitored_value_is_not_a_match() {

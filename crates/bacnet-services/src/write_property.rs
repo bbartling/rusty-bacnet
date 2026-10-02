@@ -36,17 +36,11 @@ fn decode_context_u32(
 // WritePropertyRequest
 // ---------------------------------------------------------------------------
 
-/// WriteProperty-Request service parameters.
+/// WriteProperty-Request service parameters (Clause 15.9; production in Clause 21.2).
 ///
-/// ```text
-/// WriteProperty-Request ::= SEQUENCE {
-///     objectIdentifier    [0] BACnetObjectIdentifier,
-///     propertyIdentifier  [1] BACnetPropertyIdentifier,
-///     propertyArrayIndex  [2] Unsigned OPTIONAL,
-///     propertyValue       [3] ABSTRACT-SYNTAX.&TYPE,
-///     priority            [4] Unsigned (1..16) OPTIONAL
-/// }
-/// ```
+/// Five context-tagged members in order: object identifier `[0]`, property identifier `[1]`,
+/// an optional Unsigned array index `[2]`, the value inside an opening/closing `[3]` pair (typed
+/// by the property), and an optional priority `[4]`, an Unsigned limited to 1-16.
 ///
 /// WriteProperty uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]

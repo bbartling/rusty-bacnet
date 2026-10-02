@@ -23,14 +23,14 @@ pub struct EventStateChange {
 
 /// A fire-ready transition and its external distribution policy.
 ///
-/// ASHRAE 135-2020 Clause 13.2.2.1.4 mandates four actions on every transition:
-/// store the new `Event_State`, store the time in `Event_Time_Stamps`, store the
-/// message text in `Event_Message_Texts` *if present*, and indicate the
-/// transition to the alarm-acknowledgment and notification-distribution
-/// processes. None of the four is `Event_Enable`-scoped; the property disables
-/// external distribution downstream (Clause 13.2.5), so a cleared bit must not
-/// suppress the first three actions, nor the alarm-acknowledgment half of the
-/// fourth.
+/// ASHRAE 135-2020 Clause 13.2.2.1.4 attaches four effects to every
+/// transition: `Event_State` takes the new state, `Event_Time_Stamps` records
+/// when it happened, `Event_Message_Texts` (on objects that have it) records
+/// the message, and both alarm-acknowledgment and notification distribution
+/// are told about it. `Event_Enable` gates none of the four; it only turns off
+/// external distribution further downstream (Clause 13.2.5), so a cleared bit
+/// must not suppress the three property updates, nor the alarm-acknowledgment
+/// part of the hand-off.
 ///
 /// The object intrinsic-reporting hooks return this value as an uncommitted
 /// proposal. The server commits object-owned state and history before considering
@@ -54,9 +54,9 @@ impl EventStateChange {
     ///
     /// ASHRAE 135-2020 Clause 13.2.5.3 requires
     /// `CHANGE_OF_RELIABILITY` for every transition to or from FAULT.
-    /// Otherwise Clauses 13.8.1.1 and 13.9.1.1 require the Event Type
-    /// associated with the event-initiating object's configured event
-    /// algorithm, supplied here as `algorithm`.
+    /// Any other transition reports the Event Type that belongs to the
+    /// object's own configured algorithm (Clauses 13.8.1.1 and 13.9.1.1),
+    /// which the caller passes as `algorithm`.
     pub fn event_type(&self, algorithm: EventType) -> EventType {
         if self.from == EventState::FAULT || self.to == EventState::FAULT {
             EventType::CHANGE_OF_RELIABILITY
@@ -260,9 +260,9 @@ fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventSt
 pub(crate) enum FaultPrecedence {
     /// Reliability is bad and FAULT does not hold yet: transition immediately.
     ///
-    /// Clause 13.2.2.1's ToFault transitions are unconditional and carry no
-    /// delay term: a reliability-evaluation result unequal to NO_FAULT_DETECTED
-    /// triggers the transition actions and entry to Fault. `Time_Delay` belongs
+    /// Clause 13.2.2.1 puts no delay on ToFault: the moment reliability
+    /// evaluation yields any value other than NO_FAULT_DETECTED, the object
+    /// goes to Fault and the usual transition actions run. `Time_Delay` belongs
     /// to the event algorithm (Clause 13.3.1 uses pTimeDelay to require sustained
     /// offnormal conditions before an indication), and
     /// the algorithm is precisely what fault detection takes precedence over.
@@ -275,9 +275,9 @@ pub(crate) enum FaultPrecedence {
     /// Reliability changed while FAULT already holds: execute the transition
     /// actions and re-enter FAULT.
     ///
-    /// Clause 13.2.2.1's Fault ToFault transition runs the transition actions
-    /// and re-enters Fault when Reliability changes to another value that
-    /// is still unequal to NO_FAULT_DETECTED.
+    /// In Clause 13.2.2.1's state machine a Reliability change while in Fault
+    /// is itself a ToFault transition, provided the new value is still a fault
+    /// (not NO_FAULT_DETECTED), so the transition actions run again.
     ///
     /// Also selected when FAULT holds with no recorded value — a state this
     /// crate never produces but a downstream implementor can construct, since
@@ -285,8 +285,8 @@ pub(crate) enum FaultPrecedence {
     ReenterFault,
     /// Reliability recovered while in FAULT.
     ///
-    /// Clause 13.2.2.1's Fault ToNormal transition runs the transition actions
-    /// and enters Normal when reliability evaluation returns NO_FAULT_DETECTED.
+    /// Clause 13.2.2.1 leaves Fault for Normal, with its transition actions, as
+    /// soon as reliability evaluation is back to NO_FAULT_DETECTED.
     /// **NORMAL specifically —
     /// not a state re-derived from the event algorithm.** Recovering straight
     /// into HIGH_LIMIT because the present value is still out of range would
@@ -368,8 +368,8 @@ pub struct OutOfRangeDetector {
     /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.6 pTimeDelayNormal
-    /// parameter — seconds that Normal conditions must persist before a
-    /// NORMAL event state is indicated. `None` is the not-configured case
+    /// parameter — the number of seconds a return to normal has to be
+    /// sustained before the detector confirms it. `None` is the not-configured case
     /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
     /// Current event state.
@@ -652,8 +652,8 @@ pub struct ChangeOfStateDetector {
     /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.2 pTimeDelayNormal
-    /// parameter — seconds that Normal conditions must persist before a
-    /// NORMAL event state is indicated. `None` is the not-configured case
+    /// parameter — the number of seconds a return to normal has to be
+    /// sustained before the detector confirms it. `None` is the not-configured case
     /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
     /// Current event state.
@@ -855,8 +855,8 @@ pub struct CommandFailureDetector {
     /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.4 pTimeDelayNormal
-    /// parameter — seconds that Normal conditions must persist before a
-    /// NORMAL event state is indicated. `None` is the not-configured case
+    /// parameter — the number of seconds a return to normal has to be
+    /// sustained before the detector confirms it. `None` is the not-configured case
     /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
     /// Current event state.
