@@ -279,11 +279,32 @@ impl BACnetDeviceObjectPropertyReference {
 pub struct BACnetAddress {
     /// Network number (0 = local network, 1-65534 = remote, 65535 = broadcast).
     pub network_number: u16,
-    /// MAC-layer address (variable length; empty = local broadcast).
+    /// MAC-layer address (variable length, at most [`Self::MAX_MAC_LEN`] in a
+    /// configured recipient; empty = broadcast).
     pub mac_address: MacAddr,
 }
 
 impl BACnetAddress {
+    /// The longest `mac_address`, in octets, of a recipient this stack is
+    /// configured to notify (#1124).
+    ///
+    /// Clause 21 puts no length on the OCTET STRING, but a MAC is only useful
+    /// if it names a node on some data link. Table 6-2 gives the network-layer
+    /// address length of each standard data link, and the longest there is 7
+    /// octets (a LonTalk Neuron_ID destination). The data links this stack
+    /// serves address a node in at most 18 octets: 1 for MS/TP, 6 for B/IP,
+    /// Ethernet and B/SC, and 18 for B/IPv6, whose port names a peer by its
+    /// 16-octet IPv6 address and 2-octet UDP port. A longer MAC names no node
+    /// on any of them, nor on a standard data link behind a router.
+    ///
+    /// A recipient the device is configured to notify (a Recipient_List
+    /// destination or the Audit_Notification_Recipient) is held to this bound:
+    /// its decoder refuses a longer MAC, and so do the local setters that store
+    /// one, so a stored recipient always decodes again. Recipients the stack
+    /// reports from source addresses it learned off the network, in COV
+    /// subscription lists and audit records, are not bounded.
+    pub const MAX_MAC_LEN: usize = 18;
+
     /// Create a local-broadcast address.
     pub fn local_broadcast() -> Self {
         Self {

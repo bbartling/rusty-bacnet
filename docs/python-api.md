@@ -1972,6 +1972,20 @@ trusted `Operation_Expected` state channel. Inbound LifeSafetyOperation is
 therefore fail-closed (`SERVICES / SERVICE_REQUEST_DENIED`) for these objects.
 Use the Rust server API when authorized silence/unsilence execution is required.
 
+A running server's application sets the states it derives:
+`await server.set_present_value_local(point_id, PropertyValue.enumerated(2))`
+sets Present_Value (here ALARM) and
+`await server.set_tracking_value_local(point_id, PropertyValue.enumerated(0))`
+sets Tracking_Value. Each takes an Enumerated BACnetLifeSafetyState, standard
+or from 256 to 65535, and raises VALUE_OUT_OF_RANGE for another number,
+INVALID_DATA_TYPE for another datatype and OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
+for an object other than a Life Safety Point or Zone. Each changes only its own
+property, so latching Present_Value until reset is up to the application.
+Present_Value is taken while Out_Of_Service is set; a Tracking_Value then waits
+for the return to service behind a client's simulated one. A SubscribeCOV on
+the object hears Present_Value changes, and a property subscription on
+Tracking_Value hears that one.
+
 #### Access Control
 
 ```python
@@ -1983,6 +1997,13 @@ server.add_access_rights(instance=1, name="Employee Access")
 server.add_access_zone(instance=1, name="Building A")
 server.add_credential_data_input(instance=1, name="Card Reader")
 ```
+
+Access Door, Access Point, Credential Data Input and Load Control take
+SubscribeCOV, and each report carries the values their Table 13-1 rows name:
+Door_Alarm_State on a door; Access_Event (in place of Present_Value),
+Access_Event_Tag and Access_Event_Time on an Access Point; Update_Time on a
+Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
+on a Load Control.
 
 #### Transportation
 
@@ -2296,11 +2317,12 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |
+| `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
 
 ```python
 from rusty_bacnet import (
     BacnetError, BacnetProtocolError, BacnetTimeoutError,
-    BacnetRejectError, BacnetAbortError,
+    BacnetRejectError, BacnetAbortError, BacnetTransportError,
 )
 
 try:
@@ -2329,6 +2351,22 @@ except BacnetError as e:
 | `vt_session_identifiers` | VT-Close error that lists them | Local identifiers of the sessions that could not be closed |
 
 `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
+
+`BacnetTransportError` derives from both `BacnetError` and `OSError`, so either `except` clause catches it. Its `errno` is the operating system's code when it reported one, otherwise the code for the failure's kind where one exists (`None` if not), and `strerror` is the message:
+
+```python
+import errno
+
+try:
+    await hub.start()
+except OSError as e:
+    if e.errno == errno.EADDRINUSE:
+        print("port already in use")
+    else:
+        raise
+```
+
+`errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises a plain `OSError` instead.
 
 ---
 

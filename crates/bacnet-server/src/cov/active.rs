@@ -7,6 +7,7 @@
 //! caller's database guard. Ordinary and Single entries form
 //! `Active_COV_Subscriptions`; Multiple references are never listed there and
 //! form `Active_COV_Multiple_Subscriptions` (see [`multiple`]).
+use super::reported::lead;
 use super::*;
 use bacnet_encoding::constructed::encode_cov_subscription_list;
 use bacnet_objects::database::ObjectDatabase;
@@ -15,7 +16,6 @@ use bacnet_types::constructed::{
     BACnetAddress, BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
     BACnetRecipientProcess,
 };
-use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 use std::cmp::Ordering as CmpOrdering;
@@ -109,7 +109,7 @@ impl ActiveCovSubscriptions {
                 let object = db.get(&entry.object)?;
                 let (property, index) = entry
                     .property
-                    .unwrap_or((ordinary_property(entry.object.object_type()), None));
+                    .unwrap_or((lead(entry.object.object_type()).property(), None));
                 Some(BACnetCOVSubscription {
                     recipient: BACnetRecipientProcess {
                         recipient: recipient(&entry.endpoint),
@@ -271,17 +271,6 @@ fn endpoint_order(a: &SubscriberEndpoint, b: &SubscriberEndpoint) -> CmpOrdering
     routed(a).cmp(&routed(b)).then_with(|| a.mac.cmp(&b.mac))
 }
 
-/// Whole-object subscriptions report the Clause 13.1 monitored value:
-/// Present_Value, except Access Point contexts, which Table 13-1 footnote 1
-/// requires to name Access_Event.
-fn ordinary_property(object_type: ObjectType) -> PropertyIdentifier {
-    if object_type == ObjectType::ACCESS_POINT {
-        PropertyIdentifier::ACCESS_EVENT
-    } else {
-        PropertyIdentifier::PRESENT_VALUE
-    }
-}
-
 /// A direct subscriber is a local-network address (network 0 and its source
 /// MAC); a routed subscriber is its remote NPDU source, never the router MAC.
 fn recipient(endpoint: &SubscriberEndpoint) -> BACnetRecipient {
@@ -319,6 +308,7 @@ mod tests {
     use super::*;
     use bacnet_objects::analog::AnalogValueObject;
     use bacnet_objects::binary::BinaryValueObject;
+    use bacnet_types::enums::ObjectType;
     use std::time::Duration;
 
     fn av(instance: u32) -> ObjectIdentifier {
@@ -537,11 +527,11 @@ mod tests {
     #[test]
     fn active_cov_access_point_whole_object_names_access_event() {
         assert_eq!(
-            ordinary_property(ObjectType::ACCESS_POINT),
+            lead(ObjectType::ACCESS_POINT).property(),
             PropertyIdentifier::ACCESS_EVENT
         );
         assert_eq!(
-            ordinary_property(ObjectType::ANALOG_INPUT),
+            lead(ObjectType::ANALOG_INPUT).property(),
             PropertyIdentifier::PRESENT_VALUE
         );
     }

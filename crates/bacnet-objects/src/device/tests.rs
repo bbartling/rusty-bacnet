@@ -1,3 +1,4 @@
+mod audit_recipient;
 mod description;
 
 use super::*;

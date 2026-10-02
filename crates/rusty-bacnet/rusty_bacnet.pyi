@@ -1450,6 +1450,21 @@ class BacnetAbortError(BacnetError):
     """
     reason: int
 
+class BacnetTransportError(BacnetError, OSError):
+    """Raised when a transport socket or I/O operation fails.
+
+    Covers a failed bind or listen (B/IP, B/IPv6, ``ScHub.start``), a refused
+    or failed dial, and other socket errors. It is also an ``OSError``:
+    ``errno`` is the operating system's code when it reported one, else the
+    code for the failure's kind (for example ``errno.EADDRINUSE``), else
+    ``None``; ``strerror`` is the message. ``except OSError`` and
+    ``except BacnetError`` both catch it. Unlike a bare ``OSError`` it is
+    not narrowed to ``ConnectionRefusedError`` and the like, so test
+    ``errno``.
+    """
+    errno: int | None
+    strerror: str | None
+
 
 # ---------------------------------------------------------------------------
 # Serial ports
@@ -2778,8 +2793,32 @@ class BACnetServer:
         and Unsigned 1..=Number_Of_States for Multi-state Input. Binary values are
         BACnet logical values after Polarity, not raw hardware/interface levels.
         An object with Out_Of_Service set rejects this update to preserve
-        network simulation ownership. Other object types are not writable
-        through this method.
+        network simulation ownership. A Life Safety Point or Zone takes an
+        Enumerated BACnetLifeSafetyState (standard, or 256..=65535) whether or
+        not Out_Of_Service is set, since clients never write its Present_Value;
+        Tracking_Value, Silenced and Operation_Expected stay as they are. Other
+        object types are not writable through this method.
+        """
+        ...
+
+    def set_tracking_value_local(
+        self,
+        object_id: ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Awaitable[None]:
+        """Set a Life Safety Point's or Zone's Tracking_Value, the live state the application derived.
+
+        The value is an Enumerated BACnetLifeSafetyState, standard or from
+        256..=65535: another number raises VALUE_OUT_OF_RANGE and another
+        datatype INVALID_DATA_TYPE. An unknown object raises UNKNOWN_OBJECT and
+        any object other than a Life Safety Point or Zone
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Present_Value, Silenced and
+        Operation_Expected stay as they are, so an application that latches
+        Present_Value until reset keeps reporting the live state here. While
+        Out_Of_Service is set the value is held for the return to service and
+        a client's simulated Tracking_Value stays in place. In service a
+        SubscribeCOVProperty on Tracking_Value is notified of the change; a
+        SubscribeCOV report doesn't carry it.
         """
         ...
 

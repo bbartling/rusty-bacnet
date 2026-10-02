@@ -39,6 +39,8 @@ mod mutation_wpm_priority_tests;
 mod mutation_wpm_tests;
 mod read_range;
 #[cfg(test)]
+mod recipient_mac_bound_tests;
+#[cfg(test)]
 mod structured_error_wire_tests;
 mod unconfirmed;
 #[cfg(test)]

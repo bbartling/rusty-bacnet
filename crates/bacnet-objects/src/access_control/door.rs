@@ -127,6 +127,15 @@ impl AccessDoorObject {
         self.door_open_too_long_time = tenths;
     }
 
+    /// Set Door_Alarm_State, the alarm condition the application's door
+    /// logic has worked out (Clause 12.26 leaves that to the device).
+    ///
+    /// A change of it triggers a SubscribeCOV notification (Table 13-1).
+    /// Over the network the property stays read-only.
+    pub fn set_door_alarm_state(&mut self, state: DoorAlarmState) {
+        self.door_alarm_state = state;
+    }
+
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);

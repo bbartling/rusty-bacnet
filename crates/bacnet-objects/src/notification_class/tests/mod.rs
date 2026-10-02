@@ -5,6 +5,7 @@ mod properties;
 mod recipient_list;
 mod recipient_list_cap;
 mod recipients;
+mod routed_list;
 
 use super::*;
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};

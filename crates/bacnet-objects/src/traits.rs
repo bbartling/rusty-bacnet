@@ -503,14 +503,27 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     }
 
     /// Properties a whole-object (SubscribeCOV) notification reports after
-    /// Present_Value and Status_Flags, in report order.
+    /// its leading value and Status_Flags, in report order.
     ///
-    /// The default follows the object type's Table 13-1 row: Loop reports
-    /// Setpoint and Controlled_Variable_Value, Pulse Converter reports
-    /// Update_Time, and Staging reports Present_Stage, whose changes also
-    /// trigger a notification. Every other type reports nothing more. The server leaves out a listed property the
-    /// object's Property_List lacks. Property subscriptions (SubscribeCOVProperty
-    /// and SubscribeCOVPropertyMultiple) report their own property instead.
+    /// The leading value is Present_Value, except on Access Point, whose
+    /// Table 13-1 row leads with Access_Event; the server chooses it by object
+    /// type. The default follows the object type's Table 13-1 row:
+    ///
+    /// - Access Door: Door_Alarm_State, a trigger.
+    /// - Access Point: Access_Event_Tag, Access_Event_Time (a trigger),
+    ///   Access_Event_Credential and Access_Event_Authentication_Factor.
+    /// - Credential Data Input: Update_Time, a trigger.
+    /// - Load Control: Requested_Shed_Level, Start_Time, Shed_Duration and
+    ///   Duty_Window, all triggers.
+    /// - Loop: Setpoint and Controlled_Variable_Value.
+    /// - Pulse Converter: Update_Time.
+    /// - Staging: Present_Stage, a trigger.
+    ///
+    /// A trigger's change sends a notification by itself; any other listed
+    /// value only rides along. Every other type reports nothing more. The
+    /// server leaves out a listed property the object's Property_List lacks.
+    /// Property subscriptions (SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple) report their own property instead.
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
         cov_reported_properties_default(self.object_identifier().object_type())
     }
@@ -919,9 +932,30 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// TRUE is required: their Out_Of_Service clause keeps software local to
     /// the device from changing Present_Value.
     ///
+    /// Life Safety Point and Zone opt in with a BACnetLifeSafetyState. Clients
+    /// never write their Present_Value, so they take the application's value in
+    /// service and out of service alike, and the hook leaves Tracking_Value,
+    /// Silenced and Operation_Expected as they are: any latching rule belongs
+    /// to the application.
+    ///
     /// The default fails closed so commandable and other object families do not
     /// acquire privileged `Present_Value` write authority through this hook.
     fn set_present_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply the `Tracking_Value` the local application derived.
+    ///
+    /// Only the built-in Life Safety Point and Zone opt in, with a
+    /// BACnetLifeSafetyState; the property stays read-only over the network in
+    /// service. While `Out_Of_Service` is TRUE a client's simulated value keeps
+    /// being served and this one takes over on the return to service. The
+    /// default fails closed with the same error as
+    /// [`set_present_value_internal`](Self::set_present_value_internal).
+    fn set_tracking_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
