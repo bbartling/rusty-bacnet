@@ -2406,6 +2406,8 @@ items, with one object's references apart only where its item alone does not fit
 Each of those notifications completes only the references it carries, and a
 reference whose values fit no notification on their own is left out with a
 warning, not sent over the limit; it is evaluated again at its next fanout.
+Each report that leaves such a reference out increments
+`CovCounters::untimed_references_oversized` once (#1066).
 Untimestamped values have no queue: a report that began going out owes the
 untimestamped references of the parts it did not deliver, those left after an
 unconfirmed report stopped, or those a confirmed report deferred once it holds the
@@ -2430,7 +2432,10 @@ never drops what the report just planned to send. Changes returned by a failed
 notification wait while a newer change of the same reference is in flight; once a
 newer change is delivered, older ones are dropped rather than delivered as stale
 state. These drops increment `CovCounters::timed_changes_dropped` and log a
-warning; splitting is not counted. `CovSubscriptionTable::with_max_apdu_length`
+warning; splitting is not counted. Untimestamped references left out as too large
+are counted apart, in `CovCounters::untimed_references_oversized`: nothing of
+theirs is lost, since the next fanout reads their values again, and the count is
+per report rather than per change. `CovSubscriptionTable::with_max_apdu_length`
 sets the local maximum (the full server uses its configured capacity).
 
 Changes are reported as soon as they happen. When their notification fails or is
