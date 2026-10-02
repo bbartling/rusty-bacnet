@@ -56,6 +56,23 @@ pub(crate) fn claim_exclusive(_socket: &socket2::Socket) -> io::Result<()> {
     Ok(())
 }
 
+/// Whether a bind failed because another socket holds the port. Tests whose
+/// configuration must name a port before the transport binds it probe for a
+/// free one, and another process can take it in between (#1032); this is the
+/// failure they retry on. An explicit B/IP or B/IPv6 port sets SO_REUSEADDR,
+/// and Windows refuses that bind with `WSAEACCES` rather than
+/// `WSAEADDRINUSE` when the holder did not share the port. Only an OS error
+/// counts, so a transport's own `AddrInUse` (a VMAC collision) does not.
+///
+/// On macOS a holder bound to a specific address does not fail the wildcard
+/// bind at all; as the module docs say, nothing there reports that case.
+#[cfg(test)]
+pub(crate) fn lost_to_another_socket(err: &io::Error) -> bool {
+    err.raw_os_error().is_some()
+        && (err.kind() == io::ErrorKind::AddrInUse
+            || (cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied))
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, UdpSocket};

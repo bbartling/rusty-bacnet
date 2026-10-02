@@ -63,6 +63,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bacnet_types::data_link::DataLink` names a data link (B/IP, B/IPv6, MS/TP,
   SC, Ethernet, loopback) and displays its short name (#956).
 
+- **Energy_Meter_Ref on the Escalator and Lift (API and wire):** the
+  application can now set the Energy_Meter_Ref of an Escalator, and of a Lift,
+  which gains the optional property after Energy_Meter in its Property_List,
+  property metadata, RPM ALL and OPTIONAL, and PICS rows (#1036). The new
+  `EscalatorObject::set_energy_meter_ref` and `LiftObject::set_energy_meter_ref`
+  take a BACnetDeviceObjectReference to the object that indicates the
+  accumulated energy consumption, local or in another device: an Accumulator,
+  Pulse Converter, Analog Input, Analog Value, Large Analog Value, Integer
+  Value, Positive Integer Value or proprietary object type (128 to 1023, for
+  vendor meters). Any other object type, or a device that
+  isn't a Device object, is refused with VALUE_OUT_OF_RANGE. A reference to
+  instance 4194303 clears it, and `energy_meter_ref()` reads it back. While a
+  reference is set, Energy_Meter reads 0.0, as the Lift and Escalator
+  descriptions require: setting one zeroes the reading, and a write of any
+  value but 0.0 fails with VALUE_OUT_OF_RANGE. Energy_Meter_Ref stays
+  read-only over the network, since neither table gives it a write
+  requirement, so a WriteProperty fails with WRITE_ACCESS_DENIED.
+
 ### Changed
 
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
@@ -353,6 +371,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking Calendar and Schedule evaluation (and Rust API):** Calendar's
+  Present_Value now follows the device's local date, and a Schedule now
+  calculates its value in the Clause 12.24.4 order and writes it in its own
+  datatype (#1029, #1028).
+  - Calendar: Present_Value is TRUE when the Device clock's local date matches
+    a Date_List entry. It is read from the clock on every read, so it changes
+    with the date; before, it stayed whatever the application set. Entries
+    match octet by octet: wildcards, odd and even months, the last, odd and
+    even day values, open-ended date ranges and every week-of-month form,
+    including weeks 6 to 9 counted back from the month's end. A Date_List
+    write (WriteProperty, WritePropertyMultiple, AddListElement) with an entry
+    out of its Clause 21 range is refused with VALUE_OUT_OF_RANGE and leaves
+    the list unchanged; before, it was stored. AddListElement's
+    ChangeList-Error names that entry's position, not the first entry the
+    list would gain, and RemoveListElement, which has no range error, finds no
+    such entry (LIST_ELEMENT_NOT_FOUND). Out of range means a month
+    outside 1-14, a week-of-month outside 1-9, a weekday outside 1-7, a day
+    outside 1-34, or a date-range end that is neither a specific date nor
+    wholly unspecified. `set_present_value` is removed, `add_date_entry`
+    returns `Result`, and `is_active_on(day)` answers for any day.
+  - Schedule: Present_Value and the writes to its references used to carry an
+    Octet String of the time-value's encoding, which a commandable Real target
+    refused. Time-values are now typed (`BACnetTimeValue::value` is a
+    primitive `PropertyValue`), so a Real schedule writes a Real. Evaluation
+    used to apply every exception whatever its period and ignored
+    Effective_Period. Now, within Effective_Period, the value is that of the
+    best-priority special event in effect today (its inline calendar entry
+    matches, or the Calendar it references is TRUE) whose current value is not
+    NULL, the lower array index breaking a tie; else today's weekly entry if
+    not NULL; else Schedule_Default. Outside the period nothing is calculated
+    or written. Entering the period, the first pass after start-up included,
+    writes the value even when unchanged. Targets are written at
+    Priority_For_Writing (new `set_priority_for_writing`) instead of always
+    16, and a NULL relinquishes that slot. Present_Value is calculated even
+    with no references. `tick_schedule` now takes the date, the time and a
+    Calendar resolver and returns `ScheduleWrite`. The setters return `Result`
+    and refuse non-primitive values, repeated or non-specific times and
+    out-of-range priorities or calendar entries; Schedule_Default refuses a
+    constructed value with INVALID_DATA_TYPE. The schedule encoders in
+    `bacnet-encoding` return `Result`.
+  - The date rules live in one place, `bacnet_types::calendar`
+    (`SpecificDate`, plus `matches`, `contains` and `is_valid` on the calendar
+    types), which `ClockFrame::is_valid_actual_datetime` now uses too.
+
 - **Breaking wire format and Rust API:** AddListElement and RemoveListElement
   now answer every error with a ChangeList-Error, which carries the First
   Failed Element Number, instead of a plain class and code (#1026). The number
@@ -451,6 +513,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example, which needs its port before it starts, now probes the wildcard
   address.
 
+- The SC hub's handshake-deadline tests run on Tokio's paused clock. The
+  HTTP-upgrade test waited on real time for the hub's 150 ms budget, so a
+  runner stall spanning both the hub's deadline and the test's 300 ms wait
+  failed it after the hub had already closed the peer (#1042). The TLS,
+  HTTP-upgrade and Connect-wait tests now check each budget 1 ms before and
+  1 ms after it ends, and no longer sleep through 10 s and 5 s budgets. The
+  B/IP BBMD start tests whose BDT names the bound port before the first start
+  probe again with a fresh port when another socket takes the probed one
+  before the bind (#1032). The B/IPv6 VMAC-collision test does the same; a
+  stolen port used to let it pass without a collision, and it now checks the
+  collision error itself.
+
 - **Breaking Calendar and Schedule wire format (and Rust API):** Calendar's
   Date_List now carries each BACnetCalendarEntry under its Clause 21 CHOICE
   tag: date `[0]`, date-range `[1]` (a frame around two application Dates) or
@@ -504,6 +578,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a list held framed with no element codec, such as Schedule's
   List_Of_Object_Property_References, returns PROPERTY / WRITE_ACCESS_DENIED.
 
+- **Breaking ReadRange behavior:** ReadRange now reads only a BACnetLIST and
+  answers SERVICES / PROPERTY_IS_NOT_A_LIST for any other target (#1025). It
+  decides from the property's datatype through `BACnetObject::is_list_property`
+  (#999), before it selects any item. Before, it went by the shape of the value
+  it read. It paged whole arrays such as Object_List, Priority_Array and
+  State_Text, an array element that reads as several values (one day of
+  Weekly_Schedule) and a BACnetDateTime. It also refused two lists held framed
+  as not lists: Notification Class's Recipient_List and Schedule's
+  List_Of_Object_Property_References. Those two are now split into their
+  elements, so By Position counts destinations and references. A list the
+  server can't split returns SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+  and ReadProperty still reads it whole. That covers a vendor list held framed
+  and the standalone Device's COV subscription lists, whose live contents only
+  ReadProperty sees. An array index on a property that doesn't exist now
+  reports UNKNOWN_PROPERTY instead of PROPERTY_IS_NOT_AN_ARRAY. By Sequence
+  Number or By Time on a target that isn't a list now reports
+  PROPERTY_IS_NOT_A_LIST instead of the range-type error. Log_Buffer reads and
+  Calendar's Date_List are unchanged. The new
+  `bacnet_encoding::constructed::decode_device_object_property_reference`
+  decodes one element of a BACnetLIST of BACnetDeviceObjectPropertyReference.
+
 - **Breaking Rust `subscribe_multiple` argument:** timestamped COV-multiple
   history that one notification cannot carry now goes out in several
   notifications instead of being dropped (#986). Each fits the smaller of the
@@ -543,6 +638,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which still go together in the last notification, can exceed the limit; that
   is logged. An unconfirmed report that stops partway now completes the
   references whose latest change it already sent.
+
+- **COV-multiple untimestamped split (wire behaviour):** untimestamped
+  COV-multiple values that alone exceed the smaller of the local and subscriber
+  maximum APDU now go out in several notifications that each fit, instead of
+  one oversized notification with a warning (#1038). The common case is the
+  initial report of a SubscribeCOVPropertyMultiple request over many objects.
+  Every timestamped change still goes first; the untimestamped values follow
+  in runs of whole object items, with one object's references apart only where
+  its item alone does not fit, and each notification completes only the
+  references it carries. An unconfirmed report sends every part at once; one
+  that stops partway (communication disabled, the event budget spent, a failed
+  send) leaves the references of its unsent parts owed, and the
+  Max_Notification_Delay backstop or re-enabled communication sends them. A
+  confirmed report sends one part per acknowledgment, as #986 does for
+  timestamped parts, and owes the references of its later parts meanwhile, so
+  they also outlast a follow-up dropped under DCC. An owed reference's value is
+  read afresh when it goes out, so a newer change goes in place of the value
+  first prepared, and it goes ahead of newer changes. An unconfirmed context
+  without timestamped references now sends a report of several parts one at a
+  time, as a timestamped context does, so a later report cannot overtake its
+  parts. A reference whose values alone fit no notification is left out and
+  logged rather than sent over the limit, and is evaluated again at its next
+  fanout.
 
 - **Breaking Elevator Group landing calls (API and wire format):** the
   Elevator Group object's Landing_Call_Control and Landing_Calls now carry
@@ -635,6 +753,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BACnetDeviceObjectReference, uninitialized (instance 4194303), instead of an
   empty OctetString. The rows are listed in table order in Property_List, the
   property metadata, RPM ALL, REQUIRED and OPTIONAL, and the PICS.
+
+- **Breaking Elevator Group Group_Members by array index (wire):** a read of
+  the Elevator Group's Group_Members with an array index now answers as a
+  BACnetARRAY should (#1034). Index 0 is the member count, index n the n-th
+  member, and an index past the last member fails with INVALID_ARRAY_INDEX.
+  Before, every index returned the whole list.
+
+- The Lift object's Car_Door_Status and Landing_Door_Status now take
+  WriteProperty while Out_Of_Service is TRUE, so a test tool can simulate the
+  car, as the Lift's Out_Of_Service description asks (#1035). A write sets the
+  whole array or one element; Car_Door_Status elements are BACnetDoorStatus
+  values and Landing_Door_Status elements BACnetLandingDoorStatus frames. The
+  size, the car door count, stays the application's: a write of index 0 fails
+  with WRITE_ACCESS_DENIED, a whole array of another size with
+  VALUE_OUT_OF_RANGE, and an index past the last door with
+  INVALID_ARRAY_INDEX, so the two arrays keep the same size. A reserved door
+  status or a floor number above 255 fails with VALUE_OUT_OF_RANGE and an
+  undecodable frame with INVALID_DATA_ENCODING, all without changing either
+  array. In service both stay read-only and refuse writes with
+  WRITE_ACCESS_DENIED. Their property metadata and PICS rows now mark them
+  writable while out of service. The Lift's other status properties, and all
+  of the Escalator's, already took writes. `decode_landing_door_status` in
+  `bacnet-encoding` now reports a well-formed floor number above 255 or door
+  status above 32 bits as `Error::OutOfRange`, as `decode_landing_call_status`
+  does, instead of a decoding error.
 
 - In a timestamped COV-multiple report, a field subscribed with timestamps no
   longer goes out without a Time_Of_Change (#987). Before, when its own selector

@@ -9,12 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
+use bacnet_types::calendar::SpecificDate;
+use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
@@ -27,6 +28,7 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
+use crate::schedule::ScheduleWrite;
 
 /// Process-local monotonic time source used by internal object lifecycles.
 #[doc(hidden)]
@@ -312,9 +314,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Whether `property` is a BACnetLIST on this object.
     ///
     /// AddListElement and RemoveListElement (Clauses 15.1 and 15.2) edit only
-    /// BACnetLIST properties. The server's handlers ask this before decoding
-    /// any element and refuse every other target, including an array element,
-    /// with SERVICES / PROPERTY_IS_NOT_A_LIST. Like
+    /// BACnetLIST properties, and ReadRange (Clause 15.8) reads only them. The
+    /// server's handlers ask this before decoding any element or selecting any
+    /// item, and refuse every other target, including an array element, with
+    /// SERVICES / PROPERTY_IS_NOT_A_LIST. Like
     /// [`Self::is_array_property`], the answer follows the property's datatype,
     /// not the shape of a value read: a whole array also reads as a list, and
     /// constructed single values often read as framed bytes.
@@ -538,17 +541,28 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         Err(EventTransitionCommitError::Unsupported)
     }
 
-    /// Evaluate this object's schedule for the given time.
+    /// Evaluate this object's schedule at `time` on `today` (Clause 12.24.4).
     ///
-    /// Returns `Some((new_value, refs))` if the present value changed, where `refs`
-    /// is the list of complete local references, including target array indices.
-    /// Only meaningful for Schedule objects; default returns `None`.
+    /// `calendar_active` answers for a special event whose period references
+    /// a Calendar: whether that Calendar is TRUE on `today`. Returns the
+    /// writes owed when Present_Value changed or the object has just entered
+    /// its Effective_Period, with the complete local references, target array
+    /// indices included. Only meaningful for Schedule objects; default returns
+    /// `None`.
     fn tick_schedule(
         &mut self,
-        _day_of_week: u8,
-        _hour: u8,
-        _minute: u8,
-    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
+        _today: SpecificDate,
+        _time: Time,
+        _calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+    ) -> Option<ScheduleWrite> {
+        None
+    }
+
+    /// Whether this Calendar's Date_List matches `day`: its Present_Value on
+    /// that day. `None` for an object that does not evaluate a date list; the
+    /// schedule tick then reads its Present_Value instead.
+    #[doc(hidden)]
+    fn calendar_state_internal(&self, _day: SpecificDate) -> Option<bool> {
         None
     }
 

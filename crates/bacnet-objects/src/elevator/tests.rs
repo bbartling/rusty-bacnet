@@ -1,11 +1,13 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
 
+mod energy_meter_ref;
 mod escalator_status_writability;
 mod group_membership;
 mod group_properties;
 mod landing_calls;
 mod lift_car_moving_direction;
+mod lift_door_simulation;
 mod lift_properties;
 
 /// Escalator write-domain tests run with Out_Of_Service enabled so they do not

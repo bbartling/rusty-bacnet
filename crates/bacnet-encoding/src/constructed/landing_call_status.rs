@@ -14,6 +14,7 @@ use bacnet_types::enums::LiftCarDirection;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
+use super::members::{member_content, narrow, unsigned_member};
 use crate::primitives;
 use crate::tags;
 
@@ -156,55 +157,4 @@ pub fn decode_landing_call_status_list(data: &[u8]) -> Result<Vec<BACnetLandingC
         offset = end;
     }
     Ok(values)
-}
-
-/// The value of an Unsigned member's content octets, or `None` when the
-/// encoding is well formed but the value needs more than 64 bits. Empty
-/// content is malformed.
-fn unsigned_member(content: &[u8], at: usize) -> Result<Option<u64>, Error> {
-    if content.is_empty() {
-        return Err(Error::decoding(
-            at,
-            "landing call status Unsigned member has no content octets",
-        ));
-    }
-    let first = content.iter().position(|&octet| octet != 0);
-    let significant = first.map_or(&[][..], |first| &content[first..]);
-    if significant.len() > 8 {
-        return Ok(None);
-    }
-    Ok(Some(
-        significant
-            .iter()
-            .fold(0, |value, &octet| (value << 8) | u64::from(octet)),
-    ))
-}
-
-/// Narrow a decoded Unsigned to its member type. When it doesn't fit, record
-/// `what` as the first oversized member (if none is recorded yet) and yield a
-/// placeholder, so decoding can still check the rest of the structure.
-fn narrow<T: TryFrom<u64> + Default>(
-    value: Option<u64>,
-    what: &'static str,
-    oversized: &mut Option<&'static str>,
-) -> T {
-    match value.map(T::try_from) {
-        Some(Ok(value)) => value,
-        _ => {
-            oversized.get_or_insert(what);
-            T::default()
-        }
-    }
-}
-
-/// The content octets of a primitive member and the offset just past them.
-fn member_content(data: &[u8], content: usize, length: u32) -> Result<(&[u8], usize), Error> {
-    let end = usize::try_from(length)
-        .ok()
-        .and_then(|length| content.checked_add(length))
-        .ok_or_else(|| Error::decoding(content, "landing call status member length overflow"))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((&data[content..end], end))
 }

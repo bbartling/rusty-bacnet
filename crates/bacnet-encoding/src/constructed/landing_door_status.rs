@@ -12,6 +12,7 @@ use bacnet_types::enums::DoorStatus;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
+use super::members::{member_content, narrow, unsigned_member};
 use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
 use crate::tags;
@@ -30,15 +31,24 @@ pub fn encode_landing_door_status(buf: &mut BytesMut, value: &BACnetLandingDoorS
 ///
 /// Returns the value and the offset just past its closing tag, so a caller
 /// that expects exactly one value must check the returned offset reaches the
-/// end of its data. A missing frame or member, a floor-number above 255, a
-/// door-status wider than 32 bits, truncated data, or more than 10,000
-/// landing doors fails. Any door-status that fits 32 bits is kept as
-/// received, reserved and proprietary values included, for the receiver to
-/// judge.
+/// end of its data.
+///
+/// Two kinds of failure are kept apart, as in
+/// [`decode_landing_call_status`](super::decode_landing_call_status), so a
+/// property writer can answer with the matching Clause 15.9.1.3 error. A
+/// malformed value (a missing frame or member, an empty or truncated member,
+/// or more than 10,000 landing doors) fails with [`Error::Decoding`] or
+/// [`Error::BufferTooShort`]. A value that is well formed throughout, but
+/// where a floor-number exceeds an Unsigned8 or a door-status exceeds 32
+/// bits, fails with [`Error::OutOfRange`] naming the first oversized member.
+/// A malformed member anywhere in the value takes precedence over an
+/// oversized one. Within 32 bits a door-status is kept as received, reserved
+/// and proprietary values included, for the receiver to judge.
 pub fn decode_landing_door_status(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetLandingDoorStatus, usize), Error> {
+    let mut oversized = None;
     let (tag, mut offset) = tags::decode_tag(data, offset)?;
     if !tag.is_opening_tag(0) {
         return Err(Error::decoding(
@@ -50,6 +60,9 @@ pub fn decode_landing_door_status(
     loop {
         let (tag, content) = tags::decode_tag(data, offset)?;
         if tag.is_closing_tag(0) {
+            if let Some(member) = oversized {
+                return Err(Error::OutOfRange(format!("landing door status {member}")));
+            }
             return Ok((BACnetLandingDoorStatus { landing_doors }, content));
         }
         if landing_doors.len() >= MAX_FRAMED_ITEMS {
@@ -65,9 +78,11 @@ pub fn decode_landing_door_status(
             ));
         }
         let (floor, next) = member_content(data, content, tag.length)?;
-        let floor_number = primitives::decode_unsigned_u8(floor).map_err(|_| {
-            Error::decoding(content, "landing door floor-number [0] is not Unsigned8")
-        })?;
+        let floor_number = narrow(
+            unsigned_member(floor, content)?,
+            "floor-number [0] exceeds an Unsigned8",
+            &mut oversized,
+        );
 
         let (tag, content) = tags::decode_tag(data, next)?;
         if !tag.is_context(1) {
@@ -77,9 +92,11 @@ pub fn decode_landing_door_status(
             ));
         }
         let (status, next) = member_content(data, content, tag.length)?;
-        let door_status = primitives::decode_unsigned_u32(status).map_err(|_| {
-            Error::decoding(content, "landing door door-status [1] exceeds 32 bits")
-        })?;
+        let door_status: u32 = narrow(
+            unsigned_member(status, content)?,
+            "door-status [1] exceeds 32 bits",
+            &mut oversized,
+        );
 
         landing_doors.push(LandingDoor {
             floor_number,
@@ -87,16 +104,4 @@ pub fn decode_landing_door_status(
         });
         offset = next;
     }
-}
-
-/// The content octets of a primitive member and the offset just past them.
-fn member_content(data: &[u8], content: usize, length: u32) -> Result<(&[u8], usize), Error> {
-    let end = usize::try_from(length)
-        .ok()
-        .and_then(|length| content.checked_add(length))
-        .ok_or_else(|| Error::decoding(content, "landing door member length overflow"))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((&data[content..end], end))
 }

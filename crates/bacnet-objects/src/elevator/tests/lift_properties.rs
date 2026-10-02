@@ -290,19 +290,38 @@ fn lift_set_landing_door_status_refuses_mismatches_atomically() {
 }
 
 #[test]
-fn lift_door_arrays_and_floor_text_are_read_only_over_the_network() {
-    let mut lift = lift();
-    for property in [P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS, P::FLOOR_TEXT] {
-        let before = read(&lift, property);
-        assert!(!lift.is_writable_property(property), "{property:?}");
-        for index in [None, Some(1)] {
-            let element = lift.read_property(property, Some(1)).unwrap();
-            assert_property_error(
-                lift.write_property(property, index, element, None),
-                ErrorCode::WRITE_ACCESS_DENIED,
+fn lift_floor_text_and_in_service_door_arrays_refuse_writes() {
+    // Floor_Text is read-only over the network. The door arrays take writes
+    // only while Out_Of_Service is TRUE (tests/lift_door_simulation.rs).
+    for out_of_service in [false, true] {
+        let mut lift = lift();
+        write(
+            &mut lift,
+            P::OUT_OF_SERVICE,
+            PropertyValue::Boolean(out_of_service),
+        )
+        .unwrap();
+        let denied: &[P] = if out_of_service {
+            &[P::FLOOR_TEXT]
+        } else {
+            &[P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS, P::FLOOR_TEXT]
+        };
+        for &property in denied {
+            let before = read(&lift, property);
+            assert_eq!(
+                lift.is_writable_property(property),
+                property != P::FLOOR_TEXT,
+                "{property:?}"
             );
+            for index in [None, Some(1)] {
+                let element = lift.read_property(property, Some(1)).unwrap();
+                assert_property_error(
+                    lift.write_property(property, index, element, None),
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                );
+            }
+            assert_eq!(read(&lift, property), before, "{property:?}");
         }
-        assert_eq!(read(&lift, property), before, "{property:?}");
     }
 }
 

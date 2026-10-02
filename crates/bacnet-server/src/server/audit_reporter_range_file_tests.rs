@@ -12,20 +12,16 @@ mod boundary;
 
 #[tokio::test]
 async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity() {
-    for case in ["success", "empty", "item cap", "byte cap", "array"] {
+    for case in ["success", "empty", "item cap", "byte cap"] {
         let mut fixture = server(read_reporter()).await;
         let mut plain = plain_server(read_reporter()).await;
         let reads = add_target(&fixture, Kind::Range, None, false).await;
         let plain_reads = add_target(&plain, Kind::Range, None, false).await;
-        let (property, index) = if case == "array" {
-            (PropertyIdentifier::WEEKLY_SCHEDULE, Some(3))
-        } else {
-            (PropertyIdentifier::LOG_BUFFER, None)
-        };
+        let property = PropertyIdentifier::LOG_BUFFER;
         let request = range_request(
             Kind::Range.target(),
             property,
-            index,
+            None,
             Some(RangeSpec::ByPosition {
                 reference_index: if case == "empty" { 99 } else { 1 },
                 count: 2,
@@ -40,7 +36,7 @@ async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity
             ReadRangeAck {
                 object_identifier: request.object_identifier,
                 property_identifier: property,
-                property_array_index: index,
+                property_array_index: None,
                 result_flags: (true, false, true),
                 item_count: 1,
                 item_data: vec![0x21, 11],
@@ -94,7 +90,7 @@ async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity
         settle().await;
         assert_eq!(
             records(&fixture),
-            vec![expected(Kind::Range.target(), property, index, 77, 0, None)]
+            vec![expected(Kind::Range.target(), property, None, 77, 0, None)]
         );
         assert!(records(&plain).is_empty());
         assert_eq!(reads.load(Ordering::Acquire), 1);
@@ -266,6 +262,12 @@ async fn audit_reporter_range_file_service_validation_errors_preserve_identity()
         ),
         (
             Kind::Range,
+            "element",
+            ErrorClass::SERVICES,
+            ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        ),
+        (
+            Kind::Range,
             "identity",
             ErrorClass::PROPERTY,
             ErrorCode::LIST_ITEM_NOT_NUMBERED,
@@ -312,9 +314,15 @@ async fn audit_reporter_range_file_service_validation_errors_preserve_identity()
         let property = match case {
             "property" => PropertyIdentifier::DESCRIPTION,
             "list" => PropertyIdentifier::OBJECT_NAME,
+            // An element of an array that reads as a list is still no list.
+            "element" => PropertyIdentifier::WEEKLY_SCHEDULE,
             _ => PropertyIdentifier::LOG_BUFFER,
         };
-        let index = (case == "array").then_some(7);
+        let index = match case {
+            "array" => Some(7),
+            "element" => Some(3),
+            _ => None,
+        };
         let mut data = BytesMut::new();
         if kind == Kind::Range {
             range_request(

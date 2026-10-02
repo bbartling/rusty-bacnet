@@ -43,6 +43,12 @@ fn elevator_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
         }
         escalator.set_group_id(47);
         lift.set_installation_id(2);
+        // A meter in another device: Energy_Meter_Ref grows to both members.
+        lift.set_energy_meter_ref(bacnet_types::constructed::BACnetDeviceObjectReference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+            object_identifier: ObjectIdentifier::new(ObjectType::ACCUMULATOR, 3).unwrap(),
+        })
+        .unwrap();
     }
     let mut objects: [Box<dyn BACnetObject>; 3] =
         [Box::new(group), Box::new(escalator), Box::new(lift)];
@@ -121,6 +127,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::CAR_LOAD_UNITS,
             P::PASSENGER_ALARM,
             P::ENERGY_METER,
+            P::ENERGY_METER_REF,
             P::RELIABILITY,
             P::OUT_OF_SERVICE,
             P::FAULT_SIGNALS,
@@ -149,6 +156,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::CAR_LOAD,
             P::CAR_LOAD_UNITS,
             P::ENERGY_METER,
+            P::ENERGY_METER_REF,
             P::RELIABILITY,
             P::LANDING_DOOR_STATUS,
         ],

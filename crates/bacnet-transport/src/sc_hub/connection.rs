@@ -222,6 +222,10 @@ pub(super) async fn serve_connection(
 
     // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
     let upgrade_deadline = tokio::time::Instant::now() + timeouts.websocket_upgrade();
+    #[cfg(test)]
+    ctx.admission
+        .upgrade_deadlines_armed
+        .fetch_add(1, Ordering::Release);
     let ws_stream = match boxed(|| {
         super::deadlines::before(
             upgrade_deadline,

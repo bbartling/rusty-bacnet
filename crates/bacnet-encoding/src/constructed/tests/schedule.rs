@@ -8,7 +8,7 @@ use bacnet_types::constructed::{
     SpecialEventPeriod,
 };
 use bacnet_types::enums::ObjectType;
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{Date, PropertyValue, Time};
 
 fn d(year: u8, month: u8, day: u8, day_of_week: u8) -> Date {
     Date {
@@ -28,17 +28,19 @@ fn t(hour: u8, minute: u8) -> Time {
     }
 }
 
-fn tv(hour: u8, minute: u8, value: &[u8]) -> BACnetTimeValue {
+fn tv(hour: u8, minute: u8, value: PropertyValue) -> BACnetTimeValue {
     BACnetTimeValue {
         time: t(hour, minute),
-        value: value.to_vec(),
+        value,
     }
 }
 
 fn tv_real(hour: u8, minute: u8, value: f32) -> BACnetTimeValue {
-    let mut buf = BytesMut::new();
-    primitives::encode_app_real(&mut buf, value);
-    tv(hour, minute, &buf)
+    tv(hour, minute, PropertyValue::Real(value))
+}
+
+fn unsigned_42() -> PropertyValue {
+    PropertyValue::Unsigned(42)
 }
 
 fn calendar(instance: u32) -> ObjectIdentifier {
@@ -47,7 +49,7 @@ fn calendar(instance: u32) -> ObjectIdentifier {
 
 fn encode_event(event: &BACnetSpecialEvent) -> Vec<u8> {
     let mut buf = BytesMut::new();
-    encode_special_event(&mut buf, event);
+    encode_special_event(&mut buf, event).unwrap();
     buf.to_vec()
 }
 
@@ -57,25 +59,76 @@ const TV_0830_42: &[u8] = &[0xB4, 8, 30, 0, 0, 0x21, 42];
 
 // --- BACnetTimeValue --------------------------------------------------------
 
+/// One time-value per primitive datatype, each value under its own
+/// application tag (Clause 20.2.1.4): the time-value carries the scheduled
+/// value typed (#1028), never as an Octet String of its encoding.
 #[test]
-fn time_value_golden_vectors_keep_the_raw_value() {
+fn time_value_golden_vectors_carry_every_primitive_datatype() {
+    let at = |value: &[u8]| [&[0xB4, 6, 0, 0, 0][..], value].concat();
     for (time_value, wire) in [
-        (tv(8, 30, &[0x21, 42]), TV_0830_42.to_vec()),
+        (tv(8, 30, unsigned_42()), TV_0830_42.to_vec()),
         // Null (0x00) and Boolean TRUE (0x11) carry no content octets.
-        (tv(17, 0, &[0x00]), vec![0xB4, 17, 0, 0, 0, 0x00]),
-        (tv(6, 0, &[0x11]), vec![0xB4, 6, 0, 0, 0, 0x11]),
+        (tv(6, 0, PropertyValue::Null), at(&[0x00])),
+        (tv(6, 0, PropertyValue::Boolean(true)), at(&[0x11])),
+        (tv(6, 0, PropertyValue::Signed(-2)), at(&[0x31, 0xFE])),
+        (tv_real(6, 0, 65.0), at(&[0x44, 0x42, 0x82, 0, 0])),
         (
-            tv_real(22, 0, 65.0),
-            vec![0xB4, 22, 0, 0, 0, 0x44, 0x42, 0x82, 0, 0],
+            tv(6, 0, PropertyValue::Double(1.0)),
+            at(&[0x55, 8, 0x3F, 0xF0, 0, 0, 0, 0, 0, 0]),
+        ),
+        (
+            tv(6, 0, PropertyValue::OctetString(vec![0xAB])),
+            at(&[0x61, 0xAB]),
+        ),
+        (
+            tv(6, 0, PropertyValue::CharacterString("on".into())),
+            at(&[0x73, 0, b'o', b'n']),
+        ),
+        (
+            tv(
+                6,
+                0,
+                PropertyValue::BitString {
+                    unused_bits: 4,
+                    data: vec![0xA0],
+                },
+            ),
+            at(&[0x82, 4, 0xA0]),
+        ),
+        (tv(6, 0, PropertyValue::Enumerated(3)), at(&[0x91, 3])),
+        (
+            tv(6, 0, PropertyValue::Date(d(126, 12, 25, 5))),
+            at(&[0xA4, 126, 12, 25, 5]),
+        ),
+        (
+            tv(6, 0, PropertyValue::Time(t(17, 30))),
+            at(&[0xB4, 17, 30, 0, 0]),
+        ),
+        (
+            tv(6, 0, PropertyValue::ObjectIdentifier(calendar(7))),
+            at(&[0xC4, 0x01, 0x80, 0x00, 0x07]),
         ),
     ] {
         let mut buf = BytesMut::new();
-        encode_time_value(&mut buf, &time_value);
-        assert_eq!(&buf[..], &wire[..]);
+        encode_time_value(&mut buf, &time_value).unwrap();
+        assert_eq!(&buf[..], &wire[..], "{time_value:?}");
         assert_eq!(
             decode_time_value(&wire, 0).unwrap(),
             (time_value, wire.len())
         );
+    }
+}
+
+#[test]
+fn time_value_refuses_to_encode_a_constructed_value() {
+    for value in [
+        PropertyValue::List(vec![PropertyValue::Unsigned(1)]),
+        PropertyValue::ApplicationData(vec![0x09, 1]),
+    ] {
+        let mut buf = BytesMut::new();
+        let err = encode_time_value(&mut buf, &tv(6, 0, value)).unwrap_err();
+        assert!(format!("{err}").contains("primitive"), "{err}");
+        assert!(buf.is_empty());
     }
 }
 
@@ -112,7 +165,7 @@ fn special_event_vectors() -> Vec<(BACnetSpecialEvent, Vec<u8>)> {
                         day_of_week: 4,
                     },
                 )),
-                list_of_time_values: vec![tv(8, 30, &[0x21, 42])],
+                list_of_time_values: vec![tv(8, 30, unsigned_42())],
                 event_priority: 3,
             },
             [
@@ -143,7 +196,7 @@ fn special_event_vectors() -> Vec<(BACnetSpecialEvent, Vec<u8>)> {
                         end_date: d(126, 8, 31, 1),
                     },
                 )),
-                list_of_time_values: vec![tv(0, 0, &[0x00])],
+                list_of_time_values: vec![tv(0, 0, PropertyValue::Null)],
                 event_priority: 16,
             },
             vec![
@@ -156,7 +209,7 @@ fn special_event_vectors() -> Vec<(BACnetSpecialEvent, Vec<u8>)> {
         (
             BACnetSpecialEvent {
                 period: SpecialEventPeriod::CalendarReference(calendar(7)),
-                list_of_time_values: vec![tv(8, 30, &[0x21, 42])],
+                list_of_time_values: vec![tv(8, 30, unsigned_42())],
                 event_priority: 16,
             },
             [
@@ -183,7 +236,7 @@ fn special_event_round_trips_several_time_values() {
         period: SpecialEventPeriod::CalendarReference(calendar(1)),
         list_of_time_values: vec![
             tv_real(8, 0, 70.0),
-            tv(12, 0, &[0x00]),
+            tv(12, 0, PropertyValue::Null),
             tv_real(18, 0, 60.0),
         ],
         event_priority: 8,
@@ -276,12 +329,12 @@ fn special_event_rejects_truncated_data() {
 #[test]
 fn daily_schedule_golden_vector_is_a_zero_frame() {
     let mut buf = BytesMut::new();
-    encode_daily_schedule(&mut buf, &[tv(8, 30, &[0x21, 42])]);
+    encode_daily_schedule(&mut buf, &[tv(8, 30, unsigned_42())]).unwrap();
     let wire = [&[0x0E][..], TV_0830_42, &[0x0F]].concat();
     assert_eq!(&buf[..], &wire[..]);
     assert_eq!(
         decode_daily_schedule(&wire, 0).unwrap(),
-        (vec![tv(8, 30, &[0x21, 42])], wire.len())
+        (vec![tv(8, 30, unsigned_42())], wire.len())
     );
     for bad in [
         &[0x0E][..],
@@ -296,9 +349,9 @@ fn daily_schedule_golden_vector_is_a_zero_frame() {
 #[test]
 fn weekly_schedule_golden_vector_is_seven_daily_schedules() {
     let mut days: [Vec<BACnetTimeValue>; 7] = Default::default();
-    days[0] = vec![tv(8, 30, &[0x21, 42])];
+    days[0] = vec![tv(8, 30, unsigned_42())];
     let mut buf = BytesMut::new();
-    encode_weekly_schedule(&mut buf, &days);
+    encode_weekly_schedule(&mut buf, &days).unwrap();
     let mut wire = [&[0x0E][..], TV_0830_42, &[0x0F]].concat();
     for _ in 1..7 {
         wire.extend_from_slice(&[0x0E, 0x0F]);
@@ -313,7 +366,7 @@ fn weekly_schedule_round_trips_and_rejects_a_wrong_day_count() {
     days[0] = vec![tv_real(6, 0, 70.0), tv_real(22, 0, 65.0)];
     days[2] = vec![tv_real(8, 0, 72.0)];
     let mut buf = BytesMut::new();
-    encode_weekly_schedule(&mut buf, &days);
+    encode_weekly_schedule(&mut buf, &days).unwrap();
     assert_eq!(decode_weekly_schedule(&buf).unwrap(), days);
 
     let six = [0x0E, 0x0F].repeat(6);
@@ -333,7 +386,7 @@ fn exception_schedule_is_the_concatenation_of_its_events() {
     let (events, wires): (Vec<_>, Vec<_>) = special_event_vectors().into_iter().unzip();
     let wire = wires.concat();
     let mut buf = BytesMut::new();
-    encode_exception_schedule(&mut buf, &events);
+    encode_exception_schedule(&mut buf, &events).unwrap();
     assert_eq!(&buf[..], &wire[..]);
     assert_eq!(decode_exception_schedule(&wire).unwrap(), events);
     // A truncated last event fails the whole property.

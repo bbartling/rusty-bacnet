@@ -1,6 +1,5 @@
 //! The Escalator object (type 58, Clause 12.60).
 
-use bacnet_encoding::constructed::encode_device_object_reference;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
     EscalatorFault, EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
@@ -8,9 +7,9 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use bytes::BytesMut;
 use std::borrow::Cow;
 
+use super::energy_meter::{energy_meter_accessors, EnergyMeter};
 use super::membership::{group_membership_accessors, GroupMembership};
 use super::{decode_fault_signals, metadata, named_or_proprietary};
 use crate::common::{self, read_common_properties};
@@ -31,11 +30,8 @@ pub struct EscalatorObject {
     pub(super) escalator_mode: EscalatorMode,
     /// Fault signal set (BACnetEscalatorFault, Clause 21).
     pub(super) fault_signals: Vec<EscalatorFault>,
-    /// Energy meter reading (Real).
-    energy_meter: f32,
-    /// Energy_Meter_Ref, a BACnetDeviceObjectReference that stays
-    /// uninitialized (instance 4194303): this object reads no external meter.
-    energy_meter_ref: BACnetDeviceObjectReference,
+    /// Energy_Meter and Energy_Meter_Ref.
+    energy_meter: EnergyMeter,
     /// Power mode (Boolean).
     power_mode: bool,
     /// Operation direction (BACnetEscalatorOperationDirection, Clause 21);
@@ -59,14 +55,7 @@ impl EscalatorObject {
             membership: GroupMembership::new()?,
             escalator_mode: EscalatorMode::UNKNOWN,
             fault_signals: Vec::new(),
-            energy_meter: 0.0,
-            energy_meter_ref: BACnetDeviceObjectReference {
-                device_identifier: None,
-                object_identifier: ObjectIdentifier::new(
-                    ObjectType::ACCUMULATOR,
-                    ObjectIdentifier::MAX_INSTANCE,
-                )?,
-            },
+            energy_meter: EnergyMeter::new()?,
             power_mode: false,
             operation_direction: EscalatorOperationDirection::UNKNOWN,
             passenger_alarm: false,
@@ -77,6 +66,7 @@ impl EscalatorObject {
     }
 
     group_membership_accessors!("escalator");
+    energy_meter_accessors!("escalator");
 }
 
 impl BACnetObject for EscalatorObject {
@@ -99,6 +89,9 @@ impl BACnetObject for EscalatorObject {
         if let Some(value) = self.membership.read(property) {
             return Ok(value);
         }
+        if let Some(value) = self.energy_meter.read(property) {
+            return Ok(value);
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ESCALATOR.to_raw()))
@@ -113,14 +106,6 @@ impl BACnetObject for EscalatorObject {
                     .map(|v| PropertyValue::Enumerated(v.to_raw()))
                     .collect();
                 Ok(PropertyValue::List(items))
-            }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                Ok(PropertyValue::Real(self.energy_meter))
-            }
-            p if p == PropertyIdentifier::ENERGY_METER_REF => {
-                let mut encoded = BytesMut::new();
-                encode_device_object_reference(&mut encoded, &self.energy_meter_ref);
-                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
             }
             p if p == PropertyIdentifier::POWER_MODE => Ok(PropertyValue::Boolean(self.power_mode)),
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
@@ -146,6 +131,9 @@ impl BACnetObject for EscalatorObject {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = self.energy_meter.write(property, &value) {
             return result;
         }
         match property {
@@ -178,15 +166,6 @@ impl BACnetObject for EscalatorObject {
                         return Err(common::value_out_of_range_error());
                     }
                     self.operation_direction = direction;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
-                    self.energy_meter = v;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
