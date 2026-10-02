@@ -13,11 +13,11 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_services::write_property::WritePropertyRequest;
 
-const ADD: ConfirmedServiceChoice = ConfirmedServiceChoice::ADD_LIST_ELEMENT;
-const REMOVE: ConfirmedServiceChoice = ConfirmedServiceChoice::REMOVE_LIST_ELEMENT;
+pub(super) const ADD: ConfirmedServiceChoice = ConfirmedServiceChoice::ADD_LIST_ELEMENT;
+pub(super) const REMOVE: ConfirmedServiceChoice = ConfirmedServiceChoice::REMOVE_LIST_ELEMENT;
 
 /// A raw request, so malformed and indexed fixtures reach the server as built.
-fn list_request(
+pub(super) fn list_request(
     object: ObjectIdentifier,
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -45,7 +45,11 @@ fn alarm_values(elements: &[u8]) -> Bytes {
 }
 
 /// The response APDU exactly as the server encoded it.
-async fn wire(fixture: &Fixture, service: ConfirmedServiceChoice, request: Bytes) -> Vec<u8> {
+pub(super) async fn wire(
+    fixture: &Fixture,
+    service: ConfirmedServiceChoice,
+    request: Bytes,
+) -> Vec<u8> {
     let npdu = fixture
         .dispatch(service, request, 5)
         .await
@@ -54,7 +58,12 @@ async fn wire(fixture: &Fixture, service: ConfirmedServiceChoice, request: Bytes
 }
 
 /// The Error PDU header for invoke ID 5, then the ChangeList-Error body.
-fn change_list_error(service: ConfirmedServiceChoice, class: u8, code: u8, element: u8) -> Vec<u8> {
+pub(super) fn change_list_error(
+    service: ConfirmedServiceChoice,
+    class: u8,
+    code: u8,
+    element: u8,
+) -> Vec<u8> {
     vec![
         0x50,
         5,

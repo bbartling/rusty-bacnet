@@ -168,11 +168,31 @@ enum Elements {
     CalendarEntries(Vec<BACnetCalendarEntry>),
 }
 
-/// The list to write back, and for AddListElement the position of the first
-/// element the list gains.
+/// Where the elements an AddListElement adds sit in the edited list: after
+/// the `kept` elements already stored, in request order, each with its
+/// position in the request. Empty for a removal, which adds nothing.
+#[derive(Default)]
+struct Added {
+    kept: usize,
+    positions: Vec<u32>,
+}
+
+impl Added {
+    /// The request position of the element at `named` (from 1) in the edited
+    /// list. None for an element the list already held, or a position past
+    /// its end: no element of the request.
+    fn request_position(&self, named: u32) -> Option<u32> {
+        usize::try_from(named)
+            .ok()?
+            .checked_sub(self.kept + 1)
+            .and_then(|index| self.positions.get(index).copied())
+    }
+}
+
+/// The list to write back, and where its added elements came from.
 struct Edited {
     value: PropertyValue,
-    first_new: Option<u32>,
+    added: Added,
 }
 
 impl Elements {
@@ -185,17 +205,16 @@ impl Elements {
                 // any element is simply not found.
                 let kinds: HashSet<Discriminant<PropertyValue>> =
                     stored.iter().map(discriminant).collect();
-                let (list, first_new) =
-                    edit(stored, edits, remove, encode_property_value, |value| {
-                        kinds.is_empty() || kinds.contains(&discriminant(value))
-                    })?;
+                let (list, added) = edit(stored, edits, remove, encode_property_value, |value| {
+                    kinds.is_empty() || kinds.contains(&discriminant(value))
+                })?;
                 Ok(Edited {
                     value: PropertyValue::List(list),
-                    first_new,
+                    added,
                 })
             }
             (Self::Destinations(stored), Self::Destinations(edits)) => {
-                let (list, first_new) = edit(
+                let (list, added) = edit(
                     stored,
                     edits,
                     remove,
@@ -209,24 +228,15 @@ impl Elements {
                 encode_destination_list(&mut bytes, &list);
                 Ok(Edited {
                     value: PropertyValue::ApplicationData(bytes.to_vec()),
-                    first_new,
+                    added,
                 })
             }
             (Self::CalendarEntries(stored), Self::CalendarEntries(edits)) => {
-                // The Calendar refuses an entry out of its Clause 21 range
-                // only for the edited list as a whole; checking here names
-                // the entry (#1029). A removal has no range error (Clause
-                // 15.2.1.3.1): no such entry is ever stored, so it is not
-                // found.
-                let out_of_range = edits.iter().position(|entry| !entry.is_valid());
-                if let (false, Some(index)) = (remove, out_of_range) {
-                    return Err(element_error(
-                        ErrorClass::PROPERTY,
-                        ErrorCode::VALUE_OUT_OF_RANGE,
-                        position(index),
-                    ));
-                }
-                let (list, first_new) = edit(
+                // The Calendar refuses an entry out of its Clause 21 range and
+                // names it (#1029, #1048). A removal has no range error
+                // (Clause 15.2.1.3.1): no such entry is ever stored, so it is
+                // not found.
+                let (list, added) = edit(
                     stored,
                     edits,
                     remove,
@@ -236,12 +246,12 @@ impl Elements {
                     },
                     |_| true,
                 )?;
-                // One pre-encoded list, which the Calendar validates again.
+                // One pre-encoded list, which the Calendar validates.
                 let mut bytes = BytesMut::new();
                 encode_calendar_entry_list(&mut bytes, &list);
                 Ok(Edited {
                     value: PropertyValue::ApplicationData(bytes.to_vec()),
-                    first_new,
+                    added,
                 })
             }
             _ => unreachable!("one codec decodes both lists"),
@@ -268,7 +278,7 @@ fn edit<T>(
     remove: bool,
     encode: impl Fn(&mut BytesMut, &T) -> Result<(), Error>,
     datatype_matches: impl Fn(&T) -> bool,
-) -> Result<(Vec<T>, Option<u32>), Error> {
+) -> Result<(Vec<T>, Added), Error> {
     let key = |element: &T| {
         let mut buf = BytesMut::new();
         encode(&mut buf, element).map(|()| buf.freeze())
@@ -316,29 +326,46 @@ fn edit<T>(
             .filter(|(_, key)| !removed.contains(*key))
             .map(|(element, _)| element)
             .collect();
-        return Ok((list, None));
+        return Ok((list, Added::default()));
     }
+    let mut added = Added {
+        kept: stored.len(),
+        positions: Vec::new(),
+    };
     let mut present: HashSet<Bytes> = keys.into_iter().collect();
-    let mut first_new = None;
     for (index, element) in edits.into_iter().enumerate() {
         if present.insert(request_key(index, &element)?) {
-            first_new.get_or_insert(position(index));
+            added.positions.push(position(index));
             stored.push(element);
         }
     }
-    Ok((stored, first_new))
+    Ok((stored, added))
 }
 
 /// Map the object's refusal of the edited list. AddListElement reports a lack
-/// of space with its own code (Clause 15.1.1.3.1). A refusal of the elements'
-/// datatype, encoding, range or space names the first element the list would
-/// have gained, which is exact for a request adding one new element: the
-/// object judges the edited list as a whole and does not say which element it
-/// refused. Every other refusal, such as WRITE_ACCESS_DENIED, concerns the
-/// target and keeps element number 0, as do refusals of a removal.
-fn object_refusal(error: Error, remove: bool, first_new: Option<u32>) -> Error {
-    let Error::Protocol { class, code } = error else {
-        return error;
+/// of space with its own code (Clause 15.1.1.3.1).
+///
+/// An object that names the element it refused (#1048) names a position in
+/// the edited list; the error carries the request position of that element,
+/// as Clause 15.1.1.3.2 counts it. An element the list already held came from
+/// no request element, so then the number is 0. A refusal naming no element
+/// keeps an estimate: for the elements' datatype, encoding, range or space,
+/// the first element the list would have gained, exact when the request adds
+/// one; for anything else, such as WRITE_ACCESS_DENIED, 0, since it concerns
+/// the target. A removal's refusals keep 0 too: the object judges what
+/// remains, which holds no element of the request.
+fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
+    let (class, code, named) = match error {
+        Error::Protocol { class, code } => (class, code, None),
+        Error::Structured {
+            class,
+            code,
+            detail,
+        } => match *detail {
+            ErrorDetail::FirstFailedElementNumber(named) => (class, code, Some(named)),
+            _ => (class, code, None),
+        },
+        other => return other,
     };
     let code = if !remove
         && class == ErrorClass::RESOURCES.to_raw() as u32
@@ -357,7 +384,11 @@ fn object_refusal(error: Error, remove: bool, first_new: Option<u32>) -> Error {
     ]
     .iter()
     .any(|element_code| element_code.to_raw() as u32 == code);
-    let element = first_new.filter(|_| about_elements);
+    let element = match named {
+        _ if remove => None,
+        Some(named) => added.request_position(named),
+        None => added.positions.first().copied().filter(|_| about_elements),
+    };
     Error::protocol(
         class,
         code,
@@ -477,7 +508,7 @@ pub(crate) fn handle_list_element_observed(
     // Decode the stored list before observation or mutation.
     let stored = codec.stored(&current)?;
     before(db, &request, Some(&current));
-    let Edited { value, first_new } = stored.apply(edits, remove)?;
+    let Edited { value, added } = stored.apply(edits, remove)?;
     db.get_mut(&request.object_identifier)
         .expect("readable object")
         .write_property(
@@ -486,5 +517,5 @@ pub(crate) fn handle_list_element_observed(
             value,
             None,
         )
-        .map_err(|error| object_refusal(error, remove, first_new))
+        .map_err(|error| object_refusal(error, remove, &added))
 }

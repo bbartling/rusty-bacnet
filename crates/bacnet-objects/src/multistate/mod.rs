@@ -33,17 +33,26 @@ fn decode_alarm_values_write(
     let PropertyValue::List(values) = value else {
         return Err(common::invalid_data_type_error());
     };
+    // A refusal names its element (#1048); the first one past the cap is the
+    // element that does not fit.
     if values.len() > MAX_ALARM_VALUES {
-        return Err(Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
-        });
+        return Err(common::at_list_element(
+            Error::Protocol {
+                class: ErrorClass::RESOURCES.to_raw() as u32,
+                code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
+            },
+            MAX_ALARM_VALUES,
+        ));
     }
     values
         .into_iter()
-        .map(|value| match value {
-            PropertyValue::Unsigned(value) => common::u64_to_u32(value),
-            _ => Err(common::invalid_data_type_error()),
+        .enumerate()
+        .map(|(index, value)| {
+            match value {
+                PropertyValue::Unsigned(value) => common::u64_to_u32(value),
+                _ => Err(common::invalid_data_type_error()),
+            }
+            .map_err(|error| common::at_list_element(error, index))
         })
         .collect()
 }
