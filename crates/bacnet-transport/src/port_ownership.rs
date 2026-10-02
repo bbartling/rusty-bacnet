@@ -87,8 +87,8 @@ pub(crate) const ATTEMPTS: usize = 8;
 
 /// Whether `err`, from run `attempt` of such a test, is a bind that another
 /// socket beat to the port, so the test may go again on a fresh one (#1032,
-/// #1070, #1095). Never on the last run: a node that really kept its port
-/// fails every run, and the last one reports it.
+/// #1068, #1070, #1095). Never on the last run: a node that really kept its
+/// port fails every run, and the last one reports it.
 #[cfg(test)]
 pub(crate) fn lost_port(attempt: usize, err: &io::Error) -> bool {
     attempt < ATTEMPTS && lost_to_another_socket(err)
