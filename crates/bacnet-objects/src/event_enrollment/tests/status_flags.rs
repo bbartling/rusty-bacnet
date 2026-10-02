@@ -1,18 +1,20 @@
 use super::super::*;
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{ErrorCode, Reliability};
 
 #[test]
 fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_false() {
     let mut enrollment =
         EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
-    enrollment
-        .write_property(
+    // Table 12-14 has no Out_Of_Service (#1064), so nothing can set the flag.
+    assert!(matches!(
+        enrollment.write_property(
             PropertyIdentifier::OUT_OF_SERVICE,
             None,
             PropertyValue::Boolean(true),
             None,
-        )
-        .unwrap();
+        ),
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+    ));
     enrollment.set_event_state(EventState::HIGH_LIMIT);
 
     assert_eq!(

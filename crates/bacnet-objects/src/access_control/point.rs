@@ -6,12 +6,12 @@ use super::*;
 /// BACnet Access Point object (type 33).
 ///
 /// Represents an access point (reader/controller at a door) in an access control system.
-/// Present value indicates the most recent access event.
+/// The most recent access event is Access_Event; Table 12-36 has no
+/// Present_Value row, so the object serves none (#1064).
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: AccessEvent,
     access_event: AccessEvent,
     access_event_tag: u64,
     access_event_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
@@ -30,7 +30,6 @@ impl AccessPointObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: AccessEvent::NONE,
             access_event: AccessEvent::NONE,
             access_event_tag: 0,
             access_event_time: ([0xFF, 0xFF, 0xFF, 0xFF], [0xFF, 0xFF, 0xFF, 0xFF]),
@@ -63,9 +62,6 @@ impl BACnetObject for AccessPointObject {
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_POINT.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::ACCESS_EVENT => {
                 Ok(PropertyValue::Enumerated(self.access_event.to_raw()))
@@ -118,21 +114,11 @@ impl BACnetObject for AccessPointObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = AccessEvent::from_raw(v);
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            _ => Err(crate::common::unhandled_write_error(
-                self.property_metadata().as_ref(),
-                property,
-                _array_index,
-            )),
-        }
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

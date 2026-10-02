@@ -16,7 +16,6 @@ pub struct AccessCredentialObject {
     assigned_access_rights_count: u32,
     authentication_factors: Vec<Vec<u8>>,
     status_flags: StatusFlags,
-    out_of_service: bool,
     reliability: Reliability,
 }
 
@@ -32,7 +31,6 @@ impl AccessCredentialObject {
             assigned_access_rights_count: 0,
             authentication_factors: Vec::new(),
             status_flags: StatusFlags::empty(),
-            out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
@@ -52,7 +50,11 @@ impl BACnetObject for AccessCredentialObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-40 has no Out_Of_Service (#1064), and Clause 12.35 holds the
+        // OUT_OF_SERVICE flag FALSE.
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
@@ -82,11 +84,6 @@ impl BACnetObject for AccessCredentialObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }

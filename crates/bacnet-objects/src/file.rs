@@ -4,15 +4,15 @@
 //! stream-access and record-access modes.
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier, Reliability,
+    ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::clock::ClockReader;
-use crate::common::{self, read_common_properties};
+use crate::common::{self, read_identity_properties};
 use crate::traits::BACnetObject;
 
 mod metadata;
@@ -231,10 +231,6 @@ pub struct FileObject {
     data: Vec<u8>,
     /// Record data (used when file_access_method == RECORD_ACCESS).
     records: Vec<Vec<u8>>,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
-    reliability: Reliability,
     /// Growth cap in octets for network writes; not a BACnet property.
     max_file_size: u64,
     /// Growth cap in records for network writes; not a BACnet property.
@@ -280,9 +276,6 @@ impl FileObject {
             record_count: None,
             data: Vec::new(),
             records: Vec::new(),
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             max_record_count: DEFAULT_MAX_RECORD_COUNT,
             clock: None,
@@ -598,7 +591,8 @@ impl BACnetObject for FileObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-16 has no Status_Flags, Reliability or Out_Of_Service (#1064).
+        if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
 
@@ -635,11 +629,6 @@ impl BACnetObject for FileObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
             return result;
         }
 

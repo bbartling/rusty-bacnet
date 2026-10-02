@@ -13,9 +13,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_TYPE, false, false),
             (P::LIST_OF_GROUP_MEMBERS, false, false),
             (P::PRESENT_VALUE, false, false),
-            (P::STATUS_FLAGS, false, false),
-            (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, false, false),
+            // Table 12-17 has no status rows (#1064).
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::GLOBAL_GROUP => vec![
@@ -40,9 +38,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::NODE_SUBTYPE, true, false),
             (P::SUBORDINATE_LIST, false, false),
             (P::SUBORDINATE_ANNOTATIONS, true, false),
-            (P::STATUS_FLAGS, false, false),
-            (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, false, false),
+            // Table 12-34 has no status rows (#1064).
             (P::PROPERTY_LIST, false, false),
         ],
     }
@@ -85,14 +81,16 @@ fn pics_group_property_metadata_is_exact() {
                         )
                         .unwrap();
                 }
-                object
-                    .write_property(
-                        P::OUT_OF_SERVICE,
-                        None,
-                        PropertyValue::Boolean(out_of_service),
-                        None,
-                    )
-                    .unwrap();
+                if kind == ObjectType::GLOBAL_GROUP {
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                }
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();

@@ -51,7 +51,6 @@ pub(super) fn is_writable(file: &FileObject, property: PropertyIdentifier) -> bo
     matches!(
         property,
         PropertyIdentifier::DESCRIPTION
-            | PropertyIdentifier::OUT_OF_SERVICE
             | PropertyIdentifier::ARCHIVE
             | PropertyIdentifier::FILE_TYPE
     ) || (property == PropertyIdentifier::FILE_SIZE

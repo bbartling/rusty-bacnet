@@ -29,16 +29,14 @@ use crate::property_metadata::{
 // (Table 12-34 O) have no network write route — group values are populated
 // locally, never commanded — so table-code conformance with ReadOnly; the R
 // rows are RequiredRead and the three O rows are Optional.
-// Status_Flags, Out_Of_Service, and Reliability are served on all three
-// symbols through the shared common read arms. Table codes map faithfully
-// (DESCRIPTION O → Optional precedent): GlobalGroup Table 12-57 lists
-// Status_Flags R, Out_Of_Service R, and Reliability O, so served-but-optional
-// rows stay Optional and readable — GlobalGroup Reliability is
-// Optional/ReadOnly. Group Table 12-17 and StructuredView Table 12-34 carry
-// no such rows, so the NetworkPort precedent for served non-table rows keeps
-// Group and StructuredView Reliability at RequiredRead/ReadOnly; likewise
-// Status_Flags stays RequiredRead/ReadOnly and Out_Of_Service stays
-// RequiredRead/Always with its routed Boolean write arm.
+// Status_Flags, Out_Of_Service, and Reliability are GlobalGroup rows only,
+// served through the shared common read arms. Table codes map faithfully
+// (DESCRIPTION O → Optional precedent): Table 12-57 lists Status_Flags R,
+// Out_Of_Service R, and Reliability O, so GlobalGroup Reliability is
+// Optional/ReadOnly, Status_Flags RequiredRead/ReadOnly and Out_Of_Service
+// RequiredRead/Always with its routed Boolean write arm. Group Table 12-17
+// and StructuredView Table 12-34 carry none of the three, so those objects
+// serve none of them (#1064 removed the rows the 0.1.0 import carried).
 // Presence is None throughout: the implementation models no commandable,
 // intrinsic-reporting, or paired-text gating on this family.
 // The trio is not createable at runtime (the network factory builds only the
@@ -58,9 +56,6 @@ const GROUP_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::LIST_OF_GROUP_MEMBERS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -87,9 +82,6 @@ const STRUCTURED_VIEW_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::NODE_SUBTYPE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::SUBORDINATE_LIST, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SUBORDINATE_ANNOTATIONS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -111,7 +103,7 @@ pub(super) fn for_structured_view_object(
 mod tests {
     use super::*;
     use crate::traits::BACnetObject;
-    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
     use std::collections::HashSet;
@@ -197,9 +189,6 @@ mod tests {
             P::OBJECT_TYPE,
             P::LIST_OF_GROUP_MEMBERS,
             P::PRESENT_VALUE,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -207,9 +196,6 @@ mod tests {
             P::OBJECT_TYPE,
             P::LIST_OF_GROUP_MEMBERS,
             P::PRESENT_VALUE,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -290,9 +276,6 @@ mod tests {
             P::NODE_SUBTYPE,
             P::SUBORDINATE_LIST,
             P::SUBORDINATE_ANNOTATIONS,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -300,9 +283,6 @@ mod tests {
             P::OBJECT_TYPE,
             P::NODE_TYPE,
             P::SUBORDINATE_LIST,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -341,14 +321,20 @@ mod tests {
         for make in fresh {
             for out_of_service in [false, true] {
                 let mut object = make();
-                object
-                    .write_property(
-                        P::OUT_OF_SERVICE,
-                        None,
-                        PropertyValue::Boolean(out_of_service),
-                        None,
-                    )
-                    .unwrap();
+                // Only GlobalGroup has Out_Of_Service (Table 12-57); Tables
+                // 12-17 and 12-34 have none (#1064).
+                let has_out_of_service =
+                    object.object_identifier().object_type() == ObjectType::GLOBAL_GROUP;
+                if has_out_of_service {
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                }
                 let original = object.property_metadata().into_owned();
                 for row in &original {
                     let p = row.property_identifier;
@@ -407,14 +393,20 @@ mod tests {
                     }
                 }
                 // Description and Out_Of_Service reject mistyped values
-                // without changing state.
+                // without changing state; where the table has no
+                // Out_Of_Service, there is no property to write.
                 for (p, value) in [
                     (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                     (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
                 ] {
+                    let expected = if p == P::OUT_OF_SERVICE && !has_out_of_service {
+                        ErrorCode::UNKNOWN_PROPERTY
+                    } else {
+                        ErrorCode::INVALID_DATA_TYPE
+                    };
                     assert_error(
                         object.write_property(p, None, value, None).unwrap_err(),
-                        ErrorCode::INVALID_DATA_TYPE,
+                        expected,
                     );
                 }
                 assert_eq!(object.property_metadata().as_ref(), original);
@@ -438,8 +430,14 @@ mod tests {
             );
         }
 
+        // Tables 12-17 and 12-34 have no Status_Flags, Reliability or
+        // Out_Of_Service (#1064).
+        let removed = [P::STATUS_FLAGS, P::RELIABILITY, P::OUT_OF_SERVICE];
         let mut group = GroupObject::new(1, "G-1").unwrap();
         assert_unserved(&mut group, P::PROFILE_NAME);
+        for p in removed {
+            assert_unserved(&mut group, p);
+        }
         let mut global = GlobalGroupObject::new(1, "GG-1").unwrap();
         // Event_State and Member_Status_Flags are table rows with no read
         // arm, so they stay absent from the served set.
@@ -447,5 +445,8 @@ mod tests {
         assert_unserved(&mut global, P::MEMBER_STATUS_FLAGS);
         let mut view = StructuredViewObject::new(1, "SV-1").unwrap();
         assert_unserved(&mut view, P::SUBORDINATE_TAGS);
+        for p in removed {
+            assert_unserved(&mut view, p);
+        }
     }
 }

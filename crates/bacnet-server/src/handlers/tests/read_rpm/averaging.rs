@@ -26,29 +26,15 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 )
                 .unwrap();
         }
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         // Independent application-value bytes pin the existing projection.
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (
-                P::PRESENT_VALUE,
-                None,
-                Ok(if configured {
-                    &[0x44, 0x41, 0xA0, 0x00, 0x00]
-                } else {
-                    &[0x44, 0, 0, 0, 0]
-                }),
-            ),
+            // Table 12-5 has no Present_Value (#1064); Average_Value carries
+            // the running average.
+            (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PRESENT_VALUE,
                 Some(0),
@@ -140,37 +126,26 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 4, 0x10]
-                } else {
-                    &[0x82, 4, 0]
-                }),
-            ),
+            // Nor any of the status rows (#1064).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::STATUS_FLAGS,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::OUT_OF_SERVICE,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
+            (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::RELIABILITY,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::EVENT_STATE, None, Ok(&[0x91, 0])),
+            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::EVENT_STATE,
                 Some(0),
@@ -180,26 +155,20 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x91, 136, 0x91, 135, 0x91, 125, 0x91, 124, 0x91, 146,
-                    0x91, 78, 0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36,
+                    0x91, 28, 0x91, 136, 0x91, 135, 0x91, 125, 0x91, 124, 0x91, 146, 0x91, 78,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 12])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 136])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 135])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 125])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 124])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 146])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 78])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 103])),
-            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 36])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 136])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 135])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 125])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 124])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 146])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 78])),
             (
                 P::PROPERTY_LIST,
-                Some(13),
+                Some(8),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

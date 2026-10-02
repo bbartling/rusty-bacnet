@@ -27,13 +27,11 @@ pub struct EventLogObject {
     name: String,
     description: String,
     log_enable: bool,
-    log_interval: u32,
     stop_when_full: bool,
     buffer_size: u32,
     log_buffer: LogRecordBuffer,
     status_flags: StatusFlags,
     event_state: EventState,
-    out_of_service: bool,
     reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
 }
@@ -47,13 +45,11 @@ impl EventLogObject {
             name: name.into(),
             description: String::new(),
             log_enable: true,
-            log_interval: 0,
             stop_when_full: false,
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
-            out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
         })
@@ -108,7 +104,11 @@ impl BACnetObject for EventLogObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-31 has neither Out_Of_Service nor Log_Interval (#1064), and
+        // Clause 12.27 holds the OUT_OF_SERVICE flag FALSE.
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
@@ -116,9 +116,6 @@ impl BACnetObject for EventLogObject {
                 Ok(PropertyValue::Enumerated(ObjectType::EVENT_LOG.to_raw()))
             }
             p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
-            p if p == PropertyIdentifier::LOG_INTERVAL => {
-                Ok(PropertyValue::Unsigned(self.log_interval as u64))
-            }
             p if p == PropertyIdentifier::STOP_WHEN_FULL => {
                 Ok(PropertyValue::Boolean(self.stop_when_full))
             }
@@ -154,13 +151,6 @@ impl BACnetObject for EventLogObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if property == PropertyIdentifier::LOG_INTERVAL {
-            if let PropertyValue::Unsigned(v) = value {
-                self.log_interval = common::u64_to_u32(v)?;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
         if property == PropertyIdentifier::STOP_WHEN_FULL {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_stop_when_full(v);
@@ -172,11 +162,6 @@ impl BACnetObject for EventLogObject {
                 return self.lifecycle().purge();
             }
             return Err(common::invalid_data_type_error());
-        }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;

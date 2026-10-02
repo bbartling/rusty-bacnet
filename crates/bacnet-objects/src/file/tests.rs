@@ -456,36 +456,29 @@ fn file_set_records_updates_record_count_and_size() {
     assert_eq!(file.records().len(), 2);
 }
 
+/// Table 12-16 has no Status_Flags, Reliability or Out_Of_Service (#1064):
+/// reads and writes of them find no property.
 #[test]
-fn file_read_status_flags_default() {
-    let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-    let val = file
-        .read_property(PropertyIdentifier::STATUS_FLAGS, None)
-        .unwrap();
-    if let PropertyValue::BitString { unused_bits, data } = val {
-        assert_eq!(unused_bits, 4);
-        assert_eq!(data, vec![0x00]);
-    } else {
-        panic!("expected BitString");
+fn file_has_no_status_flags_reliability_or_out_of_service() {
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    for property in [
+        PropertyIdentifier::STATUS_FLAGS,
+        PropertyIdentifier::RELIABILITY,
+        PropertyIdentifier::OUT_OF_SERVICE,
+    ] {
+        assert!(!file.property_list().contains(&property));
+        let read = file.read_property(property, None).map(|_| ());
+        let write = file.write_property(property, None, PropertyValue::Boolean(true), None);
+        for result in [read, write] {
+            match result {
+                Err(Error::Protocol { class, code }) => {
+                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+                }
+                other => panic!("{property:?}: expected UNKNOWN_PROPERTY, got {other:?}"),
+            }
+        }
     }
-}
-
-#[test]
-fn file_read_out_of_service_default_false() {
-    let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-    let val = file
-        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(false));
-}
-
-#[test]
-fn file_read_reliability_default() {
-    let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-    let val = file
-        .read_property(PropertyIdentifier::RELIABILITY, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Enumerated(0));
 }
 
 #[test]
@@ -561,22 +554,6 @@ fn file_write_file_type() {
 }
 
 #[test]
-fn file_write_out_of_service() {
-    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-    file.write_property(
-        PropertyIdentifier::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
-    let val = file
-        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(true));
-}
-
-#[test]
 fn file_write_read_only_denied() {
     let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
     let result = file.write_property(
@@ -614,9 +591,6 @@ fn file_property_list_stream() {
     assert!(props.contains(&PropertyIdentifier::ARCHIVE));
     assert!(props.contains(&PropertyIdentifier::READ_ONLY));
     assert!(props.contains(&PropertyIdentifier::FILE_ACCESS_METHOD));
-    assert!(props.contains(&PropertyIdentifier::STATUS_FLAGS));
-    assert!(props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
-    assert!(props.contains(&PropertyIdentifier::RELIABILITY));
     // RECORD_COUNT should NOT be in property list for stream-access files
     assert!(!props.contains(&PropertyIdentifier::RECORD_COUNT));
 }

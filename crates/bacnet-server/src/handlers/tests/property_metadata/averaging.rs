@@ -30,15 +30,6 @@ fn averaging_object(configured: bool) -> AveragingObject {
             )
             .unwrap();
     }
-    // Exercise the unconditional write routes so large encodings persist.
-    object
-        .write_property(
-            P::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(configured),
-            None,
-        )
-        .unwrap();
     object
 }
 
@@ -49,17 +40,12 @@ fn rpm_averaging_metadata_selectors_preserve_bytes_and_budgets() {
         P::OBJECT_NAME,
         P::DESCRIPTION,
         P::OBJECT_TYPE,
-        P::PRESENT_VALUE,
         P::MINIMUM_VALUE,
         P::MAXIMUM_VALUE,
         P::AVERAGE_VALUE,
         P::ATTEMPTED_SAMPLES,
         P::VALID_SAMPLES,
         P::OBJECT_PROPERTY_REFERENCE,
-        P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
-        P::EVENT_STATE,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -72,14 +58,10 @@ fn rpm_averaging_metadata_selectors_preserve_bytes_and_budgets() {
         P::VALID_SAMPLES,
         P::OBJECT_PROPERTY_REFERENCE,
     ];
-    let optional = [
-        P::DESCRIPTION,
-        P::PRESENT_VALUE,
-        P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
-        P::EVENT_STATE,
-    ];
+    // Table 12-5 has no Present_Value, Status_Flags, Out_Of_Service,
+    // Reliability or Event_State (#1064), so Description is the only optional
+    // row Averaging serves.
+    let optional = [P::DESCRIPTION];
     for configured in [false, true] {
         let object = averaging_object(configured);
         let oid = object.object_identifier();
