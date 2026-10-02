@@ -1972,6 +1972,20 @@ trusted `Operation_Expected` state channel. Inbound LifeSafetyOperation is
 therefore fail-closed (`SERVICES / SERVICE_REQUEST_DENIED`) for these objects.
 Use the Rust server API when authorized silence/unsilence execution is required.
 
+A running server's application sets the states it derives:
+`await server.set_present_value_local(point_id, PropertyValue.enumerated(2))`
+sets Present_Value (here ALARM) and
+`await server.set_tracking_value_local(point_id, PropertyValue.enumerated(0))`
+sets Tracking_Value. Each takes an Enumerated BACnetLifeSafetyState, standard
+or from 256 to 65535, and raises VALUE_OUT_OF_RANGE for another number,
+INVALID_DATA_TYPE for another datatype and OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
+for an object other than a Life Safety Point or Zone. Each changes only its own
+property, so latching Present_Value until reset is up to the application.
+Present_Value is taken while Out_Of_Service is set; a Tracking_Value then waits
+for the return to service behind a client's simulated one. A SubscribeCOV on
+the object hears Present_Value changes, and a property subscription on
+Tracking_Value hears that one.
+
 #### Access Control
 
 ```python

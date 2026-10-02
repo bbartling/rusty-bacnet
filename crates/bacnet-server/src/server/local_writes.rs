@@ -29,6 +29,8 @@ enum LocalWrite {
     ApplicationControlledVariableValue,
     /// The application supplying one sample to an Averaging object.
     ApplicationAveragingSample,
+    /// The application supplying a Life Safety object's `Tracking_Value`.
+    ApplicationTrackingValue,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -113,8 +115,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Supply a supported object's logical `Present_Value` from Rust application code.
     ///
-    /// Analog, Binary and Multi-state Inputs, noncommandable Values and Loop
-    /// (the control algorithm's output) opt in.
+    /// Analog, Binary and Multi-state Inputs, noncommandable Values, Loop
+    /// (the control algorithm's output) and Life Safety Point and Zone opt in.
     /// Binary Input values are logical INACTIVE/ACTIVE states after Polarity,
     /// not raw physical states. The update runs the existing post-write
     /// intrinsic-event and COV processing after the database lock is released;
@@ -123,11 +125,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Applications are denied while `Out_Of_Service` is TRUE to protect a
     /// client's simulation value. This is local policy for Inputs and required
-    /// by the object clauses for the supported Values and Loop. NULL is an invalid
-    /// application value. Other object families fail closed; use
+    /// by the object clauses for the supported Values and Loop. NULL is an
+    /// invalid application value. Other object families fail closed; use
     /// [`BACnetServer::write_local`] for network-equivalent writes and sourced
     /// commands on commandable objects. The Python binding exposes this as
     /// `BACnetServer.set_present_value_local`.
+    ///
+    /// A Life Safety Point or Zone takes an Enumerated BACnetLifeSafetyState,
+    /// a standard value or one from 256 to 65535, in or out of service, since
+    /// clients never write its Present_Value. The update leaves
+    /// Tracking_Value, Silenced and Operation_Expected alone, so any latching
+    /// until reset is the application's (see
+    /// [`BACnetServer::set_tracking_value_local`]). A change notifies
+    /// SubscribeCOV and Present_Value property subscribers through the Life
+    /// Safety COV path. The built-in objects run no intrinsic reporting, so
+    /// the post-write event pass raises nothing for them.
     ///
     /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
     pub async fn set_present_value_local(
@@ -205,6 +217,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await
     }
 
+    /// Supply a Life Safety Point's or Zone's `Tracking_Value`, the live state
+    /// the application derived, while the server holds the object.
+    ///
+    /// The value is an Enumerated naming a standard BACnetLifeSafetyState or
+    /// one from the proprietary range 256..=65535. A reserved or larger number
+    /// fails with PROPERTY / VALUE_OUT_OF_RANGE and another datatype with
+    /// PROPERTY / INVALID_DATA_TYPE. An unknown object fails with OBJECT /
+    /// UNKNOWN_OBJECT and any object other than a Life Safety Point or Zone
+    /// with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as with
+    /// [`BACnetServer::set_present_value_local`]. Present_Value, Silenced and
+    /// Operation_Expected are left as they are: the object derives nothing
+    /// from Tracking_Value.
+    ///
+    /// While `Out_Of_Service` is TRUE the value replaces the one set aside for
+    /// the return to service, and a client's simulated Tracking_Value keeps
+    /// being served (#1108); the return to service then serves the latest
+    /// application value and notifies its subscribers. In service, a change
+    /// reaches SubscribeCOVProperty and SubscribeCOVPropertyMultiple
+    /// subscribers of Tracking_Value through the Life Safety COV path once the
+    /// database lock is released; whole-object SubscribeCOV reports don't
+    /// carry it. The property stays read-only over the network in service.
+    /// The Python binding exposes this as `BACnetServer.set_tracking_value_local`.
+    pub async fn set_tracking_value_local(
+        &self,
+        oid: &ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        self.write_local_as(oid, LocalWrite::ApplicationTrackingValue, value, None)
+            .await
+    }
+
     async fn write_local_as(
         &self,
         oid: &ObjectIdentifier,
@@ -277,7 +320,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 LocalWrite::ApplicationPresentValue
                 | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample => None,
+                | LocalWrite::ApplicationAveragingSample
+                | LocalWrite::ApplicationTrackingValue => None,
             };
             let prepared = match write {
                 LocalWrite::Property {
@@ -302,7 +346,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 LocalWrite::ApplicationPresentValue
                 | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample => None,
+                | LocalWrite::ApplicationAveragingSample
+                | LocalWrite::ApplicationTrackingValue => None,
             };
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
@@ -330,6 +375,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     LocalWrite::ApplicationAveragingSample => {
                         object.add_averaging_sample_internal(value)
+                    }
+                    LocalWrite::ApplicationTrackingValue => {
+                        object.set_tracking_value_internal(value)
                     }
                 }
             });

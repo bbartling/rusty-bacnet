@@ -17,10 +17,10 @@
 //!
 //! - On the FALSE-to-TRUE edge it puts aside the Tracking_Value and
 //!   Reliability it serves.
-//! - Meanwhile a Tracking_Value the application reports (`set_tracking_value`
-//!   or a reset commit) replaces the value put aside, not the one served, and
-//!   `set_reliability_internal` is refused, as on the other Reliability
-//!   carriers.
+//! - Meanwhile a Tracking_Value the application reports (`set_tracking_value`,
+//!   `set_tracking_value_internal` or a reset commit) replaces the value put
+//!   aside, not the one served, and `set_reliability_internal` is refused, as
+//!   on the other Reliability carriers.
 //! - On the TRUE-to-FALSE edge both go back to the values put aside, so the
 //!   device's state is served again at once and the simulated values are gone.
 //!
@@ -38,10 +38,10 @@
 //!   latching to the implementation, here the application), so a simulated
 //!   Tracking_Value does not latch it. The tables give Present_Value no
 //!   out-of-service footnote, so it stays the application's in both states:
-//!   `set_present_value` and a reset commit set it as usual. A reset
-//!   executor's context carries the Tracking_Value the object serves, so a
-//!   latching rule in the executor reacts to a simulated value as to a real
-//!   one.
+//!   `set_present_value`, `set_present_value_internal` and a reset commit set
+//!   it as usual (`application.rs`). A reset executor's context carries the
+//!   Tracking_Value the object serves, so a latching rule in the executor
+//!   reacts to a simulated value as to a real one.
 //! - Silenced and Operation_Expected don't depend on Tracking_Value here and
 //!   are left alone; LifeSafetyOperation works the same out of service.
 //! - Event reporting: CHANGE_OF_LIFE_SAFETY (Clause 13.3.8) takes
@@ -112,14 +112,7 @@ impl Simulation<'_> {
         if !*self.out_of_service {
             return Err(common::write_access_denied_error());
         }
-        let PropertyValue::Enumerated(raw) = value else {
-            return Err(common::invalid_data_type_error());
-        };
-        let state = LifeSafetyState::from_raw(*raw);
-        if !super::valid_life_safety_state(state) {
-            return Err(common::value_out_of_range_error());
-        }
-        *self.tracking_value = state;
+        *self.tracking_value = super::application::life_safety_state(value)?;
         Ok(())
     }
 
