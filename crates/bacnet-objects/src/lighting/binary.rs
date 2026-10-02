@@ -287,6 +287,9 @@ impl BACnetObject for BinaryLightingOutputObject {
             PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Enumerated(self.relinquish_default))
             }
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

@@ -486,9 +486,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Present_Value and Status_Flags, in report order.
     ///
     /// The default follows the object type's Table 13-1 row: Loop reports
-    /// Setpoint and Controlled_Variable_Value, and Staging reports
-    /// Present_Stage, whose changes also trigger a notification. Every other
-    /// type reports nothing more. The server leaves out a listed property the
+    /// Setpoint and Controlled_Variable_Value, Pulse Converter reports
+    /// Update_Time, and Staging reports Present_Stage, whose changes also
+    /// trigger a notification. Every other type reports nothing more. The server leaves out a listed property the
     /// object's Property_List lacks. Property subscriptions (SubscribeCOVProperty
     /// and SubscribeCOVPropertyMultiple) report their own property instead.
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {

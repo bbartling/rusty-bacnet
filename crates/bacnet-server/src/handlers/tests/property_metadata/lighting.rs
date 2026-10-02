@@ -105,6 +105,9 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
             P::DEFAULT_FADE_TIME,
+            P::DEFAULT_RAMP_RATE,
+            P::DEFAULT_STEP_INCREMENT,
+            P::CURRENT_COMMAND_PRIORITY,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
@@ -120,10 +123,12 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::RELIABILITY,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
+            P::CURRENT_COMMAND_PRIORITY,
         ],
     };
-    // Default_Fade_Time shifts the Lighting Output projection by one row
-    // after Relinquish_Default; the Binary projection has no such row.
+    // Default_Fade_Time, Default_Ramp_Rate and Default_Step_Increment follow
+    // Relinquish_Default on Lighting Output only; Current_Command_Priority
+    // ends both projections.
     let optional = vec![P::DESCRIPTION, P::RELIABILITY];
     let required: Vec<_> = all
         .iter()

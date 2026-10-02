@@ -5,7 +5,7 @@
 //!
 //! A `define_value_object!` macro generates the struct + BACnetObject impl for each type.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -31,6 +31,11 @@ mod metadata;
 /// `rd_validate` performs post-extraction validation for Relinquish_Default.
 /// Every generated type exposes its validated local setter and network write;
 /// required property metadata supplies property presence and writability.
+///
+/// The optional `units: EngineeringUnits` entry gives the type a Units
+/// property (the numeric value types, whose tables require it): a field that
+/// starts at NO_UNITS and reads as Enumerated, a `units` getter and a
+/// validated `set_units` setter. Units has no network write route.
 macro_rules! define_value_object_commandable {
     (
         name: $struct_name:ident,
@@ -44,6 +49,7 @@ macro_rules! define_value_object_commandable {
         rd_wrap: $rd_wrap:expr,
         rd_validate: $rd_validate:expr,
         copy_type: $is_copy:tt,
+        $(units: $units_ty:ty,)?
         property_metadata: $property_metadata:expr
         $(,)?
     ) => {
@@ -59,6 +65,7 @@ macro_rules! define_value_object_commandable {
             /// 16-level priority array. `None` = no command at that level.
             priority_array: [Option<$val_type>; 16],
             relinquish_default: $val_type,
+            $(units: $units_ty,)?
         }
 
         impl $struct_name {
@@ -75,6 +82,7 @@ macro_rules! define_value_object_commandable {
                     reliability: Reliability::NO_FAULT_DETECTED,
                     priority_array: Default::default(),
                     relinquish_default: $default,
+                    $(units: <$units_ty>::NO_UNITS,)?
                 })
             }
 
@@ -98,6 +106,27 @@ macro_rules! define_value_object_commandable {
                 self.recalculate_present_value();
                 Ok(())
             }
+
+            $(
+            /// The engineering units of Present_Value, served as Units.
+            pub fn units(&self) -> $units_ty {
+                self.units
+            }
+
+            /// Set the engineering units of Present_Value. A new object uses
+            /// NO_UNITS.
+            ///
+            /// Units is read-only over the network. A value above 65535,
+            /// outside BACnetEngineeringUnits, is refused with
+            /// VALUE_OUT_OF_RANGE and the property is left unchanged.
+            pub fn set_units(&mut self, units: $units_ty) -> Result<(), Error> {
+                if units.to_raw() > 65_535 {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.units = units;
+                Ok(())
+            }
+            )?
         }
 
         impl BACnetObject for $struct_name {
@@ -134,6 +163,11 @@ macro_rules! define_value_object_commandable {
                     p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                         Ok(($rd_wrap)(&self.relinquish_default))
                     }
+                    $(
+                    p if p == PropertyIdentifier::UNITS => {
+                        Ok(PropertyValue::Enumerated(<$units_ty>::to_raw(self.units)))
+                    }
+                    )?
                     _ => Err(common::unknown_property_error()),
                 }
             }
@@ -334,6 +368,7 @@ define_value_object_commandable! {
     rd_wrap: (|v: &i32| PropertyValue::Signed(*v)),
     rd_validate: (|_: &i32| -> Result<(), Error> { Ok(()) }),
     copy_type: copy,
+    units: EngineeringUnits,
     property_metadata: metadata::INTEGER_VALUE_BASE,
 }
 
@@ -352,6 +387,7 @@ define_value_object_commandable! {
     rd_wrap: (|v: &u64| PropertyValue::Unsigned(*v)),
     rd_validate: (|_: &u64| -> Result<(), Error> { Ok(()) }),
     copy_type: copy,
+    units: EngineeringUnits,
     property_metadata: metadata::POSITIVE_INTEGER_VALUE_BASE,
 }
 
@@ -376,6 +412,7 @@ define_value_object_commandable! {
         }
     }),
     copy_type: copy,
+    units: EngineeringUnits,
     property_metadata: metadata::LARGE_ANALOG_VALUE_BASE,
 }
 

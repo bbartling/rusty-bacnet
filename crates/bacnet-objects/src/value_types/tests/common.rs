@@ -129,8 +129,9 @@ fn value_object_priority_array_tracks_present_value_commands() {
 
 #[test]
 fn value_object_unknown_property() {
+    // Table 12-50 has no Active_Text row.
     let obj = IntegerValueObject::new(1, "IV-1").unwrap();
-    let result = obj.read_property(PropertyIdentifier::UNITS, None);
+    let result = obj.read_property(PropertyIdentifier::ACTIVE_TEXT, None);
     assert!(result.is_err());
 }
 
