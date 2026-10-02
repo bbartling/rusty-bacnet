@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 65 |
+| Priority | P1 | 66 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 37 |
+| Status | supported-with-clause-evidence | 38 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -72,6 +72,7 @@
 | `BACNET-12-BINARY-LIGHTING-OPERATIONS` | Clause 12.55 and Table 12-70, including 12.55.4.1 and 12.55.10.1; Clause 19.2 command prioritization; Clause 21 BACnetBinaryLightingPV | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` | Clause 12.52 and Table 12-61; Clause 21 BACnetNotifyType; Clause 15.7 ReadPropertyMultiple | P1 | supported-with-clause-evidence | 4 |
+| `BACNET-12-CALENDAR-PROPERTY-SET` | Clause 12.9 and Table 12-11; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS` | Clause 12.12 Table 12-14; Clause 12.52 Table 12-61; Clause 12.1.5.1; Clause 13.2.2.1; Clause 21 BACnetTimeStamp | P1 | implementation-present-needs-state-machine-audit | 0 |
 | `BACNET-12-TIME-DELAY-NORMAL` | Clause 13.3.2 CHANGE_OF_STATE, Clause 13.3.4 COMMAND_FAILURE, Clause 13.3.6 OUT_OF_RANGE (pTimeDelayNormal definitions and condition letters); Clause 12.2 Table 12-2 (Analog Input, O5), 12.3 Table 12-3 (Analog Output, O4), 12.4 Table 12-4 (Analog Value, O6), 12.6 Table 12-6 (Binary Input, O7), 12.7 Table 12-8 (Binary Output, O6), 12.8 Table 12-10 (Binary Value, O8), 12.18 Table 12-21 (Multi-state Input, O5), 12.19 Table 12-22 (Multi-state Output, O3), 12.20 Table 12-23 (Multi-state Value, O6) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18; §13.14.1.1–13.14.2 (printed703–704/PDF705–706); §13.15.1.1 (printed707/PDF709); §13.15.1.3 Table13-20; §§13.6/13.7 (printed685/687, PDF687/689); §§13.17/13.18 (printed714/717, PDF716/719); §13.1 Tables13-1/13-1a (printed633–634/PDF635–636) | P1 | implementation-present-needs-conformance-tests | 2 |

@@ -1,5 +1,6 @@
 //! Status_Flags is computed from Reliability, Out_Of_Service and Event_State
-//! on Loop, Schedule, Calendar, Trend Log and Trend Log Multiple (#978).
+//! on Loop, Schedule, Trend Log and Trend Log Multiple (#978). Calendar has no
+//! Status_Flags at all (Table 12-11, #984).
 //!
 //! These objects used to return a Status_Flags fixed at construction, so FAULT
 //! and OUT_OF_SERVICE never moved. Each step below checks the four bits against
@@ -12,7 +13,8 @@ use crate::loop_obj::LoopObject;
 use crate::schedule::{CalendarObject, ScheduleObject};
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
-use bacnet_types::enums::{EventState, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
 fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValue {
@@ -180,18 +182,37 @@ fn trend_log_status_flags_ignore_its_out_of_service_property() {
 }
 
 #[test]
-fn calendar_and_trend_log_multiple_flags_match_their_fixed_state() {
-    // Neither object can change Reliability or Out_Of_Service yet, so the
+fn trend_log_multiple_flags_match_its_fixed_state() {
+    // Trend Log Multiple can't change Reliability or Out_Of_Service yet, so the
     // computed flags stay clear and agree with those readbacks.
-    let calendar = CalendarObject::new(1, "CAL-1").unwrap();
-    assert_eq!(status_flags(&calendar), StatusFlags::empty());
-    assert_eq!(
-        read(&calendar, PropertyIdentifier::OUT_OF_SERVICE),
-        PropertyValue::Boolean(false)
-    );
     assert_flags(
         &TrendLogMultipleObject::new(1, "TLM-1", 10).unwrap(),
         Kind::LogFixedFalse,
         StatusFlags::empty(),
     );
+}
+
+#[test]
+fn calendar_has_no_status_flags_to_compute() {
+    // #984 removed the always-clear Status_Flags #978 computed for Calendar,
+    // along with Event_State and Out_Of_Service: Table 12-11 defines none of
+    // them, so each reads as an unknown property.
+    let calendar = CalendarObject::new(1, "CAL-1").unwrap();
+    for property in [
+        PropertyIdentifier::STATUS_FLAGS,
+        PropertyIdentifier::EVENT_STATE,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyIdentifier::RELIABILITY,
+    ] {
+        assert!(
+            matches!(
+                calendar.read_property(property, None),
+                Err(Error::Protocol { class, code })
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            ),
+            "Calendar must not serve {property:?}"
+        );
+        assert!(!calendar.property_list().contains(&property));
+    }
 }
