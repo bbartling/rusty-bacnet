@@ -15,6 +15,7 @@ pub mod mutation;
 pub mod network_number;
 pub mod pics;
 pub mod schedule;
+mod schedule_references;
 pub mod server;
 pub mod trend_log;
 

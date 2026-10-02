@@ -131,6 +131,11 @@ pub(super) async fn write_property_multiple(
 
 /// Wait for the SimpleACK or Error answering the last request sent.
 pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
+    error_response(h).await.map_err(|error| error.error_code)
+}
+
+/// Wait for the SimpleACK or Error PDU answering the last request sent.
+pub(super) async fn error_response(h: &Harness) -> Result<(), ErrorPdu> {
     let invoke_id = h.invoke_id;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -145,7 +150,7 @@ pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
             };
             match answer {
                 Some(Apdu::SimpleAck(_)) => return Ok(()),
-                Some(Apdu::Error(error)) => return Err(error.error_code),
+                Some(Apdu::Error(error)) => return Err(error),
                 _ => tokio::time::sleep(Duration::from_millis(1)).await,
             }
         }

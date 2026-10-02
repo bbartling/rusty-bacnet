@@ -597,6 +597,16 @@ pub(crate) fn decode_dopr_body(
     ))
 }
 
+/// Encode one bare `BACnetDeviceObjectPropertyReference`, the counterpart of
+/// [`decode_device_object_property_reference`]: its members with no enclosing
+/// frame, so a BACnetLIST of these references is their encodings back to back.
+pub fn encode_device_object_property_reference(
+    buf: &mut BytesMut,
+    r: &BACnetDeviceObjectPropertyReference,
+) {
+    encode_dopr_body(buf, r);
+}
+
 /// Decode one bare `BACnetDeviceObjectPropertyReference` at `offset`; returns
 /// it and the offset past its last member. A BACnetLIST of these references
 /// concatenates its elements with no frame, so walking the list calls this at

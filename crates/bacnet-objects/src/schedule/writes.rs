@@ -65,7 +65,7 @@ fn empty_special_event() -> BACnetSpecialEvent {
 
 /// The byte chunks of a written value: the raw payload, or the elements of a
 /// value as a read returns it.
-fn chunks(value: PropertyValue) -> Result<Vec<Vec<u8>>, Error> {
+pub(super) fn chunks(value: PropertyValue) -> Result<Vec<Vec<u8>>, Error> {
     match value {
         PropertyValue::ApplicationData(bytes) => Ok(vec![bytes]),
         PropertyValue::List(elements) => elements
@@ -94,18 +94,28 @@ pub(super) fn decode_elements<T>(
     for bytes in chunks(value)? {
         let mut offset = 0;
         while offset < bytes.len() {
-            match tags::decode_tag(&bytes, offset) {
-                Ok((tag, _)) if starts(&tag) => {}
-                Ok(_) => return Err(common::invalid_data_type_error()),
-                Err(_) => return Err(common::invalid_data_encoding_error()),
-            }
-            let (element, end) =
-                decode(&bytes, offset).map_err(|_| common::invalid_data_encoding_error())?;
+            let (element, end) = decode_element(&bytes, offset, starts, decode)?;
             elements.push(element);
             offset = end;
         }
     }
     Ok(elements)
+}
+
+/// Decode the element at `offset`, with the errors [`decode_elements`]
+/// describes, returning it and the offset past it.
+pub(super) fn decode_element<T>(
+    bytes: &[u8],
+    offset: usize,
+    starts: fn(&Tag) -> bool,
+    decode: ElementDecoder<T>,
+) -> Result<(T, usize), Error> {
+    match tags::decode_tag(bytes, offset) {
+        Ok((tag, _)) if starts(&tag) => {}
+        Ok(_) => return Err(common::invalid_data_type_error()),
+        Err(_) => return Err(common::invalid_data_encoding_error()),
+    }
+    decode(bytes, offset).map_err(|_| common::invalid_data_encoding_error())
 }
 
 /// The daily schedules in a written Weekly_Schedule value: each opens with
