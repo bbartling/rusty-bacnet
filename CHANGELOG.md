@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing admission policy remains conjunctive. No-map CA-valid admission remains
   an intentional profile; no downstream leaf-authentication claim is made (#800).
 
+- `rusty_bacnet.list_serial_ports()` returns the names of the serial ports the
+  operating system reports, to pass as `serial_port=` for MS/TP, and
+  `bacnet_transport::mstp_serial::available_ports()` is its Rust counterpart.
+  macOS lists them through IOKit, Windows through SetupAPI and the registry, and
+  Linux from sysfs. The release smoke test calls it on every platform, which on
+  macOS proves the wheels' IOKit and CoreFoundation links at run time (#951).
+
 ### Changed
 
 - Alarm and event service types use the enumerations and bit strings that
@@ -219,6 +226,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statically; and each release has a `SHA256SUMS` file and a
   `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
   CPython 3.14 wheels ship once the release pipeline publishes (#943).
+  Before anything is published, GitHub-hosted runners now run the macOS
+  (Apple Silicon and Intel) and Windows artifacts: each CPython 3.11 to 3.14
+  wheel in a fresh virtual environment, with an import, the serial port
+  listing and a loopback client/server round trip, and each CLI binary's
+  `--version`, `--help` and quickstart read against a local server. The files
+  reach GitHub on the release's GitHub draft, which the release copy later
+  publishes unchanged; a failure or timeout stops the release, and a dry run
+  smoke-tests a throwaway draft and deletes it. The old manual-only GitHub
+  release workflow is gone (#951).
 
 - The test suites also run natively on macOS (Apple Silicon) and Windows
   (x86_64, MSVC): a GitHub Actions workflow on the mirror runs the tests,

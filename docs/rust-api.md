@@ -1191,6 +1191,21 @@ let client = BACnetClient::generic_builder()
     .await?;
 ```
 
+To find the port name, `available_ports()` returns the names of the serial ports
+the operating system reports: macOS lists them through IOKit, Windows through
+SetupAPI and the registry, and Linux from sysfs (`/sys/class/tty`). A port that
+another program has open is listed too, and an empty list means none. It returns
+`Error::Transport` with the `std::io::ErrorKind` of the failure if the operating
+system can't be asked.
+
+```rust
+use bacnet_transport::mstp_serial::available_ports;
+
+for name in available_ports()? {
+    println!("{name}"); // /dev/ttyUSB0, /dev/cu.usbserial-1410, COM3, ...
+}
+```
+
 #### Kernel RS-485 Mode (Linux, RTS-based)
 
 When DE/RE is wired to the UART's RTS pin, the Linux kernel can toggle it automatically via the `TIOCSRS485` ioctl. Zero userspace overhead.
