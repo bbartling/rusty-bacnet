@@ -7,14 +7,14 @@ use super::{ScFunction, ScMessage, SC_MIN_HEADER};
 pub enum ScBvlcResult {
     /// ACK: successful completion for a BVLC function.
     Ack {
-        /// BVLC function for which this is the result.
+        /// Function code of the BVLC message this result answers.
         result_for: ScFunction,
     },
     /// NAK: failed BVLC function with error information.
     Nak {
-        /// BVLC function for which this is the result.
+        /// Function code of the BVLC message this result answers.
         result_for: ScFunction,
-        /// Header marker that caused the error, or 0 when unrelated to a header option.
+        /// Marker of the header option at fault, or 0 when no header option was involved.
         error_header_marker: u8,
         /// BACnet Error Class value.
         error_class: u16,

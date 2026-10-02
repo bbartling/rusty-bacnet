@@ -1,9 +1,9 @@
 //! RB-06: freshness split, standard vs hardened convergence, bounded discovery.
 //!
-//! Clauses 6.6.3.1 (reject only when the network cannot be found in the table
-//! or through Who-Is), 6.6.3.2 (each new I-Am represents a configuration
-//! modification; last message takes precedence), 6.6.3.3 (replace MAC/port on
-//! difference) and 6.5 (attempt Who-Is when the next router is unknown).
+//! Clauses 6.6.3.1 (a reject goes out only after both the table lookup and
+//! Who-Is discovery come up empty), 6.6.3.2 (a later I-Am for a network
+//! supersedes earlier ones), 6.6.3.3 (replace MAC/port on difference) and
+//! 6.5 (attempt Who-Is when the next router is unknown).
 //! In-memory only, deterministic time via table/tracker injection, no sleeps.
 
 use super::envelope_harness::{broadcast_data, control_npdu, Harness};

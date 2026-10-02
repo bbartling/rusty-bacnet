@@ -701,8 +701,9 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
 /// Largest encodable `sequence-number` value: the production constrains it to
 /// `Unsigned (0..65535)`.
 ///
-/// `BACnetTimeStamp ::= CHOICE { time [0] Time, sequence-number [1] Unsigned
-/// (0..65535), datetime [2] BACnetDateTime }` (ASHRAE 135-2020 Clause 21).
+/// `BACnetTimeStamp` (ASHRAE 135-2020 Clause 21) is a three-way CHOICE: a Time
+/// under context tag 0, this bounded sequence number under tag 1, or a
+/// `BACnetDateTime` under tag 2.
 pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
 
 /// Encode a `BACnetTimeStamp` as a bare CHOICE element (no enclosing field

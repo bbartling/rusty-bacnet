@@ -80,7 +80,8 @@ pub(super) fn original_destination_matches(
     }
 }
 
-/// Send a Register-Foreign-Device message to a BBMD.
+/// Ask the BBMD at `bbmd_addr` to register us as a foreign device
+/// (Register-Foreign-Device).
 pub(super) async fn send_register_foreign_device(
     socket: &UdpSocket,
     bbmd_addr: SocketAddrV4,

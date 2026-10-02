@@ -104,9 +104,9 @@ pub enum ScConnectError {
     /// The hub rejected the Connect-Request with a BVLC-Result NAK.
     #[non_exhaustive]
     HandshakeNak {
-        /// BVLC function for which this Result was sent.
+        /// Function code of the BVLC message this Result answers.
         result_for: ScFunction,
-        /// Header marker that caused the error, or 0 when unrelated to a header option.
+        /// Marker of the header option at fault, or 0 when no header option was involved.
         error_header_marker: u8,
         /// BACnet Error Class value carried by the NAK.
         error_class: u16,
@@ -128,7 +128,7 @@ pub enum ScConnectError {
     /// A BVLC-Result ACK was received where Connect-Accept was required.
     #[non_exhaustive]
     UnexpectedResultAck {
-        /// BVLC function for which this Result was sent.
+        /// Function code of the BVLC message this Result answers.
         result_for: ScFunction,
     },
     /// Connect-Accept did not match the pending Connect-Request.

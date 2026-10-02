@@ -1,8 +1,8 @@
 //! BACnet half-router — forwards APDUs between BACnet networks.
 //!
-//! Per ASHRAE 135-2020 Clause 6.4, a BACnet router connects two or more
-//! BACnet networks. It forwards messages between them by manipulating
-//! the NPDU source/destination fields and decrementing the hop count.
+//! A BACnet router (ASHRAE 135-2020 Clause 6.6) sits on several BACnet
+//! networks at once and relays messages among them, rewriting the NPDU
+//! source/destination fields and decrementing the hop count as it goes.
 //!
 //! This implementation supports:
 //! - Forwarding APDUs between directly-connected networks
