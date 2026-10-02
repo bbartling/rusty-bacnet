@@ -13,6 +13,10 @@ use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use crate::MacAddr;
 
+mod access;
+pub use access::{
+    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetCredentialAuthenticationFactor,
+};
 mod audit;
 pub use audit::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
@@ -516,21 +520,6 @@ pub struct BACnetAccessRule {
     /// Optional location reference. Present only when `location_specifier` is 0 (specified).
     pub location: Option<BACnetDeviceObjectReference>,
     /// Whether access is enabled or disabled by this rule.
-    pub enable: bool,
-}
-
-// ---------------------------------------------------------------------------
-// BACnetAssignedAccessRights (Clause 12 -- used by AccessCredential/AccessUser)
-// ---------------------------------------------------------------------------
-
-/// BACnet Assigned Access Rights.
-///
-/// Associates a reference to an AccessRights object with an enable flag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BACnetAssignedAccessRights {
-    /// Reference to an AccessRights object.
-    pub assigned_access_rights: ObjectIdentifier,
-    /// Whether these access rights are currently enabled.
     pub enable: bool,
 }
 

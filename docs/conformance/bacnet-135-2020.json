@@ -1192,16 +1192,16 @@
   },
   {
    "id": "BACNET-12-ACCESS-DOOR-DOOR-VALUE",
-   "standard_anchor": "Clause 12.26 and Table 12-30 (Present_Value, Priority_Array, Relinquish_Default); Clause 21 BACnetDoorValue; Clause 19 command prioritization; Clause 15.9.1.3 WriteProperty errors",
+   "standard_anchor": "Clause 12.26 and Table 12-30 (Present_Value, Priority_Array, Relinquish_Default); Clauses 12.26.4 and 12.26.11; Clause 21 BACnetDoorValue; Clause 19 command prioritization; Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
-   "requirement_summary": "The Access Door's commandable Present_Value, the slots of its Priority_Array and its Relinquish_Default are BACnetDoorValue, whose four values are LOCK (0), UNLOCK (1), PULSE_UNLOCK (2) and EXTENDED_PULSE_UNLOCK (3). A Present_Value command or a Relinquish_Default write carrying one of the four is stored and reads back as that Enumerated, and Present_Value resolves to the highest-priority non-NULL slot, or else to Relinquish_Default. Any other Enumerated is refused with PROPERTY / VALUE_OUT_OF_RANGE and a non-Enumerated value with PROPERTY / INVALID_DATA_TYPE, leaving Present_Value, Priority_Array and Relinquish_Default unchanged.",
+   "requirement_summary": "The Access Door's commandable Present_Value, the slots of its Priority_Array and its Relinquish_Default are BACnetDoorValue, whose four values are LOCK (0), UNLOCK (1), PULSE_UNLOCK (2) and EXTENDED_PULSE_UNLOCK (3). A Present_Value command carrying one of the four is stored and reads back as that Enumerated, and Present_Value resolves to the highest-priority non-NULL slot, or else to Relinquish_Default. Relinquish_Default takes only LOCK or UNLOCK (Clause 12.26.11). Any other Enumerated is refused with PROPERTY / VALUE_OUT_OF_RANGE and a non-Enumerated value with PROPERTY / INVALID_DATA_TYPE, leaving Present_Value, Priority_Array and Relinquish_Default unchanged.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/access_control/door.rs::AccessDoorObject"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_door_present_value_commands_each_door_value",
-    "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_door_set_relinquish_default_takes_a_door_value",
+    "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_door_set_relinquish_default_takes_lock_or_unlock",
     "crates/bacnet-objects/src/access_control/tests.rs::access_door_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/wpm_state_ownership.rs::wpm_command_priority_and_fallback_remain_owned_by_committed_prefix"
@@ -1209,19 +1209,20 @@
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_door_present_value_refuses_values_outside_door_value_atomically",
     "crates/bacnet-server/src/handlers/tests/access_typed_values.rs::wp_access_door_present_value_holds_to_door_value",
-    "crates/bacnet-server/src/handlers/tests/access_typed_values.rs::wp_access_door_relinquish_default_holds_to_door_value"
+    "crates/bacnet-server/src/handlers/tests/access_typed_values.rs::wp_access_door_relinquish_default_holds_to_lock_or_unlock"
    ],
    "benchmarks": [],
    "public_claims": [
-    "CHANGELOG.md Unreleased Changed entry for #979"
+    "CHANGELOG.md Unreleased Changed entry for #979",
+    "CHANGELOG.md Unreleased Changed entry for #1073"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#979). The three properties are stored as the DoorValue newtype (the #932 pattern), and AccessDoorObject::set_relinquish_default takes a DoorValue; DoorValue::from_raw can carry any number, so the setter checks the four values too. Breaking pre-1.0 behaviour change: the Present_Value arm used to store any Enumerated in its priority slot (the follow-up BACNET-12-RELINQUISH-DEFAULT-WRITABILITY recorded) and now shares Relinquish_Default's check through the shared write_priority_array! path. Values in range read back on the wire exactly as before. The bacnet-types test door_value_values_match_clause_21 pins the four values the check derives from. Not covered: the PULSE_UNLOCK and EXTENDED_PULSE_UNLOCK timing and automatic relinquish, Door_Unlock_Delay_Time and the pulse-time rows, which the object doesn't serve; Current_Command_Priority and the value-source rows; and the footnoted Out_Of_Service writability of Door_Status and Lock_Status."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#979). The three properties are stored as the DoorValue newtype (the #932 pattern), and AccessDoorObject::set_relinquish_default takes a DoorValue; DoorValue::from_raw can carry any number, so the setter checks the four values too. Breaking pre-1.0 behaviour change: the Present_Value arm used to store any Enumerated in its priority slot (the follow-up BACNET-12-RELINQUISH-DEFAULT-WRITABILITY recorded) and now shares Relinquish_Default's check through the shared write_priority_array! path. Values in range read back on the wire exactly as before. The bacnet-types test door_value_values_match_clause_21 pins the four values the check derives from. #1073 narrowed Relinquish_Default from the four values to LOCK and UNLOCK, since Clause 12.26.11 keeps the two pulses out of it (a pulse can't be the resting command); the setter refuses them too. The pulse timing, the pulse-time rows and Current_Command_Priority are evidenced in BACNET-12-ACCESS-DOOR-PULSE-TIMING. Not covered: Door_Unlock_Delay_Time and the value-source rows, which the object doesn't serve, and the footnoted Out_Of_Service writability of Door_Status and Lock_Status."
   },
   {
    "id": "BACNET-12-ACCESS-CREDENTIAL-PROPERTY-SET",
-   "standard_anchor": "Clause 12.35 and Table 12-40 (Credential_Status); Clause 21 BACnetBinaryPV; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "standard_anchor": "Clause 12.35 and Table 12-40 (Credential_Status); Clause 12.35.8; Clause 21 BACnetBinaryPV; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
-   "requirement_summary": "The Access Credential's Credential_Status is a BACnetBinaryPV. A write of INACTIVE (0) or ACTIVE (1) is stored and reads back as that Enumerated; any other Enumerated is refused with PROPERTY / VALUE_OUT_OF_RANGE and a non-Enumerated value with PROPERTY / INVALID_DATA_TYPE, without changing the stored status. Present_Value is not a Table 12-40 row, so it is absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on it fail with PROPERTY / UNKNOWN_PROPERTY.",
+   "requirement_summary": "The Access Credential's Credential_Status is a BACnetBinaryPV derived from Reason_For_Disable: INACTIVE (0) while the list holds any reason and ACTIVE (1) when it is empty, so it is read-only and every WriteProperty on it fails with PROPERTY / WRITE_ACCESS_DENIED without changing it. Present_Value is not a Table 12-40 row, so it is absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on it fail with PROPERTY / UNKNOWN_PROPERTY.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/access_control/credential.rs::AccessCredentialObject",
@@ -1229,7 +1230,7 @@
     "crates/bacnet-types/src/enums/resolve.rs::ResolvedEnum"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_credential_status_accepts_inactive_and_active",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_status_follows_credential_disable",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_credential_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_credential_indexed_reads_and_bytes_are_unchanged",
@@ -1238,19 +1239,103 @@
     "crates/bacnet-types/src/enums/resolve.rs::tests::credential_status_resolves_to_binary_pv"
    ],
    "negative_tests": [
-    "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_credential_status_refuses_values_outside_binary_pv_atomically",
+    "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_credential_status_is_read_only",
     "crates/bacnet-objects/src/access_control/typed_value_tests.rs::access_credential_has_no_present_value",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_writes_store_verbatim_and_deny",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_unserved_rows_stay_unknown",
-    "crates/bacnet-server/src/handlers/tests/access_typed_values.rs::wp_access_credential_status_holds_to_binary_pv",
+    "crates/bacnet-server/src/handlers/tests/access_typed_values.rs::wp_access_credential_status_is_read_only",
     "crates/bacnet-server/src/handlers/tests/access_typed_values.rs::rp_wp_access_credential_present_value_is_unknown"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Changed entry for #979",
-    "CHANGELOG.md Unreleased Fixed entry for #979"
+    "CHANGELOG.md Unreleased Fixed entry for #979",
+    "CHANGELOG.md Unreleased Changed entry for #1073"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#979). Breaking pre-1.0 changes. Credential_Status stored any Enumerated; it is now the BinaryPV newtype and refuses anything but 0 and 1, and ResolvedEnum::from_property names it as a BinaryPV. Present_Value came with the 0.1.0 import (7efc670a), which described it as the credential's active or inactive state, the meaning Credential_Status carries, but kept it in a separate field nothing synchronised; the #678 metadata migration then recorded it as an implementation-extra Optional writable row. It is removed, as #984 did for Calendar and #997 for Elevator Group. The object has no COV support, event state or intrinsic reporting, so nothing else read it. Local policy: Credential_Status starts INACTIVE and stays network-writable, since an R row leaves writability to the implementation, and it is not derived from Reason_For_Disable, which the object doesn't serve. This row covers Credential_Status and the Present_Value removal only. It makes no claim for the unserved Table 12-40 rows (Global_Identifier, Reason_For_Disable, Activation_Time, Expiration_Time, Credential_Disable and the optional rows) or for the datatypes of Assigned_Access_Rights and Authentication_Factors, which the object serves as a count and a list of octet strings. The Out_Of_Service it also served, which Table 12-40 doesn't list, went in #1064 (BACNET-12-UNDEFINED-PROPERTY-ROWS)."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#979, #1073). Breaking pre-1.0 changes. Credential_Status stored any Enumerated; #979 made it the BinaryPV newtype and refused anything but 0 and 1, and ResolvedEnum::from_property names it as a BinaryPV. #1073 then derived it from Reason_For_Disable as Clause 12.35.8 describes, which made it read-only: a write would break the link to the list, and Credential_Disable (Clause 12.35.13) is the property an operator or outside process writes to disable the credential. A new credential has no disable reason, so it reads ACTIVE where it used to read INACTIVE. How the list is assembled is evidenced in BACNET-12-ACCESS-CREDENTIAL-REQUIRED-ROWS. Present_Value came with the 0.1.0 import (7efc670a), which described it as the credential's active or inactive state, the meaning Credential_Status carries, but kept it in a separate field nothing synchronised; the #678 metadata migration then recorded it as an implementation-extra Optional writable row. It is removed, as #984 did for Calendar and #997 for Elevator Group. The object has no COV support, event state or intrinsic reporting, so nothing else read it. The Out_Of_Service it also served, which Table 12-40 doesn't list, went in #1064 (BACNET-12-UNDEFINED-PROPERTY-ROWS)."
+  },
+  {
+   "id": "BACNET-12-ACCESS-CREDENTIAL-REQUIRED-ROWS",
+   "standard_anchor": "Clause 12.35 and Table 12-40 (Global_Identifier, Reason_For_Disable, Authentication_Factors, Activation_Time, Expiration_Time, Credential_Disable, Assigned_Access_Rights); Clauses 12.35.5, 12.35.9, 12.35.10, 12.35.11, 12.35.12, 12.35.13 and 12.35.18; Clause 21 BACnetAssignedAccessRights, BACnetCredentialAuthenticationFactor, BACnetAuthenticationFactor, BACnetAuthenticationFactorType, BACnetAccessAuthenticationFactorDisable, BACnetAccessCredentialDisable and BACnetAccessCredentialDisableReason; Clause 15.5 ReadProperty and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "The Access Credential serves every Table 12-40 required row. Global_Identifier is a writable Unsigned32; a write past 32 bits fails with PROPERTY / VALUE_OUT_OF_RANGE. Reason_For_Disable is a read-only BACnetLIST holding, sorted and without repeats, the reasons the application raises, the reason the current Credential_Disable stands for (DISABLED, DISABLED_MANUAL or DISABLED_LOCKOUT, and DISABLED for a vendor value), and DISABLED_NOT_YET_ACTIVE before Activation_Time or DISABLED_EXPIRED after Expiration_Time, judged against the database clock on each read; changing Credential_Disable drops the reason its previous value added. Credential_Disable is writable and takes the four named values and 64 to 65535, refusing the rest with VALUE_OUT_OF_RANGE. Activation_Time and Expiration_Time are writable BACnetDateTime values taking a specific moment or all X'FF' (an open end), and refuse a partly specified value with VALUE_OUT_OF_RANGE and any other shape with INVALID_DATA_TYPE. Authentication_Factors and Assigned_Access_Rights are read-only BACnetARRAYs of BACnetCredentialAuthenticationFactor and BACnetAssignedAccessRights: a whole read concatenates the framed elements, index 0 reads the size, index n the element, and an index past the end fails with INVALID_ARRAY_INDEX; the bacnet-encoding codecs round-trip each element and refuse malformed ones.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/credential.rs::AccessCredentialObject",
+    "crates/bacnet-objects/src/access_control/credential_rules.rs",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs",
+    "crates/bacnet-encoding/src/constructed/access_credential.rs",
+    "crates/bacnet-types/src/constructed/access.rs",
+    "crates/bacnet-types/src/enums/access.rs",
+    "crates/bacnet-objects/src/traits/defaults.rs::array_property_default"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_status_follows_credential_disable",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_local_reasons_merge_with_credential_disable",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_validity_window_follows_the_clock",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_global_identifier_is_unsigned32",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_arrays_read_whole_by_index_and_by_size",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_credential_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-encoding/src/constructed/tests/access_credential.rs::assigned_access_rights_golden_bytes_and_round_trip",
+    "crates/bacnet-encoding/src/constructed/tests/access_credential.rs::credential_authentication_factor_golden_bytes_and_round_trip",
+    "crates/bacnet-encoding/src/constructed/tests/access_credential.rs::access_credential_elements_leave_trailing_bytes_to_the_caller",
+    "crates/bacnet-types/src/enums/tests/access_production.rs::access_authentication_factor_disable_values_match_clause_21",
+    "crates/bacnet-types/src/enums/tests/access_production.rs::authentication_factor_type_values_match_clause_21",
+    "crates/bacnet-server/src/handlers/tests/access_required_rows.rs::wp_rp_access_credential_disable_drives_status_and_reasons",
+    "crates/bacnet-server/src/handlers/tests/access_required_rows.rs::wp_rp_access_credential_window_follows_the_database_clock",
+    "crates/bacnet-server/src/handlers/tests/access_required_rows.rs::rp_wp_access_credential_arrays_and_global_identifier_on_the_wire",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_credential_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_disable_refuses_reserved_and_mistyped_values",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_validity_window_refuses_partial_and_mistyped_limits",
+    "crates/bacnet-objects/src/access_control/credential_tests.rs::access_credential_arrays_refuse_bad_elements_and_network_writes",
+    "crates/bacnet-encoding/src/constructed/tests/access_credential.rs::assigned_access_rights_rejects_malformed_elements",
+    "crates/bacnet-encoding/src/constructed/tests/access_credential.rs::credential_authentication_factor_rejects_malformed_elements",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_user_indexed_reads_and_bytes_are_unchanged"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Changed entry for #1073"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1073). Breaking pre-1.0 wire changes: the five rows were missing, Assigned_Access_Rights read as an Unsigned count and Authentication_Factors as octet strings in a list, which the default array gate refused an index on. Both identifiers are now identifier-stable arrays in array_property_default, since Table 12-40 is the only table carrying either; an index on an object without them now passes the gate and fails with UNKNOWN_PROPERTY rather than PROPERTY_IS_NOT_AN_ARRAY. BACnetAssignedAccessRights in bacnet-types held a bare object identifier and had no users; it now holds the BACnetDeviceObjectReference Clause 21 gives it. Local policies: the window is judged lazily on each read, as the Calendar judges its date, so no tick is needed; without a clock frame naming a real moment (no clock, an impossible date, an unspecified time) it adds no reason, so a device with no clock doesn't disable every dated credential. A partly specified limit names no single moment, so it is refused rather than matched as a pattern; the weekday octet is stored but ignored. The application raises and withdraws its own reasons with add_disable_reason and remove_disable_reason; DISABLED_NOT_YET_ACTIVE and DISABLED_EXPIRED are refused there because they follow the two times. Which reason a vendor Credential_Disable value adds is a local matter; this implementation adds DISABLED. Global_Identifier, Credential_Disable, Activation_Time and Expiration_Time are network-writable; the two arrays are R rows the application provisions with set_authentication_factors and set_assigned_access_rights, which check each element (a named or vendor disable value, one of the 25 format types, an Access Rights reference or the 4194303 unused marker, a Device for any device identifier). Not covered: the optional rows (Days_Remaining, Uses_Remaining, Absentee_Limit, Belongs_To, Last_Access_Point, Last_Access_Event, Last_Use_Time, Trace_Flag, Threat_Authority, Extended_Time_Enable, Authorization_Exemptions, Reliability_Evaluation_Inhibit, the audit, tag and profile rows) and the reasons only they drive; resizing the arrays over the network (Clauses 12.35.10.1 and 12.35.18.1); and that a referenced Access Rights object exists."
+  },
+  {
+   "id": "BACNET-12-ACCESS-DOOR-PULSE-TIMING",
+   "standard_anchor": "Clause 12.26 and Table 12-30 (Door_Pulse_Time, Door_Extended_Pulse_Time, Door_Open_Too_Long_Time, Current_Command_Priority); Clauses 12.26.4, 12.26.16, 12.26.17, 12.26.19 and 12.26.39; Clause 21 BACnetOptionalUnsigned; Clause 19 command prioritization; Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "The Access Door serves Door_Pulse_Time, Door_Extended_Pulse_Time and Door_Open_Too_Long_Time as writable Unsigned32 counts of tenths of a second (a write past 32 bits fails with PROPERTY / VALUE_OUT_OF_RANGE, a non-Unsigned value with INVALID_DATA_TYPE) and Current_Command_Priority as a read-only BACnetOptionalUnsigned: the index of the slot Present_Value comes from, or NULL when it comes from Relinquish_Default. A PULSE_UNLOCK or EXTENDED_PULSE_UNLOCK command holds its slot until Door_Pulse_Time or Door_Extended_Pulse_Time has passed and is then relinquished from that slot, so Present_Value falls back to the next command or Relinquish_Default and COV subscribers hear of it. A pulse written while a higher priority is commanded is relinquished at once, as is a pulse with a time of zero; rewriting or relinquishing the slot cancels its deadline.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/door.rs::AccessDoorObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-server/src/server/binary_lighting_lifecycle.rs::spawn_binary_lighting_operation_task"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_unlock_relocks_after_door_pulse_time",
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_extended_pulse_uses_its_own_time_and_reveals_lower_commands",
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulses_at_two_priorities_expire_independently",
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_deadline_comes_from_the_bound_monotonic_clock",
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_current_command_priority_tracks_the_winning_slot",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_door_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-server/src/server/access_door_pulse_task_tests.rs::door_pulse_relocks_at_its_exact_deadline_with_one_cov",
+    "crates/bacnet-server/src/server/access_door_pulse_task_tests.rs::door_extended_pulse_relocks_after_its_own_time_and_a_relinquish_disarms",
+    "crates/bacnet-server/src/handlers/tests/access_required_rows.rs::wp_rp_access_door_times_and_command_priority",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_below_a_live_command_or_of_zero_length_never_takes_effect",
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_rewriting_a_pulse_slot_cancels_or_rearms_its_deadline",
+    "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_times_are_unsigned32_tenths",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Changed entry for #1073"
+   ],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1073). The relock reuses the server's existing monotonic operation task (spawn_binary_lighting_operation_task, which already drives Binary Lighting Output egress): the door records each pulse slot's deadline from the database's monotonic clock when the command is written, reports its earliest deadline through next_monotonic_deadline_internal, relinquishes due slots in advance_monotonic_time_internal and hands the task a snapshot for COV. No new task, trait method or clock source was added; a door with no bound clock advances a logical clock through advance_time_internal, which the object tests use. Local policies: the clause lets the controller relinquish a pulse early as a local matter; this implementation lets an outranked pulse run to its own deadline. Changing a pulse time leaves an armed deadline as it was. The defaults are 5 s, 15 s and 30 s. Not covered: Door_Unlock_Delay_Time (an optional row the object doesn't serve, so no unlock delay is applied) and the door-open-too-long alarm, since Door_Open_Too_Long_Time is stored and served but no Door_Alarm_State logic consumes it."
   },
   {
    "id": "BACNET-12-UNDEFINED-PROPERTY-ROWS",
@@ -1709,7 +1794,7 @@
    "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",
    "standard_anchor": "Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization",
    "priority": "P1",
-   "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation is property- and type-specific: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), the BACnetDoorValue production 0..=3 - lock, unlock, pulse-unlock, extended-pulse-unlock (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). Binary Lighting Output Relinquish_Default is restricted to BACnetBinaryLightingPV OFF(0) or ON(1), deliberately separate from Present_Value operation inputs; steady Priority_Array storage remains OFF/ON/NULL. WARN, WARN_OFF, WARN_RELINQUISH, and STOP behavior is evidenced in the dedicated Binary Lighting operations row. With #182 the datetime-paired value types (DateTime Value, Clause 12.38 Table 12-45; DateTime Pattern Value, Clause 12.46) join the network-writable set: the BACnetDateTime pair decodes from application-tagged Date+Time in the multi-element service decode.",
+   "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation is property- and type-specific: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), BACnetDoorValue LOCK (0) or UNLOCK (1), the two Clause 12.26.11 admits (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). Binary Lighting Output Relinquish_Default is restricted to BACnetBinaryLightingPV OFF(0) or ON(1), deliberately separate from Present_Value operation inputs; steady Priority_Array storage remains OFF/ON/NULL. WARN, WARN_OFF, WARN_RELINQUISH, and STOP behavior is evidenced in the dedicated Binary Lighting operations row. With #182 the datetime-paired value types (DateTime Value, Clause 12.38 Table 12-45; DateTime Pattern Value, Clause 12.46) join the network-writable set: the BACnetDateTime pair decodes from application-tagged Date+Time in the multi-element service decode.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/common.rs",
@@ -1730,11 +1815,11 @@
     "crates/bacnet-objects/src/analog/tests/value.rs::av_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-objects/src/binary/tests/input_output.rs::bo_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-objects/src/binary/tests/value.rs::bv_relinquish_default_write_recaptures_present_value",
-     "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_msv_relinquish_default_write_recaptures_present_value",
-     "crates/bacnet-objects/src/lighting/tests.rs::lighting_output_relinquish_default_write_recaptures_present_value",
-     "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_accepts_off_on_and_recaptures_present_value",
-     "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_active_command_outranks_relinquish_default",
-     "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_relinquish_default_accepts_off_on_over_write_property",
+    "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_msv_relinquish_default_write_recaptures_present_value",
+    "crates/bacnet-objects/src/lighting/tests.rs::lighting_output_relinquish_default_write_recaptures_present_value",
+    "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_accepts_off_on_and_recaptures_present_value",
+    "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_active_command_outranks_relinquish_default",
+    "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_relinquish_default_accepts_off_on_over_write_property",
     "crates/bacnet-objects/src/access_control/tests.rs::access_door_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-objects/src/value_types/tests/numeric.rs::scalar_value_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-objects/src/value_types/tests/temporal.rs::date_value_relinquish_default_write_recaptures_present_value",
@@ -1743,16 +1828,16 @@
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_value_present_value_and_priority_array_over_the_wire"
    ],
    "negative_tests": [
-     "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_rejects_non_binary_values_atomically",
-     "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_wrong_type_is_atomic",
-     "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_relinquish_default_rejects_non_binary_values_over_write_property",
-     "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_failed_wpm_keeps_default_prefix_and_priority",
-     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_write_with_mispaired_members_is_refused_and_preserves",
+    "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_rejects_non_binary_values_atomically",
+    "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_wrong_type_is_atomic",
+    "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_relinquish_default_rejects_non_binary_values_over_write_property",
+    "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_failed_wpm_keeps_default_prefix_and_priority",
+    "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_write_with_mispaired_members_is_refused_and_preserves",
     "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_relinquish_default_is_not_range_locked_after_store"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms; #842 subsequently makes Priority_Array read-only across all 20 affected families, while preserving Relinquish_Default and prioritized Present_Value writes. Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves a valid Relinquish_Default prefix remains committed when a later value is refused, without disturbing the active priority state. Binary Lighting operation handling is evidenced separately in BACNET-12-BINARY-LIGHTING-OPERATIONS; this row remains bounded to Relinquish_Default. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The Access Door Present_Value arm, which used to accept any Enumerated, now shares the Relinquish_Default check (#979, evidenced in BACNET-12-ACCESS-DOOR-DOOR-VALUE), and the door's property_list now lists PRIORITY_ARRAY and RELINQUISH_DEFAULT. #182 added the paired datetime write path, replacing the pinned-denial test with datetime_value_relinquish_default_write_recaptures_present_value. Issue #821 removes the private unused access selector and no-metadata fallbacks: all twelve value types retain the same validated Relinquish_Default write and required metadata-derived property presence/writability."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms; #842 subsequently makes Priority_Array read-only across all 20 affected families, while preserving Relinquish_Default and prioritized Present_Value writes. Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves a valid Relinquish_Default prefix remains committed when a later value is refused, without disturbing the active priority state. Binary Lighting operation handling is evidenced separately in BACNET-12-BINARY-LIGHTING-OPERATIONS; this row remains bounded to Relinquish_Default. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The Access Door Present_Value arm, which used to accept any Enumerated, now shares the Relinquish_Default check (#979, evidenced in BACNET-12-ACCESS-DOOR-DOOR-VALUE), and the door's property_list now lists PRIORITY_ARRAY and RELINQUISH_DEFAULT. #182 added the paired datetime write path, replacing the pinned-denial test with datetime_value_relinquish_default_write_recaptures_present_value. Issue #821 removes the private unused access selector and no-metadata fallbacks: all twelve value types retain the same validated Relinquish_Default write and required metadata-derived property presence/writability. #1073 narrowed the Access Door's Relinquish_Default to LOCK and UNLOCK (Clause 12.26.11), refusing the two pulse values with VALUE_OUT_OF_RANGE."
   },
   {
    "id": "BACNET-12-BINARY-LIGHTING-OPERATIONS",

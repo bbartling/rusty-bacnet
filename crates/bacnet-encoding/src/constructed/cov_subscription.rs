@@ -282,7 +282,7 @@ fn decode_ctx_u32(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<(u3
 }
 
 /// A context-tagged BOOLEAN has one contents octet, 0 or 1 (Clause 20.2.3).
-fn decode_ctx_boolean(
+pub(super) fn decode_ctx_boolean(
     data: &[u8],
     offset: usize,
     tag: u8,
