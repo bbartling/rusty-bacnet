@@ -312,6 +312,27 @@ client = BACnetClient(
 )
 ```
 
+### MS/TP serial ports
+
+`transport="mstp"` takes the keyword-only `serial_port` (required),
+`mstp_baud` (9600, 19200, 38400, 57600, 76800 or 115200; default 38400),
+`mstp_mac` (default 1), `mstp_max_master` (default 127) and
+`mstp_max_info_frames` (default 1). `BACnetServer` takes the same options, and
+`MstpEndpoint` its own `serial_port`.
+
+`rusty_bacnet.list_serial_ports()` returns the names of the serial ports the
+operating system reports, to pass as `serial_port`: macOS lists them through
+IOKit, Windows through SetupAPI and the registry, and Linux from sysfs. A port
+that another program has open is listed too, and an empty list means none. It
+raises `OSError` (or the subclass for the failure's kind) if the operating
+system can't be asked.
+
+```python
+import rusty_bacnet
+
+print(rusty_bacnet.list_serial_ports())  # ['/dev/ttyUSB0'], ['/dev/cu.usbserial-1410'], ['COM3'], ...
+```
+
 ### Lifecycle
 
 ```python

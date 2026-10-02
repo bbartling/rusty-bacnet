@@ -168,7 +168,7 @@ pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
     let network = Arc::clone(network);
     let mut owner =
         crate::network_number::NetworkNumberOwner::new(selected.map(|oid| (Arc::clone(db), oid)));
-    tokio::spawn(async move {
+    super::heap_futures::spawn_boxed(move || async move {
         while let Some(control) = controls.recv().await {
             if let Some(npdu) = owner.handle(control).await {
                 if let Err(error) = network.transport().send_broadcast(&npdu).await {

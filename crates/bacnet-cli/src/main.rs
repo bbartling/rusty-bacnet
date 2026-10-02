@@ -458,30 +458,51 @@ type CliResult = Result<(), Box<dyn std::error::Error>>;
 // Windows (8 MiB on Linux and macOS), and a debug build overflowed it on its
 // first SC command (#950). So `cli_main`'s state lives on the heap. While it
 // runs, the main thread's stack holds the box pointer, block_on's frames, and
-// the poll frames of the futures and whatever they call. In a debug build the
-// largest of those is clap's derived parser in `Cli::parse()`: with a 1 MiB
-// main stack on macOS the CLI's tests pass, and with 768 KiB they overflow
-// inside it. This builds the runtime `#[tokio::main]` would (multi-thread,
-// every driver), without the attribute's temporary of the whole future in
-// main's own frame.
+// the poll frames of the futures and whatever they call. This builds the
+// runtime `#[tokio::main]` would (multi-thread, every driver), without the
+// attribute's temporary of the whole future in main's own frame.
+//
+// Clap's derived parser needed more than all of that: in a debug build,
+// `Cli::parse()` took about 860 KiB of the main thread's stack on macOS, most
+// of it one 620 KiB frame (`Command::augment_subcommands`, which builds every
+// subcommand's arguments inline). So the command line is parsed on a thread of
+// its own (#953). A read or a discover then needs about 240 KiB of the main
+// thread's stack in a debug build, where it needed 860 KiB before.
 fn main() -> CliResult {
+    let cli = parse_on_large_stack(Cli::parse);
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("Failed building the Runtime")
-        .block_on(boxed_cli_main())
+        .block_on(boxed_cli_main(cli))
+}
+
+/// Stack for the thread that parses the command line; see `main`.
+const PARSE_STACK_BYTES: usize = 8 << 20;
+
+/// Run a clap parse on a thread with a stack of [`PARSE_STACK_BYTES`].
+///
+/// A parse that fails with `Cli::parse` prints its error or the help text and
+/// exits the process from that thread, as it would on the main thread.
+fn parse_on_large_stack<T: Send + 'static>(parse: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .name("bacnet-args".into())
+        .stack_size(PARSE_STACK_BYTES)
+        .spawn(parse)
+        .expect("spawn the command-line parser thread")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 /// Create `cli_main`'s future and move it to the heap. The full-size temporary
 /// that creating it takes is in this frame, which returns before polling
 /// starts.
 #[inline(never)]
-fn boxed_cli_main() -> std::pin::Pin<Box<impl std::future::Future<Output = CliResult>>> {
-    Box::pin(cli_main())
+fn boxed_cli_main(cli: Cli) -> std::pin::Pin<Box<impl std::future::Future<Output = CliResult>>> {
+    Box::pin(cli_main(cli))
 }
 
-async fn cli_main() -> CliResult {
-    let cli = Cli::parse();
+async fn cli_main(cli: Cli) -> CliResult {
     setup_tracing(cli.verbose, cli.sc);
     let format = resolve_format(&cli);
 

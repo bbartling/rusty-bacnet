@@ -45,6 +45,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<hub::PyScHub>()?;
     m.add_class::<hub_bindings::PyScHubCertificateBinding>()?;
     endpoint::register(m)?;
+    m.add_function(wrap_pyfunction!(mstp_py::list_serial_ports, m)?)?;
 
     Ok(())
 }

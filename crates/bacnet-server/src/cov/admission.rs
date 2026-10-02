@@ -26,7 +26,9 @@ impl CovSubscriptionTable {
     /// Atomically accept final unique Multiple references and refresh their exact context.
     /// All identities/options are validated before quota/generation reservation or refresh.
     /// The request's expiry and maximum notification delay become the whole
-    /// context's (last write wins); the delay is reported, never acted on.
+    /// context's (last write wins). The delay bounds how long the context's
+    /// timestamped changes may stay queued after a notification failed or was
+    /// held back.
     /// The admitted route also replaces the route of every retained reference,
     /// including empty renewals. A changed route fences old snapshots while
     /// preserving unreplaced observations; same-route refresh retains authority,
@@ -106,6 +108,7 @@ impl CovSubscriptionTable {
                 )
             })
             .collect();
+        self.timed.lock().set_delay(context, max_notification_delay);
         if let Some(replaced) = replaced {
             self.fence_context_flight(context, &replaced, &keys);
         }
@@ -179,7 +182,11 @@ impl CovSubscriptionTable {
         {
             let mut timed = self.timed.lock();
             if sub.timestamped && snapshot.key.multiple_context().is_some() {
-                timed.reset(&snapshot.key, generation);
+                timed.reset(
+                    &snapshot.key,
+                    generation,
+                    max_notification_delay.unwrap_or_default(),
+                );
             } else {
                 timed.remove(&snapshot.key);
             }

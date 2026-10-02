@@ -4,17 +4,20 @@ name: Release
 # runner VM; GitHub only receives a copy of each release. The jobs run on the
 # Linux amd64 runner in the CI image, which ci.yml builds, and cross-compile
 # every artifact there: Linux and macOS with zig, Windows with xwin's MSVC CRT
-# and SDK (#944). Running the macOS and Windows artifacts on real hosts is for a
-# GitHub-hosted smoke gate (#951). See docs/ci.md, "Release".
+# and SDK (#944). GitHub-hosted runners then run the macOS and Windows
+# artifacts (#951, .github/workflows/release-smoke.yml) before anything is
+# published. See docs/ci.md, "Release".
 #
 #   v* tag pushed     validate (preflight both release hosts, wait for CI on
-#                     the tag), build, test the artifacts, then publish in
-#                     order: crates.io, PyPI, the Forgejo release, the GitHub
-#                     release copy
+#                     the tag), build, test the artifacts, smoke-test them on
+#                     GitHub from the GitHub draft, then publish in order:
+#                     crates.io, PyPI, the Forgejo release, the GitHub release
+#                     copy (that same draft)
 #   manual dispatch   dry_run (default true) builds and tests everything, runs
-#                     the release API calls read only, and publishes nothing.
-#                     dry_run=false is accepted only on a v* tag, and runs that
-#                     tag's release again.
+#                     the smoke test against a throwaway GitHub draft that it
+#                     deletes again, runs the release API calls read only, and
+#                     publishes nothing. dry_run=false is accepted only on a v*
+#                     tag, and runs that tag's release again.
 #
 # Every publish job is safe to re-run: it skips what is already published, and
 # each release stays a draft until its last asset is up (GitHub releases are
@@ -479,8 +482,9 @@ jobs:
           chmod +x release/bacnet-*
           ls -l release
           (cd release && sha256sum -- *)
-      # Static checks of every file, the macOS and Windows ones included: nothing
-      # here can run those (docs/ci.md, "What is and isn't tested").
+      # Static checks of every file, the macOS and Windows ones included: only
+      # the smoke job, on GitHub, can run those (docs/ci.md, "What is and isn't
+      # tested").
       - name: Versions, wheel tags, notices, architectures and linkage
         env:
           VERSION: ${{ needs.validate.outputs.version }}
@@ -516,8 +520,9 @@ jobs:
             echo "== $("/tmp/venv-$tag/bin/python" --version)"
             bash scripts/release/cli_smoke.sh "release/bacnet-linux-amd64" "/tmp/venv-$tag/bin/python"
           done
-      # The aarch64, macOS and Windows wheels are only checked by
-      # check_artifacts.py: their tags, module names, architecture and linkage.
+      # The aarch64 wheels are only checked by check_artifacts.py: their tags,
+      # module names, architecture and linkage. The macOS and Windows ones run
+      # in the smoke job, on GitHub.
       - name: CLI smoke test (arm64, under qemu-user)
         env:
           CLI_WRAPPER: qemu-aarch64-static -L /usr/aarch64-linux-gnu
@@ -527,6 +532,68 @@ jobs:
           name: release-assets
           path: release/
           if-no-files-found: error
+
+  # The macOS and Windows artifacts, run on GitHub-hosted runners (#951): stage
+  # the release's files on a GitHub draft (a release's own draft, which the
+  # GitHub copy later publishes unchanged; a dry run's throwaway draft), dispatch
+  # .github/workflows/release-smoke.yml against it, and wait for the result. A
+  # failure or timeout stops the release before anything is published. See
+  # docs/ci.md, "Smoke test".
+  smoke:
+    name: Smoke test (macOS, Windows)
+    needs: [validate, verify]
+    if: success()
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_IMAGE }}
+    timeout-minutes: 90
+    outputs:
+      release_id: ${{ steps.gate.outputs.release_id }}
+      sums_sha256: ${{ steps.gate.outputs.sums_sha256 }}
+    env:
+      PUBLISH: ${{ needs.validate.outputs.publish }}
+      HAVE_GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN != '' }}
+      THROWAWAY: release-smoke-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-assets
+          path: release
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7
+        with:
+          name: release-notes
+          path: notes
+      # Leaves time for the clean-up step if it runs out.
+      - name: Stage the GitHub draft, run the smoke workflow, wait for it
+        id: gate
+        timeout-minutes: 80
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          if [ "$HAVE_GH_RELEASE_TOKEN" != true ]; then
+            # Validate already stops a release without the token; a release never skips this.
+            [ "$PUBLISH" != true ] || { echo "::error::GH_RELEASE_TOKEN isn't set, so the smoke test can't run"; exit 1; }
+            echo "::warning::GH_RELEASE_TOKEN isn't set, so this dry run skips the smoke test"
+            exit 0
+          fi
+          mode=(--tag "$TAG" --wait-tag 900)
+          [ "$PUBLISH" = true ] || mode=(--tag "v$VERSION" --throwaway "$THROWAWAY")
+          # shellcheck disable=SC2086 # PYTHONS is a list.
+          python3 scripts/release/release_smoke.py gate "${mode[@]}" --commit "$COMMIT" --version "$VERSION" \
+            --python $PYTHONS --notes notes/notes-github.md --assets release --ref "$GITHUB_REF" --timeout 3600
+      # The gate deletes a dry run's draft itself; this covers a gate that was
+      # killed first.
+      - name: Delete the throwaway draft
+        if: always() && env.PUBLISH != 'true' && env.HAVE_GH_RELEASE_TOKEN == 'true'
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+        run: python3 scripts/release/release_smoke.py discard --name "$THROWAWAY"
 
   # Dry runs only: the release API calls a real run would make, read only. The
   # GitHub half needs GH_RELEASE_TOKEN and is skipped without it.
@@ -572,12 +639,13 @@ jobs:
           python3 scripts/release/release_api.py github --dry-run --tag "$TAG" --commit "$COMMIT" \
             --notes notes/notes-github.md --assets release --wait-tag 900
 
-  # Publishing: tag runs only, after every build and test passed, one step at a
-  # time so a failure stops everything after it. Each `if:` states success()
-  # because Forgejo leaves the implicit one to the runner.
+  # Publishing: tag runs only, after every build and test, the smoke test
+  # included, passed, one step at a time so a failure stops everything after it.
+  # Each `if:` states success() because Forgejo leaves the implicit one to the
+  # runner.
   crates-io:
     name: Publish to crates.io
-    needs: [validate, verify]
+    needs: [validate, verify, smoke]
     if: success() && needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     container:
@@ -643,7 +711,7 @@ jobs:
 
   github-release:
     name: GitHub release copy
-    needs: [validate, forgejo-release]
+    needs: [validate, smoke, forgejo-release]
     if: success() && needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     container:
@@ -662,13 +730,20 @@ jobs:
           name: release-notes
           path: notes
       # Checks again that the mirror's tag points at the release commit (the
-      # preflight waited for it), then drafts, uploads, checks every asset's
-      # digest and publishes.
-      - name: Draft, upload, publish
+      # preflight waited for it), then publishes the draft the smoke job staged
+      # and tested: it must be that draft, holding exactly these files, every
+      # asset's digest checked, and nothing is uploaded or deleted.
+      - name: Check and publish the smoke-tested draft
         env:
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
           TAG: ${{ needs.validate.outputs.tag }}
           COMMIT: ${{ needs.validate.outputs.commit }}
+          STAGED_RELEASE: ${{ needs.smoke.outputs.release_id }}
+          STAGED_SUMS: ${{ needs.smoke.outputs.sums_sha256 }}
         run: |
+          # Fails closed: only the smoke-tested draft is ever published (the script checks too).
+          [ -n "$STAGED_RELEASE" ] && [ -n "$STAGED_SUMS" ] \
+            || { echo "::error::the smoke job gave no staged draft, so nothing is published"; exit 1; }
           python3 scripts/release/release_api.py github --tag "$TAG" --commit "$COMMIT" \
-            --notes notes/notes-github.md --assets release --wait-tag 900
+            --notes notes/notes-github.md --assets release --wait-tag 900 \
+            --staged-release "$STAGED_RELEASE" --staged-sums "$STAGED_SUMS"

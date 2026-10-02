@@ -1415,6 +1415,23 @@ class BacnetAbortError(BacnetError):
 
 
 # ---------------------------------------------------------------------------
+# Serial ports
+# ---------------------------------------------------------------------------
+
+def list_serial_ports() -> list[str]:
+    """List the serial ports the operating system reports, as names to pass as
+    ``serial_port=`` for ``transport="mstp"`` (``/dev/ttyUSB0``,
+    ``/dev/cu.usbserial-1410``, ``COM3``).
+
+    macOS lists them through IOKit, Windows through SetupAPI and the registry,
+    and Linux from sysfs, so a port another program has open is listed too.
+    An empty list means the system reports none. Raises OSError (or the
+    subclass for the failure's kind) if the operating system can't be asked.
+    """
+    ...
+
+
+# ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
 
