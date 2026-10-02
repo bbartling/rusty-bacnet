@@ -36,15 +36,10 @@ fn decode_context_u32(
 // ReadPropertyRequest
 // ---------------------------------------------------------------------------
 
-/// ReadProperty-Request service parameters.
+/// ReadProperty-Request service parameters (Clause 15.5; production in Clause 21.2).
 ///
-/// ```text
-/// ReadProperty-Request ::= SEQUENCE {
-///     objectIdentifier    [0] BACnetObjectIdentifier,
-///     propertyIdentifier  [1] BACnetPropertyIdentifier,
-///     propertyArrayIndex  [2] Unsigned OPTIONAL
-/// }
-/// ```
+/// On the wire: the object identifier in context tag `[0]`, the property identifier in `[1]`,
+/// then an optional Unsigned array index in `[2]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadPropertyRequest {
     /// Object to read from.
@@ -127,16 +122,11 @@ impl ReadPropertyRequest {
 // ReadPropertyACK
 // ---------------------------------------------------------------------------
 
-/// ReadProperty-ACK service parameters.
+/// ReadProperty-ACK service parameters (Clause 15.5; production in Clause 21.2).
 ///
-/// ```text
-/// ReadProperty-ACK ::= SEQUENCE {
-///     objectIdentifier    [0] BACnetObjectIdentifier,
-///     propertyIdentifier  [1] BACnetPropertyIdentifier,
-///     propertyArrayIndex  [2] Unsigned OPTIONAL,
-///     propertyValue       [3] ABSTRACT-SYNTAX.&TYPE
-/// }
-/// ```
+/// The ACK repeats the request's members at the same context tags (`[0]` object, `[1]`
+/// property, optional `[2]` array index) and adds the value inside an opening/closing `[3]`
+/// pair, typed by whatever the property holds.
 ///
 /// The `property_value` field contains raw application-tagged bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]

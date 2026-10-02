@@ -18,9 +18,9 @@ use super::{IngressContext, SendRequest};
 /// One validated Initialize-Routing-Table / Initialize-Routing-Table-Ack
 /// entry: DNET(2) + Port ID(1) + Port Info Length(1) + Port Info(N).
 /// Port Info octets are envelope-checked but not retained: this router holds
-/// no PTP/modem dial information (135-2020 6.4.7 treats the optional Port Info
-/// as opaque octets, commonly used for modem setup and dialing data needed
-/// to reach a remote network over a switched PTP link).
+/// no PTP/modem dial information (135-2020 6.4.7 gives the optional Port Info
+/// no structure beyond an octet string; it serves dial-up PTP links, which
+/// this router does not implement).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RoutingTableEntry {
     network: u16,
@@ -119,7 +119,7 @@ pub(super) async fn handle_network_message(
     };
 
     if msg_type == NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw() {
-        // Clause 6.4.1: optionally followed by one 2-octet network number.
+        // Clause 6.4.1: the payload is empty or a single 16-bit network.
         // Anything else (a 1-octet tail, trailing bytes) is malformed and
         // must not promote a scoped query into a global scan.
         let requested_network = match npdu.payload.len() {
@@ -212,7 +212,7 @@ pub(super) async fn handle_network_message(
             warn!(%e, "Router dropped I-Am-Router response: output channel full");
         }
     } else if msg_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw() {
-        // Clause 6.4.2: one or more 2-octet network numbers. A truncated
+        // Clause 6.4.2: a non-empty list of 16-bit networks. A truncated
         // tail rejects the whole message — no prefix learning, no rebroadcast.
         let data = &npdu.payload;
         if data.is_empty() || !data.len().is_multiple_of(2) {

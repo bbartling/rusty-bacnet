@@ -106,8 +106,8 @@ pub struct RouteEntry {
 /// Convergence mode for learned cross-port moves (RB-06).
 ///
 /// Standard (default) applies the 135-2020 6.6.3.2 last-wins rule immediately:
-/// each new advertisement represents a configuration modification and updates
-/// routing information. Hardened is an explicit opt-in local restriction that
+/// the router takes every fresh advertisement as a topology change and adopts
+/// it on arrival. Hardened is an explicit opt-in local restriction that
 /// holds cross-port moves pending for a second same-(network, port) claim
 /// within 60s; it does not authenticate the claim and can delay legitimate
 /// convergence (alternation resets the slot, single-shot advertisers wait for
@@ -471,13 +471,14 @@ impl RouterTable {
 
     /// Apply one Initialize-Routing-Table update entry (135-2020 6.6.3.8).
     ///
-    /// Every network named in the NPDU has its port mapping rewritten: the
-    /// supplied route overwrites the current row for that DNET, or becomes a
-    /// new row if the table has none. Management writes install learned routes and
-    /// never direct ones — direct attachments stay locally configured until
-    /// RB-09 authorization — so an existing direct entry is left untouched
-    /// and reports `false`. Reserved networks are skipped. Replacement clears
-    /// pending/reject records exactly like fresh learning.
+    /// Each entry is an upsert keyed by DNET (see also 6.4.7): the supplied
+    /// route takes the place of whatever row the table holds for that
+    /// network, and a network the table lacks gets a fresh row. Management
+    /// writes install learned routes and never direct ones — direct
+    /// attachments stay locally configured until RB-09 authorization — so an
+    /// existing direct entry is left untouched and reports `false`. Reserved
+    /// networks are skipped. Replacement clears pending/reject records exactly
+    /// like fresh learning.
     pub(crate) fn apply_management_update(
         &mut self,
         network: u16,
