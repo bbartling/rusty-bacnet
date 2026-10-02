@@ -141,6 +141,29 @@ pub(super) fn error_apdu_from_error(
         });
     }
     let (error_class, error_code) = error_fields(error);
+    if service_choice == ConfirmedServiceChoice::ADD_LIST_ELEMENT
+        || service_choice == ConfirmedServiceChoice::REMOVE_LIST_ELEMENT
+    {
+        // Both list services answer every error with a ChangeList-Error
+        // (Clause 21). Only an element refusal names an element; a refusal of
+        // the request or its target (authorization, object, property, index,
+        // list-ness) carries zero (Clauses 15.1.1.3.1 and 15.2.1.3.1).
+        let first_failed_element_number = match error {
+            Error::ChangeList {
+                first_failed_element_number,
+                ..
+            } => *first_failed_element_number,
+            _ => 0,
+        };
+        return Apdu::Error(
+            bacnet_services::list_manipulation::ChangeListError {
+                error_class,
+                error_code,
+                first_failed_element_number,
+            }
+            .to_error_pdu(invoke_id, service_choice),
+        );
+    }
     Apdu::Error(ErrorPdu {
         invoke_id,
         service_choice,
@@ -152,7 +175,7 @@ pub(super) fn error_apdu_from_error(
 
 pub(in crate::server) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } => (
+        Error::Protocol { class, code } | Error::ChangeList { class, code, .. } => (
             ErrorClass::from_raw(*class as u16),
             ErrorCode::from_raw(*code as u16),
         ),

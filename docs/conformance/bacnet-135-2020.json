@@ -2182,10 +2182,10 @@
     "crates/bacnet-server/src/server/audit_reporter_file_tests.rs::audit_reporter_atomic_write_file_preserves_decoder_acceptance_boundary",
     "crates/bacnet-server/src/server/audit_reporter_file_tests.rs::audit_reporter_atomic_write_file_execution_gates_precedence_and_results",
     "crates/bacnet-integration-tests/tests/audit_reporter.rs::audit_reporter_atomic_write_file_confirmed_and_unconfirmed_reach_real_log",
-    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_success_duplicates_and_noop_preserve_delta_and_preimage",
+    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_duplicates_and_absent_elements_preserve_delta_and_preimage",
     "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_execution_failures_keep_response_state_and_known_fields",
-    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_framed_destinations_decode_before_observation",
-    "crates/bacnet-integration-tests/tests/audit_reporter.rs::audit_reporter_list_add_remove_and_noop_reach_real_log_over_udp",
+    "crates/bacnet-server/src/server/audit_reporter_list_destination_tests.rs::audit_reporter_list_framed_destinations_decode_before_observation",
+    "crates/bacnet-integration-tests/tests/audit_reporter.rs::audit_reporter_list_add_remove_and_absent_element_reach_real_log_over_udp",
     "crates/bacnet-server/src/server/audit_reporter_lifecycle_tests.rs::audit_reporter_create_delete_success_uses_final_identity_without_initial_writes",
     "crates/bacnet-server/src/server/audit_reporter_lifecycle_tests.rs::audit_reporter_lifecycle_execution_errors_preserve_results_and_create_rollback",
     "crates/bacnet-integration-tests/tests/audit_reporter/lifecycle.rs::audit_reporter_create_delete_reach_real_log_over_udp",
@@ -2560,7 +2560,7 @@
     "crates/bacnet-encoding/src/primitives/mod.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-server/src/handlers/list.rs::whole_list_write_property_decodes_all_elements",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::whole_list_write_property_decodes_all_elements",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_value_present_value_and_priority_array_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_relinquish_default_over_the_wire_recaptures_present_value",
@@ -2628,9 +2628,9 @@
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/traits/defaults.rs::tests::list_classification_follows_the_datatype_and_never_overlaps_arrays",
-    "crates/bacnet-server/src/handlers/list.rs::add_and_remove_list_element_mutate_msi_alarm_values",
-    "crates/bacnet-server/src/handlers/list.rs::add_list_element_to_framed_recipient_list_appends",
-    "crates/bacnet-server/src/handlers/list.rs::remove_list_element_from_framed_recipient_list_leaves_rest",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_and_remove_list_element_mutate_msi_alarm_values",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::add_list_element_to_framed_recipient_list_appends",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::remove_list_element_from_framed_recipient_list_leaves_rest",
     "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_response",
     "crates/bacnet-endpoint/src/source_reporter_forwarding_tests.rs::custom_capabilities_clocks_indexes_and_private_state_are_retained"
    ],
@@ -2640,7 +2640,7 @@
     "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_services_refuse_arrays_and_array_elements_as_not_a_list",
     "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_target_errors_precede_element_errors_in_clause_order",
     "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::framed_lists_of_other_elements_never_take_the_destination_codec",
-    "crates/bacnet-server/src/handlers/list.rs::add_list_element_rejects_array_index_on_alarm_values",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_rejects_array_index_on_alarm_values",
     "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_execution_failures_keep_response_state_and_known_fields"
    ],
    "benchmarks": [],
@@ -2648,7 +2648,81 @@
     "docs/rust-api.md BACnetObject Trait list services",
     "CHANGELOG.md #999"
    ],
-   "notes": "Refs #999. BACnetObject::is_list_property is a provided method beside is_array_property; its default classifies by Clause 12 datatype, including the type-dependent Alarm_Values / Fault_Values, List_Of_Object_Property_References, Present_Value (a list only on Group) and Member_Of (a single reference on Audit Log). The 2020 tables define no BACnetARRAY of BACnetLIST, so an indexed array element is never a list. An index on a non-array is refused as PROPERTY / PROPERTY_IS_NOT_AN_ARRAY after a whole-property read, so absence keeps its UNKNOWN_PROPERTY precedence. Recipient_List of Notification Class and Notification Forwarder alone takes the destination codec; a list held framed with no element codec (Schedule List_Of_Object_Property_References, the standalone Device COV subscription lists, all read-only) returns PROPERTY / WRITE_ACCESS_DENIED instead of being decoded as destinations. Before, a RemoveListElement naming absent members of a value that reads as several members (DateTime Value Present_Value) was acknowledged and wrote a priority-16 command; it is now refused with nothing written. Audit observation is unchanged in kind: a target refusal with well-formed elements reports the response error and the readable pre-image. The Error PDU still carries only class and code, not the First Failed Element Number of the ChangeList-Error form. No broader list-property or complete service conformance claim."
+   "notes": "Refs #999. BACnetObject::is_list_property is a provided method beside is_array_property; its default classifies by Clause 12 datatype, including the type-dependent Alarm_Values / Fault_Values, List_Of_Object_Property_References, Present_Value (a list only on Group) and Member_Of (a single reference on Audit Log). The 2020 tables define no BACnetARRAY of BACnetLIST, so an indexed array element is never a list. An index on a non-array is refused as PROPERTY / PROPERTY_IS_NOT_AN_ARRAY after a whole-property read, so absence keeps its UNKNOWN_PROPERTY precedence. Recipient_List of Notification Class and Notification Forwarder alone takes the destination codec; a list held framed with no element codec (Schedule List_Of_Object_Property_References, the standalone Device COV subscription lists, all read-only) returns PROPERTY / WRITE_ACCESS_DENIED instead of being decoded as destinations. Before, a RemoveListElement naming absent members of a value that reads as several members (DateTime Value Present_Value) was acknowledged and wrote a priority-16 command; it is now refused with nothing written. Audit observation is unchanged in kind: a target refusal with well-formed elements reports the response error and the readable pre-image. Since #1026 every target refusal goes out as a ChangeList-Error with First Failed Element Number 0; element rules and element numbers are in BACNET-15-LIST-ELEMENT-SEMANTICS. No broader list-property or complete service conformance claim."
+  },
+  {
+   "id": "BACNET-15-LIST-ELEMENT-SEMANTICS",
+   "standard_anchor": "Clauses 15.1.1.3, 15.1.2, 15.2.1.3 and 15.2.2 (printed732-734, PDF734-736); Clause 12.1.5.2 (BACnetLIST elements); Clause 21 BACnet-Error and ChangeList-Error productions; local licensed source inspected",
+   "priority": "P1",
+   "requirement_summary": "Inbound AddListElement and RemoveListElement compare whole elements (no served list narrows the comparison) and apply all of a request or none of it. AddListElement leaves an element already present, a repeat within the request included, and that is not a failure. RemoveListElement refuses the request at the first element, in request order, whose datatype differs from the stored elements' (PROPERTY / INVALID_DATA_TYPE) or that is absent (SERVICES / LIST_ELEMENT_NOT_FOUND), and removes nothing. This holds for the values, destination and calendar-entry codecs. Both services answer every error with a ChangeList-Error: the class and code in [0] and the First Failed Element Number in [1], which is the 1-based position of the refused element for decode, datatype, not-found and object element refusals, and 0 for refusals of the request or target. Other services keep the plain class/code Error PDU. The APDU codec recognizes the body for services 8 and 9 in both directions, the client surfaces it as Error::ChangeList, and Python's BacnetProtocolError carries first_failed_element_number.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-server/src/handlers/list.rs::edit",
+    "crates/bacnet-server/src/handlers/list.rs::object_refusal",
+    "crates/bacnet-server/src/handlers/list.rs::handle_list_element_observed",
+    "crates/bacnet-server/src/server/requests/confirmed_response.rs::error_apdu_from_error",
+    "crates/bacnet-services/src/list_manipulation/error.rs::ChangeListError",
+    "crates/bacnet-encoding/src/apdu/formal_error.rs::decode_formal_body",
+    "crates/bacnet-types/src/error.rs::Error::ChangeList",
+    "crates/bacnet-client/src/tsm.rs::TsmResponse::from_error_pdu",
+    "crates/bacnet-client/src/client/mod.rs::confirmed_response_result",
+    "crates/rusty-bacnet/src/errors.rs::to_py_err"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_and_remove_list_element_mutate_msi_alarm_values",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_leaves_elements_already_present",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::add_list_element_to_framed_recipient_list_appends",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::remove_list_element_from_framed_recipient_list_leaves_rest",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::recipient_list_elements_compare_as_whole_destinations",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_add_and_remove_list_element_match_entries_by_choice",
+    "crates/bacnet-server/src/server/requests/mutation_list_wire_tests.rs::list_element_duplicates_succeed_and_absent_elements_change_nothing",
+    "crates/bacnet-server/src/server/requests/mutation_list_wire_tests.rs::list_element_refusals_go_out_as_change_list_errors",
+    "crates/bacnet-server/src/server/requests/mutation_list_wire_tests.rs::list_element_policy_denial_is_a_change_list_error_naming_no_element",
+    "crates/bacnet-server/src/server/requests/mutation_list_wire_tests.rs::other_services_keep_the_plain_error_form",
+    "crates/bacnet-encoding/src/apdu/change_list_error_tests.rs::change_list_error_golden_vector_replaces_the_generic_pair",
+    "crates/bacnet-encoding/src/apdu/change_list_error_tests.rs::change_list_error_decodes_class_and_code_from_the_body",
+    "crates/bacnet-encoding/src/apdu/change_list_error_tests.rs::legacy_plain_list_service_error_still_decodes_and_encodes",
+    "crates/bacnet-services/src/list_manipulation/error.rs::tests::change_list_error_round_trips_with_exact_shape",
+    "crates/bacnet-services/src/list_manipulation/error.rs::tests::change_list_error_pdu_conversion_keeps_both_services",
+    "crates/bacnet-types/src/error.rs::tests::change_list_error_display_names_the_element",
+    "crates/bacnet-client/src/client/list_error_tests.rs::change_list_error_projects_its_element_number",
+    "crates/bacnet-client/src/client/list_error_tests.rs::list_services_surface_the_first_failed_element_number",
+    "crates/bacnet-client/src/client/list_error_tests.rs::plain_list_service_error_stays_a_protocol_error",
+    "crates/bacnet-integration-tests/tests/server/list_elements.rs::list_element_semantics_and_change_list_errors_reach_the_client",
+    "crates/bacnet-integration-tests/tests/audit_reporter.rs::audit_reporter_list_add_remove_and_absent_element_reach_real_log_over_udp",
+    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_duplicates_and_absent_elements_preserve_delta_and_preimage",
+    "crates/rusty-bacnet/src/errors.rs::tests::protocol_errors_carry_the_first_failed_element_number",
+    "crates/rusty-bacnet/tests/test_list_validation.py::test_change_list_error_reaches_python_with_its_element_number"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_refuses_an_absent_element_and_removes_nothing",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_checks_the_element_datatype_before_presence",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_malformed_tail_errors_without_partial_commit",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_malformed_tail_errors_without_partial_commit",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_over_cap_returns_the_clause_15_1_error",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_names_the_new_element_the_object_refuses",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_rejects_array_index_on_alarm_values",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::remove_list_element_absent_recipient_fails_and_removes_nothing",
+    "crates/bacnet-server/src/handlers/tests/list_element_recipients.rs::remove_list_element_malformed_framed_payload_errors_and_preserves",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_list_services_refuse_bad_entries_without_partial_commit",
+    "crates/bacnet-server/src/handlers/tests/calendar_date_list.rs::date_list_add_list_element_past_the_cap_is_no_space_to_add",
+    "crates/bacnet-server/src/handlers/tests/list_element_targets.rs::list_target_errors_precede_element_errors_in_clause_order",
+    "crates/bacnet-encoding/src/apdu/change_list_error_tests.rs::change_list_error_projection_must_match_body",
+    "crates/bacnet-encoding/src/apdu/change_list_error_tests.rs::malformed_change_list_error_bodies_are_refused",
+    "crates/bacnet-encoding/src/apdu/change_list_error_tests.rs::change_list_body_is_formal_only_for_the_list_services",
+    "crates/bacnet-services/src/list_manipulation/error.rs::tests::change_list_error_decode_rejects_missing_wrong_and_trailing_fields",
+    "crates/bacnet-services/src/list_manipulation/error.rs::tests::change_list_error_conversion_rejects_plain_and_mismatched_pdus",
+    "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_execution_failures_keep_response_state_and_known_fields",
+    "crates/bacnet-server/src/server/requests/mutation_policy_tests.rs::mutation_policy_matrix_all_ten_decisions_and_post_issuance_reauthorization"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md BACnetObject Trait list services, List Manipulation and Error Handling",
+    "docs/python-api.md List Manipulation and Exceptions",
+    "crates/rusty-bacnet/rusty_bacnet.pyi BacnetProtocolError",
+    "CHANGELOG.md #1026 and #1027"
+   ],
+   "notes": "Refs #1026 and #1027; builds on BACNET-15-LIST-ELEMENT-TARGET-KIND (#999) and the calendar-entry codec (#996). Breaking on the wire: both services used to answer with the plain class/code Error PDU, which a peer expecting the ChangeList production misreads, and the client could not decode the ChangeList form at all. Elements compare by canonical encoding, which equals value equality for every codec and keeps the comparison linear. Neither Recipient_List description (Notification Class, Notification Forwarder) narrows the comparison, so a destination differing in any field is another element. Notification Forwarder Subscribed_Recipients, whose description matches on recipient and process identifier only, is not served. The values codec takes the datatype a removal must match from the stored elements; an empty list shows none, so there any element is LIST_ELEMENT_NOT_FOUND. Decode errors are found in a first pass over every element, before the target's stored list is read; the remaining checks run in request order. The object validates the edited list as a whole and names no element, so its datatype, encoding, range and space refusals point at the first element the list would gain: exact for a request adding one new element, the earliest candidate otherwise. A pure-duplicate AddListElement still writes the unchanged list, so the object's write-access check applies. Audit observation is unchanged in kind: an executable request that fails (not found, datatype, object refusal) is recorded with its error and pre-image, and malformed elements stay silent. CreateObject-Error, which has the same shape, is not produced or recognized here."
   },
   {
    "id": "BACNET-15-WPM-OUTBOUND-VALIDATION",
@@ -3002,7 +3076,7 @@
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #996"
    ],
-   "notes": "Split child of BACNET-21-FORMAL-APDUS (#996). Breaking on the wire: Date_List entries went out as an application Date or Octet String, Exception_Schedule dropped each event's period and sent the priority as an application Unsigned, Weekly_Schedule days were lists of Time and Octet String pairs, and Effective_Period was an eight-octet Octet String, NULL until set (it now defaults to the range with both dates unspecified). The codecs moved from bacnet-services::schedule, which is removed, to bacnet-encoding::constructed, and the raw eight-octet BACnetDateRange::encode/decode are removed. Not covered: Present_Value evaluation from Date_List, Schedule periods or Effective_Period; value checks on the date and week-n-day octets of a written entry; network writes of the Schedule properties; and the shared list-service behaviour, which still appends an element already present on AddListElement and ignores an absent element on RemoveListElement."
+   "notes": "Split child of BACNET-21-FORMAL-APDUS (#996). Breaking on the wire: Date_List entries went out as an application Date or Octet String, Exception_Schedule dropped each event's period and sent the priority as an application Unsigned, Weekly_Schedule days were lists of Time and Octet String pairs, and Effective_Period was an eight-octet Octet String, NULL until set (it now defaults to the range with both dates unspecified). The codecs moved from bacnet-services::schedule, which is removed, to bacnet-encoding::constructed, and the raw eight-octet BACnetDateRange::encode/decode are removed. Not covered: Present_Value evaluation from Date_List, Schedule periods or Effective_Period; value checks on the date and week-n-day octets of a written entry; network writes of the Schedule properties. The shared list-service element rules (#1027), under which a present entry is left on AddListElement and an absent one refuses RemoveListElement, are in BACNET-15-LIST-ELEMENT-SEMANTICS."
   },
   {
    "id": "BACNET-A-PICS",

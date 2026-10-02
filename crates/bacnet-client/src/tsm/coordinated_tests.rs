@@ -463,7 +463,11 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
                 error_data: Bytes::new(),
             })
         };
-        let response = || TsmResponse::Error { class: 2, code: 40 };
+        let response = || TsmResponse::Error {
+            class: 2,
+            code: 40,
+            first_failed_element_number: None,
+        };
         let wrong = error(ConfirmedServiceChoice::READ_PROPERTY);
         let matching = error(ConfirmedServiceChoice::WRITE_PROPERTY);
         if pre_admitted {
@@ -515,7 +519,11 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
         }
         assert!(matches!(
             registration.response.await.unwrap(),
-            TsmResponse::Error { class: 2, code: 40 }
+            TsmResponse::Error {
+                class: 2,
+                code: 40,
+                first_failed_element_number: None
+            }
         ));
         assert_eq!(coordinator.active_count().unwrap(), 0);
         assert_eq!(tsm.pending_count(), 0);

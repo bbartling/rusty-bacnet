@@ -937,6 +937,10 @@ the service's outer `[3]`, and handles application Boolean without payload bytes
 Context, constructed and vendor encodings remain opaque: this does not validate
 every application primitive or the remote property's datatype.
 
+When the device refuses the request with a ChangeList-Error, the raised
+`BacnetProtocolError` carries `first_failed_element_number`: the position, from
+1, of the element that failed, or 0 when the request failed for another reason.
+
 #### `add_list_element(address, object_id, property_id, list_of_elements, array_index=None)`
 
 ```python
@@ -2180,7 +2184,7 @@ except BacnetError as e:
     print(f"BACnet error: {e}")
 ```
 
-`BacnetProtocolError` has `error_class` and `error_code` integer attributes. `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
+`BacnetProtocolError` has `error_class` and `error_code` integer attributes, and `first_failed_element_number`, which is an integer for an AddListElement or RemoveListElement ChangeList-Error and `None` for every other error. `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
 
 ---
 

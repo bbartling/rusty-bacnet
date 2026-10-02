@@ -20,7 +20,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::primitives;
 use crate::tags;
 
-mod wpm_error;
+mod formal_error;
 
 // ---------------------------------------------------------------------------
 // Max-segments encoding
@@ -276,8 +276,10 @@ pub struct ErrorPdu {
     /// Error code from the standard Error production.
     pub error_code: ErrorCode,
     /// Service-specific bytes following the error class and code; empty for a plain class/code
-    /// error. For WritePropertyMultiple it holds the whole error body when that decodes in the
-    /// formal form; a legacy class/code WPM error keeps only the bytes after the code.
+    /// error. For WritePropertyMultiple, AddListElement and RemoveListElement it holds the whole
+    /// error body when that decodes in the formal Clause 21 form (WritePropertyMultiple-Error,
+    /// ChangeList-Error); a legacy class/code error from those services keeps only the bytes
+    /// after the code.
     pub error_data: Bytes,
 }
 
@@ -453,18 +455,15 @@ fn valid_window_size(field: &str, value: u8) -> Result<u8, Error> {
 }
 
 fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
-    let formal = if pdu.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE {
-        // A legacy generic WPM Error may carry arbitrary service data beginning
-        // with context [0]. Only suppress the generic pair for a complete,
-        // structurally valid formal service body.
-        wpm_error::decode_formal_body(&pdu.error_data).unwrap_or(None)
-    } else {
-        None
-    };
+    // A legacy generic error may carry arbitrary service data beginning with
+    // context [0]. Only suppress the generic pair for a complete, structurally
+    // valid formal service body (WPM, AddListElement, RemoveListElement).
+    let formal =
+        formal_error::decode_formal_body(pdu.service_choice, &pdu.error_data).unwrap_or(None);
     if let Some((error_class, error_code)) = formal {
         if error_class != pdu.error_class || error_code != pdu.error_code {
             return Err(Error::Encoding(
-                "formal WPM Error body disagrees with ErrorPdu class/code".into(),
+                "formal Error body disagrees with ErrorPdu class/code".into(),
             ));
         }
     }
@@ -695,16 +694,16 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     let invoke_id = data[1];
     let service_choice = ConfirmedServiceChoice::from_raw(data[2]);
 
-    if service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE {
-        if let Some((error_class, error_code)) = wpm_error::decode_formal_body(&data[3..])? {
-            return Ok(ErrorPdu {
-                invoke_id,
-                service_choice,
-                error_class,
-                error_code,
-                error_data: data.slice(3..),
-            });
-        }
+    if let Some((error_class, error_code)) =
+        formal_error::decode_formal_body(service_choice, &data[3..])?
+    {
+        return Ok(ErrorPdu {
+            invoke_id,
+            service_choice,
+            error_class,
+            error_code,
+            error_data: data.slice(3..),
+        });
     }
 
     let mut offset = 3;
@@ -798,6 +797,8 @@ fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+mod change_list_error_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
