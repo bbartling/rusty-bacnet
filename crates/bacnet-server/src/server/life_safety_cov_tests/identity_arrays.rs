@@ -37,7 +37,7 @@ fn multiple(refs: &[(Option<u32>, f32)], cancel: bool) -> Bytes {
 }
 
 #[tokio::test]
-async fn cov_identity_multiple_array_coordinates_duplicates_and_late_invalid_are_atomic() {
+async fn cov_identity_multiple_array_coordinates_duplicates_and_refused_first_change_nothing() {
     let mut db = clocked_test_database();
     db.add(Box::new(AnalogValueObject::new(8, "array", 95).unwrap()))
         .unwrap();
@@ -92,12 +92,13 @@ async fn cov_identity_multiple_array_coordinates_duplicates_and_late_invalid_are
             .cov_increment,
         Some(0.9)
     );
-    // Valid early coordinate followed by an unreadable array element cannot refresh or replace.
+    // A refused first coordinate (an unreadable array element) ends the
+    // request before the valid one after it, which cannot refresh or replace.
     fixture
         .dispatch(
             2,
             ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
-            multiple(&[(Some(1), 1.5), (Some(17), 0.1)], false),
+            multiple(&[(Some(17), 0.1), (Some(1), 1.5)], false),
         )
         .await;
     assert!(matches!(fixture.take_apdus().as_slice(), [Apdu::Error(_)]));

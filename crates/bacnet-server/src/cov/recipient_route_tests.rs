@@ -244,7 +244,11 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
                         None,
                         subscriptions
                     ),
-                    Err(Error::Encoding(_))
+                    Err(MultipleRefusal {
+                        error: Error::Encoding(_),
+                        refused: None,
+                        ..
+                    })
                 ));
             }
             assert!(matches!(
@@ -256,7 +260,10 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
                     None,
                     vec![]
                 ),
-                Err(Error::Encoding(_))
+                Err(MultipleRefusal {
+                    error: Error::Encoding(_),
+                    ..
+                })
             ));
             table.unsubscribe_cov_multiple_context(&invalid_context);
         } else {

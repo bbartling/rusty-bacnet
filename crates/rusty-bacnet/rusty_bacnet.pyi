@@ -2343,6 +2343,24 @@ class BACnetClient:
 # Server
 # ---------------------------------------------------------------------------
 
+class CovCounters(TypedDict):
+    """COV telemetry, zero at each start; fields are sampled one by one, not atomically."""
+    subscriptions_active: int
+    subscriptions_created: int
+    subscriptions_rejected_quota: int
+    subscriptions_rejected_capacity: int
+    subscriptions_rejected_indefinite: int
+    subscriptions_cancelled: int
+    subscriptions_purged: int
+    notifications_sent: int
+    notifications_confirmed: int
+    notifications_unconfirmed: int
+    notification_bytes_sent: int
+    notifications_throttled_fanout: int
+    notifications_throttled_peer: int
+    timed_changes_dropped: int
+    untimed_references_oversized: int
+
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
     accepted_total: int
@@ -2771,6 +2789,19 @@ class BACnetServer:
 
     def comm_state(self) -> Awaitable[int]:
         """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
+        ...
+
+    def cov_counters(self) -> Awaitable[CovCounters]:
+        """Sample COV subscription and notification telemetry; zero at each start.
+
+        Every field of the Rust CovCounters under the same name.
+        subscriptions_active is a gauge; the rest are running totals.
+        timed_changes_dropped counts timestamped COV-multiple changes lost for
+        good, the running signal for a subscriber whose maximum APDU can't hold
+        one. untimed_references_oversized counts each report that left out an
+        untimestamped reference too large for one notification. Raises
+        RuntimeError before start and after stop.
+        """
         ...
 
     def dcc_outcome_counters(self) -> Awaitable[DccOutcomeCounters]:

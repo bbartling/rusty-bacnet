@@ -351,7 +351,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
 async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_unchanged() {
     let config = ServerConfig {
         cov_policy: CovPolicy {
-            max_subscriptions_per_peer: 2,
+            max_subscriptions_per_peer: 1,
             ..CovPolicy::default()
         },
         ..ServerConfig::default()
@@ -380,15 +380,18 @@ async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_u
     assert_eq!(untimed(&wire.multiple().await, &[(299, 300)]), baseline);
 
     // Each rejected re-subscription carries a new lifetime and delay; none
-    // changes the context, its references, lifetime or reported delay.
+    // changes the context, its references, lifetime or reported delay. Each
+    // refuses the whole request or its first reference, so nothing is
+    // processed (#1058).
     let rejected = [
         (
-            // Atomic: the valid Status_Flags reference is not added either.
+            // The valid Status_Flags reference after the refused one is not
+            // processed.
             subscribe(
                 92,
                 false,
                 Some((900, 99)),
-                vec![(av(1), vec![plain(FLAGS)]), (av(99), vec![plain(PV)])],
+                vec![(av(99), vec![plain(PV)]), (av(1), vec![plain(FLAGS)])],
             ),
             ErrorClass::OBJECT,
             ErrorCode::UNKNOWN_OBJECT,
@@ -414,18 +417,20 @@ async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_u
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         ),
         (
-            // A clockless server cannot report timestamps.
+            // A clockless server cannot report timestamps; the whole request
+            // is refused, the valid renewal before the timestamped reference
+            // included.
             subscribe(
                 92,
                 false,
                 Some((900, 99)),
-                vec![(av(1), vec![(FLAGS, None, None, true)])],
+                vec![(av(1), vec![plain(PV), (FLAGS, None, None, true)])],
             ),
             ErrorClass::SERVICES,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         ),
         (
-            // Two new references exceed the two-per-peer quota.
+            // The first new reference is past the one-per-peer quota.
             subscribe(
                 92,
                 false,

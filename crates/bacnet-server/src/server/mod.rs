@@ -663,6 +663,8 @@ mod cov_confirmed_baseline_tests;
 #[cfg(test)]
 mod cov_confirmed_context_tests;
 #[cfg(test)]
+mod cov_multiple_admission_tests;
+#[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;

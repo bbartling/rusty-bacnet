@@ -10,6 +10,7 @@ use super::{
     Bip6Vmac, MAX_VMAC_RETRIES,
 };
 use crate::port::TransportPort;
+use crate::port_ownership::lost_port;
 
 #[test]
 fn generate_random_vmac_produces_3_bytes() {
@@ -49,7 +50,6 @@ async fn random_vmac_foreign_device_fails_before_bip6_startup() {
 
 #[tokio::test]
 async fn peer_probe_collision_fails_startup_without_publishing_socket() {
-    const ATTEMPTS: usize = 8;
     let device_instance = 0x12_3456;
     let vmac = derive_vmac_from_device_instance(device_instance);
     // The peer needs the port before the start binds it, so it comes from a
@@ -79,11 +79,7 @@ async fn peer_probe_collision_fails_startup_without_publishing_socket() {
         peer_task.abort();
         let _ = peer_task.await;
         match error {
-            Error::Transport(ref err)
-                if attempt < ATTEMPTS && crate::port_ownership::lost_to_another_socket(err) =>
-            {
-                attempt += 1
-            }
+            Error::Transport(ref err) if lost_port(attempt, err) => attempt += 1,
             error => break (transport, error),
         }
     };
