@@ -130,7 +130,13 @@ impl Fixture {
             direct,
         }
     }
-    pub async fn shutdown(mut self, bare_drop: bool) {
+    /// Stops the client (or drops it bare), waits until the hub and direct
+    /// listener see it gone, then stops both listeners and binds each address
+    /// again to prove it was released. Both are stopped whatever the first
+    /// bind returns; the first failed bind goes back to
+    /// [`rerun_on_lost_port`](crate::port_retry::rerun_on_lost_port), since
+    /// another process can take a port between a stop and its bind (#1070).
+    pub async fn shutdown(mut self, bare_drop: bool) -> std::io::Result<()> {
         let mut client = self.client.take().unwrap();
         if !bare_drop {
             bounded(client.stop()).await.unwrap();
@@ -152,11 +158,12 @@ impl Fixture {
         let direct_address = self.listener.local_addr();
         // The external listener owns its join and bind independently of client.
         bounded(self.listener.stop()).await;
-        let direct_rebound = tokio::net::TcpListener::bind(direct_address).await.unwrap();
-        drop(direct_rebound);
+        let direct_rebound = tokio::net::TcpListener::bind(direct_address)
+            .await
+            .map(drop);
         let hub_address = self.hub.local_addr().unwrap();
         bounded(self.hub.stop()).await;
-        let hub_rebound = tokio::net::TcpListener::bind(hub_address).await.unwrap();
-        drop(hub_rebound);
+        let hub_rebound = tokio::net::TcpListener::bind(hub_address).await.map(drop);
+        direct_rebound.and(hub_rebound)
     }
 }
