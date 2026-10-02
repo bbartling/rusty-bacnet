@@ -18,6 +18,8 @@ create_exception!(rusty_bacnet, BacnetAbortError, BacnetError);
 /// programmatically without parsing the message string. A protocol error also
 /// carries `first_failed_element_number`: the element position from an
 /// AddListElement or RemoveListElement ChangeList-Error, `None` otherwise.
+/// Futures call this on binding threads, so the attributes are set through
+/// the exit gate (#1002).
 pub fn to_py_err(err: Error) -> PyErr {
     match err {
         Error::Protocol { class, code } => protocol_error(
@@ -42,17 +44,19 @@ pub fn to_py_err(err: Error) -> PyErr {
         Error::Timeout(_) => BacnetTimeoutError::new_err(err.to_string()),
         Error::Reject { reason } => {
             let py_err = BacnetRejectError::new_err(format!("BACnet reject: reason={reason}"));
-            Python::attach(|py| {
+            let _ = crate::py_async::attach(|py| {
                 let val = py_err.value(py);
                 let _ = val.setattr("reason", reason);
+                Ok(())
             });
             py_err
         }
         Error::Abort { reason } => {
             let py_err = BacnetAbortError::new_err(format!("BACnet abort: reason={reason}"));
-            Python::attach(|py| {
+            let _ = crate::py_async::attach(|py| {
                 let val = py_err.value(py);
                 let _ = val.setattr("reason", reason);
+                Ok(())
             });
             py_err
         }
@@ -67,11 +71,12 @@ fn protocol_error(
     first_failed_element_number: Option<u32>,
 ) -> PyErr {
     let py_err = BacnetProtocolError::new_err(message);
-    Python::attach(|py| {
+    let _ = crate::py_async::attach(|py| {
         let val = py_err.value(py);
         let _ = val.setattr("error_class", class);
         let _ = val.setattr("error_code", code);
         let _ = val.setattr("first_failed_element_number", first_failed_element_number);
+        Ok(())
     });
     py_err
 }

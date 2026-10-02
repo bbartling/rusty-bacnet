@@ -365,7 +365,7 @@ impl PyScHub {
 
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Stop the hub.
@@ -381,7 +381,7 @@ impl PyScHub {
             }
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Shut the hub down gracefully, returning `"graceful"` or `"forced"`.
@@ -397,7 +397,7 @@ impl PyScHub {
     /// safe to call afterwards.
     fn shutdown_gracefully<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mut hub = {
                 let mut guard = inner.lock().await;
                 guard
@@ -418,7 +418,7 @@ impl PyScHub {
     /// after stop, like the server counter accessors.
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let snapshot = {
                 let guard = inner.lock().await;
                 let hub = guard
@@ -428,7 +428,7 @@ impl PyScHub {
             };
             // Owned snapshot only; the hub lock is released before touching
             // Python, and no await happens while the GIL is held.
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("listening", snapshot.listening)?;
                 dict.set_item("max_clients", snapshot.limits.max_clients)?;
@@ -494,7 +494,7 @@ impl PyScHub {
         let inner = slf.borrow().inner.clone();
         let config = slf.borrow().config.clone();
         let address = slf.borrow().address.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             {
                 let guard = inner.lock().await;
                 if guard.is_some() {
@@ -528,7 +528,7 @@ impl PyScHub {
             }
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// The address the hub is listening on (e.g. ``"127.0.0.1:47900"``).
@@ -536,7 +536,7 @@ impl PyScHub {
     /// Returns ``None`` before ``start()`` is called.
     fn address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let address = self.address.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let guard = address.lock().await;
             Ok(guard.clone())
         })
@@ -547,7 +547,7 @@ impl PyScHub {
     /// Returns ``None`` before ``start()`` is called.
     fn url<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let address = self.address.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let guard = address.lock().await;
             let result: Option<String> = guard
                 .as_ref()

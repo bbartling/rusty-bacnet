@@ -139,9 +139,10 @@ pub struct CovCounters {
     pub notifications_throttled_peer: u64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the
-    /// per-context history bound, or superseded by a newer delivered change
-    /// when an older notification failed. History split across several
-    /// notifications is not counted.
+    /// per-context history bound, too large for any notification to the
+    /// subscriber even alone, or superseded by a newer delivered change when an
+    /// older notification failed. Changes split across several notifications
+    /// are not counted.
     pub timed_changes_dropped: u64,
 }
 
@@ -176,9 +177,10 @@ pub struct AtomicCovCounters {
     pub notifications_throttled_peer: AtomicU64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the
-    /// per-context history bound, or superseded by a newer delivered change
-    /// when an older notification failed. History split across several
-    /// notifications is not counted.
+    /// per-context history bound, too large for any notification to the
+    /// subscriber even alone, or superseded by a newer delivered change when an
+    /// older notification failed. Changes split across several notifications
+    /// are not counted.
     pub timed_changes_dropped: AtomicU64,
 }
 

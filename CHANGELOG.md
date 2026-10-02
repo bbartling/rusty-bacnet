@@ -370,6 +370,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already holds now succeeds and changes nothing, where it was refused as out
   of range.
 
+- **Breaking Python panic exception:** a Python process that used the bindings
+  no longer segfaults at exit while a Tokio thread completes an awaited
+  future, such as `stop()` (#1002). Completing a future calls
+  `loop.call_soon_threadsafe`, which releases the GIL after queueing the
+  callback; the main thread could finish the program in that window, and
+  CPython 3.12 and 3.13 end a thread that takes the GIL back during
+  finalization, unwinding it through Rust frames that then dropped Python
+  objects without the GIL (51 of 800 fresh processes that exit right after
+  `await server.stop()` on the CI image under load, and none of 800 with this
+  fix). The bindings now bridge Tokio futures to asyncio themselves
+  (`py_async`) instead of through `pyo3-async-runtimes`, which is no longer a
+  dependency. Binding threads touch Python only through an exit gate, and an
+  `atexit` hook, which runs before finalization starts, closes it and waits
+  for them with the GIL released. A future requested after that hook raises
+  `RuntimeError` instead of never completing. A Rust panic in an async method
+  now raises PyO3's `PanicException`, as a panic in a synchronous method does,
+  instead of `pyo3_async_runtimes.RustPanic`; `PanicException` derives from
+  `BaseException`, so `except Exception` no longer catches it.
+
+- The Python B/IP endpoint tests bind port 0 and read the bound port back from
+  `local_address()` instead of probing a free port on 127.0.0.1 first. B/IP
+  binds the wildcard address, so a port free on loopback could be in use there,
+  and any process could take it between the probe and the bind (#993). The
+  audit-policy endpoint test does the same, and the `server_only` endpoint
+  example, which needs its port before it starts, now probes the wildcard
+  address.
+
 - **Breaking Calendar and Schedule wire format (and Rust API):** Calendar's
   Date_List now carries each BACnetCalendarEntry under its Clause 21 CHOICE
   tag: date `[0]`, date-range `[1]` (a frame around two application Dates) or
@@ -444,6 +471,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the one already known), and
   `CovSubscriptionSnapshot::subscriber_max_apdu` reports it.
 
+- **COV-multiple split order (wire behaviour):** a timestamped COV-multiple
+  report too large for one notification now splits strictly in capture order,
+  each reference's latest change included (#1008). Before, every reference's
+  latest change stayed in the last notification with the untimestamped values.
+  A context with many references could still send that notification over the
+  smaller of the local and subscriber maximum APDU, and a reference's only
+  change could arrive after newer changes of another reference. Now each
+  notification carries the next run of changes, oldest first, and the last one
+  carries the untimestamped values with the newest changes that still fit. A
+  reference whose latest change went out earlier completes its observation
+  when that notification is sent, or acknowledged when confirmed; in the last
+  notification, a sibling carrying its field times it as #987 describes. A
+  change too large for any notification on its own is now dropped and counted
+  even when it is a reference's latest, since no report could deliver it and a
+  confirmed context would keep retrying it. Only the untimestamped values,
+  which still go together in the last notification, can exceed the limit; that
+  is logged. An unconfirmed report that stops partway now completes the
+  references whose latest change it already sent.
+
 - **Breaking Elevator Group landing calls (API and wire format):** the
   Elevator Group object's Landing_Call_Control and Landing_Calls now carry
   BACnetLandingCallStatus values, as Clause 12.58 (Table 12-76) and Clause 21
@@ -494,6 +540,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   VALUE_OUT_OF_RANGE, leaving the stored value unchanged. A new Lift now reads
   STOPPED (2), as intended, instead of NONE (1). The value is stored as
   `LiftCarDirection`, as #932 did for the other enumerated fields.
+
+- **Breaking Lift property set (API and wire format):** the Lift object now
+  serves its rows of Clause 12.59, Table 12-77, with their table datatypes
+  (#1021). On the wire: Car_Position is an Unsigned8, so a write above 255
+  fails with VALUE_OUT_OF_RANGE and keeps the value. Car_Load is a REAL
+  instead of an Unsigned percentage capped at 100; it takes any finite value
+  and refuses NaN and infinities with VALUE_OUT_OF_RANGE. Car_Door_Status is a
+  BACnetARRAY of BACnetDoorStatus instead of an empty list of Unsigned, and a
+  new Lift has one car door with status UNKNOWN. Landing_Door_Status is a
+  BACnetARRAY of BACnetLandingDoorStatus, one element per car door, instead of
+  an Unsigned floor count. Floor_Text, Car_Door_Status and Landing_Door_Status
+  now take an array index. Tracking_Value and Floor_Number, which the table
+  doesn't define, are gone, and ReadProperty or WriteProperty on them fails
+  with PROPERTY / UNKNOWN_PROPERTY. The Lift gains the required
+  Elevator_Group, Group_ID, Installation_ID, Passenger_Alarm and Fault_Signals,
+  and Car_Load_Units, which must be present with Car_Load. Passenger_Alarm (a
+  Boolean, FALSE at first) and Fault_Signals (a BACnetLIST of BACnetLiftFault
+  that refuses reserved, oversized and repeated faults) take writes, as
+  Energy_Meter now does too. The rows are listed in table order in
+  Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL, and
+  the PICS. In the Rust API: Elevator_Group, Group_ID, Installation_ID,
+  Car_Load_Units, Car_Door_Status and Landing_Door_Status are read-only over
+  the network and set with new `LiftObject` setters. `set_elevator_group`
+  refuses any object type but Elevator Group, `set_car_load_units` a value
+  above 65535, `set_car_door_status` a reserved door status, and
+  `set_landing_door_status` a size other than Car_Door_Status's;
+  `set_car_door_status` also resizes Landing_Door_Status to the new door
+  count. `bacnet-types` adds `constructed::{BACnetLandingDoorStatus,
+  LandingDoor}` and `bacnet-encoding` adds `encode_landing_door_status` and
+  `decode_landing_door_status`.
+
+- **Breaking Escalator property set (wire):** the Escalator object gains the
+  required Elevator_Group, Group_ID and Installation_ID of Clause 12.60,
+  Table 12-78 (#1022). Elevator_Group names Elevator Group instance 4194303
+  until the application sets one, and Group_ID and Installation_ID are
+  Unsigned8 values that start at 0. All three are read-only over the network
+  and set with the new `EscalatorObject::set_elevator_group`, `set_group_id`
+  and `set_installation_id`. Energy_Meter_Ref is now a
+  BACnetDeviceObjectReference, uninitialized (instance 4194303), instead of an
+  empty OctetString. The rows are listed in table order in Property_List, the
+  property metadata, RPM ALL, REQUIRED and OPTIONAL, and the PICS.
 
 - In a timestamped COV-multiple report, a field subscribed with timestamps no
   longer goes out without a Time_Of_Change (#987). Before, when its own selector

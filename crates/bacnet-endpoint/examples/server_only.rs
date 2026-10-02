@@ -30,10 +30,11 @@ fn oid(t: ObjectType, i: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(t, i).unwrap()
 }
 
-/// Probes one free loopback port so the example knows the endpoint MAC
-/// (127.0.0.1 + port) without capturing a broadcast.
+/// Probes one free port so the example knows the endpoint MAC (127.0.0.1 +
+/// port) without capturing a broadcast. B/IP binds the wildcard address, so
+/// the probe does too: a port free on loopback can still be in use there (#993).
 fn free_port() -> u16 {
-    std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+    std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
         .expect("probe bind")
         .local_addr()
         .expect("probe addr")

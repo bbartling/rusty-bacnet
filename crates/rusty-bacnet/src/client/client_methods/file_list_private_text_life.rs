@@ -40,7 +40,7 @@ impl BACnetClient {
             }
         };
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -52,7 +52,7 @@ impl BACnetClient {
                 .atomic_read_file(&mac, fid, access)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
+            crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
 
@@ -92,7 +92,7 @@ impl BACnetClient {
             }
         };
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -104,7 +104,7 @@ impl BACnetClient {
                 .atomic_write_file(&mac, fid, access)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
+            crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
 
@@ -153,7 +153,7 @@ impl BACnetClient {
             .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Remove elements from a list property.
@@ -197,7 +197,7 @@ impl BACnetClient {
             .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -217,7 +217,7 @@ impl BACnetClient {
         service_parameters: Option<Vec<u8>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -241,7 +241,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             let ack = PrivateTransferAck::decode(&resp).map_err(to_py_err)?;
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("vendor_id", ack.vendor_id)?;
                 dict.set_item("service_number", ack.service_number)?;
@@ -293,7 +293,7 @@ impl BACnetClient {
             .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -341,7 +341,7 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send an UnconfirmedTextMessage request.
@@ -386,7 +386,7 @@ impl BACnetClient {
             .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -429,6 +429,6 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 }
