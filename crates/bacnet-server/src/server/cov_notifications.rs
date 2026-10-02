@@ -330,6 +330,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .ok()?;
                 let sample = crate::cov::CovSample::new(&pv).ok()?;
                 let flags = crate::cov::flags::PreparedFlags::read(object).ok()?;
+                let reported = crate::cov::reported::PreparedReported::read(object).ok()?;
                 let mut buf = BytesMut::new();
                 encode_property_value(&mut buf, sample.value()).ok()?;
                 let mut values = vec![BACnetPropertyValue {
@@ -346,7 +347,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         priority: None,
                     });
                 }
-                let observation = flags.observation(sample);
+                // Table 13-1 extras follow PV and flags, in the object's order.
+                values.extend(reported.values);
+                let observation = flags.observation(sample).with_triggers(reported.triggers);
                 let increment = object.cov_increment();
                 // Reserve every ordinary reference while the shared observation
                 // is still guarded, before a preceding property send can await.
@@ -362,7 +365,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     sub.cov_increment.or(increment),
                                 )
                                 && !observation
-                                    .flags_changed(sub.last_notified_observation.as_ref()))
+                                    .flags_changed(sub.last_notified_observation.as_ref())
+                                && !observation
+                                    .triggers_changed(sub.last_notified_observation.as_ref()))
                         {
                             return None;
                         }

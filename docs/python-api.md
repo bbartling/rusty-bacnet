@@ -1906,7 +1906,14 @@ through a partially configured state. Local target writes complete during
 write handling; failures set source Reliability to `UNRELIABLE_OTHER` until a
 current plan succeeds. `Out_Of_Service` decouples targets and returning to
 service reapplies the current stage. Staging does not advertise intrinsic
-reporting or COV.
+reporting. It supports COV: a SubscribeCOV notification carries Present_Value,
+Status_Flags and Present_Stage, and fires on a Present_Value move of at least
+the writable `COV_Increment`, a Status_Flags change or a Present_Stage change.
+A Loop's COV notification carries Present_Value, Status_Flags, Setpoint and
+Controlled_Variable_Value and fires on a `COV_Increment` move of Present_Value
+or a Status_Flags change. Loop Present_Value is network-writable only while
+Out_Of_Service is TRUE; in service the application supplies it with
+`set_present_value_local`.
 
 #### Lighting
 

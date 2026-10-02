@@ -709,13 +709,15 @@ mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
 #[cfg(test)]
-mod loop_status_flags_cov_tests;
+mod loop_cov_tests;
 #[cfg(test)]
 mod notification_transactions_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
 #[cfg(test)]
 mod segmentation_tests;
+#[cfg(test)]
+mod staging_cov_tests;
 #[cfg(test)]
 pub(crate) mod test_transport;
 #[cfg(test)]
