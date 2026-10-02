@@ -2,6 +2,7 @@
 import asyncio
 import errno
 import socket
+import sys
 import unittest
 
 from rusty_bacnet import (
@@ -10,11 +11,19 @@ from rusty_bacnet import (
 from test_sc_hub_lifecycle import HubTlsFixture
 
 
+# Windows can refuse a bind to a UDP port another socket holds with
+# WSAEACCES instead of WSAEADDRINUSE; errno passes the OS code through.
+ADDR_IN_USE = (
+    {errno.EADDRINUSE, errno.WSAEACCES} if sys.platform == "win32"
+    else {errno.EADDRINUSE}
+)
+
+
 def assert_addr_in_use(case: unittest.TestCase, error: BaseException) -> None:
     case.assertIsInstance(error, OSError)
     case.assertIsInstance(error, BacnetError)
     case.assertIsInstance(error, BacnetTransportError)
-    case.assertEqual(error.errno, errno.EADDRINUSE)
+    case.assertIn(error.errno, ADDR_IN_USE)
     case.assertTrue(error.strerror)
 
 

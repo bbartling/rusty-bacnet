@@ -2345,7 +2345,7 @@ except OSError as e:
         raise
 ```
 
-It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises a plain `OSError` instead.
+`errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises a plain `OSError` instead.
 
 ---
 
